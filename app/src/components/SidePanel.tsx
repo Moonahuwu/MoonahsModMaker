@@ -1,0 +1,354 @@
+import { AnimatePresence, motion } from "motion/react";
+import { useMemo, useRef, useState } from "react";
+import type { EventProject, EventView, Song } from "../types";
+import { SongCard } from "./SongCard";
+import { StockWaveform } from "./StockWaveform";
+
+function ownedRefsFor(ev: EventProject, soundFolder: string): Set<string> {
+  const set = new Set<string>(ev.previousOwnedNames);
+  for (const s of ev.songs) set.add(`${soundFolder}/${s.soundName}.vsnd`);
+  return set;
+}
+
+function shortName(ref: string): string {
+  const file = ref.split("/").pop() ?? ref;
+  return file.replace(/\.vsnd$/, "");
+}
+
+function StatBadge({ n, label, tone }: { n: number; label: string; tone: string }) {
+  return (
+    <span className={`rounded-md px-2 py-0.5 text-[11px] font-medium ${tone}`}>
+      {n} {label}
+    </span>
+  );
+}
+
+function Toggle({ on, onClick }: { on: boolean; onClick: () => void }) {
+  return (
+    <button
+      role="switch"
+      aria-checked={on}
+      onClick={onClick}
+      title={on ? "Enabled — click to disable" : "Disabled — click to enable"}
+      className={`relative h-4 w-7 shrink-0 rounded-full transition ${
+        on ? "bg-emerald-500/70" : "bg-zinc-700"
+      }`}
+    >
+      <motion.span
+        layout
+        transition={{ type: "spring", stiffness: 500, damping: 32 }}
+        className="absolute top-0.5 h-3 w-3 rounded-full bg-white"
+        style={{ left: on ? 14 : 2 }}
+      />
+    </button>
+  );
+}
+
+function EntryRow({
+  name,
+  tag,
+  tone,
+  included,
+  previewState,
+  onPreview,
+  onToggle,
+  onRemove,
+}: {
+  name: string;
+  tag: string;
+  tone: string;
+  included: boolean;
+  previewState: "idle" | "loading" | "playing";
+  onPreview: () => void;
+  onToggle: () => void;
+  onRemove: () => void;
+}) {
+  return (
+    <div
+      className={`flex items-center justify-between rounded-lg border px-3 py-2 text-sm transition ${tone} ${
+        included ? "" : "opacity-45"
+      }`}
+    >
+      <span
+        className={`flex items-center gap-2 truncate font-medium ${included ? "" : "line-through"}`}
+      >
+        {name}
+      </span>
+      <div className="flex shrink-0 items-center gap-2">
+        <span className="text-[10px] uppercase tracking-wide opacity-70">{tag}</span>
+        <button
+          onClick={onPreview}
+          title="Preview the original in-game track"
+          className="rounded p-0.5 text-current opacity-70 transition hover:opacity-100"
+        >
+          {previewState === "loading" ? "…" : previewState === "playing" ? "⏸" : "▶"}
+        </button>
+        <Toggle on={included} onClick={onToggle} />
+        <button
+          onClick={onRemove}
+          aria-label="Remove from pool"
+          title="Remove from pool"
+          className="rounded p-0.5 text-current opacity-50 transition hover:bg-red-950/40 hover:text-red-300 hover:opacity-100"
+        >
+          ✕
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export function SidePanel({
+  ev,
+  view,
+  soundFolder,
+  ffmpegPath,
+  accent,
+  dropActive,
+  panelRef,
+  onSongChange,
+  onSongRename,
+  onSongRemove,
+  onToggleEntry,
+  onRemoveEntry,
+  onRestoreEntry,
+  onDecodeStock,
+}: {
+  ev: EventProject;
+  view: EventView | undefined;
+  soundFolder: string;
+  ffmpegPath?: string;
+  accent: string;
+  dropActive: boolean;
+  panelRef: (el: HTMLElement | null) => void;
+  onSongChange: (songId: string, patch: Partial<Song>) => void;
+  onSongRename: (songId: string, raw: string) => void;
+  onSongRemove: (songId: string) => void;
+  onToggleEntry: (eventName: string, ref: string) => void;
+  onRemoveEntry: (eventName: string, ref: string) => void;
+  onRestoreEntry: (eventName: string, ref: string) => void;
+  onDecodeStock: (stockRef: string) => Promise<string>;
+}) {
+  const [stockUrl, setStockUrl] = useState<string | null>(null);
+  const [stockErr, setStockErr] = useState<string | null>(null);
+  const [stockLoading, setStockLoading] = useState(false);
+
+  // Quick audio preview of any existing in-game entry (stock/foreign).
+  const [previewRef, setPreviewRef] = useState<string | null>(null);
+  const [loadingRef, setLoadingRef] = useState<string | null>(null);
+  const previewAudio = useRef<HTMLAudioElement | null>(null);
+
+  async function previewEntry(ref: string) {
+    if (previewRef === ref) {
+      previewAudio.current?.pause();
+      setPreviewRef(null);
+      return;
+    }
+    previewAudio.current?.pause();
+    setLoadingRef(ref);
+    try {
+      const url = await onDecodeStock(ref);
+      const audio = new Audio(url);
+      previewAudio.current = audio;
+      audio.onended = () => setPreviewRef(null);
+      audio.onerror = () => setPreviewRef(null);
+      await audio.play();
+      setPreviewRef(ref);
+    } catch {
+      /* decode/playback failed — ignore */
+    } finally {
+      setLoadingRef(null);
+    }
+  }
+
+  const previewStateOf = (ref: string): "idle" | "loading" | "playing" =>
+    loadingRef === ref ? "loading" : previewRef === ref ? "playing" : "idle";
+
+  async function loadStock(open: boolean) {
+    if (!open || stockUrl || stockLoading) return;
+    setStockLoading(true);
+    setStockErr(null);
+    try {
+      setStockUrl(await onDecodeStock(ev.stockEntry));
+    } catch (e) {
+      setStockErr(String(e));
+    } finally {
+      setStockLoading(false);
+    }
+  }
+
+  const owned = useMemo(() => ownedRefsFor(ev, soundFolder), [ev, soundFolder]);
+  const excluded = useMemo(() => new Set(ev.excludedEntries), [ev.excludedEntries]);
+  const removed = useMemo(() => new Set(ev.removedEntries), [ev.removedEntries]);
+
+  const poolEntries = view?.entries ?? [];
+  const foreignAll = poolEntries.filter((e) => e !== ev.stockEntry && !owned.has(e));
+  const foreign = foreignAll.filter((e) => !removed.has(e));
+  const stockRemoved = removed.has(ev.stockEntry);
+  const removedList = [
+    ...(stockRemoved ? [ev.stockEntry] : []),
+    ...foreignAll.filter((e) => removed.has(e)),
+  ];
+
+  const stockOn = !excluded.has(ev.stockEntry);
+  const foreignOn = foreign.filter((e) => !excluded.has(e)).length;
+  const total = (!stockRemoved && stockOn ? 1 : 0) + foreignOn + ev.songs.length;
+  const sortedSongs = [...ev.songs].sort((a, b) => a.order - b.order);
+
+  return (
+    <motion.section
+      ref={panelRef}
+      animate={{ borderColor: dropActive ? "rgb(16 185 129)" : "rgb(39 39 42)" }}
+      style={{
+        background: `radial-gradient(120% 70% at 50% 0%, ${accent}26 0%, ${accent}0d 22%, rgba(0,0,0,0) 48%), rgba(24,24,27,0.45)`,
+      }}
+      className="flex-1 overflow-hidden rounded-2xl border p-5"
+    >
+      <header className="mb-4 flex items-center justify-between">
+        <div className="flex items-center gap-2.5">
+          <h2 className="text-lg font-semibold" style={{ color: accent }}>
+            {ev.side}
+          </h2>
+          <StatBadge n={total} label="in pool" tone="bg-zinc-800/80 text-zinc-400" />
+        </div>
+        <div className="flex items-center gap-1.5">
+          {ev.songs.length > 0 && (
+            <StatBadge
+              n={ev.songs.length}
+              label="yours"
+              tone="bg-emerald-500/10 text-emerald-300"
+            />
+          )}
+          {view?.vsndDuration != null && (
+            <span className="text-[11px] text-zinc-500">
+              {view.vsndDuration.toFixed(1)}s
+            </span>
+          )}
+        </div>
+      </header>
+
+      {/* Stock — toggleable + removable */}
+      {!stockRemoved && (
+        <div className="mb-2">
+          <EntryRow
+            name={`★ ${shortName(ev.stockEntry)}`}
+            tag="Valve original"
+            tone="border-amber-500/30 bg-amber-500/[0.04] text-amber-200"
+            included={stockOn}
+            previewState={previewStateOf(ev.stockEntry)}
+            onPreview={() => void previewEntry(ev.stockEntry)}
+            onToggle={() => onToggleEntry(ev.id, ev.stockEntry)}
+            onRemove={() => onRemoveEntry(ev.id, ev.stockEntry)}
+          />
+        </div>
+      )}
+
+      {/* Compare to the original game track (length / beats) */}
+      <details
+        className="mb-3 rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2"
+        onToggle={(e) => loadStock((e.currentTarget as HTMLDetailsElement).open)}
+      >
+        <summary className="cursor-pointer text-xs text-zinc-500">
+          ♪ Compare to original ({shortName(ev.stockEntry)})
+        </summary>
+        <div className="mt-2">
+          {stockLoading && (
+            <span className="text-xs text-zinc-600">decoding original…</span>
+          )}
+          {stockErr && <span className="text-xs text-red-400">{stockErr}</span>}
+          {stockUrl && <StockWaveform url={stockUrl} accent={accent} />}
+        </div>
+      </details>
+
+      {/* Other mods — toggleable + removable, collapsed by default */}
+      {foreign.length > 0 && (
+        <details className="mb-3 rounded-lg border border-zinc-800 bg-zinc-800/20 px-3 py-2">
+          <summary className="cursor-pointer text-xs text-zinc-500">
+            {foreign.length} track{foreign.length === 1 ? "" : "s"} from other mods
+            <span className="text-zinc-600"> — toggle or remove ({foreignOn} on)</span>
+          </summary>
+          <div className="mt-2 flex flex-col gap-1.5">
+            {foreign.map((e) => (
+              <EntryRow
+                key={e}
+                name={shortName(e)}
+                tag="other mod"
+                tone="border-zinc-700 bg-zinc-800/40 text-zinc-300"
+                included={!excluded.has(e)}
+                previewState={previewStateOf(e)}
+                onPreview={() => void previewEntry(e)}
+                onToggle={() => onToggleEntry(ev.id, e)}
+                onRemove={() => onRemoveEntry(ev.id, e)}
+              />
+            ))}
+          </div>
+        </details>
+      )}
+
+      {/* Removed entries — restore */}
+      {removedList.length > 0 && (
+        <details className="mb-3 rounded-lg border border-dashed border-zinc-800 px-3 py-2">
+          <summary className="cursor-pointer text-xs text-zinc-600">
+            {removedList.length} removed — click to restore
+          </summary>
+          <div className="mt-2 flex flex-col gap-1.5">
+            {removedList.map((e) => (
+              <button
+                key={e}
+                onClick={() => onRestoreEntry(ev.id, e)}
+                className="flex items-center justify-between rounded-lg border border-zinc-800 px-3 py-1.5 text-xs text-zinc-500 transition hover:text-zinc-300"
+              >
+                <span className="truncate line-through">{shortName(e)}</span>
+                <span className="shrink-0 text-emerald-400">+ restore</span>
+              </button>
+            ))}
+          </div>
+        </details>
+      )}
+
+      {/* Your tracks */}
+      <div className="flex flex-col gap-3">
+        <AnimatePresence initial={false}>
+          {sortedSongs.map((s) => (
+            <motion.div
+              key={s.id}
+              layout
+              initial={{ opacity: 0, y: -8, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95, height: 0, marginTop: 0 }}
+              transition={{ type: "spring", stiffness: 380, damping: 30 }}
+            >
+              <SongCard
+                song={s}
+                soundFolder={soundFolder}
+                ffmpegPath={ffmpegPath}
+                onChange={(patch) => onSongChange(s.id, patch)}
+                onRename={(raw) => onSongRename(s.id, raw)}
+                onRemove={() => onSongRemove(s.id)}
+              />
+            </motion.div>
+          ))}
+        </AnimatePresence>
+      </div>
+
+      {/* Drop zone / empty state */}
+      <motion.div
+        animate={{
+          borderColor: dropActive ? "rgb(16 185 129)" : "rgb(63 63 70)",
+          backgroundColor: dropActive ? "rgba(16,185,129,0.06)" : "rgba(0,0,0,0)",
+        }}
+        className={`mt-3 rounded-xl border border-dashed py-6 text-center text-xs ${
+          dropActive ? "text-emerald-300" : "text-zinc-600"
+        }`}
+      >
+        {ev.songs.length === 0 ? (
+          <span>
+            <span className="block text-sm text-zinc-400">No tracks yet</span>
+            Drop an .mp3 here to add it to {ev.side}
+          </span>
+        ) : (
+          <span>Drop another .mp3 to add to {ev.side}</span>
+        )}
+      </motion.div>
+    </motion.section>
+  );
+}

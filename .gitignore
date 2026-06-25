@@ -1,0 +1,24 @@
+# ---- Build artifacts ----
+/target
+**/target
+app/node_modules
+app/dist
+app/src-tauri/gen
+tools/vpk-helper/bin
+tools/vpk-helper/obj
+
+# ---- Compile output ----
+/output
+
+# ---- Extracted Valve game content & tool binaries ----
+# Do NOT commit/share game files (per the CSDK README). These live locally only.
+/ModFiles
+/sounds
+/soundevents
+/compilerstuff
+/VanillaFiles
+
+# ---- OS / editor ----
+.DS_Store
+Thumbs.db
+*.log
