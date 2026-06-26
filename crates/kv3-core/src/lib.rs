@@ -98,6 +98,15 @@ pub struct EventView {
     pub vsnd_duration: Option<f64>,
 }
 
+/// One array found in a document (for combining other mods).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArrayInfo {
+    pub event_name: String,
+    pub array_key: String,
+    pub entries: Vec<String>,
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -131,6 +140,96 @@ pub fn read_event_array(text: &str, event_name: &str, array_key: &str) -> Result
         entries,
         vsnd_duration,
     })
+}
+
+/// Enumerate every event's `vsnd_files*` array in the document. Used to learn
+/// what another mod added (for combining). Scalar `vsnd_files = "x"` (non-array)
+/// values are skipped.
+pub fn list_arrays(text: &str) -> Result<Vec<ArrayInfo>> {
+    validate_header(text)?;
+    let b = text.as_bytes();
+    // The header comment contains `{` (e.g. `version{...}`), so start after it.
+    let header_end = text.find("-->").map(|i| i + 3).unwrap_or(0);
+    let obj_open = text[header_end..]
+        .find('{')
+        .map(|i| header_end + i)
+        .ok_or(Kv3Error::Unterminated("document"))?;
+    let obj_close =
+        matching_close(text, obj_open, b'{', b'}').ok_or(Kv3Error::Unterminated("document"))?;
+
+    let mut out = Vec::new();
+    for (name, bo, bc) in top_level_entries(text, obj_open, obj_close) {
+        let mut from = bo;
+        while let Some(rel) = text[from..bc].find("vsnd_files") {
+            let kpos = from + rel;
+            let before_ok =
+                kpos == 0 || matches!(b[kpos - 1], b' ' | b'\t' | b'\n' | b'\r' | b'{');
+            // Read the full key name (vsnd_files[_suffix]).
+            let mut j = kpos;
+            while j < bc && (b[j].is_ascii_alphanumeric() || b[j] == b'_') {
+                j += 1;
+            }
+            let key = &text[kpos..j];
+            // After the key: optional spaces, then '='.
+            let mut k = j;
+            while k < bc && matches!(b[k], b' ' | b'\t') {
+                k += 1;
+            }
+            if before_ok && k < bc && b[k] == b'=' {
+                // After '=': optional spaces, then the value must be '[' (array).
+                let mut v = k + 1;
+                while v < bc && matches!(b[v], b' ' | b'\t' | b'\n' | b'\r') {
+                    v += 1;
+                }
+                if v < bc && b[v] == b'[' {
+                    if let Some(rb) = matching_close(text, v, b'[', b']') {
+                        out.push(ArrayInfo {
+                            event_name: name.clone(),
+                            array_key: key.to_string(),
+                            entries: parse_array_entries(text, v, rb),
+                        });
+                        from = rb + 1;
+                        continue;
+                    }
+                }
+            }
+            from = j;
+        }
+    }
+    Ok(out)
+}
+
+/// Append `new_entries` (deduped, preserving order) to an existing named array,
+/// leaving every other byte intact. No-op (returns input) if nothing is new.
+/// Errors if the event/array doesn't exist (caller decides whether to skip).
+pub fn add_entries(
+    text: &str,
+    event_name: &str,
+    array_key: &str,
+    new_entries: &[String],
+) -> Result<String> {
+    validate_header(text)?;
+    let block = event_block(text, event_name)?;
+    let (lb, rb) = find_array(text, block, array_key, event_name)?;
+    let existing = parse_array_entries(text, lb, rb);
+
+    let mut result = existing.clone();
+    let mut seen: HashSet<String> = existing.iter().cloned().collect();
+    let before = result.len();
+    for e in new_entries {
+        if seen.insert(e.clone()) {
+            result.push(e.clone());
+        }
+    }
+    if result.len() == before {
+        return Ok(text.to_string()); // nothing new to add
+    }
+    let le = detect_line_ending(text);
+    let indent = bracket_indent(text, lb).to_string();
+    let new_array = render_array(&result, &indent, le);
+    let mut out = text.to_string();
+    out.replace_range(lb..=rb, &new_array);
+    Ok(out)
 }
 
 /// Apply a single event merge, returning the new file text. Every byte outside
@@ -251,6 +350,72 @@ fn format_duration(v: f64) -> String {
 // ---------------------------------------------------------------------------
 // Span location (string-aware scanning)
 // ---------------------------------------------------------------------------
+
+/// Enumerate depth-1 keys whose value is a `{ ... }` block, returning
+/// `(name, brace_open, brace_close)` for each. Skips scalar/array values.
+fn top_level_entries(text: &str, open: usize, close: usize) -> Vec<(String, usize, usize)> {
+    let b = text.as_bytes();
+    let mut i = open + 1;
+    let mut out = Vec::new();
+    while i < close {
+        while i < close && matches!(b[i], b' ' | b'\t' | b'\n' | b'\r' | b',') {
+            i += 1;
+        }
+        if i >= close {
+            break;
+        }
+        let ks = i;
+        while i < close && !matches!(b[i], b' ' | b'\t' | b'\n' | b'\r' | b'=') {
+            i += 1;
+        }
+        let key = text[ks..i].to_string();
+        while i < close && b[i] != b'=' {
+            i += 1;
+        }
+        if i >= close {
+            break;
+        }
+        i += 1; // past '='
+        while i < close && matches!(b[i], b' ' | b'\t' | b'\n' | b'\r') {
+            i += 1;
+        }
+        if i >= close {
+            break;
+        }
+        match b[i] {
+            b'{' => match matching_close(text, i, b'{', b'}') {
+                Some(bc) => {
+                    out.push((key, i, bc));
+                    i = bc + 1;
+                }
+                None => break,
+            },
+            b'[' => {
+                i = matching_close(text, i, b'[', b']').map(|x| x + 1).unwrap_or(close);
+            }
+            b'"' => {
+                let mut j = i + 1;
+                while j < close {
+                    if b[j] == b'\\' {
+                        j += 2;
+                        continue;
+                    }
+                    if b[j] == b'"' {
+                        break;
+                    }
+                    j += 1;
+                }
+                i = j + 1;
+            }
+            _ => {
+                while i < close && !matches!(b[i], b'\n' | b'\r') {
+                    i += 1;
+                }
+            }
+        }
+    }
+    out
+}
 
 /// Inclusive byte range `[brace_open ..= brace_close]` of an event's `{ ... }`.
 fn event_block(text: &str, event_name: &str) -> Result<(usize, usize)> {
@@ -517,6 +682,34 @@ mod unit {
         // The sibling team array is untouched.
         let team = read_event_array(&out, "T", "vsnd_files").unwrap();
         assert_eq!(team.entries, vec!["team/stock.vsnd"]);
+    }
+
+    #[test]
+    fn list_arrays_enumerates_both_arrays() {
+        let arrays = list_arrays(SYNTH2).unwrap();
+        assert_eq!(arrays.len(), 2);
+        assert_eq!(arrays[0].event_name, "T");
+        assert_eq!(arrays[0].array_key, "vsnd_files");
+        assert_eq!(arrays[0].entries, vec!["team/stock.vsnd"]);
+        assert_eq!(arrays[1].array_key, "vsnd_files_opponent_control");
+        assert_eq!(arrays[1].entries, vec!["opp/stock.vsnd"]);
+    }
+
+    #[test]
+    fn add_entries_unions_and_dedupes() {
+        let out = add_entries(
+            SYNTH,
+            "Evt",
+            "vsnd_files",
+            &["a/new.vsnd".into(), "a/foreign1.vsnd".into()],
+        )
+        .unwrap();
+        let v = read_event(&out, "Evt").unwrap();
+        // foreign1 already present (deduped); new appended at the end.
+        assert_eq!(
+            v.entries,
+            vec!["a/stock.vsnd", "a/foreign1.vsnd", "a/old_owned.vsnd", "a/new.vsnd"]
+        );
     }
 
     #[test]

@@ -9,6 +9,7 @@ mod vpk;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             commands::read_event_pool,
             commands::read_event_pools,

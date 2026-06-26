@@ -20,6 +20,8 @@ export function CompileBar({
   const { push } = useToast();
 
   const songCount = events.reduce((n, e) => n + e.songs.length, 0);
+  const modCount = settings.importedMods.length;
+  const canCompile = songCount > 0 || modCount > 0;
 
   async function compile() {
     setRunning(true);
@@ -130,13 +132,15 @@ export function CompileBar({
         )}
 
         <span className="truncate text-xs text-zinc-500">
-          {songCount} song{songCount === 1 ? "" : "s"} → {settings.outputDir}
+          {songCount} song{songCount === 1 ? "" : "s"}
+          {modCount > 0 ? ` · ${modCount} mod${modCount === 1 ? "" : "s"}` : ""} →{" "}
+          {settings.outputDir}
         </span>
 
         <motion.button
           whileTap={{ scale: 0.97 }}
           onClick={() => void compile()}
-          disabled={running || songCount === 0}
+          disabled={running || !canCompile}
           className="ml-auto rounded-lg bg-emerald-600 px-6 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-900/30 transition hover:bg-emerald-500 disabled:opacity-40 disabled:shadow-none"
         >
           {running ? "Compiling…" : "Compile"}

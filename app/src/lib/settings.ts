@@ -16,6 +16,8 @@ export interface Settings {
   outputDir: string;
   outputMode: "folder" | "vpk";
   vpkName: string;
+  /** Other mods' pak01_dir.vpk paths to combine in on compile. */
+  importedMods: string[];
 }
 
 const REPO = "C:/Users/ethob/Desktop/DeadlockModding/EasyIntroModder";
@@ -33,6 +35,7 @@ export const DEFAULT_SETTINGS: Settings = {
   outputDir: `${REPO}/output`,
   outputMode: "vpk",
   vpkName: "pak01_dir.vpk",
+  importedMods: [],
 };
 
 const STORAGE_KEY = "eim.settings.v1";
@@ -101,6 +104,7 @@ export function buildCompileConfig(
     vpkName: s.vpkName,
     writeEncodingTxt: true,
     skipCompile,
+    importedMods: s.importedMods,
     events: eventCompiles,
   };
 }

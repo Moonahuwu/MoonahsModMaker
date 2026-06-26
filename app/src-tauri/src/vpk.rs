@@ -33,6 +33,46 @@ pub fn pack(helper_path: &str, folder: &str, out_vpk: &str) -> Result<String, St
     run(cmd, "pack")
 }
 
+/// List entry paths in a vpk (optionally filtered by substring). One per line.
+pub fn list(helper_path: &str, vpk: &str, filter: Option<&str>) -> Result<Vec<String>, String> {
+    let mut cmd = helper_command(helper_path);
+    cmd.args(["list", vpk]);
+    if let Some(f) = filter {
+        cmd.arg(f);
+    }
+    let out = run(cmd, "list")?;
+    Ok(out.lines().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+}
+
+/// Extract every file (optionally under `prefix`) from `vpk` into `dest_dir`,
+/// preserving the content-relative layout.
+pub fn extract_all(
+    helper_path: &str,
+    vpk: &str,
+    dest_dir: &str,
+    prefix: Option<&str>,
+) -> Result<String, String> {
+    let mut cmd = helper_command(helper_path);
+    cmd.args(["extractall", vpk, dest_dir]);
+    if let Some(p) = prefix {
+        cmd.arg(p);
+    }
+    run(cmd, "extractall")
+}
+
+/// Decompile a compiled resource (e.g. `.vsndevts_c`) inside `vpk` to its KV3
+/// text source at `out_file`.
+pub fn decompile_from_vpk(
+    helper_path: &str,
+    vpk: &str,
+    internal_path: &str,
+    out_file: &str,
+) -> Result<String, String> {
+    let mut cmd = helper_command(helper_path);
+    cmd.args(["decompile", vpk, internal_path, out_file]);
+    run(cmd, "decompile")
+}
+
 /// Decode a compiled `.vsnd_c` (inside `vpk`) to playable audio. Returns the
 /// written file path (the helper picks the correct extension).
 pub fn decode(

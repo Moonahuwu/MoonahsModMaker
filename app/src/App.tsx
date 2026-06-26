@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import {
@@ -10,6 +11,7 @@ import {
 } from "./lib/api";
 import { SidePanel } from "./components/SidePanel";
 import { SetupSection } from "./components/SetupSection";
+import { ImportedMods } from "./components/ImportedMods";
 import { CompileBar } from "./components/CompileBar";
 import { useToast } from "./components/Toaster";
 import { useSettings } from "./lib/settings";
@@ -19,10 +21,13 @@ import "./index.css";
 const AUDIO_EXT = /\.(mp3|wav|flac|ogg|m4a|aac)$/i;
 const DEFAULT_GAIN_DB = 6;
 
+const MOD_COMBINER = "modcombiner";
+
 const TAB_LABELS: Record<string, string> = {
   intro: "Deadlock Intro",
   urn: "Urn Music",
   heroes: "Heroes",
+  [MOD_COMBINER]: "Mod combiner",
 };
 
 function baseName(path: string): string {
@@ -41,6 +46,7 @@ export default function App() {
   const [pools, setPools] = useState<Record<string, EventView>>({});
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<string>("intro");
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const { settings, update: updateSettings } = useSettings();
   const { push } = useToast();
 
@@ -50,12 +56,13 @@ export default function App() {
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
 
-  // Distinct tabs (groups) in slot order.
+  // Slot-group tabs (in slot order) plus the special Mod Combiner tab.
   const tabs = useMemo(() => {
     const seen: string[] = [];
     for (const e of project?.events ?? []) {
       if (!seen.includes(e.group)) seen.push(e.group);
     }
+    seen.push(MOD_COMBINER);
     return seen;
   }, [project]);
 
@@ -114,11 +121,35 @@ export default function App() {
       } else if (p.type === "drop") {
         const { side } = pickSide(p.position.x, p.position.y);
         setDropTarget(null);
+        const vpks = p.paths.filter((pp) => /\.vpk$/i.test(pp));
         const audio = p.paths.filter((pp) => AUDIO_EXT.test(pp));
-        if (side && audio.length > 0) {
-          for (const path of audio) void addSong(side, path);
-        } else if (audio.length === 0) {
-          push("error", "That file isn't a recognized audio type (.mp3/.wav/…)");
+
+        // Dropped mod .vpk(s) → add to the Mod combiner list.
+        if (vpks.length > 0) {
+          const cur = settingsRef.current.importedMods;
+          const next = [...cur];
+          for (const v of vpks) if (!next.includes(v)) next.push(v);
+          const addedN = next.length - cur.length;
+          if (addedN > 0) {
+            updateSettings({ importedMods: next });
+            setActiveTab(MOD_COMBINER);
+            push("success", `Added ${addedN} mod${addedN === 1 ? "" : "s"} to combine`);
+          } else {
+            push("info", "Those mod(s) are already in the combine list");
+          }
+        }
+
+        // Dropped audio → add to the slot under the cursor.
+        if (audio.length > 0) {
+          if (side) {
+            for (const path of audio) void addSong(side, path);
+          } else {
+            push("error", "Drop the .mp3 onto a track slot");
+          }
+        }
+
+        if (vpks.length === 0 && audio.length === 0) {
+          push("error", "Drop an .mp3 (onto a slot) or a mod .vpk");
         }
       }
     });
@@ -297,9 +328,12 @@ export default function App() {
           <p className="text-[11px] text-zinc-600">Music Modder</p>
         </div>
         {tabs.map((g) => {
-          const count = (project?.events ?? [])
-            .filter((e) => e.group === g)
-            .reduce((n, e) => n + e.songs.length, 0);
+          const count =
+            g === MOD_COMBINER
+              ? settings.importedMods.length
+              : (project?.events ?? [])
+                  .filter((e) => e.group === g)
+                  .reduce((n, e) => n + e.songs.length, 0);
           const active = g === activeTab;
           return (
             <button
@@ -320,8 +354,19 @@ export default function App() {
             </button>
           );
         })}
-        <div className="mt-auto text-[10px] text-zinc-700">
-          {songCount} track{songCount === 1 ? "" : "s"} total
+        <div className="mt-auto flex items-center justify-between pt-2">
+          <button
+            onClick={() => setSettingsOpen(true)}
+            aria-label="Setup"
+            title="Setup"
+            className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-zinc-400 transition hover:bg-zinc-900 hover:text-zinc-200"
+          >
+            <span className="text-base">⚙</span>
+            <span>Setup</span>
+          </button>
+          <span className="text-[10px] text-zinc-700">
+            {songCount} track{songCount === 1 ? "" : "s"}
+          </span>
         </div>
       </aside>
 
@@ -332,33 +377,37 @@ export default function App() {
             {TAB_LABELS[activeTab] ?? activeTab}
           </h2>
           <p className="mt-1 text-sm text-zinc-500">
-            Your entries merge in — every other mod stays untouched.
+            {activeTab === MOD_COMBINER
+              ? "Merge other mods' sounds into your compile — nothing of yours is removed."
+              : "Your entries merge in — every other mod stays untouched."}
           </p>
         </header>
 
-        <SetupSection settings={settings} update={updateSettings} />
-
-        <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-          {visibleSlots.map((ev) => (
-            <SidePanel
-              key={ev.id}
-              ev={ev}
-              view={pools[ev.id]}
-              soundFolder={project!.soundFolder}
-              ffmpegPath={settings.ffmpegPath || undefined}
-              accent={accentFor(ev)}
-              dropActive={dropTarget === ev.id}
-              panelRef={(el) => (panelEls.current[ev.id] = el)}
-              onSongChange={updateSong}
-              onSongRename={renameSong}
-              onSongRemove={removeSong}
-              onToggleEntry={toggleEntry}
-              onRemoveEntry={removeEntry}
-              onRestoreEntry={restoreEntry}
-              onDecodeStock={decodeStock}
-            />
-          ))}
-        </div>
+        {activeTab === MOD_COMBINER ? (
+          <ImportedMods settings={settings} update={updateSettings} />
+        ) : (
+          <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+            {visibleSlots.map((ev) => (
+              <SidePanel
+                key={ev.id}
+                ev={ev}
+                view={pools[ev.id]}
+                soundFolder={project!.soundFolder}
+                ffmpegPath={settings.ffmpegPath || undefined}
+                accent={accentFor(ev)}
+                dropActive={dropTarget === ev.id}
+                panelRef={(el) => (panelEls.current[ev.id] = el)}
+                onSongChange={updateSong}
+                onSongRename={renameSong}
+                onSongRemove={removeSong}
+                onToggleEntry={toggleEntry}
+                onRemoveEntry={removeEntry}
+                onRestoreEntry={restoreEntry}
+                onDecodeStock={decodeStock}
+              />
+            ))}
+          </div>
+        )}
 
         <div className="flex-1" />
 
@@ -370,6 +419,33 @@ export default function App() {
           />
         )}
       </main>
+
+      <AnimatePresence>
+        {settingsOpen && (
+          <motion.div
+            className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-6 backdrop-blur-sm"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setSettingsOpen(false)}
+          >
+            <motion.div
+              className="w-full max-w-2xl"
+              initial={{ scale: 0.97, y: 8 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.97, y: 8 }}
+              transition={{ type: "spring", stiffness: 400, damping: 32 }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <SetupSection
+                settings={settings}
+                update={updateSettings}
+                onClose={() => setSettingsOpen(false)}
+              />
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

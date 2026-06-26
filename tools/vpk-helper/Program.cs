@@ -10,6 +10,7 @@
 
 using SteamDatabase.ValvePak;
 using ValveResourceFormat;
+using ValveResourceFormat.IO;
 using ValveResourceFormat.ResourceTypes;
 
 return args.Length == 0 ? Usage() : Dispatch(args);
@@ -30,6 +31,8 @@ static int Dispatch(string[] args)
             "extract" => Extract(args),
             "list" => List(args),
             "decode" => Decode(args),
+            "decompile" => Decompile(args),
+            "extractall" => ExtractAll(args),
             _ => Unknown(args[0]),
         };
     }
@@ -179,6 +182,52 @@ static int Decode(string[] args)
     return 0;
 }
 
+// decompile <vpk> <internalPath> <outFile>   (from a vpk)
+// decompile <vsndevts_c file> <outFile>       (loose file)
+// Decompiles a compiled Source 2 resource (e.g. .vsndevts_c) back to its KV3
+// text source, so we can read what another mod added.
+static int Decompile(string[] args)
+{
+    byte[] bytes;
+    string outFile;
+    if (args.Length >= 4)
+    {
+        var vpk = Path.GetFullPath(args[1]);
+        var internalPath = args[2].Replace('\\', '/').TrimStart('/');
+        outFile = Path.GetFullPath(args[3]);
+        using var package = new Package();
+        package.Read(vpk);
+        var entry = package.FindEntry(internalPath) ?? FindFuzzy(package, internalPath);
+        if (entry is null)
+        {
+            Console.Error.WriteLine($"entry not found: {internalPath}");
+            return 1;
+        }
+        package.ReadEntry(entry, out bytes);
+    }
+    else if (args.Length == 3)
+    {
+        bytes = File.ReadAllBytes(Path.GetFullPath(args[1]));
+        outFile = Path.GetFullPath(args[2]);
+    }
+    else
+    {
+        Console.Error.WriteLine(
+            "usage: decompile <vpk> <internalPath> <outFile> | decompile <file_c> <outFile>");
+        return 2;
+    }
+
+    using var resource = new Resource();
+    resource.Read(new MemoryStream(bytes));
+    using var content = FileExtract.Extract(resource, null, null);
+    var dir = Path.GetDirectoryName(outFile);
+    if (!string.IsNullOrEmpty(dir))
+        Directory.CreateDirectory(dir);
+    File.WriteAllBytes(outFile, content.Data);
+    Console.WriteLine(outFile);
+    return 0;
+}
+
 // Fallback lookup for when an exact .vsnd_c path isn't found: match by stem
 // prefix. Handles version drift where a track gained a suffix (e.g. the events
 // file references `music_idol_carry_lp.vsnd` but the pak has
@@ -204,6 +253,43 @@ static PackageEntry? FindFuzzy(Package package, string internalPath)
         }
     }
     return best;
+}
+
+// extractall <vpk> <destDir> [pathPrefix]
+// Extracts every file (optionally only those under pathPrefix) into destDir,
+// preserving the content-relative folder layout. Prints the count.
+static int ExtractAll(string[] args)
+{
+    if (args.Length < 3)
+    {
+        Console.Error.WriteLine("usage: extractall <vpk> <destDir> [pathPrefix]");
+        return 2;
+    }
+    var vpk = Path.GetFullPath(args[1]);
+    var destDir = Path.GetFullPath(args[2]);
+    var prefix = args.Length >= 4 ? args[3].Replace('\\', '/').TrimStart('/') : "";
+
+    using var package = new Package();
+    package.Read(vpk);
+    var count = 0;
+    foreach (var byExt in package.Entries)
+    {
+        foreach (var entry in byExt.Value)
+        {
+            var full = entry.GetFullPath();
+            if (prefix.Length > 0 && !full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                continue;
+            package.ReadEntry(entry, out var bytes);
+            var dest = Path.Combine(destDir, full.Replace('/', Path.DirectorySeparatorChar));
+            var dir = Path.GetDirectoryName(dest);
+            if (!string.IsNullOrEmpty(dir))
+                Directory.CreateDirectory(dir);
+            File.WriteAllBytes(dest, bytes);
+            count++;
+        }
+    }
+    Console.WriteLine($"extracted {count} files -> {destDir}");
+    return 0;
 }
 
 // list <vpk> [substring]

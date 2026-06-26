@@ -89,6 +89,10 @@ pub struct CompileConfig {
     pub write_encoding_txt: bool,
     #[serde(default)]
     pub skip_compile: bool,
+    /// Other mods' `pak01_dir.vpk` paths to merge in (their sounds + soundevents
+    /// are unioned with ours; nothing of ours is removed).
+    #[serde(default)]
+    pub imported_mods: Vec<String>,
     pub events: Vec<EventCompile>,
 }
 
@@ -312,128 +316,202 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
         }
     }
 
-    // 3-4. Per events FILE: read live source, merge our slots, backup, write
-    // into the addon content tree, compile. Slots are grouped by their events
-    // file so a single Compile can span music.vsndevts AND hero/*.vsndevts etc.
-    use std::collections::BTreeMap;
+    // Group our slots by their events file.
+    use std::collections::{BTreeMap, BTreeSet};
     let mut by_file: BTreeMap<&str, Vec<&EventCompile>> = BTreeMap::new();
     for ev in &cfg.events {
         by_file.entry(ev.events_relpath.as_str()).or_default().push(ev);
     }
-
     let output_dir = Path::new(&cfg.output_dir);
-    let stage = output_dir.join("_staging");
-    let _ = std::fs::remove_dir_all(&stage);
-    if let Err(e) = std::fs::create_dir_all(&stage) {
-        return report.fail("prepare staging", e.to_string());
-    }
-    let mut staged = 0;
-    let mut events_c_rels: Vec<String> = Vec::new();
+    let helper_opt = cfg.vpk_helper_path.as_deref().filter(|h| !h.is_empty());
 
-    for (relpath, group) in &by_file {
-        let rel = relpath.trim_matches('/');
-        let source = Path::new(&cfg.vanilla_root).join(rel);
-        let live_text = match std::fs::read_to_string(&source) {
-            Ok(t) => t,
-            Err(e) => {
-                return report.fail(format!("read {rel}"), format!("{}: {e}", source.display()))
-            }
+    // 3. Read imported mods' soundevents (decompiled) once, keyed by relpath.
+    let mut imported_texts: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    if !cfg.imported_mods.is_empty() {
+        let helper = match helper_opt {
+            Some(h) => h,
+            None => return report.fail("import mods", "vpkHelperPath not set"),
         };
-
-        let merges: Vec<EventMerge> = group
-            .iter()
-            .map(|ev| {
-                let current = kv3_core::read_event_array(&live_text, &ev.event_name, &ev.array_key)
-                    .ok()
-                    .and_then(|v| v.vsnd_duration);
-                event_merge(ev, &cfg.sound_folder, current)
-            })
-            .collect();
-
-        let merged = match kv3_core::apply_merges(&live_text, &merges) {
-            Ok(t) => t,
-            Err(e) => return report.fail(format!("merge {rel}"), e.to_string()),
-        };
-        report.ok_step(format!("merge {rel}"), format!("{} event(s) spliced", merges.len()));
-
-        // Merged source -> addon content tree; compiler emits _c to the game tree.
-        let events_dest = content_root.join(rel);
-        if let Some(parent) = events_dest.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                return report.fail("prepare events dir", e.to_string());
+        let tmp_dir = std::env::temp_dir().join("deadlock-intro-tool").join("import");
+        let _ = std::fs::create_dir_all(&tmp_dir);
+        for (mi, mod_vpk) in cfg.imported_mods.iter().enumerate() {
+            let files = vpk::list(helper, mod_vpk, Some("soundevents/")).unwrap_or_default();
+            for f in files.iter().filter(|f| f.ends_with(".vsndevts_c")) {
+                let relpath = f.trim_end_matches("_c").to_string();
+                let tmp = tmp_dir.join(format!("m{mi}_{}", f.replace('/', "_")));
+                if vpk::decompile_from_vpk(helper, mod_vpk, f, &tmp.to_string_lossy()).is_ok() {
+                    if let Ok(text) = std::fs::read_to_string(&tmp) {
+                        imported_texts.entry(relpath).or_default().push(text);
+                    }
+                }
             }
         }
-        if events_dest.exists() {
+        report.ok_step("read imported mods", format!("{} mod(s)", cfg.imported_mods.len()));
+    }
+
+    // 4. Produce variants in their own folders under output_dir:
+    //    - "mine"     = your tracks only (a clean backup of just your mod)
+    //    - "combined" = yours + the imported mods (only when mods are imported)
+    struct Variant {
+        name: &'static str,
+        with_imported: bool,
+    }
+    let mut variants = vec![Variant { name: "mine", with_imported: false }];
+    if !cfg.imported_mods.is_empty() {
+        variants.push(Variant { name: "combined", with_imported: true });
+    }
+
+    for v in &variants {
+        let stage = output_dir.join(v.name).join("_staging");
+        let _ = std::fs::remove_dir_all(&stage);
+        if let Err(e) = std::fs::create_dir_all(&stage) {
+            return report.fail("prepare staging", e.to_string());
+        }
+        let mut staged = 0;
+        let mut events_c_rels: Vec<String> = Vec::new();
+
+        // Imported audio goes only into the combined variant.
+        if v.with_imported {
+            if let Some(helper) = helper_opt {
+                for mod_vpk in &cfg.imported_mods {
+                    let _ = vpk::extract_all(helper, mod_vpk, &stage.to_string_lossy(), Some("sounds/"));
+                }
+            }
+        }
+
+        let mut relpaths: BTreeSet<String> = by_file.keys().map(|s| s.to_string()).collect();
+        if v.with_imported {
+            for k in imported_texts.keys() {
+                relpaths.insert(k.clone());
+            }
+        }
+
+        for relpath in &relpaths {
+            let rel = relpath.trim_matches('/');
+            let vanilla = Path::new(&cfg.vanilla_root).join(rel);
+            let mod_texts = if v.with_imported { imported_texts.get(rel) } else { None };
+
+            let (mut text, additions): (String, &[String]) = if vanilla.exists() {
+                match std::fs::read_to_string(&vanilla) {
+                    Ok(t) => (t, mod_texts.map(|v| v.as_slice()).unwrap_or(&[])),
+                    Err(e) => return report.fail(format!("read {rel}"), e.to_string()),
+                }
+            } else if let Some(mt) = mod_texts {
+                (mt[0].clone(), &mt[1..])
+            } else {
+                return report.fail(format!("read {rel}"), "no vanilla base or imported source");
+            };
+
+            let mut added = 0;
+            for mt in additions {
+                if let Ok(arrays) = kv3_core::list_arrays(mt) {
+                    for a in arrays {
+                        if let Ok(t) =
+                            kv3_core::add_entries(&text, &a.event_name, &a.array_key, &a.entries)
+                        {
+                            text = t;
+                            added += 1;
+                        }
+                    }
+                }
+            }
+            if v.with_imported && !additions.is_empty() {
+                report.ok_step(format!("[{}] combine {rel}", v.name), format!("{added} array(s)"));
+            }
+
+            if let Some(slots) = by_file.get(rel) {
+                let merges: Vec<EventMerge> = slots
+                    .iter()
+                    .map(|ev| {
+                        let current =
+                            kv3_core::read_event_array(&text, &ev.event_name, &ev.array_key)
+                                .ok()
+                                .and_then(|x| x.vsnd_duration);
+                        event_merge(ev, &cfg.sound_folder, current)
+                    })
+                    .collect();
+                match kv3_core::apply_merges(&text, &merges) {
+                    Ok(t) => {
+                        text = t;
+                        report.ok_step(
+                            format!("[{}] merge {rel}", v.name),
+                            format!("{} slot(s)", merges.len()),
+                        );
+                    }
+                    Err(e) => return report.fail(format!("[{}] merge {rel}", v.name), e.to_string()),
+                }
+            }
+
+            let events_dest = content_root.join(rel);
             if let Some(parent) = events_dest.parent() {
-                let bak_dir = parent.join(".bak");
-                let _ = std::fs::create_dir_all(&bak_dir);
-                let stem = events_dest
-                    .file_name()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "events".into());
-                let bak = bak_dir.join(format!("{stem}.{}.bak", timestamp()));
-                let _ = std::fs::copy(&events_dest, &bak);
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    return report.fail("prepare events dir", e.to_string());
+                }
             }
-        }
-        if let Err(e) = std::fs::write(&events_dest, &merged) {
-            return report.fail(format!("write {rel}"), e.to_string());
+            if events_dest.exists() {
+                if let Some(parent) = events_dest.parent() {
+                    let bak_dir = parent.join(".bak");
+                    let _ = std::fs::create_dir_all(&bak_dir);
+                    let stem = events_dest
+                        .file_name()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "events".into());
+                    let bak = bak_dir.join(format!("{stem}.{}.bak", timestamp()));
+                    let _ = std::fs::copy(&events_dest, &bak);
+                }
+            }
+            if let Err(e) = std::fs::write(&events_dest, &text) {
+                return report.fail(format!("write {rel}"), e.to_string());
+            }
+            if !cfg.skip_compile {
+                match run_resource_compiler(cfg, &events_dest.to_string_lossy()) {
+                    Ok(detail) => report.ok_step(format!("[{}] compile {rel}", v.name), detail),
+                    Err(e) => return report.fail(format!("[{}] compile {rel}", v.name), e),
+                }
+            }
+            events_c_rels.push(events_c_relpath(rel));
         }
 
-        if !cfg.skip_compile {
-            match run_resource_compiler(cfg, &events_dest.to_string_lossy()) {
-                Ok(detail) => report.ok_step(format!("compile {rel}"), detail),
-                Err(e) => return report.fail(format!("compile {rel}"), e),
+        // Stage our song .vsnd_c + each events .vsndevts_c into this variant.
+        for ev in &cfg.events {
+            for song in &ev.songs {
+                let rel = vsnd_c_relpath(&cfg.sound_folder, &song.sound_name);
+                let src = compiled_root.join(&rel);
+                if cfg.skip_compile && !src.exists() {
+                    continue;
+                }
+                match copy_into(&src, &stage, &rel) {
+                    Ok(_) => staged += 1,
+                    Err(e) => return report.fail(format!("stage: {rel}"), e.to_string()),
+                }
             }
         }
-        events_c_rels.push(events_c_relpath(rel));
+        for rel in &events_c_rels {
+            let src = compiled_root.join(rel);
+            if src.exists() {
+                match copy_into(&src, &stage, rel) {
+                    Ok(_) => staged += 1,
+                    Err(e) => return report.fail(format!("stage: {rel}"), e.to_string()),
+                }
+            }
+        }
+        report.ok_step(format!("[{}] stage", v.name), format!("{staged} file(s)"));
+
+        if cfg.output_mode == "vpk" {
+            let helper = match helper_opt {
+                Some(h) => h,
+                None => return report.fail("pack vpk", "vpkHelperPath not set"),
+            };
+            let out_vpk = output_dir.join(v.name).join(&cfg.vpk_name);
+            match vpk::pack(helper, &stage.to_string_lossy(), &out_vpk.to_string_lossy()) {
+                Ok(detail) => report.ok_step(format!("[{}] pack vpk", v.name), detail),
+                Err(e) => return report.fail(format!("[{}] pack vpk", v.name), e),
+            }
+        }
     }
 
-    // 5. Stage produced files (song .vsnd_c + each events .vsndevts_c).
-    for ev in &cfg.events {
-        for song in &ev.songs {
-            let rel = vsnd_c_relpath(&cfg.sound_folder, &song.sound_name);
-            let src = compiled_root.join(&rel);
-            if cfg.skip_compile && !src.exists() {
-                continue;
-            }
-            match copy_into(&src, &stage, &rel) {
-                Ok(_) => staged += 1,
-                Err(e) => return report.fail(format!("stage: {rel}"), e.to_string()),
-            }
-        }
-    }
-    for rel in &events_c_rels {
-        let src = compiled_root.join(rel);
-        if src.exists() {
-            match copy_into(&src, &stage, rel) {
-                Ok(_) => staged += 1,
-                Err(e) => return report.fail(format!("stage: {rel}"), e.to_string()),
-            }
-        }
-    }
-    report.ok_step("stage output", format!("{staged} file(s) -> {}", stage.display()));
-
-    // 6. Folder vs VPK.
-    if cfg.output_mode == "vpk" {
-        let helper = match &cfg.vpk_helper_path {
-            Some(h) if !h.is_empty() => h.clone(),
-            _ => return report.fail("pack vpk", "vpkHelperPath not set"),
-        };
-        let out_vpk = output_dir.join(&cfg.vpk_name);
-        match vpk::pack(
-            &helper,
-            &stage.to_string_lossy(),
-            &out_vpk.to_string_lossy(),
-        ) {
-            Ok(detail) => {
-                report.ok_step("pack vpk", detail);
-                report.output_path = Some(out_vpk.to_string_lossy().into_owned());
-            }
-            Err(e) => return report.fail("pack vpk", e),
-        }
-    } else {
-        report.output_path = Some(stage.to_string_lossy().into_owned());
-    }
+    // Report the output dir (contains mine/ and, if combined, combined/).
+    report.output_path = Some(output_dir.to_string_lossy().into_owned());
 
     Ok(())
 }
@@ -517,6 +595,7 @@ mod tests {
             vpk_name: "pak01_dir.vpk".into(),
             write_encoding_txt: true,
             skip_compile: false,
+            imported_mods: vec![],
             events: vec![EventCompile {
                 event_name: "Music.MatchIntro.MatchStart.King".into(),
                 array_key: "vsnd_files".into(),
@@ -544,7 +623,7 @@ mod tests {
 
         // Assertions
         assert!(report.ok, "pipeline failed");
-        let vpk = out.join("pak01_dir.vpk");
+        let vpk = out.join("mine").join("pak01_dir.vpk");
         assert!(vpk.exists(), "vpk not produced");
         let vsnd_c = compiled_root_path(&cfg).join("sounds/music/match_intro/eim_e2e.vsnd_c");
         assert!(vsnd_c.exists(), "vsnd_c not produced");

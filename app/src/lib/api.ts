@@ -91,6 +91,7 @@ export interface CompileConfig {
   vpkName: string;
   writeEncodingTxt: boolean;
   skipCompile: boolean;
+  importedMods: string[];
   events: EventCompile[];
 }
 
