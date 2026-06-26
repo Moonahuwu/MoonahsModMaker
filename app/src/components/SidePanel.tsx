@@ -54,6 +54,7 @@ function EntryRow({
   onToggle,
   onRemove,
   onEdit,
+  onDownload,
 }: {
   name: string;
   tag: string;
@@ -64,6 +65,7 @@ function EntryRow({
   onToggle: () => void;
   onRemove: () => void;
   onEdit?: () => void;
+  onDownload: () => void;
 }) {
   return (
     <div
@@ -84,6 +86,13 @@ function EntryRow({
           className="rounded p-0.5 text-current opacity-70 transition hover:opacity-100"
         >
           {previewState === "loading" ? "…" : previewState === "playing" ? "⏸" : "▶"}
+        </button>
+        <button
+          onClick={onDownload}
+          title="Download a copy to your Downloads folder"
+          className="rounded p-0.5 text-current opacity-70 transition hover:opacity-100"
+        >
+          ⤓
         </button>
         {onEdit && (
           <button
@@ -124,6 +133,8 @@ export function SidePanel({
   onRestoreEntry,
   onDecodeStock,
   onEditAdopted,
+  onDownloadEntry,
+  onDownloadSong,
 }: {
   ev: EventProject;
   view: EventView | undefined;
@@ -140,6 +151,8 @@ export function SidePanel({
   onRestoreEntry: (eventName: string, ref: string) => void;
   onDecodeStock: (ref: string, vpk?: string) => Promise<string>;
   onEditAdopted: (slotId: string, ref: string, vpk: string, label: string) => void;
+  onDownloadEntry: (ref: string, vpk?: string) => void;
+  onDownloadSong: (sourceMp3: string) => void;
 }) {
   const [stockUrl, setStockUrl] = useState<string | null>(null);
   const [stockErr, setStockErr] = useState<string | null>(null);
@@ -255,6 +268,7 @@ export function SidePanel({
             onPreview={() => void previewEntry(ev.stockEntry)}
             onToggle={() => onToggleEntry(ev.id, ev.stockEntry)}
             onRemove={() => onRemoveEntry(ev.id, ev.stockEntry)}
+            onDownload={() => onDownloadEntry(ev.stockEntry)}
           />
         </div>
       )}
@@ -295,6 +309,7 @@ export function SidePanel({
                 onPreview={() => void previewEntry(e)}
                 onToggle={() => onToggleEntry(ev.id, e)}
                 onRemove={() => onRemoveEntry(ev.id, e)}
+                onDownload={() => onDownloadEntry(e)}
               />
             ))}
           </div>
@@ -320,6 +335,7 @@ export function SidePanel({
                 onToggle={() => onToggleEntry(ev.id, a.reference)}
                 onRemove={() => onRemoveEntry(ev.id, a.reference)}
                 onEdit={() => onEditAdopted(ev.id, a.reference, a.sourceVpk, a.label)}
+                onDownload={() => onDownloadEntry(a.reference, a.sourceVpk)}
               />
             ))}
           </div>
@@ -366,6 +382,7 @@ export function SidePanel({
                 onChange={(patch) => onSongChange(s.id, patch)}
                 onRename={(raw) => onSongRename(s.id, raw)}
                 onRemove={() => onSongRemove(s.id)}
+                onDownload={() => onDownloadSong(s.sourceMp3)}
               />
             </motion.div>
           ))}

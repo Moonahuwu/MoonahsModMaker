@@ -29,6 +29,8 @@ pub struct SongCompile {
     pub fade_in: f64,
     #[serde(default)]
     pub fade_out: f64,
+    #[serde(default)]
+    pub looping: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -113,7 +115,34 @@ fn default_true() -> bool {
     true
 }
 
-const ENCODING_TXT: &str = "<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} format:generic:version{7412167c-06e9-4698-aff2-e63eb59037e7} -->\n{\n\tcompress = \n\t{\n\t\tformat = \"mp3\"\n\t\tminbitrate = 128\n\t\tmaxbitrate = 320\n\t\tvbr = 1\n\t}\n}\n";
+const ENCODING_HEADER: &str = "<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} format:generic:version{7412167c-06e9-4698-aff2-e63eb59037e7} -->\n";
+
+/// Build `encoding.txt`: an mp3 `compress` block plus a `loop` block per song
+/// that should loop (required for `_lp` tracks to actually loop in-game).
+fn build_encoding_txt(events: &[EventCompile]) -> String {
+    let mut s = String::from(ENCODING_HEADER);
+    s.push_str("{\n\tcompress = \n\t{\n\t\tformat = \"mp3\"\n\t\tminbitrate = 128\n\t\tmaxbitrate = 320\n\t\tvbr = 1\n\t}\n");
+
+    let mut files = String::new();
+    for ev in events {
+        for song in &ev.songs {
+            if song.looping {
+                let dur = (song.trim_end - song.trim_start).max(0.01);
+                files.push_str(&format!(
+                    "\t\t{{ fileName = \"{}.wav\" loop = {{ loop_start_time = 0.0 loop_end_time = {:.6} }} }},\n",
+                    song.sound_name, dur,
+                ));
+            }
+        }
+    }
+    if !files.is_empty() {
+        s.push_str("\tfiles = \n\t[\n");
+        s.push_str(&files);
+        s.push_str("\t]\n");
+    }
+    s.push_str("}\n");
+    s
+}
 
 fn default_vpk_name() -> String {
     "pak01_dir.vpk".to_string()
@@ -282,13 +311,16 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
     let compiled_root = Path::new(&cfg.compiled_root);
     let ffmpeg = cfg.ffmpeg_path.as_deref();
 
-    // 0. Write encoding.txt so audio is mp3-compressed like community templates.
+    // 0. Write encoding.txt alongside the source wavs (same folder) so the
+    //    compiler picks up mp3 compression AND per-file loop points (_lp tracks).
     if cfg.write_encoding_txt {
-        let enc = content_root.join("sounds").join("encoding.txt");
+        let enc = content_root
+            .join(cfg.sound_folder.trim_matches('/'))
+            .join("encoding.txt");
         if let Some(parent) = enc.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        if let Err(e) = std::fs::write(&enc, ENCODING_TXT) {
+        if let Err(e) = std::fs::write(&enc, build_encoding_txt(&cfg.events)) {
             return report.fail("write encoding.txt", e.to_string());
         }
         report.ok_step("write encoding.txt", enc.to_string_lossy().into_owned());
@@ -576,6 +608,7 @@ mod tests {
                 gain_db: 0.0,
                 fade_in: 0.0,
                 fade_out: 0.0,
+                looping: false,
             }],
         };
         // current 27 -> stays 27 (our clip is shorter)
@@ -653,6 +686,7 @@ mod tests {
                     gain_db: 6.0,
                     fade_in: 0.0,
                     fade_out: 1.0,
+                    looping: true,
                 }],
             }],
         };

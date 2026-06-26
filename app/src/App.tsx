@@ -3,7 +3,9 @@ import { AnimatePresence, motion } from "motion/react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import {
+  copyToDownloads,
   decodeStock as decodeStockApi,
+  downloadEntry,
   loadState,
   newProject,
   probeAudio,
@@ -230,6 +232,7 @@ export default function App() {
         gainDb: DEFAULT_GAIN_DB,
         fadeIn: 0,
         fadeOut: 0,
+        looping: slot?.eventName.endsWith(".Lp") ?? false,
         order,
         lastCompiledHash: null,
       };
@@ -304,6 +307,27 @@ export default function App() {
     return (ref.split("/").pop() ?? ref).replace(/\.vsnd$/, "");
   }
 
+  // Download a copy of an existing entry (decoded from its vpk) into Downloads.
+  async function downloadEntryTo(ref: string, vpk?: string) {
+    const s = settingsRef.current;
+    try {
+      const dest = await downloadEntry(s.vpkHelperPath, vpk ?? s.deadlockPak, ref);
+      push("success", `Saved to ${dest}`);
+    } catch (e) {
+      push("error", `Download failed: ${e}`);
+    }
+  }
+
+  // Copy one of your source mp3s into Downloads.
+  async function downloadSong(sourceMp3: string) {
+    try {
+      const dest = await copyToDownloads(sourceMp3);
+      push("success", `Saved to ${dest}`);
+    } catch (e) {
+      push("error", `Download failed: ${e}`);
+    }
+  }
+
   // "Merge into project": adopt a mod's added entries into matching slots.
   async function mergeModIntoProject(vpk: string) {
     const proj = projectRef.current;
@@ -375,6 +399,7 @@ export default function App() {
           gainDb: DEFAULT_GAIN_DB,
           fadeIn: 0,
           fadeOut: 0,
+          looping: slot?.eventName.endsWith(".Lp") ?? false,
           order,
           lastCompiledHash: null,
         };
@@ -526,6 +551,8 @@ export default function App() {
                 onRestoreEntry={restoreEntry}
                 onDecodeStock={decodeStock}
                 onEditAdopted={editAdopted}
+                onDownloadEntry={downloadEntryTo}
+                onDownloadSong={downloadSong}
               />
             ))}
           </div>

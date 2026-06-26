@@ -11,6 +11,7 @@ interface SongCardProps {
   onChange: (patch: Partial<Song>) => void;
   onRename: (raw: string) => void;
   onRemove: () => void;
+  onDownload: () => void;
 }
 
 function fmtTime(s: number): string {
@@ -26,6 +27,7 @@ export function SongCard({
   onChange,
   onRename,
   onRemove,
+  onDownload,
 }: SongCardProps) {
   const [state, setState] = useState<PlayState>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -119,6 +121,14 @@ export function SongCard({
           {song.lastCompiledHash ? "Compiled" : "New"}
         </span>
         <button
+          onClick={onDownload}
+          aria-label="Download a copy"
+          title="Copy this source file to your Downloads folder"
+          className="shrink-0 rounded p-1 text-zinc-500 transition hover:bg-zinc-800 hover:text-zinc-200"
+        >
+          ⤓
+        </button>
+        <button
           onClick={onRemove}
           aria-label="Remove track"
           className="shrink-0 rounded p-1 text-zinc-500 transition hover:bg-red-950/50 hover:text-red-300"
@@ -156,6 +166,19 @@ export function SongCard({
           {fmtTime(song.trimStart)}–{fmtTime(song.trimEnd)}
           <span className="ml-1 text-zinc-600">({fmtTime(length)})</span>
         </span>
+
+        <label
+          className="flex items-center gap-1.5 text-xs text-zinc-400"
+          title="Loop this track (writes loop points to encoding.txt — needed for _lp slots)"
+        >
+          <input
+            type="checkbox"
+            checked={song.looping}
+            onChange={(e) => onChange({ looping: e.target.checked })}
+            className="accent-emerald-500"
+          />
+          Loop
+        </label>
 
         <label className="flex flex-1 items-center gap-2 text-xs text-zinc-400">
           <span className="whitespace-nowrap text-zinc-500">Gain</span>

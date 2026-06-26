@@ -35,6 +35,77 @@ pub fn compile_project(config: CompileConfig) -> CompileReport {
     compile::run(&config)
 }
 
+fn downloads_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    use tauri::Manager;
+    app.path().download_dir().map_err(|e| e.to_string())
+}
+
+/// A non-colliding path `<dir>/<stem>.<ext>` (appends " (2)", " (3)", …).
+fn unique_path(dir: &std::path::Path, stem: &str, ext: &str) -> PathBuf {
+    let mut p = dir.join(format!("{stem}.{ext}"));
+    let mut i = 2;
+    while p.exists() {
+        p = dir.join(format!("{stem} ({i}).{ext}"));
+        i += 1;
+    }
+    p
+}
+
+fn ref_stem(reference: &str) -> String {
+    reference
+        .rsplit('/')
+        .next()
+        .unwrap_or(reference)
+        .trim_end_matches(".vsnd")
+        .to_string()
+}
+
+/// Decode a compiled entry (from `vpk`) and save a playable copy into the user's
+/// Downloads folder. Returns the saved path.
+#[tauri::command]
+pub fn download_entry(
+    app: tauri::AppHandle,
+    helper_path: String,
+    vpk: String,
+    reference: String,
+) -> Result<String, String> {
+    let internal = reference
+        .strip_suffix(".vsnd")
+        .map(|s| format!("{s}.vsnd_c"))
+        .unwrap_or_else(|| reference.clone());
+    let tmp_base = std::env::temp_dir()
+        .join("deadlock-intro-tool")
+        .join("dl_tmp");
+    if let Some(parent) = tmp_base.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let decoded = crate::vpk::decode(&helper_path, &vpk, &internal, &tmp_base.to_string_lossy())?;
+    let ext = std::path::Path::new(&decoded)
+        .extension()
+        .map(|e| e.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "wav".into());
+    let dest = unique_path(&downloads_dir(&app)?, &ref_stem(&reference), &ext);
+    std::fs::copy(&decoded, &dest).map_err(|e| e.to_string())?;
+    Ok(dest.to_string_lossy().into_owned())
+}
+
+/// Copy an existing audio file (e.g. one of your source mp3s) into Downloads.
+#[tauri::command]
+pub fn copy_to_downloads(app: tauri::AppHandle, src_path: String) -> Result<String, String> {
+    let src = std::path::Path::new(&src_path);
+    let stem = src
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "track".into());
+    let ext = src
+        .extension()
+        .map(|e| e.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "mp3".into());
+    let dest = unique_path(&downloads_dir(&app)?, &stem, &ext);
+    std::fs::copy(src, &dest).map_err(|e| e.to_string())?;
+    Ok(dest.to_string_lossy().into_owned())
+}
+
 /// Read every `vsnd_files*` array in a mod's soundevents (decompiled from its
 /// vpk). Used by "Merge into project" to find what the mod added.
 #[tauri::command]

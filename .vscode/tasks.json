@@ -1,0 +1,31 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "▶ Run app (dev, hot reload)",
+      "type": "shell",
+      "command": "npm run tauri dev",
+      "options": {
+        "cwd": "${workspaceFolder}/app",
+        "env": { "PATH": "${env:USERPROFILE}\\.cargo\\bin;${env:PATH}" }
+      },
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true },
+      "detail": "Launch the app with hot reload (like the Python play button)."
+    },
+    {
+      "label": "Build app (release .exe + installer)",
+      "type": "shell",
+      "command": "npm run tauri build",
+      "options": {
+        "cwd": "${workspaceFolder}/app",
+        "env": { "PATH": "${env:USERPROFILE}\\.cargo\\bin;${env:PATH}" }
+      },
+      "group": "build",
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "detail": "Produce target/release/app.exe + installers."
+    }
+  ]
+}

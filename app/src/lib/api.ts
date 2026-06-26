@@ -19,6 +19,8 @@ export interface ProcessReq {
   ffmpegPath?: string;
 }
 
+// (looping is carried on Song/SongCompile, not preview ProcessReq)
+
 /** Render the processed (trimmed + gained) preview; resolves to its WAV path. */
 export function processAudio(req: ProcessReq): Promise<string> {
   return invoke("process_audio", { req });
@@ -65,6 +67,7 @@ export interface SongCompile {
   gainDb: number;
   fadeIn: number;
   fadeOut: number;
+  looping: boolean;
 }
 
 export interface EventCompile {
@@ -130,6 +133,20 @@ export function decodeStock(
   stockRef: string,
 ): Promise<string> {
   return invoke("decode_stock", { helperPath, pakPath, stockRef });
+}
+
+/** Decode a compiled entry from a vpk and save a copy into Downloads. */
+export function downloadEntry(
+  helperPath: string,
+  vpk: string,
+  reference: string,
+): Promise<string> {
+  return invoke("download_entry", { helperPath, vpk, reference });
+}
+
+/** Copy an existing audio file (e.g. a source mp3) into Downloads. */
+export function copyToDownloads(srcPath: string): Promise<string> {
+  return invoke("copy_to_downloads", { srcPath });
 }
 
 export interface ArrayInfo {

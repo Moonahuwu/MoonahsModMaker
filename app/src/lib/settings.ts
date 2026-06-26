@@ -92,6 +92,7 @@ export function buildCompileConfig(
       gainDb: song.gainDb,
       fadeIn: song.fadeIn,
       fadeOut: song.fadeOut,
+      looping: song.looping,
     })),
   }));
 

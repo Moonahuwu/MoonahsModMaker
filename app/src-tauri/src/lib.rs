@@ -18,6 +18,8 @@ pub fn run() {
             commands::new_project,
             commands::check_paths,
             commands::read_mod_arrays,
+            commands::download_entry,
+            commands::copy_to_downloads,
             commands::load_project,
             commands::save_project,
             commands::save_state,

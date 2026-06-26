@@ -31,6 +31,7 @@ export interface Song {
   gainDb: number;
   fadeIn: number;
   fadeOut: number;
+  looping: boolean;
   order: number;
   lastCompiledHash: string | null;
 }

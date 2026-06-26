@@ -189,6 +189,9 @@ pub struct Song {
     /// Fade-out duration in seconds (0 = none).
     #[serde(default)]
     pub fade_out: f64,
+    /// Whether this track should loop (writes a loop block to encoding.txt).
+    #[serde(default)]
+    pub looping: bool,
     pub order: u32,
     /// Hash of `{trim, gain, sourceMp3}`; null until first compile.
     #[serde(default)]
