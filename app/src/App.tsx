@@ -4,10 +4,13 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import {
   decodeStock as decodeStockApi,
+  loadState,
   newProject,
   probeAudio,
   readEventPools,
+  readModArrays,
   sanitizeName,
+  saveState,
 } from "./lib/api";
 import { SidePanel } from "./components/SidePanel";
 import { SetupSection } from "./components/SetupSection";
@@ -66,15 +69,29 @@ export default function App() {
     return seen;
   }, [project]);
 
+  const hydrated = useRef(false);
+
   useEffect(() => {
-    newProject()
-      .then((p) => {
+    (async () => {
+      try {
+        const saved = await loadState();
+        const p = saved ?? (await newProject());
         setProject(p);
+        hydrated.current = true;
         void load(p);
-      })
-      .catch((e) => push("error", String(e)));
+      } catch (e) {
+        push("error", String(e));
+      }
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Debounced autosave of the project state (no compile) on any change.
+  useEffect(() => {
+    if (!project || !hydrated.current) return;
+    const id = setTimeout(() => void saveState(project), 600);
+    return () => clearTimeout(id);
+  }, [project]);
 
   function pickSide(x: number, y: number): { side: string | null; how: string } {
     const dpr = window.devicePixelRatio || 1;
@@ -211,6 +228,7 @@ export default function App() {
         trimStart: 0,
         trimEnd: info.duration,
         gainDb: DEFAULT_GAIN_DB,
+        fadeIn: 0,
         fadeOut: 0,
         order,
         lastCompiledHash: null,
@@ -274,10 +292,109 @@ export default function App() {
     );
   }
 
-  async function decodeStock(stockRef: string): Promise<string> {
+  // Decode a compiled entry to a playable URL. `vpk` defaults to the game pak
+  // (stock tracks); pass a mod vpk for adopted entries.
+  async function decodeStock(ref: string, vpk?: string): Promise<string> {
     const s = settingsRef.current;
-    const path = await decodeStockApi(s.vpkHelperPath, s.deadlockPak, stockRef);
+    const path = await decodeStockApi(s.vpkHelperPath, vpk ?? s.deadlockPak, ref);
     return convertFileSrc(path);
+  }
+
+  function shortRef(ref: string): string {
+    return (ref.split("/").pop() ?? ref).replace(/\.vsnd$/, "");
+  }
+
+  // "Merge into project": adopt a mod's added entries into matching slots.
+  async function mergeModIntoProject(vpk: string) {
+    const proj = projectRef.current;
+    if (!proj) return;
+    try {
+      const arrays = await readModArrays(settingsRef.current.vpkHelperPath, vpk);
+      const byKey = new Map(arrays.map((a) => [`${a.eventName}::${a.arrayKey}`, a]));
+      let adoptedCount = 0;
+      let slotsTouched = 0;
+      setProject((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          events: prev.events.map((ev) => {
+            const a = byKey.get(`${ev.eventName}::${ev.arrayKey}`);
+            if (!a) return ev;
+            const ourRefs = ev.songs.map(
+              (s) => `${prev.soundFolder}/${s.soundName}.vsnd`,
+            );
+            const existing = new Set([
+              ev.stockEntry,
+              ...(pools[ev.id]?.entries ?? []),
+              ...ourRefs,
+              ...ev.adopted.map((x) => x.reference),
+            ]);
+            const fresh = a.entries.filter((r) => !existing.has(r));
+            if (fresh.length === 0) return ev;
+            slotsTouched++;
+            adoptedCount += fresh.length;
+            return {
+              ...ev,
+              adopted: [
+                ...ev.adopted,
+                ...fresh.map((r) => ({ reference: r, sourceVpk: vpk, label: shortRef(r) })),
+              ],
+            };
+          }),
+        };
+      });
+      if (adoptedCount > 0) {
+        push("success", `Adopted ${adoptedCount} track(s) into ${slotsTouched} slot(s)`);
+      } else {
+        push("info", "Nothing new to adopt from that mod for your slots");
+      }
+    } catch (e) {
+      push("error", `Merge into project failed: ${e}`);
+    }
+  }
+
+  // Convert an adopted entry into an editable mp3 song card.
+  async function editAdopted(slotId: string, ref: string, vpk: string, label: string) {
+    const s = settingsRef.current;
+    try {
+      const mp3 = await decodeStockApi(s.vpkHelperPath, vpk, ref);
+      const info = await probeAudio(mp3, s.ffmpegPath || undefined);
+      const sanitized = await sanitizeName(label);
+      setProject((prev) => {
+        if (!prev) return prev;
+        const soundName = uniqueSoundName(sanitized, prev);
+        const slot = prev.events.find((e) => e.id === slotId);
+        const order = slot ? slot.songs.length : 0;
+        const song: Song = {
+          id: crypto.randomUUID(),
+          label,
+          sourceMp3: mp3,
+          soundName,
+          trimStart: 0,
+          trimEnd: info.duration,
+          gainDb: DEFAULT_GAIN_DB,
+          fadeIn: 0,
+          fadeOut: 0,
+          order,
+          lastCompiledHash: null,
+        };
+        return {
+          ...prev,
+          events: prev.events.map((e) =>
+            e.id === slotId
+              ? {
+                  ...e,
+                  songs: [...e.songs, song],
+                  adopted: e.adopted.filter((x) => x.reference !== ref),
+                }
+              : e,
+          ),
+        };
+      });
+      push("success", `Now editing "${label}"`);
+    } catch (e) {
+      push("error", `Couldn't edit ${label}: ${e}`);
+    }
   }
 
   // Slot-targeted toggles (slots can share an event name, so key by slot id).
@@ -384,7 +501,11 @@ export default function App() {
         </header>
 
         {activeTab === MOD_COMBINER ? (
-          <ImportedMods settings={settings} update={updateSettings} />
+          <ImportedMods
+            settings={settings}
+            update={updateSettings}
+            onMerge={mergeModIntoProject}
+          />
         ) : (
           <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
             {visibleSlots.map((ev) => (
@@ -404,6 +525,7 @@ export default function App() {
                 onRemoveEntry={removeEntry}
                 onRestoreEntry={restoreEntry}
                 onDecodeStock={decodeStock}
+                onEditAdopted={editAdopted}
               />
             ))}
           </div>

@@ -29,6 +29,7 @@ export interface Song {
   trimStart: number;
   trimEnd: number;
   gainDb: number;
+  fadeIn: number;
   fadeOut: number;
   order: number;
   lastCompiledHash: string | null;
@@ -47,7 +48,14 @@ export interface EventProject {
   previousOwnedNames: string[];
   excludedEntries: string[];
   removedEntries: string[];
+  adopted: AdoptedEntry[];
   eventsRelpath: string;
+}
+
+export interface AdoptedEntry {
+  reference: string;
+  sourceVpk: string;
+  label: string;
 }
 
 export interface EventsFile {

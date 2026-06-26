@@ -55,16 +55,32 @@ export function Waveform({ url, trimStart, trimEnd, onTrimChange }: WaveformProp
       onTrimChangeRef.current(region.start, region.end);
     });
 
-    // Click region body to play just that slice (unprocessed preview of trim).
+    // Left-click the trim region to play that slice; click again to pause/resume.
     regions.on("region-clicked", (region, e) => {
       e.stopPropagation();
-      region.play();
+      if (ws.isPlaying()) {
+        ws.pause();
+      } else {
+        region.play();
+      }
     });
 
+    // Right-click anywhere on the waveform to move the playhead to that point.
+    const el = containerRef.current!;
+    const onContext = (e: MouseEvent) => {
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+      const dur = ws.getDuration();
+      if (dur > 0) ws.setTime(ratio * dur);
+    };
+    el.addEventListener("contextmenu", onContext);
+
     return () => {
+      el.removeEventListener("contextmenu", onContext);
       ws.destroy();
     };
   }, [url]);
 
-  return <div ref={containerRef} className="w-full cursor-text" />;
+  return <div ref={containerRef} className="w-full cursor-pointer" />;
 }

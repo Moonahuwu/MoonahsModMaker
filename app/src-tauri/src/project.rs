@@ -144,6 +144,10 @@ pub struct EventProject {
     /// from the UI and excluded from the array; restorable).
     #[serde(default)]
     pub removed_entries: Vec<String>,
+    /// Entries adopted from other mods into this slot (shown in the pool; their
+    /// compiled audio is bundled from `source_vpk`). Part of the project.
+    #[serde(default)]
+    pub adopted: Vec<AdoptedEntry>,
     /// Which soundevent file this slot's event lives in, relative to the
     /// soundevents root (e.g. `soundevents/music.vsndevts` or
     /// `soundevents/hero/punkgoat.vsndevts`).
@@ -153,6 +157,18 @@ pub struct EventProject {
 
 fn default_events_relpath() -> String {
     "soundevents/music.vsndevts".to_string()
+}
+
+/// An entry adopted from another mod into a slot (kept at the mod's original
+/// compiled quality; convertible to an editable Song via the UI's Edit button).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdoptedEntry {
+    /// Full `.vsnd` reference written into the array.
+    pub reference: String,
+    /// The mod vpk the compiled `.vsnd_c` is extracted from on compile.
+    pub source_vpk: String,
+    pub label: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -167,6 +183,9 @@ pub struct Song {
     pub trim_start: f64,
     pub trim_end: f64,
     pub gain_db: f64,
+    /// Fade-in duration in seconds (0 = none).
+    #[serde(default)]
+    pub fade_in: f64,
     /// Fade-out duration in seconds (0 = none).
     #[serde(default)]
     pub fade_out: f64,
@@ -200,6 +219,7 @@ fn slot(
         previous_owned_names: vec![],
         excluded_entries: vec![],
         removed_entries: vec![],
+        adopted: vec![],
         events_relpath: events_relpath.into(),
     }
 }

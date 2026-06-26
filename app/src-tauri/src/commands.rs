@@ -35,6 +35,30 @@ pub fn compile_project(config: CompileConfig) -> CompileReport {
     compile::run(&config)
 }
 
+/// Read every `vsnd_files*` array in a mod's soundevents (decompiled from its
+/// vpk). Used by "Merge into project" to find what the mod added.
+#[tauri::command]
+pub fn read_mod_arrays(
+    helper_path: String,
+    vpk: String,
+) -> Result<Vec<kv3_core::ArrayInfo>, String> {
+    let files = crate::vpk::list(&helper_path, &vpk, Some("soundevents/"))?;
+    let tmp = std::env::temp_dir().join("deadlock-intro-tool").join("modread");
+    let _ = std::fs::create_dir_all(&tmp);
+    let mut out = Vec::new();
+    for f in files.iter().filter(|f| f.ends_with(".vsndevts_c")) {
+        let dest = tmp.join(f.replace('/', "_"));
+        if crate::vpk::decompile_from_vpk(&helper_path, &vpk, f, &dest.to_string_lossy()).is_ok() {
+            if let Ok(text) = std::fs::read_to_string(&dest) {
+                if let Ok(arrays) = kv3_core::list_arrays(&text) {
+                    out.extend(arrays);
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Decode a stock track's compiled `.vsnd_c` (from the game's pak) to playable
 /// audio for the waveform comparison. `stock_ref` is the `.vsnd` reference; the
 /// result is cached in the staging dir and the audio file path is returned.
@@ -163,6 +187,31 @@ pub fn check_paths(paths: Vec<String>) -> Vec<bool> {
 #[tauri::command]
 pub fn load_project(path: String) -> Result<Project, String> {
     Project::load(&PathBuf::from(path)).map_err(|e| e.to_string())
+}
+
+/// Path of the autosaved project in the OS app-data dir.
+fn state_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    use tauri::Manager;
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.join("project.json"))
+}
+
+/// Autosave the current project state (no compile).
+#[tauri::command]
+pub fn save_state(app: tauri::AppHandle, project: Project) -> Result<(), String> {
+    project.save(&state_path(&app)?).map_err(|e| e.to_string())
+}
+
+/// Load the autosaved project, or None if there isn't one yet.
+#[tauri::command]
+pub fn load_state(app: tauri::AppHandle) -> Result<Option<Project>, String> {
+    let path = state_path(&app)?;
+    if path.exists() {
+        Project::load(&path).map(Some).map_err(|e| e.to_string())
+    } else {
+        Ok(None)
+    }
 }
 
 #[tauri::command]

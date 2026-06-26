@@ -12,9 +12,11 @@ function baseName(p: string): string {
 export function ImportedMods({
   settings,
   update,
+  onMerge,
 }: {
   settings: Settings;
   update: (patch: Partial<Settings>) => void;
+  onMerge: (vpk: string) => void;
 }) {
   const [draft, setDraft] = useState("");
   const mods = settings.importedMods;
@@ -39,6 +41,16 @@ export function ImportedMods({
     const next = [...mods];
     for (const p of paths) if (!next.includes(p)) next.push(p);
     update({ importedMods: next });
+  }
+
+  async function browseMerge() {
+    const sel = await open({
+      multiple: true,
+      title: "Merge mod(s) into your project",
+      filters: [{ name: "VPK", extensions: ["vpk"] }],
+    });
+    if (!sel) return;
+    for (const p of Array.isArray(sel) ? sel : [sel]) onMerge(p);
   }
 
   return (
@@ -102,6 +114,22 @@ export function ImportedMods({
           className="rounded-md border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-white"
         >
           Add
+        </button>
+      </div>
+
+      <div className="mt-5 border-t border-zinc-800 pt-4">
+        <h3 className="text-sm font-semibold text-zinc-200">Merge a mod into your project</h3>
+        <p className="mt-2 text-xs text-zinc-500">
+          One-time import: pulls a mod's tracks into your matching slots (Intro / Urn
+          / Heroes) so they show up there — toggle, remove, or hit <span className="text-zinc-400">Edit</span> on
+          one to turn it into your own trimmable track. Different from the list above,
+          which just bundles a whole mod on compile.
+        </p>
+        <button
+          onClick={() => void browseMerge()}
+          className="mt-3 rounded-md bg-violet-600 px-4 py-1.5 text-xs font-medium text-white transition hover:bg-violet-500"
+        >
+          Merge a mod into project…
         </button>
       </div>
     </section>

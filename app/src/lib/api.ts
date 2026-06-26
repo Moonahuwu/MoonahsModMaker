@@ -14,6 +14,7 @@ export interface ProcessReq {
   trimStart: number;
   trimEnd: number;
   gainDb: number;
+  fadeIn: number;
   fadeOut: number;
   ffmpegPath?: string;
 }
@@ -62,6 +63,7 @@ export interface SongCompile {
   trimStart: number;
   trimEnd: number;
   gainDb: number;
+  fadeIn: number;
   fadeOut: number;
 }
 
@@ -74,6 +76,7 @@ export interface EventCompile {
   previousOwned: string[];
   excluded: string[];
   eventsRelpath: string;
+  adopted: { reference: string; sourceVpk: string }[];
   songs: SongCompile[];
 }
 
@@ -129,8 +132,32 @@ export function decodeStock(
   return invoke("decode_stock", { helperPath, pakPath, stockRef });
 }
 
+export interface ArrayInfo {
+  eventName: string;
+  arrayKey: string;
+  entries: string[];
+}
+
+/** Read every vsnd_files* array a mod's soundevents define (for adopting). */
+export function readModArrays(
+  helperPath: string,
+  vpk: string,
+): Promise<ArrayInfo[]> {
+  return invoke("read_mod_arrays", { helperPath, vpk });
+}
+
 export function loadProject(path: string): Promise<Project> {
   return invoke("load_project", { path });
+}
+
+/** Autosave the project to the app-data dir (no compile). */
+export function saveState(project: Project): Promise<void> {
+  return invoke("save_state", { project });
+}
+
+/** Load the autosaved project, or null if none yet. */
+export function loadState(): Promise<Project | null> {
+  return invoke("load_state");
 }
 
 export function saveProject(path: string, project: Project): Promise<void> {

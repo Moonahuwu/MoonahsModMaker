@@ -36,7 +36,7 @@ export function SongCard({
 
   const url = convertFileSrc(song.sourceMp3);
   const length = Math.max(0, song.trimEnd - song.trimStart);
-  const paramKey = `${song.sourceMp3}|${song.trimStart}|${song.trimEnd}|${song.gainDb}|${song.fadeOut}`;
+  const paramKey = `${song.sourceMp3}|${song.trimStart}|${song.trimEnd}|${song.gainDb}|${song.fadeIn}|${song.fadeOut}`;
 
   // Keep the rename draft in sync if soundName changes elsewhere.
   useEffect(() => setNameDraft(song.soundName), [song.soundName]);
@@ -71,6 +71,7 @@ export function SongCard({
         trimStart: song.trimStart,
         trimEnd: song.trimEnd,
         gainDb: song.gainDb,
+        fadeIn: song.fadeIn,
         fadeOut: song.fadeOut,
         ffmpegPath,
       });
@@ -170,6 +171,22 @@ export function SongCard({
           <span className="w-12 text-right tabular-nums text-zinc-300">
             {song.gainDb > 0 ? "+" : ""}
             {song.gainDb}
+          </span>
+        </label>
+
+        <label className="flex flex-1 items-center gap-2 text-xs text-zinc-400">
+          <span className="whitespace-nowrap text-zinc-500">Fade&nbsp;in</span>
+          <input
+            type="range"
+            min={0}
+            max={Math.max(1, Math.round(length))}
+            step={0.1}
+            value={song.fadeIn}
+            onChange={(e) => onChange({ fadeIn: Number(e.target.value) })}
+            className="min-w-[80px] flex-1 accent-emerald-500"
+          />
+          <span className="w-12 text-right tabular-nums text-zinc-300">
+            {song.fadeIn.toFixed(1)}s
           </span>
         </label>
 

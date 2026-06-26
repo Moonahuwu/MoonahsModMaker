@@ -26,6 +26,8 @@ pub struct SongCompile {
     pub trim_end: f64,
     pub gain_db: f64,
     #[serde(default)]
+    pub fade_in: f64,
+    #[serde(default)]
     pub fade_out: f64,
 }
 
@@ -48,7 +50,18 @@ pub struct EventCompile {
     /// Which soundevent file this slot's event lives in (relative).
     #[serde(default = "default_events_relpath")]
     pub events_relpath: String,
+    /// Entries adopted from other mods (kept at original quality): their refs go
+    /// into the array and their `.vsnd_c` is extracted from `source_vpk`.
+    #[serde(default)]
+    pub adopted: Vec<AdoptedRef>,
     pub songs: Vec<SongCompile>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdoptedRef {
+    pub reference: String,
+    pub source_vpk: String,
 }
 
 fn default_events_relpath() -> String {
@@ -159,11 +172,13 @@ fn events_c_relpath(events_game_relpath: &str) -> String {
 
 /// Build the kv3-core merge for one event, and the new auto/manual duration.
 fn event_merge(ev: &EventCompile, sound_folder: &str, current_duration: Option<f64>) -> EventMerge {
-    let owned_in_order: Vec<String> = ev
+    let mut owned_in_order: Vec<String> = ev
         .songs
         .iter()
         .map(|s| vsnd_ref(sound_folder, &s.sound_name))
         .collect();
+    // Adopted entries (from other mods) are also "ours" — include their refs.
+    owned_in_order.extend(ev.adopted.iter().map(|a| a.reference.clone()));
 
     // vsnd_duration is per-event (shared by all its arrays), so only the primary
     // `vsnd_files` slot manages it — secondary arrays (e.g. opponent control)
@@ -298,6 +313,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                 song.trim_start,
                 song.trim_end,
                 song.gain_db,
+                song.fade_in,
                 song.fade_out,
                 &audio_path,
             ) {
@@ -485,6 +501,26 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                     Err(e) => return report.fail(format!("stage: {rel}"), e.to_string()),
                 }
             }
+            // Adopted entries: extract their compiled .vsnd_c from the source mod.
+            for a in &ev.adopted {
+                if ev.excluded.contains(&a.reference) {
+                    continue;
+                }
+                let internal = a
+                    .reference
+                    .strip_suffix(".vsnd")
+                    .map(|s| format!("{s}.vsnd_c"))
+                    .unwrap_or_else(|| a.reference.clone());
+                let dest = stage.join(&internal);
+                if let Some(helper) = helper_opt {
+                    match vpk::extract(helper, &a.source_vpk, &internal, &dest.to_string_lossy()) {
+                        Ok(_) => staged += 1,
+                        Err(e) => {
+                            report.ok_step(format!("adopt {internal} (skipped)"), e);
+                        }
+                    }
+                }
+            }
         }
         for rel in &events_c_rels {
             let src = compiled_root.join(rel);
@@ -531,12 +567,14 @@ mod tests {
             previous_owned: vec![],
             excluded: vec![],
             events_relpath: "soundevents/music.vsndevts".into(),
+            adopted: vec![],
             songs: vec![SongCompile {
                 sound_name: "x".into(),
                 source_audio: "x.mp3".into(),
                 trim_start: 0.0,
                 trim_end: 10.0,
                 gain_db: 0.0,
+                fade_in: 0.0,
                 fade_out: 0.0,
             }],
         };
@@ -557,6 +595,7 @@ mod tests {
             previous_owned: vec![],
             excluded: vec![],
             events_relpath: "soundevents/music.vsndevts".into(),
+            adopted: vec![],
             songs: vec![],
         };
         let m = event_merge(&ev, "sounds/music/match_intro", Some(27.0));
@@ -605,12 +644,14 @@ mod tests {
                 previous_owned: vec![],
                 excluded: vec![],
                 events_relpath: "soundevents/music.vsndevts".into(),
+                adopted: vec![],
                 songs: vec![SongCompile {
                     sound_name: "eim_e2e".into(),
                     source_audio: format!(r"{csdk}\content\citadel\wunderwaffe\wunderwaffeshoot1.mp3"),
                     trim_start: 0.0,
                     trim_end: 2.0,
                     gain_db: 6.0,
+                    fade_in: 0.0,
                     fade_out: 1.0,
                 }],
             }],

@@ -53,6 +53,7 @@ function EntryRow({
   onPreview,
   onToggle,
   onRemove,
+  onEdit,
 }: {
   name: string;
   tag: string;
@@ -62,6 +63,7 @@ function EntryRow({
   onPreview: () => void;
   onToggle: () => void;
   onRemove: () => void;
+  onEdit?: () => void;
 }) {
   return (
     <div
@@ -83,6 +85,15 @@ function EntryRow({
         >
           {previewState === "loading" ? "…" : previewState === "playing" ? "⏸" : "▶"}
         </button>
+        {onEdit && (
+          <button
+            onClick={onEdit}
+            title="Convert to an editable track (trim/gain/fade)"
+            className="rounded p-0.5 text-current opacity-70 transition hover:opacity-100"
+          >
+            ✎
+          </button>
+        )}
         <Toggle on={included} onClick={onToggle} />
         <button
           onClick={onRemove}
@@ -112,6 +123,7 @@ export function SidePanel({
   onRemoveEntry,
   onRestoreEntry,
   onDecodeStock,
+  onEditAdopted,
 }: {
   ev: EventProject;
   view: EventView | undefined;
@@ -126,7 +138,8 @@ export function SidePanel({
   onToggleEntry: (eventName: string, ref: string) => void;
   onRemoveEntry: (eventName: string, ref: string) => void;
   onRestoreEntry: (eventName: string, ref: string) => void;
-  onDecodeStock: (stockRef: string) => Promise<string>;
+  onDecodeStock: (ref: string, vpk?: string) => Promise<string>;
+  onEditAdopted: (slotId: string, ref: string, vpk: string, label: string) => void;
 }) {
   const [stockUrl, setStockUrl] = useState<string | null>(null);
   const [stockErr, setStockErr] = useState<string | null>(null);
@@ -137,7 +150,7 @@ export function SidePanel({
   const [loadingRef, setLoadingRef] = useState<string | null>(null);
   const previewAudio = useRef<HTMLAudioElement | null>(null);
 
-  async function previewEntry(ref: string) {
+  async function previewEntry(ref: string, vpk?: string) {
     if (previewRef === ref) {
       previewAudio.current?.pause();
       setPreviewRef(null);
@@ -146,7 +159,7 @@ export function SidePanel({
     previewAudio.current?.pause();
     setLoadingRef(ref);
     try {
-      const url = await onDecodeStock(ref);
+      const url = await onDecodeStock(ref, vpk);
       const audio = new Audio(url);
       previewAudio.current = audio;
       audio.onended = () => setPreviewRef(null);
@@ -184,14 +197,18 @@ export function SidePanel({
   const foreignAll = poolEntries.filter((e) => e !== ev.stockEntry && !owned.has(e));
   const foreign = foreignAll.filter((e) => !removed.has(e));
   const stockRemoved = removed.has(ev.stockEntry);
+  const adoptedShown = ev.adopted.filter((a) => !removed.has(a.reference));
+  const adoptedOn = adoptedShown.filter((a) => !excluded.has(a.reference)).length;
   const removedList = [
     ...(stockRemoved ? [ev.stockEntry] : []),
     ...foreignAll.filter((e) => removed.has(e)),
+    ...ev.adopted.filter((a) => removed.has(a.reference)).map((a) => a.reference),
   ];
 
   const stockOn = !excluded.has(ev.stockEntry);
   const foreignOn = foreign.filter((e) => !excluded.has(e)).length;
-  const total = (!stockRemoved && stockOn ? 1 : 0) + foreignOn + ev.songs.length;
+  const total =
+    (!stockRemoved && stockOn ? 1 : 0) + foreignOn + adoptedOn + ev.songs.length;
   const sortedSongs = [...ev.songs].sort((a, b) => a.order - b.order);
 
   return (
@@ -282,6 +299,31 @@ export function SidePanel({
             ))}
           </div>
         </details>
+      )}
+
+      {/* Adopted from other mods (part of your project) */}
+      {adoptedShown.length > 0 && (
+        <div className="mb-3">
+          <div className="mb-1.5 text-[11px] uppercase tracking-wide text-violet-300/80">
+            Adopted from mods
+          </div>
+          <div className="flex flex-col gap-1.5">
+            {adoptedShown.map((a) => (
+              <EntryRow
+                key={a.reference}
+                name={a.label}
+                tag="adopted"
+                tone="border-violet-500/40 bg-violet-500/[0.06] text-violet-200"
+                included={!excluded.has(a.reference)}
+                previewState={previewStateOf(a.reference)}
+                onPreview={() => void previewEntry(a.reference, a.sourceVpk)}
+                onToggle={() => onToggleEntry(ev.id, a.reference)}
+                onRemove={() => onRemoveEntry(ev.id, a.reference)}
+                onEdit={() => onEditAdopted(ev.id, a.reference, a.sourceVpk, a.label)}
+              />
+            ))}
+          </div>
+        </div>
       )}
 
       {/* Removed entries — restore */}

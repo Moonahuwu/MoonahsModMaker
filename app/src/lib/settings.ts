@@ -80,12 +80,17 @@ export function buildCompileConfig(
     // Both disabled (toggled-off) and removed entries are dropped from the array.
     excluded: [...ev.excludedEntries, ...ev.removedEntries],
     eventsRelpath: ev.eventsRelpath,
+    // Adopted-from-mod entries (removed ones dropped entirely).
+    adopted: ev.adopted
+      .filter((a) => !ev.removedEntries.includes(a.reference))
+      .map((a) => ({ reference: a.reference, sourceVpk: a.sourceVpk })),
     songs: ev.songs.map((song) => ({
       soundName: song.soundName,
       sourceAudio: song.sourceMp3,
       trimStart: song.trimStart,
       trimEnd: song.trimEnd,
       gainDb: song.gainDb,
+      fadeIn: song.fadeIn,
       fadeOut: song.fadeOut,
     })),
   }));

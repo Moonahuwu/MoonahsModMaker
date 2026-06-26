@@ -21,6 +21,9 @@ pub struct ProcessReq {
     pub trim_start: f64,
     pub trim_end: f64,
     pub gain_db: f64,
+    /// Fade-in duration in seconds applied at the start of the trimmed clip.
+    #[serde(default)]
+    pub fade_in: f64,
     /// Fade-out duration in seconds applied at the end of the trimmed clip.
     /// 0 = no fade.
     #[serde(default)]
@@ -41,10 +44,14 @@ fn fmt(v: f64) -> String {
     format!("{v:.6}")
 }
 
-/// Build the ffmpeg `-af` filter chain: gain, then an optional fade-out anchored
-/// to the end of the (trimmed) clip of length `duration`.
-fn build_af(gain_db: f64, duration: f64, fade_out: f64) -> String {
+/// Build the ffmpeg `-af` filter chain: gain, optional fade-in at the start, and
+/// optional fade-out anchored to the end of the (trimmed) clip of `duration`.
+fn build_af(gain_db: f64, duration: f64, fade_in: f64, fade_out: f64) -> String {
     let mut af = format!("volume={gain_db}dB");
+    if fade_in > 0.0 {
+        let d = fade_in.min(duration).max(0.0);
+        af.push_str(&format!(",afade=t=in:st=0:d={}", fmt(d)));
+    }
     if fade_out > 0.0 {
         let d = fade_out.min(duration).max(0.0);
         let st = (duration - d).max(0.0);
@@ -103,6 +110,7 @@ pub fn render_to(
     trim_start: f64,
     trim_end: f64,
     gain_db: f64,
+    fade_in: f64,
     fade_out: f64,
     out_path: &str,
 ) -> Result<(), String> {
@@ -118,7 +126,7 @@ pub fn render_to(
             "-t",
             &fmt(duration),
             "-af",
-            &build_af(gain_db, duration, fade_out),
+            &build_af(gain_db, duration, fade_in, fade_out),
             out_path,
         ])
         .output()
@@ -135,8 +143,8 @@ pub fn render_to(
 pub fn process(req: &ProcessReq) -> Result<String, String> {
     let ffmpeg = req.ffmpeg_path.as_deref().unwrap_or("ffmpeg");
     let key = format!(
-        "{}|{}|{}|{}|{}",
-        req.source_path, req.trim_start, req.trim_end, req.gain_db, req.fade_out
+        "{}|{}|{}|{}|{}|{}",
+        req.source_path, req.trim_start, req.trim_end, req.gain_db, req.fade_in, req.fade_out
     );
     let out = staging_dir().join(format!("preview_{}.wav", hash_key(&key)));
     if out.exists() {
@@ -155,7 +163,7 @@ pub fn process(req: &ProcessReq) -> Result<String, String> {
             "-t",
             &fmt(duration),
             "-af",
-            &build_af(req.gain_db, duration, req.fade_out),
+            &build_af(req.gain_db, duration, req.fade_in, req.fade_out),
             &out_str,
         ])
         .output()
