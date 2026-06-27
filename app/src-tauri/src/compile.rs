@@ -31,6 +31,14 @@ pub struct SongCompile {
     pub fade_out: f64,
     #[serde(default)]
     pub looping: bool,
+    /// Hash of the current {source,trim,gain,fades,looping,name}. When this equals
+    /// `last_compiled_hash` and the `.vsnd_c` already exists, render+compile are
+    /// skipped. `None` disables the skip (always (re)compile).
+    #[serde(default)]
+    pub current_hash: Option<String>,
+    /// Hash recorded after this song's last successful compile.
+    #[serde(default)]
+    pub last_compiled_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -184,6 +192,16 @@ impl CompileReport {
     }
 }
 
+/// Whether a song's compile can be skipped: its params are unchanged since the
+/// last successful compile AND the compiled `.vsnd_c` is still present. A `None`
+/// `current_hash` (or global `skip_compile`) never qualifies.
+fn is_up_to_date(song: &SongCompile, skip_compile: bool, compiled_exists: bool) -> bool {
+    !skip_compile
+        && song.current_hash.is_some()
+        && song.current_hash == song.last_compiled_hash
+        && compiled_exists
+}
+
 /// content-relative path for a song's compiled file, e.g.
 /// `sounds/music/match_intro/mysong.vsnd_c`.
 fn vsnd_c_relpath(sound_folder: &str, sound_name: &str) -> String {
@@ -329,6 +347,15 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
     // 1+2. Per song: ffmpeg -> content/<folder>/<name>.wav, then compile -> vsnd_c.
     for ev in &cfg.events {
         for song in &ev.songs {
+            // Skip-unchanged: if the song's params match its last successful
+            // compile AND the compiled `.vsnd_c` is still on disk, reuse it
+            // (avoids the expensive ffmpeg + resourcecompiler round-trip).
+            let compiled = compiled_root.join(vsnd_c_relpath(&cfg.sound_folder, &song.sound_name));
+            if is_up_to_date(song, cfg.skip_compile, compiled.exists()) {
+                report.ok_step(format!("up to date: {}", song.sound_name), "unchanged — skipped");
+                continue;
+            }
+
             let content_audio = content_root
                 .join(cfg.sound_folder.trim_matches('/'))
                 .join(format!("{}.wav", song.sound_name));
@@ -609,6 +636,8 @@ mod tests {
                 fade_in: 0.0,
                 fade_out: 0.0,
                 looping: false,
+                current_hash: None,
+                last_compiled_hash: None,
             }],
         };
         // current 27 -> stays 27 (our clip is shorter)
@@ -687,6 +716,8 @@ mod tests {
                     fade_in: 0.0,
                     fade_out: 1.0,
                     looping: true,
+                    current_hash: None,
+                    last_compiled_hash: None,
                 }],
             }],
         };
@@ -718,6 +749,37 @@ mod tests {
 
     fn compiled_root_path(cfg: &CompileConfig) -> std::path::PathBuf {
         std::path::PathBuf::from(&cfg.compiled_root)
+    }
+
+    fn song_with(current: Option<&str>, last: Option<&str>) -> SongCompile {
+        SongCompile {
+            sound_name: "x".into(),
+            source_audio: "x.mp3".into(),
+            trim_start: 0.0,
+            trim_end: 1.0,
+            gain_db: 0.0,
+            fade_in: 0.0,
+            fade_out: 0.0,
+            looping: false,
+            current_hash: current.map(String::from),
+            last_compiled_hash: last.map(String::from),
+        }
+    }
+
+    #[test]
+    fn skip_only_when_hashes_match_and_file_present() {
+        // Unchanged + file present -> skip.
+        assert!(is_up_to_date(&song_with(Some("h"), Some("h")), false, true));
+        // Unchanged but compiled file missing -> must recompile.
+        assert!(!is_up_to_date(&song_with(Some("h"), Some("h")), false, false));
+        // Params changed -> recompile.
+        assert!(!is_up_to_date(&song_with(Some("h2"), Some("h")), false, true));
+        // Never compiled (no last hash) -> compile.
+        assert!(!is_up_to_date(&song_with(Some("h"), None), false, true));
+        // No current hash (skip disabled for this song) -> compile.
+        assert!(!is_up_to_date(&song_with(None, None), false, true));
+        // Global skip_compile bypasses the optimization entirely.
+        assert!(!is_up_to_date(&song_with(Some("h"), Some("h")), true, true));
     }
 
     #[test]

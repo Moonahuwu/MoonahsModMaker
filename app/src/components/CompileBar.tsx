@@ -10,10 +10,13 @@ export function CompileBar({
   settings,
   update,
   events,
+  onCompiled,
 }: {
   settings: Settings;
   update: (patch: Partial<Settings>) => void;
   events: EventProject[];
+  /** Called after a successful compile so the project can record compiled hashes. */
+  onCompiled: () => void;
 }) {
   const [running, setRunning] = useState(false);
   const [report, setReport] = useState<CompileReport | null>(null);
@@ -30,8 +33,10 @@ export function CompileBar({
       const config = buildCompileConfig(settings, events);
       const r = await compileProject(config);
       setReport(r);
-      if (r.ok) push("success", `Compiled → ${r.outputPath ?? "done"}`);
-      else push("error", "Compile failed — see the step report");
+      if (r.ok) {
+        onCompiled();
+        push("success", `Compiled → ${r.outputPath ?? "done"}`);
+      } else push("error", "Compile failed — see the step report");
     } catch (e) {
       setReport({ ok: false, steps: [{ name: "invoke", ok: false, detail: String(e) }] });
       push("error", String(e));

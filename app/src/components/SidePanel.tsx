@@ -1,8 +1,46 @@
-import { AnimatePresence, motion } from "motion/react";
-import { useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion, Reorder, useDragControls } from "motion/react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import type { EventProject, EventView, Song } from "../types";
 import { SongCard } from "./SongCard";
 import { StockWaveform } from "./StockWaveform";
+
+/** One reorderable song row: drags only via the handle passed to its children. */
+function DraggableSong({
+  song,
+  children,
+}: {
+  song: Song;
+  children: (handle: ReactNode) => ReactNode;
+}) {
+  const controls = useDragControls();
+  const handle = (
+    <button
+      onPointerDown={(e) => {
+        e.preventDefault();
+        controls.start(e);
+      }}
+      aria-label="Drag to reorder"
+      title="Drag to reorder"
+      className="shrink-0 cursor-grab touch-none rounded p-1 text-zinc-600 transition hover:bg-zinc-800 hover:text-zinc-300 active:cursor-grabbing"
+    >
+      ⠿
+    </button>
+  );
+  return (
+    <Reorder.Item
+      value={song}
+      dragListener={false}
+      dragControls={controls}
+      layout
+      initial={{ opacity: 0, y: -8, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.95, height: 0, marginTop: 0 }}
+      transition={{ type: "spring", stiffness: 380, damping: 30 }}
+    >
+      {children(handle)}
+    </Reorder.Item>
+  );
+}
 
 function ownedRefsFor(ev: EventProject, soundFolder: string): Set<string> {
   const set = new Set<string>(ev.previousOwnedNames);
@@ -125,9 +163,12 @@ export function SidePanel({
   accent,
   dropActive,
   panelRef,
+  expandedSongs,
+  onToggleSongExpanded,
   onSongChange,
   onSongRename,
   onSongRemove,
+  onReorderSongs,
   onToggleEntry,
   onRemoveEntry,
   onRestoreEntry,
@@ -143,9 +184,12 @@ export function SidePanel({
   accent: string;
   dropActive: boolean;
   panelRef: (el: HTMLElement | null) => void;
+  expandedSongs: Record<string, boolean>;
+  onToggleSongExpanded: (songId: string) => void;
   onSongChange: (songId: string, patch: Partial<Song>) => void;
   onSongRename: (songId: string, raw: string) => void;
   onSongRemove: (songId: string) => void;
+  onReorderSongs: (slotId: string, orderedIds: string[]) => void;
   onToggleEntry: (eventName: string, ref: string) => void;
   onRemoveEntry: (eventName: string, ref: string) => void;
   onRestoreEntry: (eventName: string, ref: string) => void;
@@ -363,31 +407,34 @@ export function SidePanel({
         </details>
       )}
 
-      {/* Your tracks */}
-      <div className="flex flex-col gap-3">
+      {/* Your tracks — drag the handle to reorder */}
+      <Reorder.Group
+        axis="y"
+        values={sortedSongs}
+        onReorder={(next) => onReorderSongs(ev.id, next.map((s) => s.id))}
+        className="flex flex-col gap-3"
+      >
         <AnimatePresence initial={false}>
           {sortedSongs.map((s) => (
-            <motion.div
-              key={s.id}
-              layout
-              initial={{ opacity: 0, y: -8, scale: 0.98 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95, height: 0, marginTop: 0 }}
-              transition={{ type: "spring", stiffness: 380, damping: 30 }}
-            >
-              <SongCard
-                song={s}
-                soundFolder={soundFolder}
-                ffmpegPath={ffmpegPath}
-                onChange={(patch) => onSongChange(s.id, patch)}
-                onRename={(raw) => onSongRename(s.id, raw)}
-                onRemove={() => onSongRemove(s.id)}
-                onDownload={() => onDownloadSong(s.sourceMp3)}
-              />
-            </motion.div>
+            <DraggableSong key={s.id} song={s}>
+              {(handle) => (
+                <SongCard
+                  song={s}
+                  soundFolder={soundFolder}
+                  ffmpegPath={ffmpegPath}
+                  handle={handle}
+                  expanded={!!expandedSongs[s.id]}
+                  onToggleExpanded={() => onToggleSongExpanded(s.id)}
+                  onChange={(patch) => onSongChange(s.id, patch)}
+                  onRename={(raw) => onSongRename(s.id, raw)}
+                  onRemove={() => onSongRemove(s.id)}
+                  onDownload={() => onDownloadSong(s.sourceMp3)}
+                />
+              )}
+            </DraggableSong>
           ))}
         </AnimatePresence>
-      </div>
+      </Reorder.Group>
 
       {/* Drop zone / empty state */}
       <motion.div

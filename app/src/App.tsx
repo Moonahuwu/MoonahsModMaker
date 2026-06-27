@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import {
+  autodetectPaths,
   copyToDownloads,
   decodeStock as decodeStockApi,
   downloadEntry,
@@ -11,6 +12,7 @@ import {
   probeAudio,
   readEventPools,
   readModArrays,
+  refreshVanilla as refreshVanillaApi,
   sanitizeName,
   saveState,
 } from "./lib/api";
@@ -20,6 +22,7 @@ import { ImportedMods } from "./components/ImportedMods";
 import { CompileBar } from "./components/CompileBar";
 import { useToast } from "./components/Toaster";
 import { useSettings } from "./lib/settings";
+import { songHash } from "./lib/songHash";
 import type { EventProject, EventView, Project, Song } from "./types";
 import "./index.css";
 
@@ -49,6 +52,10 @@ function accentFor(ev: { group: string; side: string }): string {
 export default function App() {
   const [project, setProject] = useState<Project | null>(null);
   const [pools, setPools] = useState<Record<string, EventView>>({});
+  // Per-song expand state, kept here (not in the card) so it survives tab
+  // switches. Default = collapsed; a song is expanded when freshly dropped/
+  // created, or once the user opens it — and stays that way on return.
+  const [expandedSongs, setExpandedSongs] = useState<Record<string, boolean>>({});
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<string>("intro");
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -200,6 +207,10 @@ export default function App() {
     }
   }
 
+  function toggleSongExpanded(id: string) {
+    setExpandedSongs((m) => ({ ...m, [id]: !m[id] }));
+  }
+
   function uniqueSoundName(base: string, proj: Project, exceptId?: string): string {
     const taken = new Set(
       proj.events.flatMap((e) =>
@@ -246,6 +257,7 @@ export default function App() {
             }
           : prev,
       );
+      setExpandedSongs((m) => ({ ...m, [song.id]: true })); // open the new drop
       push("success", `Added "${baseName(path)}" to ${slot?.side ?? "slot"}`);
     } catch (e) {
       push("error", `Could not add ${baseName(path)}: ${e}`);
@@ -279,6 +291,28 @@ export default function App() {
         })),
       };
     });
+  }
+
+  // Persist a new drag order: each song's `order` becomes its index in the list.
+  function reorderSongs(slotId: string, orderedIds: string[]) {
+    setProject((prev) =>
+      prev
+        ? {
+            ...prev,
+            events: prev.events.map((e) =>
+              e.id === slotId
+                ? {
+                    ...e,
+                    songs: e.songs.map((s) => {
+                      const idx = orderedIds.indexOf(s.id);
+                      return idx === -1 ? s : { ...s, order: idx };
+                    }),
+                  }
+                : e,
+            ),
+          }
+        : prev,
+    );
   }
 
   function removeSong(songId: string) {
@@ -384,13 +418,14 @@ export default function App() {
       const mp3 = await decodeStockApi(s.vpkHelperPath, vpk, ref);
       const info = await probeAudio(mp3, s.ffmpegPath || undefined);
       const sanitized = await sanitizeName(label);
+      const newId = crypto.randomUUID();
       setProject((prev) => {
         if (!prev) return prev;
         const soundName = uniqueSoundName(sanitized, prev);
         const slot = prev.events.find((e) => e.id === slotId);
         const order = slot ? slot.songs.length : 0;
         const song: Song = {
-          id: crypto.randomUUID(),
+          id: newId,
           label,
           sourceMp3: mp3,
           soundName,
@@ -416,10 +451,27 @@ export default function App() {
           ),
         };
       });
+      setExpandedSongs((m) => ({ ...m, [newId]: true })); // open it for editing
       push("success", `Now editing "${label}"`);
     } catch (e) {
       push("error", `Couldn't edit ${label}: ${e}`);
     }
+  }
+
+  // After a successful compile, stamp each song with its current hash so the
+  // next compile can skip unchanged tracks (and the badge reads "Compiled").
+  function markAllCompiled() {
+    setProject((prev) =>
+      prev
+        ? {
+            ...prev,
+            events: prev.events.map((e) => ({
+              ...e,
+              songs: e.songs.map((s) => ({ ...s, lastCompiledHash: songHash(s) })),
+            })),
+          }
+        : prev,
+    );
   }
 
   // Slot-targeted toggles (slots can share an event name, so key by slot id).
@@ -454,6 +506,81 @@ export default function App() {
       removedEntries: e.removedEntries.filter((r) => r !== ref),
       excludedEntries: e.excludedEntries.filter((r) => r !== ref),
     }));
+  }
+
+  // Refresh the merge base from the live game pak: decompile its events files,
+  // repoint vanillaRoot at the fresh copy, re-read pools, and correct each slot's
+  // stockEntry to the live first entry (kills drifted stock refs).
+  async function refreshVanilla() {
+    const proj = projectRef.current;
+    const s = settingsRef.current;
+    if (!proj) return;
+    try {
+      const relpaths = Array.from(new Set(proj.events.map((e) => e.eventsRelpath)));
+      const res = await refreshVanillaApi(s.vpkHelperPath, s.deadlockPak, relpaths);
+      updateSettings({ vanillaRoot: res.vanillaRoot });
+
+      const root = res.vanillaRoot.replace(/[/\\]+$/, "");
+      const slots = proj.events.map((e) => ({
+        eventsPath: `${root}/${e.eventsRelpath}`,
+        eventName: e.eventName,
+        arrayKey: e.arrayKey,
+      }));
+      const views = await readEventPools(slots);
+      const map: Record<string, EventView> = {};
+      proj.events.forEach((e, i) => {
+        const v = views[i];
+        if (v) map[e.id] = v;
+      });
+      setPools(map);
+
+      // Pin each slot's stock to the current game's first array entry.
+      let corrected = 0;
+      setProject((prev) =>
+        prev
+          ? {
+              ...prev,
+              events: prev.events.map((e) => {
+                const first = map[e.id]?.entries?.[0];
+                if (first && first !== e.stockEntry) {
+                  corrected++;
+                  return { ...e, stockEntry: first };
+                }
+                return e;
+              }),
+            }
+          : prev,
+      );
+
+      const failNote = res.failed.length ? ` (${res.failed.length} missing)` : "";
+      push(
+        "success",
+        `Refreshed ${res.refreshed.length} file(s) from the game; fixed ${corrected} stock ref(s)${failNote}`,
+      );
+    } catch (e) {
+      push("error", `Refresh failed: ${e}`);
+    }
+  }
+
+  // Best-effort auto-detect of tool/game paths; fills in what it finds.
+  async function autodetect() {
+    try {
+      const d = await autodetectPaths();
+      const patch: Partial<typeof settings> = {};
+      if (d.csdkRoot) patch.csdkRoot = d.csdkRoot;
+      if (d.deadlockPak) patch.deadlockPak = d.deadlockPak;
+      if (d.vpkHelper) patch.vpkHelperPath = d.vpkHelper;
+      if (d.ffmpeg && d.ffmpeg !== "ffmpeg") patch.ffmpegPath = d.ffmpeg;
+      const found = Object.keys(patch).length;
+      if (found > 0) {
+        updateSettings(patch);
+        push("success", `Auto-detected ${found} path(s)`);
+      } else {
+        push("info", "Couldn't auto-detect any paths — set them manually");
+      }
+    } catch (e) {
+      push("error", `Auto-detect failed: ${e}`);
+    }
   }
 
   const visibleSlots = (project?.events ?? []).filter((e) => e.group === activeTab);
@@ -542,10 +669,13 @@ export default function App() {
                 ffmpegPath={settings.ffmpegPath || undefined}
                 accent={accentFor(ev)}
                 dropActive={dropTarget === ev.id}
+                expandedSongs={expandedSongs}
+                onToggleSongExpanded={toggleSongExpanded}
                 panelRef={(el) => (panelEls.current[ev.id] = el)}
                 onSongChange={updateSong}
                 onSongRename={renameSong}
                 onSongRemove={removeSong}
+                onReorderSongs={reorderSongs}
                 onToggleEntry={toggleEntry}
                 onRemoveEntry={removeEntry}
                 onRestoreEntry={restoreEntry}
@@ -565,6 +695,7 @@ export default function App() {
             settings={settings}
             update={updateSettings}
             events={project.events}
+            onCompiled={markAllCompiled}
           />
         )}
       </main>
@@ -590,6 +721,8 @@ export default function App() {
                 settings={settings}
                 update={updateSettings}
                 onClose={() => setSettingsOpen(false)}
+                onRefreshVanilla={refreshVanilla}
+                onAutodetect={autodetect}
               />
             </motion.div>
           </motion.div>

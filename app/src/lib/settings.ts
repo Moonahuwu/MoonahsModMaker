@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { CompileConfig, EventCompile } from "./api";
 import type { EventProject } from "../types";
+import { songHash } from "./songHash";
 
 // User-facing settings. We derive the verbose CompileConfig paths from a CSDK
 // root + addon name so the user only manages a few friendly fields.
@@ -93,6 +94,8 @@ export function buildCompileConfig(
       fadeIn: song.fadeIn,
       fadeOut: song.fadeOut,
       looping: song.looping,
+      currentHash: songHash(song),
+      lastCompiledHash: song.lastCompiledHash,
     })),
   }));
 

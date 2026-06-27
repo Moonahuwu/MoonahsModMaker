@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import WaveSurfer from "wavesurfer.js";
 import RegionsPlugin from "wavesurfer.js/dist/plugins/regions.esm.js";
+import { getCachedPeaks, setCachedPeaks } from "../lib/peaksCache";
 
 interface WaveformProps {
   /** Playable URL of the FULL source audio (via convertFileSrc). */
@@ -29,6 +30,7 @@ export function Waveform({ url, trimStart, trimEnd, onTrimChange }: WaveformProp
     if (!containerRef.current) return;
 
     const regions = RegionsPlugin.create();
+    const cached = getCachedPeaks(url);
     const ws = WaveSurfer.create({
       container: containerRef.current,
       url,
@@ -38,9 +40,15 @@ export function Waveform({ url, trimStart, trimEnd, onTrimChange }: WaveformProp
       cursorColor: "#a1a1aa",
       normalize: true,
       plugins: [regions],
+      // Reuse decoded peaks if we have them — skips the costly re-decode and
+      // renders instantly; the media element still lazy-loads for playback.
+      ...(cached ? { peaks: cached.peaks, duration: cached.duration } : {}),
     });
 
+    // `decode` fires whether peaks were decoded fresh or supplied from cache,
+    // so the trim region is added in both paths.
     ws.on("decode", (duration) => {
+      if (!cached) setCachedPeaks(url, ws.exportPeaks(), duration);
       const { trimStart: s, trimEnd: e } = trimRef.current;
       regions.addRegion({
         start: Math.max(0, s),

@@ -29,6 +29,8 @@ pub fn run() {
             commands::pack_vpk,
             commands::extract_vpk,
             commands::decode_stock,
+            commands::refresh_vanilla,
+            commands::autodetect_paths,
             commands::compile_project,
         ])
         .run(tauri::generate_context!())

@@ -171,6 +171,249 @@ pub fn decode_stock(
     )
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefreshResult {
+    /// The app-managed dir the fresh `soundevents/` tree was written into. The
+    /// frontend points `vanillaRoot` here so merges read the current game data.
+    pub vanilla_root: String,
+    /// Relative events paths successfully refreshed.
+    pub refreshed: Vec<String>,
+    /// `"<relpath>: <error>"` for any that couldn't be decompiled.
+    pub failed: Vec<String>,
+}
+
+/// Refresh the merge base from the live game pak: decompile each `<relpath>_c`
+/// out of `pak_path` into an app-managed `vanilla/` dir, so compile merges into
+/// the CURRENT game data instead of a stale snapshot (fixes drifted stock refs).
+/// Non-destructive — never touches the user's own files.
+#[tauri::command]
+pub fn refresh_vanilla(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+    relpaths: Vec<String>,
+) -> Result<RefreshResult, String> {
+    use tauri::Manager;
+    let dest_root = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("vanilla");
+    let mut refreshed = Vec::new();
+    let mut failed = Vec::new();
+    for rel in &relpaths {
+        let rel_trim = rel.trim_matches('/');
+        let internal = format!("{rel_trim}_c");
+        let dest = dest_root.join(rel_trim);
+        if let Some(parent) = dest.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                failed.push(format!("{rel}: {e}"));
+                continue;
+            }
+        }
+        match crate::vpk::decompile_from_vpk(
+            &helper_path,
+            &pak_path,
+            &internal,
+            &dest.to_string_lossy(),
+        ) {
+            Ok(_) => refreshed.push(rel.clone()),
+            Err(e) => failed.push(format!("{rel}: {e}")),
+        }
+    }
+    if refreshed.is_empty() && !failed.is_empty() {
+        return Err(failed.join("; "));
+    }
+    Ok(RefreshResult {
+        vanilla_root: dest_root.to_string_lossy().into_owned(),
+        refreshed,
+        failed,
+    })
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectedPaths {
+    pub csdk_root: Option<String>,
+    pub resource_compiler: Option<String>,
+    pub deadlock_pak: Option<String>,
+    pub ffmpeg: Option<String>,
+    pub vpk_helper: Option<String>,
+}
+
+fn exists(p: &std::path::Path) -> bool {
+    p.exists()
+}
+
+/// Read Steam's install path from the registry (`HKCU\Software\Valve\Steam`).
+fn steam_path() -> Option<std::path::PathBuf> {
+    let out = std::process::Command::new("reg")
+        .args(["query", r"HKCU\SOFTWARE\Valve\Steam", "/v", "SteamPath"])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    // Line looks like: `    SteamPath    REG_SZ    c:/program files (x86)/steam`
+    for line in text.lines() {
+        if let Some(idx) = line.find("REG_SZ") {
+            let val = line[idx + "REG_SZ".len()..].trim();
+            if !val.is_empty() {
+                return Some(std::path::PathBuf::from(val));
+            }
+        }
+    }
+    None
+}
+
+/// All Steam library roots: the base install plus every `path` in
+/// `libraryfolders.vdf`.
+fn steam_libraries() -> Vec<std::path::PathBuf> {
+    let mut libs = Vec::new();
+    let Some(steam) = steam_path() else { return libs };
+    libs.push(steam.clone());
+    let vdf = steam.join("steamapps").join("libraryfolders.vdf");
+    if let Ok(text) = std::fs::read_to_string(&vdf) {
+        // Grab each `"path"   "<value>"` (value may contain escaped backslashes).
+        for line in text.lines() {
+            let t = line.trim();
+            if let Some(rest) = t.strip_prefix("\"path\"") {
+                if let Some(start) = rest.find('"') {
+                    if let Some(end) = rest[start + 1..].find('"') {
+                        let raw = &rest[start + 1..start + 1 + end];
+                        libs.push(std::path::PathBuf::from(raw.replace("\\\\", "\\")));
+                    }
+                }
+            }
+        }
+    }
+    libs
+}
+
+/// Locate the Deadlock install (the dir containing `game/citadel`) across Steam
+/// libraries.
+fn deadlock_root() -> Option<std::path::PathBuf> {
+    for lib in steam_libraries() {
+        let root = lib.join("steamapps").join("common").join("Deadlock");
+        if root.join("game").join("citadel").is_dir() {
+            return Some(root);
+        }
+    }
+    None
+}
+
+/// Look for a Reduced/Citadel SDK (a dir with `game/bin_tools/win64/
+/// resourcecompiler.exe`) under a few likely parents.
+fn find_csdk(home: &std::path::Path, exe_dir: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
+    let rc_rel = std::path::Path::new("game/bin_tools/win64/resourcecompiler.exe");
+    let mut bases: Vec<std::path::PathBuf> = vec![
+        home.join("Desktop").join("DeadlockModding"),
+        home.join("Desktop"),
+        home.join("Documents"),
+        home.to_path_buf(),
+    ];
+    // Walk a few parents up from the running exe too (dev checkout layout).
+    if let Some(mut d) = exe_dir.map(|p| p.to_path_buf()) {
+        for _ in 0..6 {
+            bases.push(d.clone());
+            if !d.pop() {
+                break;
+            }
+        }
+    }
+    for base in bases {
+        // The base itself might be a CSDK.
+        if base.join(rc_rel).exists() {
+            return Some(base);
+        }
+        if let Ok(rd) = std::fs::read_dir(&base) {
+            for entry in rd.flatten() {
+                let p = entry.path();
+                if !p.is_dir() {
+                    continue;
+                }
+                let name = p.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+                if name.contains("csdk") || name.contains("sdk") {
+                    if p.join(rc_rel).exists() {
+                        return Some(p);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Locate the bundled/dev vpk-helper relative to the running exe.
+fn find_vpk_helper(exe_dir: Option<&std::path::Path>, resource_dir: Option<&std::path::Path>) -> Option<String> {
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    for base in [exe_dir, resource_dir].into_iter().flatten() {
+        candidates.push(base.join("vpk-helper.exe"));
+        candidates.push(base.join("vpk-helper").join("vpk-helper.exe"));
+        candidates.push(base.join("vpk-helper.dll"));
+    }
+    // Dev checkout: walk parents looking for tools/vpk-helper/bin/Release/*.dll.
+    if let Some(mut d) = exe_dir.map(|p| p.to_path_buf()) {
+        for _ in 0..6 {
+            let dll = d.join("tools/vpk-helper/bin/Release/net10.0/vpk-helper.dll");
+            if dll.exists() {
+                return Some(dll.to_string_lossy().into_owned());
+            }
+            let exe = d.join("tools/vpk-helper/bin/Release/net10.0/vpk-helper.exe");
+            if exe.exists() {
+                return Some(exe.to_string_lossy().into_owned());
+            }
+            if !d.pop() {
+                break;
+            }
+        }
+    }
+    candidates.into_iter().find(|p| exists(p)).map(|p| p.to_string_lossy().into_owned())
+}
+
+/// True if a bare `ffmpeg` runs (i.e. it's on PATH).
+fn ffmpeg_on_path() -> bool {
+    std::process::Command::new("ffmpeg")
+        .arg("-version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Best-effort auto-detection of the tool/game paths the user would otherwise
+/// type into Setup. Everything is optional — missing items come back as `null`.
+#[tauri::command]
+pub fn autodetect_paths(app: tauri::AppHandle) -> DetectedPaths {
+    use tauri::Manager;
+    let exe = std::env::current_exe().ok();
+    let exe_dir = exe.as_deref().and_then(|p| p.parent()).map(|p| p.to_path_buf());
+    let resource_dir = app.path().resource_dir().ok();
+    let home = app
+        .path()
+        .home_dir()
+        .ok()
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+
+    let deadlock = deadlock_root();
+    let deadlock_pak = deadlock.as_ref().map(|r| {
+        r.join("game/citadel/pak01_dir.vpk").to_string_lossy().replace('\\', "/")
+    });
+    let deadlock_pak = deadlock_pak.filter(|p| std::path::Path::new(p).exists());
+
+    let csdk = find_csdk(&home, exe_dir.as_deref());
+    let resource_compiler = csdk.as_ref().map(|c| {
+        c.join("game/bin_tools/win64/resourcecompiler.exe").to_string_lossy().replace('\\', "/")
+    });
+
+    DetectedPaths {
+        csdk_root: csdk.map(|c| c.to_string_lossy().replace('\\', "/")),
+        resource_compiler,
+        deadlock_pak,
+        ffmpeg: if ffmpeg_on_path() { Some("ffmpeg".into()) } else { None },
+        vpk_helper: find_vpk_helper(exe_dir.as_deref(), resource_dir.as_deref())
+            .map(|p| p.replace('\\', "/")),
+    }
+}
+
 /// Extract one entry from a VPK via the bundled ValvePak helper.
 #[tauri::command]
 pub fn extract_vpk(
@@ -209,16 +452,19 @@ pub fn read_event_pools(slots: Vec<SlotRef>) -> Result<Vec<Option<EventView>>, S
     let mut cache: HashMap<String, String> = HashMap::new();
     let mut out = Vec::new();
     for slot in slots {
-        let text = match cache.get(&slot.events_path) {
-            Some(t) => t,
-            None => {
-                let t = std::fs::read_to_string(&slot.events_path)
-                    .map_err(|e| format!("reading {}: {e}", slot.events_path))?;
-                cache.entry(slot.events_path.clone()).or_insert(t)
+        // A missing/unreadable events file yields `None` for that slot only — one
+        // absent file (e.g. a hero events file not present in a refresh) must not
+        // fail the whole load.
+        if !cache.contains_key(&slot.events_path) {
+            if let Ok(t) = std::fs::read_to_string(&slot.events_path) {
+                cache.insert(slot.events_path.clone(), t);
             }
-        };
+        }
         let key = slot.array_key.as_deref().unwrap_or("vsnd_files");
-        out.push(kv3_core::read_event_array(text, &slot.event_name, key).ok());
+        let view = cache
+            .get(&slot.events_path)
+            .and_then(|text| kv3_core::read_event_array(text, &slot.event_name, key).ok());
+        out.push(view);
     }
     Ok(out)
 }

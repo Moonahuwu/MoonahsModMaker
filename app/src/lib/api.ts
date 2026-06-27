@@ -68,6 +68,10 @@ export interface SongCompile {
   fadeIn: number;
   fadeOut: number;
   looping: boolean;
+  /** Fingerprint of the current params; matches the skip check in the backend. */
+  currentHash: string;
+  /** Hash recorded after the last successful compile (null = never compiled). */
+  lastCompiledHash: string | null;
 }
 
 export interface EventCompile {
@@ -161,6 +165,35 @@ export function readModArrays(
   vpk: string,
 ): Promise<ArrayInfo[]> {
   return invoke("read_mod_arrays", { helperPath, vpk });
+}
+
+export interface RefreshResult {
+  vanillaRoot: string;
+  refreshed: string[];
+  failed: string[];
+}
+
+/** Decompile the current game's events files from its pak into an app-managed
+ *  vanilla dir, so compile merges into live game data (fixes drifted refs). */
+export function refreshVanilla(
+  helperPath: string,
+  pakPath: string,
+  relpaths: string[],
+): Promise<RefreshResult> {
+  return invoke("refresh_vanilla", { helperPath, pakPath, relpaths });
+}
+
+export interface DetectedPaths {
+  csdkRoot: string | null;
+  resourceCompiler: string | null;
+  deadlockPak: string | null;
+  ffmpeg: string | null;
+  vpkHelper: string | null;
+}
+
+/** Best-effort auto-detection of tool/game paths (Steam, CSDK, ffmpeg, helper). */
+export function autodetectPaths(): Promise<DetectedPaths> {
+  return invoke("autodetect_paths");
 }
 
 export function loadProject(path: string): Promise<Project> {

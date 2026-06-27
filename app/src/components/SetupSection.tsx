@@ -49,12 +49,26 @@ export function SetupSection({
   settings,
   update,
   onClose,
+  onRefreshVanilla,
+  onAutodetect,
 }: {
   settings: Settings;
   update: (patch: Partial<Settings>) => void;
   onClose: () => void;
+  onRefreshVanilla: () => Promise<void>;
+  onAutodetect: () => Promise<void>;
 }) {
   const [checks, setChecks] = useState<Record<string, boolean | null>>({});
+  const [busy, setBusy] = useState<null | "detect" | "refresh">(null);
+
+  async function run(which: "detect" | "refresh", fn: () => Promise<void>) {
+    setBusy(which);
+    try {
+      await fn();
+    } finally {
+      setBusy(null);
+    }
+  }
 
   const compiler = `${settings.csdkRoot}/game/bin_tools/win64/resourcecompiler.exe`;
   const gameinfo = `${settings.csdkRoot}/game/citadel/gameinfo.gi`;
@@ -102,6 +116,25 @@ export function SetupSection({
           ✕
         </button>
       </header>
+
+      {/* One-click helpers */}
+      <div className="mb-4 flex flex-wrap gap-2">
+        <button
+          onClick={() => void run("detect", onAutodetect)}
+          disabled={busy !== null}
+          className="rounded-md border border-violet-500/40 bg-violet-500/10 px-3 py-1.5 text-xs font-medium text-violet-200 transition hover:bg-violet-500/20 disabled:opacity-50"
+        >
+          {busy === "detect" ? "Detecting…" : "✨ Auto-detect paths"}
+        </button>
+        <button
+          onClick={() => void run("refresh", onRefreshVanilla)}
+          disabled={busy !== null}
+          title="Decompile the current game's soundevents so compile uses live data (fixes outdated stock tracks)"
+          className="rounded-md border border-sky-500/40 bg-sky-500/10 px-3 py-1.5 text-xs font-medium text-sky-200 transition hover:bg-sky-500/20 disabled:opacity-50"
+        >
+          {busy === "refresh" ? "Refreshing…" : "⟳ Refresh game data"}
+        </button>
+      </div>
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         <Field

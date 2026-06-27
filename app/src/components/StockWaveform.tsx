@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
+import { getCachedPeaks, setCachedPeaks } from "../lib/peaksCache";
 
 /** Plain display waveform with play/pause — used to compare the stock track
  *  against your clips (length / beats). No trim region. */
@@ -11,6 +12,7 @@ export function StockWaveform({ url, accent }: { url: string; accent: string }) 
 
   useEffect(() => {
     if (!containerRef.current) return;
+    const cached = getCachedPeaks(url);
     const ws = WaveSurfer.create({
       container: containerRef.current,
       url,
@@ -19,12 +21,17 @@ export function StockWaveform({ url, accent }: { url: string; accent: string }) 
       progressColor: accent,
       cursorColor: "#a1a1aa",
       normalize: true,
+      // Reuse decoded peaks if available to skip re-decoding on remount.
+      ...(cached ? { peaks: cached.peaks, duration: cached.duration } : {}),
     });
     wsRef.current = ws;
     ws.on("play", () => setPlaying(true));
     ws.on("pause", () => setPlaying(false));
     ws.on("finish", () => setPlaying(false));
-    ws.on("decode", (d) => setDuration(d));
+    ws.on("decode", (d) => {
+      if (!cached) setCachedPeaks(url, ws.exportPeaks(), d);
+      setDuration(d);
+    });
     ws.on("interaction", () => ws.play());
     return () => {
       ws.destroy();

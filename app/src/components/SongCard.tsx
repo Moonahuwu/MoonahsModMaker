@@ -1,13 +1,27 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { processAudio } from "../lib/api";
+import { songStatus } from "../lib/songHash";
 import type { Song } from "../types";
 import { Waveform } from "./Waveform";
+
+const STATUS_BADGE: Record<string, { label: string; cls: string }> = {
+  new: { label: "New", cls: "bg-emerald-500/10 text-emerald-300" },
+  compiled: { label: "Compiled", cls: "bg-sky-500/10 text-sky-300" },
+  stale: { label: "Out of date", cls: "bg-amber-500/10 text-amber-300" },
+};
 
 interface SongCardProps {
   song: Song;
   soundFolder: string;
   ffmpegPath?: string;
+  /** Optional drag handle (rendered in the header) for reordering. */
+  handle?: ReactNode;
+  /** Whether the card is expanded (controlled by the parent so it survives
+   *  tab switches). */
+  expanded: boolean;
+  onToggleExpanded: () => void;
   onChange: (patch: Partial<Song>) => void;
   onRename: (raw: string) => void;
   onRemove: () => void;
@@ -24,6 +38,9 @@ export function SongCard({
   song,
   soundFolder,
   ffmpegPath,
+  handle,
+  expanded,
+  onToggleExpanded,
   onChange,
   onRename,
   onRemove,
@@ -104,12 +121,35 @@ export function SongCard({
     setState("idle");
   }
 
-  const playLabel =
-    state === "playing" ? "⏸ Pause" : state === "paused" ? "▶ Resume" : state === "loading" ? "…" : "▶ Preview";
+  const playIcon = state === "loading" ? "…" : state === "playing" ? "⏸" : state === "paused" ? "▶" : "▶";
+
+  // Compact one-liner shown in the collapsed row (length + gain/fades/loop).
+  const summary = [
+    fmtTime(length),
+    `${song.gainDb > 0 ? "+" : ""}${song.gainDb}dB`,
+    song.fadeIn > 0 ? `in ${song.fadeIn.toFixed(1)}s` : null,
+    song.fadeOut > 0 ? `out ${song.fadeOut.toFixed(1)}s` : null,
+    song.looping ? "loop" : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  const badge = STATUS_BADGE[songStatus(song)];
 
   return (
-    <div className="rounded-lg border border-zinc-700/60 bg-zinc-900/80 p-3.5 shadow-sm transition hover:border-zinc-600">
-      <div className="mb-1.5 flex items-center gap-2">
+    <div className="rounded-lg border border-zinc-700/60 bg-zinc-900/80 shadow-sm transition hover:border-zinc-600">
+      {/* Header row — always visible; the whole card collapses to just this. */}
+      <div className="flex items-center gap-2 p-2.5">
+        {handle}
+        <button
+          onClick={onToggleExpanded}
+          aria-expanded={expanded}
+          aria-label={expanded ? "Collapse" : "Expand"}
+          title={expanded ? "Collapse" : "Expand"}
+          className="shrink-0 rounded p-0.5 text-zinc-500 transition hover:bg-zinc-800 hover:text-zinc-200"
+        >
+          {expanded ? "▾" : "▸"}
+        </button>
         <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-400" />
         <input
           value={song.label}
@@ -117,9 +157,34 @@ export function SongCard({
           className="min-w-0 flex-1 rounded border border-transparent bg-transparent px-1 py-0.5 text-sm font-medium text-zinc-100 outline-none transition hover:border-zinc-700 focus:border-zinc-500"
           placeholder="Track name"
         />
-        <span className="shrink-0 rounded bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-300">
-          {song.lastCompiledHash ? "Compiled" : "New"}
+        {!expanded && (
+          <span className="hidden shrink-0 truncate text-[11px] tabular-nums text-zinc-600 sm:inline">
+            {summary}
+          </span>
+        )}
+        <span
+          className={`shrink-0 rounded px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${badge.cls}`}
+        >
+          {badge.label}
         </span>
+        <button
+          onClick={playPause}
+          disabled={state === "loading"}
+          aria-label="Preview"
+          title="Preview the processed clip"
+          className="shrink-0 rounded p-1 text-zinc-400 transition hover:bg-zinc-800 hover:text-emerald-300 disabled:opacity-50"
+        >
+          {playIcon}
+        </button>
+        {(state === "playing" || state === "paused") && (
+          <button
+            onClick={stop}
+            aria-label="Stop"
+            className="shrink-0 rounded p-1 text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-200"
+          >
+            ■
+          </button>
+        )}
         <button
           onClick={onDownload}
           aria-label="Download a copy"
@@ -137,119 +202,115 @@ export function SongCard({
         </button>
       </div>
 
-      {/* Filename (drives the .vsnd / .vsnd_c / soundevent reference) */}
-      <div className="mb-2.5 flex items-center gap-1 pl-4 font-mono text-[11px] text-zinc-500">
-        <span className="text-zinc-600">{soundFolder}/</span>
-        <input
-          value={nameDraft}
-          onChange={(e) => setNameDraft(e.target.value)}
-          onBlur={() => {
-            if (nameDraft !== song.soundName) onRename(nameDraft);
-          }}
-          onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
-          spellCheck={false}
-          className="w-32 rounded border border-transparent bg-transparent px-1 text-zinc-300 outline-none transition hover:border-zinc-700 focus:border-zinc-500"
-          title="Rename the file (updates the .vsnd_c and soundevent reference)"
-        />
-        <span className="text-zinc-600">.vsnd</span>
-      </div>
-
-      <Waveform
-        url={url}
-        trimStart={song.trimStart}
-        trimEnd={song.trimEnd}
-        onTrimChange={(start, end) => onChange({ trimStart: start, trimEnd: end })}
-      />
-
-      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
-        <span className="rounded bg-zinc-800/80 px-2 py-1 text-[11px] tabular-nums text-zinc-400">
-          {fmtTime(song.trimStart)}–{fmtTime(song.trimEnd)}
-          <span className="ml-1 text-zinc-600">({fmtTime(length)})</span>
-        </span>
-
-        <label
-          className="flex items-center gap-1.5 text-xs text-zinc-400"
-          title="Loop this track (writes loop points to encoding.txt — needed for _lp slots)"
-        >
-          <input
-            type="checkbox"
-            checked={song.looping}
-            onChange={(e) => onChange({ looping: e.target.checked })}
-            className="accent-emerald-500"
-          />
-          Loop
-        </label>
-
-        <label className="flex flex-1 items-center gap-2 text-xs text-zinc-400">
-          <span className="whitespace-nowrap text-zinc-500">Gain</span>
-          <input
-            type="range"
-            min={-12}
-            max={24}
-            step={0.5}
-            value={song.gainDb}
-            onChange={(e) => onChange({ gainDb: Number(e.target.value) })}
-            className="min-w-[80px] flex-1 accent-emerald-500"
-          />
-          <span className="w-12 text-right tabular-nums text-zinc-300">
-            {song.gainDb > 0 ? "+" : ""}
-            {song.gainDb}
-          </span>
-        </label>
-
-        <label className="flex flex-1 items-center gap-2 text-xs text-zinc-400">
-          <span className="whitespace-nowrap text-zinc-500">Fade&nbsp;in</span>
-          <input
-            type="range"
-            min={0}
-            max={Math.max(1, Math.round(length))}
-            step={0.1}
-            value={song.fadeIn}
-            onChange={(e) => onChange({ fadeIn: Number(e.target.value) })}
-            className="min-w-[80px] flex-1 accent-emerald-500"
-          />
-          <span className="w-12 text-right tabular-nums text-zinc-300">
-            {song.fadeIn.toFixed(1)}s
-          </span>
-        </label>
-
-        <label className="flex flex-1 items-center gap-2 text-xs text-zinc-400">
-          <span className="whitespace-nowrap text-zinc-500">Fade&nbsp;out</span>
-          <input
-            type="range"
-            min={0}
-            max={Math.max(1, Math.round(length))}
-            step={0.1}
-            value={song.fadeOut}
-            onChange={(e) => onChange({ fadeOut: Number(e.target.value) })}
-            className="min-w-[80px] flex-1 accent-emerald-500"
-          />
-          <span className="w-12 text-right tabular-nums text-zinc-300">
-            {song.fadeOut.toFixed(1)}s
-          </span>
-        </label>
-
-        <div className="flex items-center gap-1.5">
-          <button
-            onClick={playPause}
-            disabled={state === "loading"}
-            className="flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-50"
+      {/* Expanded body — filename, waveform, and the adjust controls. */}
+      <AnimatePresence initial={false}>
+        {expanded && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            className="overflow-hidden"
           >
-            {playLabel}
-          </button>
-          {(state === "playing" || state === "paused") && (
-            <button
-              onClick={stop}
-              aria-label="Stop"
-              className="rounded-md border border-zinc-700 px-2 py-1.5 text-xs text-zinc-400 transition hover:text-zinc-200"
-            >
-              ■
-            </button>
-          )}
-        </div>
-      </div>
+            <div className="px-3.5 pb-3.5">
+              {/* Filename (drives the .vsnd / .vsnd_c / soundevent reference) */}
+              <div className="mb-2.5 flex items-center gap-1 pl-1 font-mono text-[11px] text-zinc-500">
+                <span className="text-zinc-600">{soundFolder}/</span>
+                <input
+                  value={nameDraft}
+                  onChange={(e) => setNameDraft(e.target.value)}
+                  onBlur={() => {
+                    if (nameDraft !== song.soundName) onRename(nameDraft);
+                  }}
+                  onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+                  spellCheck={false}
+                  className="w-32 rounded border border-transparent bg-transparent px-1 text-zinc-300 outline-none transition hover:border-zinc-700 focus:border-zinc-500"
+                  title="Rename the file (updates the .vsnd_c and soundevent reference)"
+                />
+                <span className="text-zinc-600">.vsnd</span>
+              </div>
 
-      {error && <p className="mt-2 text-xs text-red-400">{error}</p>}
+              <Waveform
+                url={url}
+                trimStart={song.trimStart}
+                trimEnd={song.trimEnd}
+                onTrimChange={(start, end) => onChange({ trimStart: start, trimEnd: end })}
+              />
+
+              <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+                <span className="rounded bg-zinc-800/80 px-2 py-1 text-[11px] tabular-nums text-zinc-400">
+                  {fmtTime(song.trimStart)}–{fmtTime(song.trimEnd)}
+                  <span className="ml-1 text-zinc-600">({fmtTime(length)})</span>
+                </span>
+
+                <label
+                  className="flex items-center gap-1.5 text-xs text-zinc-400"
+                  title="Loop this track (writes loop points to encoding.txt — needed for _lp slots)"
+                >
+                  <input
+                    type="checkbox"
+                    checked={song.looping}
+                    onChange={(e) => onChange({ looping: e.target.checked })}
+                    className="accent-emerald-500"
+                  />
+                  Loop
+                </label>
+
+                <label className="flex flex-1 items-center gap-2 text-xs text-zinc-400">
+                  <span className="whitespace-nowrap text-zinc-500">Gain</span>
+                  <input
+                    type="range"
+                    min={-12}
+                    max={24}
+                    step={0.5}
+                    value={song.gainDb}
+                    onChange={(e) => onChange({ gainDb: Number(e.target.value) })}
+                    className="min-w-[80px] flex-1 accent-emerald-500"
+                  />
+                  <span className="w-12 text-right tabular-nums text-zinc-300">
+                    {song.gainDb > 0 ? "+" : ""}
+                    {song.gainDb}
+                  </span>
+                </label>
+
+                <label className="flex flex-1 items-center gap-2 text-xs text-zinc-400">
+                  <span className="whitespace-nowrap text-zinc-500">Fade&nbsp;in</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={Math.max(1, Math.round(length))}
+                    step={0.1}
+                    value={song.fadeIn}
+                    onChange={(e) => onChange({ fadeIn: Number(e.target.value) })}
+                    className="min-w-[80px] flex-1 accent-emerald-500"
+                  />
+                  <span className="w-12 text-right tabular-nums text-zinc-300">
+                    {song.fadeIn.toFixed(1)}s
+                  </span>
+                </label>
+
+                <label className="flex flex-1 items-center gap-2 text-xs text-zinc-400">
+                  <span className="whitespace-nowrap text-zinc-500">Fade&nbsp;out</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={Math.max(1, Math.round(length))}
+                    step={0.1}
+                    value={song.fadeOut}
+                    onChange={(e) => onChange({ fadeOut: Number(e.target.value) })}
+                    className="min-w-[80px] flex-1 accent-emerald-500"
+                  />
+                  <span className="w-12 text-right tabular-nums text-zinc-300">
+                    {song.fadeOut.toFixed(1)}s
+                  </span>
+                </label>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {error && <p className="px-3.5 pb-2.5 text-xs text-red-400">{error}</p>}
     </div>
   );
 }
