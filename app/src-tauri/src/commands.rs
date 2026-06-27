@@ -624,6 +624,7 @@ pub fn hero_roster(
     if refresh {
         let _ = std::fs::remove_file(dir.join("abilities.vdata"));
         let _ = std::fs::remove_file(dir.join("hero_sound_files.txt"));
+        let _ = std::fs::remove_dir_all(dir.join("heroevents"));
         if let Ok(rd) = std::fs::read_dir(&dir) {
             for e in rd.flatten() {
                 let name = e.file_name();
@@ -857,6 +858,59 @@ fn valid_hero_stems(
         .collect()
 }
 
+/// Event names in a `.vsndevts` text that actually define a `vsnd_files`
+/// (scalar or array) — i.e. real, editable sound events. Used to drop stale
+/// ability references that name an event the soundevents file no longer defines
+/// (e.g. an ability points at `Warden.LockDown.Explode` but the file only has
+/// `Warden.LockDown.Hit/Expire/...`).
+fn events_with_vsnd(text: &str) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    let mut cur: Option<String> = None;
+    for line in text.lines() {
+        let top = line.starts_with('\t') && !line.starts_with("\t\t");
+        let t = line.trim();
+        if top {
+            // Event opener: `Name.With.Dots =` (the `{` is on the next line).
+            if let Some(k) = t.strip_suffix('=').map(str::trim) {
+                if !k.is_empty()
+                    && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+                {
+                    cur = Some(k.to_string());
+                    continue;
+                }
+            }
+        }
+        if let Some(name) = &cur {
+            if t.starts_with("vsnd_files") {
+                out.insert(name.clone());
+            }
+        }
+    }
+    out
+}
+
+/// The set of real (vsnd-bearing) event names in a hero's soundevents file,
+/// decompiling + caching it under `dir` on first use.
+fn hero_event_set(
+    helper: &str,
+    pak: &str,
+    dir: &std::path::Path,
+    stem: &str,
+) -> std::collections::HashSet<String> {
+    let path = dir.join(format!("{stem}.vsndevts"));
+    if !path.exists() {
+        let _ = crate::vpk::decompile_from_vpk(
+            helper,
+            pak,
+            &format!("soundevents/hero/{stem}.vsndevts_c"),
+            &path.to_string_lossy(),
+        );
+    }
+    std::fs::read_to_string(&path)
+        .map(|t| events_with_vsnd(&t))
+        .unwrap_or_default()
+}
+
 /// A hero's 4 abilities with icons + the distinct sounds each triggers, parsed
 /// from `heroes.vdata` + `abilities.vdata`. The result (abilities + icon paths +
 /// which sound events exist) is **static** game data, so it's cached per-hero to
@@ -878,8 +932,9 @@ pub fn hero_detail(
         .join("hero_portraits");
     std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
 
-    // Serve the cached per-hero detail unless a refresh was requested.
-    let detail_cache = base.join(format!("detail_{codename}.json"));
+    // Serve the cached per-hero detail unless a refresh was requested. The `v2`
+    // marker invalidates caches built before stale-event filtering existed.
+    let detail_cache = base.join(format!("detail_v2_{codename}.json"));
     if !refresh.unwrap_or(false) {
         if let Ok(text) = std::fs::read_to_string(&detail_cache) {
             if let Ok(cached) = serde_json::from_str::<Vec<HeroAbility>>(&text) {
@@ -908,6 +963,11 @@ pub fn hero_detail(
     }
     let ability_map = parse_abilities(&abilities_text);
     let hero_stems = valid_hero_stems(&helper_path, &pak_path, &base.join("hero_sound_files.txt"));
+    // Lazily-built `stem -> {real event names}` so we can drop stale references.
+    let events_dir = base.join("heroevents");
+    std::fs::create_dir_all(&events_dir).map_err(|e| e.to_string())?;
+    let mut present: std::collections::HashMap<String, std::collections::HashSet<String>> =
+        std::collections::HashMap::new();
 
     // Decode the ability icons (one batch).
     let icon_dir = base.join("ability_icons").join(&codename);
@@ -944,15 +1004,22 @@ pub fn hero_detail(
             .map(|p| p.to_string_lossy().into_owned());
 
         // Distinct sound events (keep first label per event). Drop events that
-        // don't live in a real per-hero soundevents file (shared/global events
-        // like `Player.Barrier.Activate` — not editable here, and they'd map to a
-        // non-existent `soundevents/hero/player.vsndevts`).
+        // (a) don't live in a real per-hero soundevents file (shared/global events
+        // like `Player.Barrier.Activate`), or (b) are stale references the file no
+        // longer defines (e.g. `Warden.LockDown.Explode`). Both would surface as
+        // broken/empty slots otherwise.
         let mut seen = std::collections::HashSet::new();
         let mut sounds = Vec::new();
         if let Some(d) = def {
             for (label, event) in &d.sounds {
                 let stem = event.split('.').next().unwrap_or(event).to_lowercase();
                 if !hero_stems.contains(&stem) {
+                    continue;
+                }
+                let real = present
+                    .entry(stem.clone())
+                    .or_insert_with(|| hero_event_set(&helper_path, &pak_path, &events_dir, &stem));
+                if !real.contains(event) {
                     continue;
                 }
                 if seen.insert(event.clone()) {
