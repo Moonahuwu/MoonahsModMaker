@@ -886,33 +886,38 @@ export default function App() {
 
   // Ensure project slots exist for an ability's sound events (created empty;
   // pruned on next launch if still empty). Lets the user add sounds to them.
-  function ensureAbilitySlots(codename: string, ability: HeroAbility) {
-    setProject((prev) => {
-      if (!prev) return prev;
-      const have = new Set(prev.events.map((e) => e.id));
-      const add: EventProject[] = [];
-      for (const snd of ability.sounds) {
-        const id = heroAbilSlotId(codename, snd.eventName);
-        if (have.has(id)) continue;
-        add.push({
-          id,
-          group: "heroes",
-          side: snd.label,
-          eventName: snd.eventName,
-          arrayKey: snd.arrayKey,
-          stockEntry: "",
-          vsndDurationMode: "auto",
-          vsndDurationManual: null,
-          songs: [],
-          previousOwnedNames: [],
-          excludedEntries: [],
-          removedEntries: [],
-          adopted: [],
-          eventsRelpath: snd.eventsRelpath,
-        });
-      }
-      return add.length ? { ...prev, events: [...prev.events, ...add] } : prev;
-    });
+  // Returns the updated project (with any new slots) so the caller can read pools
+  // for them immediately — setProject alone is async, so a load() right after
+  // would otherwise miss the just-added slots and they'd show no stock sound.
+  function ensureAbilitySlots(codename: string, ability: HeroAbility): Project | null {
+    const prev = projectRef.current;
+    if (!prev) return null;
+    const have = new Set(prev.events.map((e) => e.id));
+    const add: EventProject[] = [];
+    for (const snd of ability.sounds) {
+      const id = heroAbilSlotId(codename, snd.eventName);
+      if (have.has(id)) continue;
+      add.push({
+        id,
+        group: "heroes",
+        side: snd.label,
+        eventName: snd.eventName,
+        arrayKey: snd.arrayKey,
+        stockEntry: "",
+        vsndDurationMode: "auto",
+        vsndDurationManual: null,
+        songs: [],
+        previousOwnedNames: [],
+        excludedEntries: [],
+        removedEntries: [],
+        adopted: [],
+        eventsRelpath: snd.eventsRelpath,
+      });
+    }
+    if (!add.length) return prev;
+    const next = { ...prev, events: [...prev.events, ...add] };
+    setProject(next);
+    return next;
   }
 
   // Load a hero's abilities when selected; decompile its sound files into vanilla.
@@ -953,13 +958,15 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedHero]);
 
-  // When an ability is opened, materialize its sound slots + (re)read pools.
+  // When an ability is opened, materialize its sound slots + read their pools.
+  // load() is given the project that already includes the new slots so they get
+  // their stock sound on the first open (not just after a later reload).
   useEffect(() => {
     if (!selectedHero || !selectedAbility || !heroAbilities) return;
     const ability = heroAbilities.find((a) => a.ability === selectedAbility);
     if (!ability) return;
-    ensureAbilitySlots(selectedHero, ability);
-    void load();
+    const next = ensureAbilitySlots(selectedHero, ability);
+    void load(next ?? undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedHero, selectedAbility, heroAbilities]);
 
