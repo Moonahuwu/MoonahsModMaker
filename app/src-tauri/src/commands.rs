@@ -671,6 +671,228 @@ pub fn hero_roster(
     Ok(out)
 }
 
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct HeroAbilitySound {
+    /// Soundevent name, e.g. `Doorman.CallBell.Cast`.
+    pub event_name: String,
+    /// Which array within the event (always `vsnd_files` here).
+    pub array_key: String,
+    /// The soundevents file the event lives in (relative).
+    pub events_relpath: String,
+    /// Friendly label from the ability field, e.g. "Cast", "Impact".
+    pub label: String,
+}
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct HeroAbility {
+    /// Signature slot 1..4.
+    pub slot: u32,
+    /// Ability entity name (e.g. `ability_doorman_bomb`).
+    pub ability: String,
+    /// Decoded icon PNG path (frontend wraps with convertFileSrc).
+    pub icon_path: Option<String>,
+    /// The distinct sound events this ability triggers.
+    pub sounds: Vec<HeroAbilitySound>,
+}
+
+/// The 4 signature abilities bound to `hero_<code>` (slot -> ability name).
+fn hero_bound_abilities(vdata: &str, code: &str) -> Vec<(u32, String)> {
+    let open = format!("hero_{code}");
+    let mut in_hero = false;
+    let mut out = Vec::new();
+    for line in vdata.lines() {
+        let t = line.trim();
+        if let Some(k) = t.strip_suffix('=').map(str::trim) {
+            if let Some(c) = k.strip_prefix("hero_") {
+                if c.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
+                    if in_hero {
+                        break; // reached the next hero
+                    }
+                    in_hero = k == open;
+                    continue;
+                }
+            }
+        }
+        if !in_hero {
+            continue;
+        }
+        if let Some(rest) = t.strip_prefix("ESlot_Signature_") {
+            // `N = "ability_x"`
+            let mut it = rest.splitn(2, '=');
+            let n: u32 = it.next().unwrap_or("").trim().parse().unwrap_or(0);
+            if let Some(v) = it.next().and_then(|s| between(s, "\"", "\"")) {
+                if n >= 1 && !v.is_empty() {
+                    out.push((n, v.to_string()));
+                }
+            }
+        }
+    }
+    out.sort_by_key(|(n, _)| *n);
+    out
+}
+
+struct AbilityDef {
+    icon_internal: Option<String>,
+    /// (label, event) pairs in declaration order.
+    sounds: Vec<(String, String)>,
+}
+
+/// Turn an ability sound field key into a label, e.g. `m_strCastSound` -> "Cast",
+/// `m_HitConfirmSound` -> "Hit Confirm".
+fn clean_sound_label(key: &str) -> String {
+    let k = key.trim().strip_prefix("m_").unwrap_or(key);
+    // Drop the leading lowercase run (str / s / vec ...) before the first cap.
+    let k = k.trim_start_matches(|c: char| c.is_ascii_lowercase());
+    let k = k.strip_suffix("Sound").unwrap_or(k);
+    // camelCase -> spaced words.
+    let mut out = String::new();
+    for (i, ch) in k.chars().enumerate() {
+        if ch.is_ascii_uppercase() && i > 0 {
+            out.push(' ');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// Parse `abilities.vdata` into `ability_name -> {icon, sounds}` in one pass.
+fn parse_abilities(vdata: &str) -> std::collections::HashMap<String, AbilityDef> {
+    let mut map = std::collections::HashMap::new();
+    let mut cur_name: Option<String> = None;
+    let mut cur = AbilityDef { icon_internal: None, sounds: vec![] };
+    for line in vdata.lines() {
+        let t = line.trim();
+        // Top-level ability opener: `ability_x =` (value/brace on next line).
+        if let Some(k) = t.strip_suffix('=').map(str::trim) {
+            if k.starts_with("ability_")
+                && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            {
+                if let Some(name) = cur_name.take() {
+                    map.insert(name, std::mem::replace(&mut cur, AbilityDef { icon_internal: None, sounds: vec![] }));
+                }
+                cur_name = Some(k.to_string());
+                continue;
+            }
+        }
+        if cur_name.is_none() {
+            continue;
+        }
+        if cur.icon_internal.is_none() && t.starts_with("m_strAbilityImage") {
+            if let Some(p) = between(t, "{images}/", ".psd") {
+                cur.icon_internal = Some(format!("panorama/images/{p}_psd.vtex_c"));
+            }
+        } else if let Some(ev) = between(t, "soundevent:\"", "\"") {
+            if !ev.is_empty() {
+                let key = t.split('=').next().unwrap_or("");
+                cur.sounds.push((clean_sound_label(key), ev.to_string()));
+            }
+        }
+    }
+    if let Some(name) = cur_name.take() {
+        map.insert(name, cur);
+    }
+    map
+}
+
+/// The soundevents file an event lives in, by its prefix, e.g.
+/// `Doorman.CallBell.Cast` -> `soundevents/hero/doorman.vsndevts`.
+fn event_relpath(event: &str) -> String {
+    let seg = event.split('.').next().unwrap_or(event).to_lowercase();
+    format!("soundevents/hero/{seg}.vsndevts")
+}
+
+/// A hero's 4 abilities with icons + the distinct sounds each triggers, parsed
+/// live from `heroes.vdata` + `abilities.vdata` (decompiled + cached). Drives the
+/// per-hero menu's ability bar and inline sound lists.
+#[tauri::command]
+pub fn hero_detail(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+    codename: String,
+) -> Result<Vec<HeroAbility>, String> {
+    use tauri::Manager;
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("hero_portraits");
+    std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
+
+    // Ensure the two data files are cached (decompiled from the pak).
+    let heroes = base.join("heroes.vdata");
+    if !heroes.exists() {
+        crate::vpk::decompile_from_vpk(&helper_path, &pak_path, "scripts/heroes.vdata_c", &heroes.to_string_lossy())?;
+    }
+    let abilities = base.join("abilities.vdata");
+    if !abilities.exists() {
+        crate::vpk::decompile_from_vpk(&helper_path, &pak_path, "scripts/abilities.vdata_c", &abilities.to_string_lossy())?;
+    }
+    let heroes_text = std::fs::read_to_string(&heroes).map_err(|e| e.to_string())?;
+    let abilities_text = std::fs::read_to_string(&abilities).map_err(|e| e.to_string())?;
+
+    let bound = hero_bound_abilities(&heroes_text, &codename);
+    if bound.is_empty() {
+        return Err(format!("no bound abilities for hero '{codename}'"));
+    }
+    let ability_map = parse_abilities(&abilities_text);
+
+    // Decode the ability icons (one batch).
+    let icon_dir = base.join("ability_icons").join(&codename);
+    std::fs::create_dir_all(&icon_dir).map_err(|e| e.to_string())?;
+    let icon_internals: Vec<String> = bound
+        .iter()
+        .filter_map(|(_, a)| ability_map.get(a).and_then(|d| d.icon_internal.clone()))
+        .collect();
+    let stem_of = |internal: &str| -> String {
+        internal
+            .rsplit('/')
+            .next()
+            .unwrap_or(internal)
+            .trim_end_matches(".vtex_c")
+            .to_string()
+    };
+    // Decode any icons not already cached.
+    let need: Vec<String> = icon_internals
+        .iter()
+        .filter(|i| !icon_dir.join(format!("{}.png", stem_of(i))).exists())
+        .cloned()
+        .collect();
+    if !need.is_empty() {
+        let _ = crate::vpk::texture_batch(&helper_path, &pak_path, &icon_dir.to_string_lossy(), &need);
+    }
+
+    let mut out = Vec::new();
+    for (slot, ability) in bound {
+        let def = ability_map.get(&ability);
+        let icon_path = def
+            .and_then(|d| d.icon_internal.as_deref())
+            .map(|i| icon_dir.join(format!("{}.png", stem_of(i))))
+            .filter(|p| p.exists())
+            .map(|p| p.to_string_lossy().into_owned());
+
+        // Distinct sound events (keep first label per event).
+        let mut seen = std::collections::HashSet::new();
+        let mut sounds = Vec::new();
+        if let Some(d) = def {
+            for (label, event) in &d.sounds {
+                if seen.insert(event.clone()) {
+                    sounds.push(HeroAbilitySound {
+                        event_name: event.clone(),
+                        array_key: "vsnd_files".to_string(),
+                        events_relpath: event_relpath(event),
+                        label: label.clone(),
+                    });
+                }
+            }
+        }
+        out.push(HeroAbility { slot, ability, icon_path, sounds });
+    }
+    Ok(out)
+}
+
 /// Extract one entry from a VPK via the bundled ValvePak helper.
 #[tauri::command]
 pub fn extract_vpk(

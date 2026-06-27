@@ -86,6 +86,27 @@ pub fn decode(
     run(cmd, "decode")
 }
 
+/// Decode several textures from `vpk` into `dest_dir` in one pass. Returns
+/// `(stem, png_path)` for each decoded `.vtex_c`.
+pub fn texture_batch(
+    helper_path: &str,
+    vpk: &str,
+    dest_dir: &str,
+    internal_paths: &[String],
+) -> Result<Vec<(String, String)>, String> {
+    let mut cmd = helper_command(helper_path);
+    cmd.args(["texturebatch", vpk, dest_dir]);
+    cmd.args(internal_paths);
+    let out = run(cmd, "texturebatch")?;
+    Ok(out
+        .lines()
+        .filter_map(|l| {
+            let mut it = l.splitn(2, '\t');
+            Some((it.next()?.trim().to_string(), it.next()?.trim().to_string()))
+        })
+        .collect())
+}
+
 /// Batch-decode each hero's card portrait from `vpk` into `dest_dir`. Returns
 /// `(codename, png_path)` pairs (one Package.Read for the whole roster).
 pub fn heroes(helper_path: &str, vpk: &str, dest_dir: &str) -> Result<Vec<(String, String)>, String> {

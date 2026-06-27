@@ -37,6 +37,7 @@ pub fn run() {
             commands::scan_addon_slots,
             commands::install_to_game,
             commands::hero_roster,
+            commands::hero_detail,
             commands::compile_project,
         ])
         .run(tauri::generate_context!())

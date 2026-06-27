@@ -35,6 +35,7 @@ static int Dispatch(string[] args)
             "decompile" => Decompile(args),
             "extractall" => ExtractAll(args),
             "texture" => TextureCmd(args),
+            "texturebatch" => TextureBatch(args),
             "heroes" => Heroes(args),
             _ => Unknown(args[0]),
         };
@@ -274,6 +275,56 @@ static int TextureCmd(string[] args)
     }
     WritePng(texture, outFile);
     Console.WriteLine(outFile);
+    return 0;
+}
+
+// texturebatch <vpk> <destDir> <internalVtexC>...
+// Decodes several textures from one vpk in a single Package.Read, each to
+// <destDir>/<stem>.png (stem = the vtex_c basename without extension). Prints
+// "stem\tpath" per decoded texture; missing/non-texture entries are skipped.
+static int TextureBatch(string[] args)
+{
+    if (args.Length < 4)
+    {
+        Console.Error.WriteLine("usage: texturebatch <vpk> <destDir> <internalVtexC>...");
+        return 2;
+    }
+    var vpk = Path.GetFullPath(args[1]);
+    var destDir = Path.GetFullPath(args[2]);
+    Directory.CreateDirectory(destDir);
+
+    using var package = new Package();
+    package.Read(vpk);
+
+    for (var i = 3; i < args.Length; i++)
+    {
+        var internalPath = args[i].Replace('\\', '/').TrimStart('/');
+        var entry = package.FindEntry(internalPath);
+        if (entry is null)
+        {
+            Console.Error.WriteLine($"entry not found: {internalPath}");
+            continue;
+        }
+        try
+        {
+            package.ReadEntry(entry, out var bytes);
+            using var resource = new Resource();
+            resource.Read(new MemoryStream(bytes));
+            if (resource.DataBlock is not Texture tex)
+            {
+                Console.Error.WriteLine($"not a texture: {internalPath}");
+                continue;
+            }
+            var stem = Path.GetFileNameWithoutExtension(internalPath);
+            var outPath = Path.Combine(destDir, stem + ".png");
+            WritePng(tex, outPath);
+            Console.WriteLine(stem + "\t" + outPath);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"skip {internalPath}: {ex.Message}");
+        }
+    }
     return 0;
 }
 
