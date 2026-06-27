@@ -325,6 +325,44 @@ impl Project {
                     "sounds/abilities/punkgoat/a3/punkgoat_blasted_lp.vsnd",
                     "soundevents/hero/punkgoat.vsndevts",
                 ),
+                // --- Tab: Shop Music (the in-game "Curio"/shop ambience) ---
+                slot(
+                    "shop_main",
+                    "shop",
+                    "Shop",
+                    "Music.Shop",
+                    "vsnd_files",
+                    "sounds/music/menu/curio_music.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "shop_secret",
+                    "shop",
+                    "Shop (secret)",
+                    "Music.Shop.Secret",
+                    "vsnd_files",
+                    "sounds/music/menu/curio_music_02.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                // --- Tab: UI (menu / pause music) ---
+                slot(
+                    "ui_pause",
+                    "ui",
+                    "Pause menu",
+                    "Gameplay.Pause.Music.Lp",
+                    "vsnd_files",
+                    "sounds/common/null.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "ui_main_menu",
+                    "ui",
+                    "Main menu",
+                    "Music.MainMenu",
+                    "vsnd_files",
+                    "sounds/music/music_menu_lp.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
             ],
         }
     }
@@ -350,7 +388,7 @@ mod tests {
         let p = Project::default_for_match_intro();
         let json = serde_json::to_string_pretty(&p).unwrap();
         let back: Project = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.events.len(), 9);
+        assert_eq!(back.events.len(), 13);
         assert_eq!(back.events[0].id, "intro_king");
         assert_eq!(back.events[0].event_name, "Music.MatchIntro.MatchStart.King");
         // The enemy-contest slot targets the opponent-control array.

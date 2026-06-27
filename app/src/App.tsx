@@ -36,6 +36,8 @@ const TAB_LABELS: Record<string, string> = {
   intro: "Deadlock Intro",
   urn: "Urn Music",
   heroes: "Heroes",
+  shop: "Shop Music",
+  ui: "UI",
   [MOD_COMBINER]: "Mod combiner",
 };
 
@@ -56,6 +58,8 @@ function reconcileProject(saved: Project, def: Project): Project {
 function accentFor(ev: { group: string; side: string }): string {
   if (ev.group === "intro") return ev.side === "Mother" ? "#3974ae" : "#ffac10";
   if (ev.group === "urn") return "#a855f7";
+  if (ev.group === "shop") return "#10b981"; // emerald (souls/shop)
+  if (ev.group === "ui") return "#38bdf8"; // sky (menus)
   return "#e0564f"; // heroes
 }
 
