@@ -31,6 +31,7 @@ import { ImportedMods } from "./components/ImportedMods";
 import { CompileBar } from "./components/CompileBar";
 import { HeroGrid } from "./components/HeroGrid";
 import { HeroDetail } from "./components/HeroDetail";
+import { ItemsTab } from "./components/ItemsTab";
 import { ProfileSwitcher } from "./components/ProfileSwitcher";
 import { useToast } from "./components/Toaster";
 import { useSettings } from "./lib/settings";
@@ -42,6 +43,8 @@ const AUDIO_EXT = /\.(mp3|wav|flac|ogg|m4a|aac)$/i;
 const DEFAULT_GAIN_DB = 6;
 
 const MOD_COMBINER = "modcombiner";
+/** Special always-present tab for shop items (scaffold; sounds wired later). */
+const ITEMS = "items";
 
 /** The built-in, undeletable empty profile = stock game (no tracks). */
 const VANILLA_NAME = "Vanilla";
@@ -60,6 +63,7 @@ const TAB_LABELS: Record<string, string> = {
   heroes: "Heroes",
   shop: "Shop Music",
   ui: "UI",
+  [ITEMS]: "Items",
   [MOD_COMBINER]: "Mod combiner",
 };
 
@@ -111,6 +115,7 @@ function accentFor(ev: { group: string; side: string }): string {
   if (ev.group === "urn") return "#a855f7";
   if (ev.group === "shop") return "#10b981"; // emerald (souls/shop)
   if (ev.group === "ui") return "#38bdf8"; // sky (menus)
+  if (ev.group === ITEMS) return "#f59e0b"; // amber (items)
   return "#e0564f"; // heroes
 }
 
@@ -153,6 +158,7 @@ export default function App() {
     for (const e of project?.events ?? []) {
       if (!seen.includes(e.group)) seen.push(e.group);
     }
+    if (!seen.includes(ITEMS)) seen.push(ITEMS);
     seen.push(MOD_COMBINER);
     return seen;
   }, [project]);
@@ -1103,6 +1109,8 @@ export default function App() {
             update={updateSettings}
             onMerge={mergeModIntoProject}
           />
+        ) : activeTab === ITEMS ? (
+          <ItemsTab />
         ) : activeTab === "heroes" ? (
           selectedHero ? (
             <HeroDetail
