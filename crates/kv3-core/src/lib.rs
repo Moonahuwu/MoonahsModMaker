@@ -130,8 +130,11 @@ pub fn read_event(text: &str, event_name: &str) -> Result<EventView> {
 pub fn read_event_array(text: &str, event_name: &str, array_key: &str) -> Result<EventView> {
     validate_header(text)?;
     let block = event_block(text, event_name)?;
-    let (lb, rb) = find_array(text, block, array_key, event_name)?;
-    let entries = parse_array_entries(text, lb, rb);
+    // A scalar `vsnd_files = "x.vsnd"` reads as a single-entry pool.
+    let entries = match find_value(text, block, array_key, event_name)? {
+        ValueSpan::Array(lb, rb) => parse_array_entries(text, lb, rb),
+        ValueSpan::Scalar(_, _, v) => vec![v],
+    };
     let vsnd_duration = duration_value_span(text, block)
         .and_then(|(s, e)| text[s..e].trim().parse::<f64>().ok());
     Ok(EventView {
@@ -237,18 +240,32 @@ pub fn add_entries(
 pub fn apply_merge(text: &str, edit: &EventMerge) -> Result<String> {
     validate_header(text)?;
     let block = event_block(text, &edit.event_name)?;
-    let (lb, rb) = find_array(text, block, &edit.array_key, &edit.event_name)?;
 
-    let existing = parse_array_entries(text, lb, rb);
+    // The value may be an array (splice in place) or a scalar string (promote to
+    // an array). `(existing entries, replace start, replace end-exclusive)`.
+    let (existing, rstart, rend, indent) =
+        match find_value(text, block, &edit.array_key, &edit.event_name)? {
+            ValueSpan::Array(lb, rb) => (
+                parse_array_entries(text, lb, rb),
+                lb,
+                rb + 1,
+                line_indent(text, lb).to_string(),
+            ),
+            // Scalar -> array: the lone value becomes the existing single entry,
+            // and we replace just the `"..."` span with a full array. Indent comes
+            // from the key's line (the `[` lands inline after `= `).
+            ValueSpan::Scalar(qs, qe, v) => {
+                (vec![v], qs, qe + 1, line_indent(text, qs).to_string())
+            }
+        };
+
     let rebuilt = rebuild_entries(&existing, edit);
-
     let le = detect_line_ending(text);
-    let indent = bracket_indent(text, lb).to_string();
     let new_array = render_array(&rebuilt, &indent, le);
 
     // Collect non-overlapping replacements and apply highest-offset-first so
     // earlier byte indices stay valid.
-    let mut edits: Vec<(usize, usize, String)> = vec![(lb, rb + 1, new_array)];
+    let mut edits: Vec<(usize, usize, String)> = vec![(rstart, rend, new_array)];
     if let Some(d) = edit.new_duration {
         if let Some((vs, ve)) = duration_value_span(text, block) {
             edits.push((vs, ve, format_duration(d)));
@@ -431,23 +448,87 @@ fn event_block(text: &str, event_name: &str) -> Result<(usize, usize)> {
     Ok((brace_open, brace_close))
 }
 
+/// The value of a `vsnd_files`-style key: either an array, or a single scalar
+/// string (the game uses the scalar form for one-sound events, e.g. an ability's
+/// `vsnd_files = "sounds/.../x.vsnd"`). We can merge into both: a scalar is
+/// promoted to an array so our entries can be added.
+enum ValueSpan {
+    /// Inclusive offsets of the opening `[` and closing `]`.
+    Array(usize, usize),
+    /// A quoted scalar value: (opening-quote offset, closing-quote offset,
+    /// unquoted contents).
+    Scalar(usize, usize, String),
+}
+
+/// Locate the value of `array_key` within an event block — an array `[...]` or a
+/// scalar `"..."`.
+fn find_value(
+    text: &str,
+    block: (usize, usize),
+    array_key: &str,
+    event_name: &str,
+) -> Result<ValueSpan> {
+    let (bopen, bclose) = block;
+    let b = text.as_bytes();
+    let key = find_key_pos(text, bopen, bclose, array_key)
+        .ok_or_else(|| Kv3Error::ArrayNotFound(format!("{event_name}.{array_key}")))?;
+    // Skip past the key, optional spaces, '=', and whitespace to the value start.
+    let mut j = key + array_key.len();
+    while j < bclose && matches!(b[j], b' ' | b'\t') {
+        j += 1;
+    }
+    if j >= bclose || b[j] != b'=' {
+        return Err(Kv3Error::ArrayNotFound(format!("{event_name}.{array_key}")));
+    }
+    j += 1;
+    while j < bclose && matches!(b[j], b' ' | b'\t' | b'\n' | b'\r') {
+        j += 1;
+    }
+    if j >= bclose {
+        return Err(Kv3Error::ArrayNotFound(format!("{event_name}.{array_key}")));
+    }
+    match b[j] {
+        b'[' => {
+            let rb = matching_close(text, j, b'[', b']').ok_or(Kv3Error::Unterminated("array"))?;
+            Ok(ValueSpan::Array(j, rb))
+        }
+        b'"' => {
+            let start = j + 1;
+            let mut k = start;
+            while k < text.len() {
+                if b[k] == b'\\' {
+                    k += 2;
+                    continue;
+                }
+                if b[k] == b'"' {
+                    break;
+                }
+                k += 1;
+            }
+            if k >= text.len() {
+                return Err(Kv3Error::Unterminated("string"));
+            }
+            Ok(ValueSpan::Scalar(j, k, text[start..k].to_string()))
+        }
+        _ => Err(Kv3Error::ArrayNotFound(format!("{event_name}.{array_key}"))),
+    }
+}
+
 /// Locate a named array (`array_key`) within an event block. Returns the byte
-/// offsets of the opening `[` and closing `]`.
+/// offsets of the opening `[` and closing `]`. Errors on a scalar value (callers
+/// that only union arrays — e.g. `add_entries` — skip those).
 fn find_array(
     text: &str,
     block: (usize, usize),
     array_key: &str,
     event_name: &str,
 ) -> Result<(usize, usize)> {
-    let (bopen, bclose) = block;
-    let key = find_key_pos(text, bopen, bclose, array_key)
-        .ok_or_else(|| Kv3Error::ArrayNotFound(format!("{event_name}.{array_key}")))?;
-    let lb_rel = text[key..bclose]
-        .find('[')
-        .ok_or_else(|| Kv3Error::ArrayNotFound(event_name.to_string()))?;
-    let lb = key + lb_rel;
-    let rb = matching_close(text, lb, b'[', b']').ok_or(Kv3Error::Unterminated("array"))?;
-    Ok((lb, rb))
+    match find_value(text, block, array_key, event_name)? {
+        ValueSpan::Array(lb, rb) => Ok((lb, rb)),
+        ValueSpan::Scalar(..) => {
+            Err(Kv3Error::ArrayNotFound(format!("{event_name}.{array_key}")))
+        }
+    }
 }
 
 /// Byte span of the `vsnd_duration` *value* (the number text) within a block.
@@ -565,6 +646,19 @@ fn parse_array_entries(text: &str, lbracket: usize, rbracket: usize) -> Vec<Stri
 fn bracket_indent(text: &str, lbracket: usize) -> &str {
     let line_start = text[..lbracket].rfind('\n').map(|i| i + 1).unwrap_or(0);
     &text[line_start..lbracket]
+}
+
+/// Leading whitespace (indentation) of the line containing `pos`. Unlike
+/// `bracket_indent`, this stops at the first non-whitespace char, so it's correct
+/// even when `pos` points mid-line (e.g. a scalar value after `key = `).
+fn line_indent(text: &str, pos: usize) -> &str {
+    let line_start = text[..pos].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let b = text.as_bytes();
+    let mut e = line_start;
+    while e < pos && matches!(b[e], b' ' | b'\t') {
+        e += 1;
+    }
+    &text[line_start..e]
 }
 
 fn detect_line_ending(text: &str) -> &'static str {
@@ -710,6 +804,33 @@ mod unit {
             v.entries,
             vec!["a/stock.vsnd", "a/foreign1.vsnd", "a/old_owned.vsnd", "a/new.vsnd"]
         );
+    }
+
+    // Like an ability event in the live game: `vsnd_files` is a SCALAR string,
+    // not an array (e.g. Punkgoat.Blasted.Lp).
+    const SYNTH_SCALAR: &str = "<!-- kv3 encoding:text:version{x} format:generic:version{y} -->\n{\n\tEvt = \n\t{\n\t\tbase = \"Base.Ability\"\n\t\tvsnd_files = \"a/stock.vsnd\"\n\t\tvsnd_duration = 15.0\n\t}\n}\n";
+
+    #[test]
+    fn reads_scalar_vsnd_files_as_single_entry() {
+        let v = read_event(SYNTH_SCALAR, "Evt").unwrap();
+        assert_eq!(v.entries, vec!["a/stock.vsnd"]);
+        assert_eq!(v.vsnd_duration, Some(15.0));
+    }
+
+    #[test]
+    fn scalar_vsnd_files_is_promoted_to_array_on_merge() {
+        let out = apply_merge(SYNTH_SCALAR, &edit(&["a/new.vsnd"], &[], Some(20.0))).unwrap();
+        // The scalar became an array with stock first + our entry appended.
+        let v = read_event(&out, "Evt").unwrap();
+        assert_eq!(v.entries, vec!["a/stock.vsnd", "a/new.vsnd"]);
+        assert_eq!(v.vsnd_duration, Some(20.0));
+        // It's a real array now, and the surrounding keys are intact.
+        assert!(out.contains("vsnd_files = ["));
+        assert!(out.contains("base = \"Base.Ability\""));
+        // Re-merging the now-array form stays stable (idempotent shape).
+        let again = apply_merge(&out, &edit(&["a/new.vsnd"], &[], None)).unwrap();
+        let v2 = read_event(&again, "Evt").unwrap();
+        assert_eq!(v2.entries, vec!["a/stock.vsnd", "a/new.vsnd"]);
     }
 
     #[test]
