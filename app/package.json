@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "build:helper": "dotnet publish ../tools/vpk-helper -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=none -p:DebugSymbols=false -o ../tools/vpk-helper/dist",
+    "build:bundle": "npm run build:helper && npm run build",
     "preview": "vite preview",
     "tauri": "tauri"
   },

@@ -37,7 +37,7 @@ const CSDK = "C:/Users/ethob/Desktop/DeadlockModding/Reduced_CSDK_12";
 export const DEFAULT_SETTINGS: Settings = {
   csdkRoot: CSDK,
   addonName: "eim_intro_music",
-  vpkHelperPath: `${REPO}/tools/vpk-helper/bin/Release/net10.0/vpk-helper.dll`,
+  vpkHelperPath: `${REPO}/tools/vpk-helper/dist/vpk-helper.exe`,
   deadlockPak:
     "D:/SteamLibrary/steamapps/common/Deadlock/game/citadel/pak01_dir.vpk",
   ffmpegPath: "",

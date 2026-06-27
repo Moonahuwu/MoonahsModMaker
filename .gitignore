@@ -6,6 +6,8 @@ app/dist
 app/src-tauri/gen
 tools/vpk-helper/bin
 tools/vpk-helper/obj
+tools/vpk-helper/dist
+tools/vpk-helper/publish
 
 # ---- Compile output ----
 /output

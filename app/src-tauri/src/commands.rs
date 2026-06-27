@@ -379,16 +379,21 @@ fn find_vpk_helper(exe_dir: Option<&std::path::Path>, resource_dir: Option<&std:
         candidates.push(base.join("vpk-helper").join("vpk-helper.exe"));
         candidates.push(base.join("vpk-helper.dll"));
     }
-    // Dev checkout: walk parents looking for tools/vpk-helper/bin/Release/*.dll.
+    // Dev checkout: walk parents looking for the helper. Prefer the self-contained
+    // `dist/vpk-helper.exe` (no .NET runtime needed) over the framework-dependent
+    // `bin/Release/*.dll` (needs `dotnet` on PATH).
     if let Some(mut d) = exe_dir.map(|p| p.to_path_buf()) {
         for _ in 0..6 {
-            let dll = d.join("tools/vpk-helper/bin/Release/net10.0/vpk-helper.dll");
-            if dll.exists() {
-                return Some(dll.to_string_lossy().into_owned());
-            }
-            let exe = d.join("tools/vpk-helper/bin/Release/net10.0/vpk-helper.exe");
-            if exe.exists() {
-                return Some(exe.to_string_lossy().into_owned());
+            for rel in [
+                "tools/vpk-helper/dist/vpk-helper.exe",
+                "tools/vpk-helper/bin/Release/net10.0/win-x64/vpk-helper.exe",
+                "tools/vpk-helper/bin/Release/net10.0/vpk-helper.exe",
+                "tools/vpk-helper/bin/Release/net10.0/vpk-helper.dll",
+            ] {
+                let cand = d.join(rel);
+                if cand.exists() {
+                    return Some(cand.to_string_lossy().into_owned());
+                }
             }
             if !d.pop() {
                 break;
