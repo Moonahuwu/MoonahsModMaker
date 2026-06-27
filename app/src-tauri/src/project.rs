@@ -285,24 +285,9 @@ impl Project {
                     "sounds/music/music_idol_timer_lp_opponent_160bpm.vsnd",
                     "soundevents/music.vsndevts",
                 ),
-                slot(
-                    "urn_stinger_pickedup",
-                    "urn",
-                    "Stinger: picked up",
-                    "Stinger.Idol.PickedUp",
-                    "vsnd_files",
-                    "sounds/common/null.vsnd",
-                    "soundevents/music.vsndevts",
-                ),
-                slot(
-                    "urn_stinger_returned",
-                    "urn",
-                    "Stinger: returned",
-                    "Stinger.Idol.Returned",
-                    "vsnd_files",
-                    "sounds/music/music_stinger_idol_return.vsnd",
-                    "soundevents/music.vsndevts",
-                ),
+                // NOTE: Stinger.Idol.PickedUp and the bare Stinger.Idol.Returned
+                // existed in older builds but were removed from the live game (only
+                // the .Team/.Opponent variants remain), so they're not slots here.
                 slot(
                     "urn_stinger_returned_team",
                     "urn",
@@ -365,7 +350,7 @@ mod tests {
         let p = Project::default_for_match_intro();
         let json = serde_json::to_string_pretty(&p).unwrap();
         let back: Project = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.events.len(), 11);
+        assert_eq!(back.events.len(), 9);
         assert_eq!(back.events[0].id, "intro_king");
         assert_eq!(back.events[0].event_name, "Music.MatchIntro.MatchStart.King");
         // The enemy-contest slot targets the opponent-control array.

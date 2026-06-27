@@ -44,6 +44,15 @@ function baseName(path: string): string {
   return file.replace(/\.[^.]+$/, "");
 }
 
+/** Align a saved project to the current slot schema: ordered by the default,
+ *  preferring saved slot data (songs, refreshed stock) where the id still exists,
+ *  dropping saved slots no longer in the schema, and adding any new default slots. */
+function reconcileProject(saved: Project, def: Project): Project {
+  const savedById = new Map(saved.events.map((e) => [e.id, e]));
+  const events = def.events.map((d) => savedById.get(d.id) ?? d);
+  return { ...saved, events };
+}
+
 function accentFor(ev: { group: string; side: string }): string {
   if (ev.group === "intro") return ev.side === "Mother" ? "#3974ae" : "#ffac10";
   if (ev.group === "urn") return "#a855f7";
@@ -85,7 +94,12 @@ export default function App() {
     (async () => {
       try {
         const saved = await loadState();
-        const p = saved ?? (await newProject());
+        const def = await newProject();
+        // Reconcile a saved project against the current slot schema: keep each
+        // current slot (preferring saved data so songs / refreshed stock survive),
+        // drop saved slots whose event no longer exists (e.g. the removed
+        // Stinger.Idol.PickedUp / .Returned), and pick up any newly-added slots.
+        const p = saved ? reconcileProject(saved, def) : def;
         setProject(p);
         hydrated.current = true;
         void load(p);
