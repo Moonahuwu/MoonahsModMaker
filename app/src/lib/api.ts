@@ -301,3 +301,30 @@ export function saveSettings(settings: unknown): Promise<void> {
 export function loadSettings<T = unknown>(): Promise<T | null> {
   return invoke("load_settings");
 }
+
+/** A named build config: the project plus its imported mods. Machine paths are
+ *  global (in settings), not part of a profile. */
+export interface ProfileBlob {
+  project: Project;
+  importedMods: string[];
+}
+
+export function listProfiles(): Promise<string[]> {
+  return invoke("list_profiles");
+}
+
+export function saveProfile(name: string, data: ProfileBlob): Promise<void> {
+  return invoke("save_profile", { name, data });
+}
+
+export function loadProfile(name: string): Promise<ProfileBlob | null> {
+  return invoke("load_profile", { name });
+}
+
+export function deleteProfile(name: string): Promise<void> {
+  return invoke("delete_profile", { name });
+}
+
+export function renameProfile(from: string, to: string): Promise<void> {
+  return invoke("rename_profile", { from, to });
+}

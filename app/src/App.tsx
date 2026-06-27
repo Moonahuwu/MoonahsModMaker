@@ -17,7 +17,12 @@ import {
   readModArrays,
   refreshVanilla as refreshVanillaApi,
   sanitizeName,
-  saveState,
+  listProfiles,
+  saveProfile,
+  loadProfile,
+  deleteProfile,
+  renameProfile,
+  type ProfileBlob,
 } from "./lib/api";
 import { SidePanel } from "./components/SidePanel";
 import { SetupSection } from "./components/SetupSection";
@@ -26,6 +31,7 @@ import { ImportedMods } from "./components/ImportedMods";
 import { CompileBar } from "./components/CompileBar";
 import { HeroGrid } from "./components/HeroGrid";
 import { HeroDetail } from "./components/HeroDetail";
+import { ProfileSwitcher } from "./components/ProfileSwitcher";
 import { useToast } from "./components/Toaster";
 import { useSettings } from "./lib/settings";
 import { songHash } from "./lib/songHash";
@@ -36,6 +42,17 @@ const AUDIO_EXT = /\.(mp3|wav|flac|ogg|m4a|aac)$/i;
 const DEFAULT_GAIN_DB = 6;
 
 const MOD_COMBINER = "modcombiner";
+
+/** The built-in, undeletable empty profile = stock game (no tracks). */
+const VANILLA_NAME = "Vanilla";
+
+/** Mirror the backend's profile-name sanitize so the display name matches the
+ *  stored file stem (keeps the active-profile checkmark in sync). */
+function cleanProfileName(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  const out = s.replace(/[<>:"/\\|?*\x00-\x1f]/g, " ").replace(/^\.+|\.+$/g, "").trim();
+  return out || "profile";
+}
 
 const TAB_LABELS: Record<string, string> = {
   intro: "Deadlock Intro",
@@ -116,8 +133,13 @@ export default function App() {
   // Soundevents files already decompiled into the vanilla merge base this session.
   const ensuredFiles = useRef<Set<string>>(new Set());
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const { settings, update: updateSettings } = useSettings();
+  const { settings, update: updateSettings, ready: settingsReady } = useSettings();
   const { push } = useToast();
+
+  // Profiles = named build configs (project + imported mods). The active one is
+  // tracked in settings.activeProfile; this is just the list for the picker.
+  const [profiles, setProfiles] = useState<string[]>([]);
+  const [profileBusy, setProfileBusy] = useState(false);
 
   const panelEls = useRef<Record<string, HTMLElement | null>>({});
   const projectRef = useRef<Project | null>(null);
@@ -137,32 +159,184 @@ export default function App() {
 
   const hydrated = useRef(false);
 
+  // Bootstrap profiles once settings (which hold the active-profile name) load.
+  // Ensures the built-in Vanilla profile exists, migrates the legacy single
+  // project.json (+ old settings.importedMods) into "Superpack" on first run,
+  // then loads the active profile into the editor.
   useEffect(() => {
+    if (!settingsReady || hydrated.current) return;
+    hydrated.current = true;
     (async () => {
       try {
-        const saved = await loadState();
         const def = await newProject();
-        // Reconcile a saved project against the current slot schema: keep each
-        // current slot (preferring saved data so songs / refreshed stock survive),
-        // drop saved slots whose event no longer exists (e.g. the removed
-        // Stinger.Idol.PickedUp / .Returned), and pick up any newly-added slots.
-        const p = saved ? reconcileProject(saved, def) : def;
-        setProject(p);
-        hydrated.current = true;
-        void load(p);
+        let list = await listProfiles();
+
+        if (!list.includes(VANILLA_NAME)) {
+          await saveProfile(VANILLA_NAME, { project: def, importedMods: [] });
+          list = await listProfiles();
+        }
+
+        let active = settings.activeProfile;
+        const userProfiles = list.filter((n) => n !== VANILLA_NAME);
+        if (userProfiles.length === 0) {
+          const legacy = await loadState().catch(() => null);
+          // Existing content migrates into "Superpack"; a brand-new install gets
+          // a plain "Default".
+          const firstName = legacy ? "Superpack" : "Default";
+          await saveProfile(firstName, {
+            project: legacy ?? def,
+            importedMods: settings.importedMods ?? [],
+          });
+          active = firstName;
+          list = await listProfiles();
+        }
+
+        if (!active || !list.includes(active)) {
+          active = list.find((n) => n !== VANILLA_NAME) ?? list[0];
+        }
+
+        const blob = await loadProfile(active);
+        const proj = blob?.project ? reconcileProject(blob.project, def) : def;
+        setProfiles(list);
+        setProject(proj);
+        updateSettings({
+          activeProfile: active,
+          importedMods: blob?.importedMods ?? settings.importedMods ?? [],
+        });
+        void load(proj);
       } catch (e) {
+        hydrated.current = false;
         push("error", String(e));
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [settingsReady]);
 
-  // Debounced autosave of the project state (no compile) on any change.
+  // Debounced autosave of the active profile (project + imported mods) on change.
   useEffect(() => {
-    if (!project || !hydrated.current) return;
-    const id = setTimeout(() => void saveState(project), 600);
+    if (!project || !hydrated.current || !settings.activeProfile) return;
+    const name = settings.activeProfile;
+    const blob: ProfileBlob = { project, importedMods: settings.importedMods };
+    const id = setTimeout(() => void saveProfile(name, blob), 600);
     return () => clearTimeout(id);
-  }, [project]);
+  }, [project, settings.importedMods, settings.activeProfile]);
+
+  // Persist the active profile immediately (autosave is debounced).
+  async function flushActiveProfile() {
+    const name = settingsRef.current.activeProfile;
+    if (name && projectRef.current) {
+      await saveProfile(name, {
+        project: projectRef.current,
+        importedMods: settingsRef.current.importedMods,
+      });
+    }
+  }
+
+  // Load a profile blob into the editor (resets transient hero UI), and point
+  // settings at it. The autosave effect persists from here on.
+  function applyProfile(name: string, blob: ProfileBlob | null, def: Project) {
+    const proj = blob?.project ? reconcileProject(blob.project, def) : def;
+    setSelectedHero(null);
+    setSelectedHeroInfo(null);
+    setHeroAbilities(null);
+    setSelectedAbility(null);
+    setProject(proj);
+    updateSettings({ activeProfile: name, importedMods: blob?.importedMods ?? [] });
+    void load(proj);
+  }
+
+  async function switchProfile(name: string) {
+    if (name === settingsRef.current.activeProfile) return;
+    setProfileBusy(true);
+    try {
+      await flushActiveProfile();
+      const def = await newProject();
+      const blob = await loadProfile(name);
+      applyProfile(name, blob, def);
+      push("success", `Switched to "${name}"`);
+    } catch (e) {
+      push("error", `Couldn't switch profile: ${e}`);
+    } finally {
+      setProfileBusy(false);
+    }
+  }
+
+  async function createProfile(rawName: string) {
+    const name = cleanProfileName(rawName);
+    setProfileBusy(true);
+    try {
+      await flushActiveProfile();
+      const def = await newProject();
+      const blob: ProfileBlob = { project: def, importedMods: [] };
+      await saveProfile(name, blob);
+      setProfiles(await listProfiles());
+      applyProfile(name, blob, def);
+      push("success", `Created "${name}"`);
+    } catch (e) {
+      push("error", `Couldn't create profile: ${e}`);
+    } finally {
+      setProfileBusy(false);
+    }
+  }
+
+  async function duplicateProfile(rawName: string) {
+    const name = cleanProfileName(rawName);
+    setProfileBusy(true);
+    try {
+      await flushActiveProfile();
+      const def = await newProject();
+      const blob: ProfileBlob = {
+        project: projectRef.current ?? def,
+        importedMods: settingsRef.current.importedMods,
+      };
+      await saveProfile(name, blob);
+      setProfiles(await listProfiles());
+      applyProfile(name, blob, def);
+      push("success", `Duplicated to "${name}"`);
+    } catch (e) {
+      push("error", `Couldn't duplicate profile: ${e}`);
+    } finally {
+      setProfileBusy(false);
+    }
+  }
+
+  async function renameActiveProfile(rawName: string) {
+    const from = settingsRef.current.activeProfile;
+    const to = cleanProfileName(rawName);
+    if (!from || from === VANILLA_NAME || to === from) return;
+    setProfileBusy(true);
+    try {
+      await flushActiveProfile();
+      await renameProfile(from, to);
+      setProfiles(await listProfiles());
+      updateSettings({ activeProfile: to });
+      push("success", `Renamed to "${to}"`);
+    } catch (e) {
+      push("error", `Couldn't rename profile: ${e}`);
+    } finally {
+      setProfileBusy(false);
+    }
+  }
+
+  async function deleteActiveProfile() {
+    const name = settingsRef.current.activeProfile;
+    if (!name || name === VANILLA_NAME) return;
+    setProfileBusy(true);
+    try {
+      await deleteProfile(name);
+      const list = await listProfiles();
+      setProfiles(list);
+      const next = list.find((n) => n !== VANILLA_NAME) ?? VANILLA_NAME;
+      const def = await newProject();
+      const blob = await loadProfile(next);
+      applyProfile(next, blob, def);
+      push("info", `Deleted "${name}"`);
+    } catch (e) {
+      push("error", `Couldn't delete profile: ${e}`);
+    } finally {
+      setProfileBusy(false);
+    }
+  }
 
   function pickSide(x: number, y: number): { side: string | null; how: string } {
     const dpr = window.devicePixelRatio || 1;
@@ -890,15 +1064,30 @@ export default function App() {
 
       {/* Main content — the only scrollable pane */}
       <main className="flex h-screen flex-1 flex-col gap-5 overflow-y-auto p-6 pb-4">
-        <header>
-          <h2 className="bg-gradient-to-r from-zinc-50 to-zinc-400 bg-clip-text text-xl font-bold tracking-tight text-transparent">
-            {TAB_LABELS[activeTab] ?? activeTab}
-          </h2>
-          <p className="mt-1 text-sm text-zinc-500">
-            {activeTab === MOD_COMBINER
-              ? "Merge other mods' sounds into your compile — nothing of yours is removed."
-              : "Your entries merge in — every other mod stays untouched."}
-          </p>
+        <header className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="bg-gradient-to-r from-zinc-50 to-zinc-400 bg-clip-text text-xl font-bold tracking-tight text-transparent">
+              {TAB_LABELS[activeTab] ?? activeTab}
+            </h2>
+            <p className="mt-1 text-sm text-zinc-500">
+              {activeTab === MOD_COMBINER
+                ? "Merge other mods' sounds into your compile — nothing of yours is removed."
+                : "Your entries merge in — every other mod stays untouched."}
+            </p>
+          </div>
+          {profiles.length > 0 && (
+            <ProfileSwitcher
+              profiles={profiles}
+              active={settings.activeProfile}
+              vanillaName={VANILLA_NAME}
+              busy={profileBusy}
+              onSwitch={(n) => void switchProfile(n)}
+              onCreate={(n) => void createProfile(n)}
+              onDuplicate={(n) => void duplicateProfile(n)}
+              onRename={(n) => void renameActiveProfile(n)}
+              onDelete={() => void deleteActiveProfile()}
+            />
+          )}
         </header>
 
         {activeTab === MOD_COMBINER ? (

@@ -34,6 +34,9 @@ export interface Settings {
   firstRunDone: boolean;
   /** Show disabled / in-development ("experimental") heroes in the Heroes grid. */
   showExperimentalHeroes: boolean;
+  /** Name of the currently-loaded profile (build config). Empty until the first
+   *  profile is bootstrapped. The active profile owns `importedMods`. */
+  activeProfile: string;
 }
 
 const REPO = "C:/Users/ethob/Desktop/DeadlockModding/EasyIntroModder";
@@ -59,6 +62,7 @@ export const DEFAULT_SETTINGS: Settings = {
   installSlot: null,
   firstRunDone: false,
   showExperimentalHeroes: false,
+  activeProfile: "",
 };
 
 const STORAGE_KEY = "eim.settings.v1";
@@ -75,8 +79,10 @@ export function useSettings() {
     }
   });
   // Gate backend writes until the initial backend load has merged, so we never
-  // clobber the persisted file with defaults on a fresh webview.
+  // clobber the persisted file with defaults on a fresh webview. `ready` is the
+  // observable form, so consumers (profile bootstrap) can wait for it.
   const loaded = useRef(false);
+  const [ready, setReady] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -87,6 +93,7 @@ export function useSettings() {
         /* backend settings optional */
       } finally {
         loaded.current = true;
+        setReady(true);
       }
     })();
   }, []);
@@ -105,7 +112,7 @@ export function useSettings() {
   const update = (patch: Partial<Settings>) =>
     setSettings((s) => ({ ...s, ...patch }));
 
-  return { settings, update };
+  return { settings, update, ready };
 }
 
 /** The compiled .vpk to install: the `combined/` variant when mods are imported

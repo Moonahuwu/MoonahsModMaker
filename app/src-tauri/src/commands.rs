@@ -1128,3 +1128,102 @@ pub fn load_settings(app: tauri::AppHandle) -> Result<Option<serde_json::Value>,
         Ok(None)
     }
 }
+
+// ---- Profiles --------------------------------------------------------------
+// A profile is a named, self-contained build config (the project + imported
+// mods) stored as one JSON file under app-data/profiles. Machine paths stay in
+// settings.json (global), so switching profiles never disturbs setup.
+
+fn profiles_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    use tauri::Manager;
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("profiles");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+/// A profile name reduced to a safe file stem (no path separators or chars
+/// Windows forbids). The sanitized form is the profile's canonical identity.
+fn sanitize_profile(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| if "<>:\"/\\|?*".contains(c) || c.is_control() { ' ' } else { c })
+        .collect();
+    let cleaned = cleaned.trim().trim_matches('.').trim();
+    if cleaned.is_empty() { "profile".to_string() } else { cleaned.to_string() }
+}
+
+fn profile_path(app: &tauri::AppHandle, name: &str) -> Result<PathBuf, String> {
+    Ok(profiles_dir(app)?.join(format!("{}.json", sanitize_profile(name))))
+}
+
+/// List saved profile names (sorted), e.g. `["Superpack", "Vanilla"]`.
+#[tauri::command]
+pub fn list_profiles(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(profiles_dir(&app)?) {
+        for e in rd.flatten() {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            if let Some(stem) = name.strip_suffix(".json") {
+                out.push(stem.to_string());
+            }
+        }
+    }
+    out.sort_by_key(|s| s.to_lowercase());
+    Ok(out)
+}
+
+/// Save a profile's blob (frontend-owned shape: `{ project, importedMods }`).
+#[tauri::command]
+pub fn save_profile(
+    app: tauri::AppHandle,
+    name: String,
+    data: serde_json::Value,
+) -> Result<(), String> {
+    let text = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
+    std::fs::write(profile_path(&app, &name)?, text).map_err(|e| e.to_string())
+}
+
+/// Load a profile's blob, or None if it doesn't exist.
+#[tauri::command]
+pub fn load_profile(
+    app: tauri::AppHandle,
+    name: String,
+) -> Result<Option<serde_json::Value>, String> {
+    let path = profile_path(&app, &name)?;
+    if path.exists() {
+        let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        let v = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+        Ok(Some(v))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Delete a profile.
+#[tauri::command]
+pub fn delete_profile(app: tauri::AppHandle, name: String) -> Result<(), String> {
+    let path = profile_path(&app, &name)?;
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Rename a profile (overwrites any existing profile at the new name).
+#[tauri::command]
+pub fn rename_profile(app: tauri::AppHandle, from: String, to: String) -> Result<(), String> {
+    let src = profile_path(&app, &from)?;
+    let dst = profile_path(&app, &to)?;
+    if src == dst {
+        return Ok(());
+    }
+    if !src.exists() {
+        return Err(format!("profile '{from}' not found"));
+    }
+    std::fs::rename(&src, &dst).map_err(|e| e.to_string())
+}
