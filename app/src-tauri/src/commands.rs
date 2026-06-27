@@ -624,6 +624,7 @@ pub fn hero_roster(
     if refresh {
         let _ = std::fs::remove_file(dir.join("abilities.vdata"));
         let _ = std::fs::remove_file(dir.join("hero_sound_files.txt"));
+        let _ = std::fs::remove_file(dir.join("event_index.json"));
         let _ = std::fs::remove_dir_all(dir.join("heroevents"));
         if let Ok(rd) = std::fs::read_dir(&dir) {
             for e in rd.flatten() {
@@ -816,13 +817,6 @@ fn parse_abilities(vdata: &str) -> std::collections::HashMap<String, AbilityDef>
     map
 }
 
-/// The soundevents file an event lives in, by its prefix, e.g.
-/// `Doorman.CallBell.Cast` -> `soundevents/hero/doorman.vsndevts`.
-fn event_relpath(event: &str) -> String {
-    let seg = event.split('.').next().unwrap_or(event).to_lowercase();
-    format!("soundevents/hero/{seg}.vsndevts")
-}
-
 /// The set of hero soundevent file stems that actually exist in the pak
 /// (e.g. `abrams`, `viper`, `magician`). Cached to a text file so abilities that
 /// reference shared/global events (`Player.Barrier.Activate`, `Ability.*`, …)
@@ -911,6 +905,41 @@ fn hero_event_set(
         .unwrap_or_default()
 }
 
+/// `event_name -> hero file stem` for every vsnd-bearing event across all hero
+/// soundevents files. Built once (decompiling each file) and cached to
+/// `event_index.json`, so an event's file is resolved by where it's actually
+/// defined rather than guessed from its name prefix — the prefix often differs
+/// from the file (e.g. `MoKrill.*` lives in `krill.vsndevts`, `Calico.*` in
+/// `nano.vsndevts`, `Archer.*` in `orion.vsndevts`, many `Ability.*` events in
+/// their owner's file). That mismatch was the "beep / no filepath" on those heroes.
+fn hero_event_index(
+    helper: &str,
+    pak: &str,
+    base: &std::path::Path,
+    hero_stems: &std::collections::HashSet<String>,
+) -> std::collections::HashMap<String, String> {
+    let cache = base.join("event_index.json");
+    if let Ok(t) = std::fs::read_to_string(&cache) {
+        if let Ok(m) = serde_json::from_str::<std::collections::HashMap<String, String>>(&t) {
+            if !m.is_empty() {
+                return m;
+            }
+        }
+    }
+    let events_dir = base.join("heroevents");
+    let _ = std::fs::create_dir_all(&events_dir);
+    let mut idx = std::collections::HashMap::new();
+    let mut stems: Vec<&String> = hero_stems.iter().collect();
+    stems.sort(); // deterministic winner when an event name appears in two files
+    for stem in stems {
+        for ev in hero_event_set(helper, pak, &events_dir, stem) {
+            idx.entry(ev).or_insert_with(|| stem.clone());
+        }
+    }
+    let _ = std::fs::write(&cache, serde_json::to_string(&idx).unwrap_or_default());
+    idx
+}
+
 /// A hero's 4 abilities with icons + the distinct sounds each triggers, parsed
 /// from `heroes.vdata` + `abilities.vdata`. The result (abilities + icon paths +
 /// which sound events exist) is **static** game data, so it's cached per-hero to
@@ -932,9 +961,9 @@ pub fn hero_detail(
         .join("hero_portraits");
     std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
 
-    // Serve the cached per-hero detail unless a refresh was requested. The `v2`
-    // marker invalidates caches built before stale-event filtering existed.
-    let detail_cache = base.join(format!("detail_v2_{codename}.json"));
+    // Serve the cached per-hero detail unless a refresh was requested. The `v3`
+    // marker invalidates caches built before event→file index resolution.
+    let detail_cache = base.join(format!("detail_v3_{codename}.json"));
     if !refresh.unwrap_or(false) {
         if let Ok(text) = std::fs::read_to_string(&detail_cache) {
             if let Ok(cached) = serde_json::from_str::<Vec<HeroAbility>>(&text) {
@@ -963,11 +992,9 @@ pub fn hero_detail(
     }
     let ability_map = parse_abilities(&abilities_text);
     let hero_stems = valid_hero_stems(&helper_path, &pak_path, &base.join("hero_sound_files.txt"));
-    // Lazily-built `stem -> {real event names}` so we can drop stale references.
-    let events_dir = base.join("heroevents");
-    std::fs::create_dir_all(&events_dir).map_err(|e| e.to_string())?;
-    let mut present: std::collections::HashMap<String, std::collections::HashSet<String>> =
-        std::collections::HashMap::new();
+    // event_name -> the file that actually defines it (handles prefix/file name
+    // mismatches and drops shared/stale events that no file defines).
+    let event_index = hero_event_index(&helper_path, &pak_path, &base, &hero_stems);
 
     // Decode the ability icons (one batch).
     let icon_dir = base.join("ability_icons").join(&codename);
@@ -1003,30 +1030,24 @@ pub fn hero_detail(
             .filter(|p| p.exists())
             .map(|p| p.to_string_lossy().into_owned());
 
-        // Distinct sound events (keep first label per event). Drop events that
-        // (a) don't live in a real per-hero soundevents file (shared/global events
-        // like `Player.Barrier.Activate`), or (b) are stale references the file no
-        // longer defines (e.g. `Warden.LockDown.Explode`). Both would surface as
-        // broken/empty slots otherwise.
+        // Distinct sound events (keep first label per event). Resolve each event
+        // to the file that actually defines it via the index; events not in any
+        // hero file (shared/global like `Player.Barrier.Activate`, or stale
+        // references the file no longer defines) are dropped — they'd otherwise be
+        // broken/empty slots.
         let mut seen = std::collections::HashSet::new();
         let mut sounds = Vec::new();
         if let Some(d) = def {
             for (label, event) in &d.sounds {
-                let stem = event.split('.').next().unwrap_or(event).to_lowercase();
-                if !hero_stems.contains(&stem) {
-                    continue;
-                }
-                let real = present
-                    .entry(stem.clone())
-                    .or_insert_with(|| hero_event_set(&helper_path, &pak_path, &events_dir, &stem));
-                if !real.contains(event) {
-                    continue;
-                }
+                let stem = match event_index.get(event) {
+                    Some(s) => s,
+                    None => continue,
+                };
                 if seen.insert(event.clone()) {
                     sounds.push(HeroAbilitySound {
                         event_name: event.clone(),
                         array_key: "vsnd_files".to_string(),
-                        events_relpath: event_relpath(event),
+                        events_relpath: format!("soundevents/hero/{stem}.vsndevts"),
                         label: label.clone(),
                     });
                 }
