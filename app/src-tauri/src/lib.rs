@@ -43,6 +43,8 @@ pub fn run() {
             commands::install_to_game,
             commands::hero_roster,
             commands::hero_detail,
+            commands::item_roster,
+            commands::item_detail,
             commands::compile_project,
         ])
         .run(tauri::generate_context!())

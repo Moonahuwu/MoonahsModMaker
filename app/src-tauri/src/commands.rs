@@ -1063,6 +1063,357 @@ pub fn hero_detail(
     Ok(out)
 }
 
+// ---- Items (shop) ----------------------------------------------------------
+// Items are abilities too (in abilities.vdata) with `m_strShopIconLarge`. The
+// Items tab recreates the shop: grouped by category (slot type) and tier, each
+// item drilling into its sound events for editing — same model as heroes.
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemCard {
+    /// Entity name (e.g. `upgrade_clip_size`) — also the slot-id seed + loc key.
+    pub name: String,
+    pub display_name: String,
+    /// `weapon` | `vitality` | `spirit` | `other` (from `m_eItemSlotType`).
+    pub category: String,
+    /// 1..5 (from `m_iItemTier` `EModTier_N`); 0 if unknown.
+    pub tier: u32,
+    pub icon_path: Option<String>,
+}
+
+struct ItemDef {
+    name: String,
+    category: String,
+    tier: u32,
+    icon_internal: Option<String>,
+    disabled: bool,
+    /// (label, event) sound fields in declaration order.
+    sounds: Vec<(String, String)>,
+}
+
+fn item_category(slot_type: &str) -> &'static str {
+    match slot_type {
+        "EItemSlotType_WeaponMod" => "weapon",
+        "EItemSlotType_Armor" => "vitality",
+        "EItemSlotType_Tech" => "spirit",
+        _ => "other",
+    }
+}
+
+/// Parse every shop item (block with `m_strShopIconLarge`) out of abilities.vdata
+/// in one pass: category, tier, icon, disabled flag, and sound events.
+fn parse_items(vdata: &str) -> Vec<ItemDef> {
+    let mut out: Vec<ItemDef> = Vec::new();
+    let mut cur: Option<ItemDef> = None;
+    let mut has_icon = false;
+    for line in vdata.lines() {
+        let top_level = line.starts_with('\t') && !line.starts_with("\t\t");
+        let t = line.trim();
+        if top_level {
+            if let Some(k) = t.strip_suffix('=').map(str::trim) {
+                if !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                    // Flush the previous block if it was a real shop item.
+                    if let Some(def) = cur.take() {
+                        if has_icon {
+                            out.push(def);
+                        }
+                    }
+                    cur = Some(ItemDef {
+                        name: k.to_string(),
+                        category: "other".to_string(),
+                        tier: 0,
+                        icon_internal: None,
+                        disabled: false,
+                        sounds: vec![],
+                    });
+                    has_icon = false;
+                    continue;
+                }
+            }
+        }
+        let Some(def) = cur.as_mut() else { continue };
+        if t.starts_with("m_eItemSlotType") {
+            if let Some(v) = between(t, "\"", "\"").or_else(|| t.rsplit('=').next().map(str::trim)) {
+                def.category = item_category(v.trim()).to_string();
+            }
+        } else if t.starts_with("m_iItemTier") {
+            if let Some(v) = t.rsplit("EModTier_").next() {
+                def.tier = v.trim().trim_matches('"').parse().unwrap_or(0);
+            }
+        } else if t.starts_with("m_bDisabled ") || t == "m_bDisabled = true" {
+            if t.contains("true") {
+                def.disabled = true;
+            }
+        } else if t.starts_with("m_strShopIconLarge") {
+            has_icon = true;
+            if let Some(p) = between(t, "{images}/", ".psd") {
+                def.icon_internal = Some(format!("panorama/images/{p}_psd.vtex_c"));
+            }
+        } else if def.icon_internal.is_none() && t.starts_with("m_strAbilityImage") {
+            if let Some(p) = between(t, "{images}/", ".psd") {
+                def.icon_internal = Some(format!("panorama/images/{p}_psd.vtex_c"));
+            }
+        } else if let Some(ev) = between(t, "soundevent:\"", "\"") {
+            if !ev.is_empty() {
+                let key = t.split('=').next().unwrap_or("");
+                def.sounds.push((clean_sound_label(key), ev.to_string()));
+            }
+        }
+    }
+    if let Some(def) = cur.take() {
+        if has_icon {
+            out.push(def);
+        }
+    }
+    out
+}
+
+/// Load item display names from the game's loose localization file (UTF-16),
+/// derived from the pak path: `<game/citadel>/resource/localization/
+/// citadel_gc_mod_names/citadel_gc_mod_names_english.txt`. Maps entity name -> name.
+fn load_mod_names(pak_path: &str) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    let citadel = match std::path::Path::new(pak_path).parent() {
+        Some(p) => p,
+        None => return map,
+    };
+    let loc = citadel
+        .join("resource/localization/citadel_gc_mod_names/citadel_gc_mod_names_english.txt");
+    let bytes = match std::fs::read(&loc) {
+        Ok(b) => b,
+        Err(_) => return map,
+    };
+    let text = if bytes.starts_with(&[0xFF, 0xFE]) {
+        let u16s: Vec<u16> = bytes[2..]
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        String::from_utf16_lossy(&u16s)
+    } else {
+        String::from_utf8_lossy(&bytes).into_owned()
+    };
+    for line in text.lines() {
+        // `"key"   "Value"` — grab the first two quoted tokens.
+        let mut it = line.split('"').skip(1).step_by(2);
+        if let (Some(k), Some(v)) = (it.next(), it.next()) {
+            if k.is_empty() || k.ends_with("_search") || k == "Language" {
+                continue;
+            }
+            map.entry(k.to_string()).or_insert_with(|| v.to_string());
+        }
+    }
+    map
+}
+
+/// `Title Case` from an entity name, dropping a leading `upgrade_`.
+fn prettify_item(name: &str) -> String {
+    let n = name.strip_prefix("upgrade_").unwrap_or(name);
+    n.split('_')
+        .filter(|s| !s.is_empty())
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                Some(f) => f.to_uppercase().chain(c).collect::<String>(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// `event_name -> soundevents/mods/<cat>.vsndevts` across the three item sound
+/// files, decompiled + cached once (mirrors `hero_event_index`).
+fn mods_event_index(
+    helper: &str,
+    pak: &str,
+    base: &std::path::Path,
+) -> std::collections::HashMap<String, String> {
+    let cache = base.join("mods_event_index.json");
+    if let Ok(t) = std::fs::read_to_string(&cache) {
+        if let Ok(m) = serde_json::from_str::<std::collections::HashMap<String, String>>(&t) {
+            if !m.is_empty() {
+                return m;
+            }
+        }
+    }
+    let dir = base.join("modevents");
+    let _ = std::fs::create_dir_all(&dir);
+    let mut idx = std::collections::HashMap::new();
+    for stem in ["weapon", "armor", "tech"] {
+        let path = dir.join(format!("{stem}.vsndevts"));
+        if !path.exists() {
+            let _ = crate::vpk::decompile_from_vpk(
+                helper,
+                pak,
+                &format!("soundevents/mods/{stem}.vsndevts_c"),
+                &path.to_string_lossy(),
+            );
+        }
+        if let Ok(t) = std::fs::read_to_string(&path) {
+            let relpath = format!("soundevents/mods/{stem}.vsndevts");
+            for ev in events_with_vsnd(&t) {
+                idx.entry(ev).or_insert_with(|| relpath.clone());
+            }
+        }
+    }
+    let _ = std::fs::write(&cache, serde_json::to_string(&idx).unwrap_or_default());
+    idx
+}
+
+/// The shop item roster: every enabled shop item with category, tier, decoded
+/// icon, and display name. Cached to `items/roster.json`; `refresh` rebuilds.
+#[tauri::command]
+pub fn item_roster(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+    refresh: Option<bool>,
+) -> Result<Vec<ItemCard>, String> {
+    use tauri::Manager;
+    let base = app.path().app_data_dir().map_err(|e| e.to_string())?.join("items");
+    std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
+    let refresh = refresh.unwrap_or(false);
+
+    let roster_cache = base.join("roster.json");
+    if refresh {
+        let _ = std::fs::remove_file(&roster_cache);
+        let _ = std::fs::remove_file(base.join("mods_event_index.json"));
+        let _ = std::fs::remove_dir_all(base.join("modevents"));
+        if let Ok(rd) = std::fs::read_dir(&base) {
+            for e in rd.flatten() {
+                if e.file_name().to_string_lossy().starts_with("detail_") {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
+    } else if let Ok(t) = std::fs::read_to_string(&roster_cache) {
+        if let Ok(cards) = serde_json::from_str::<Vec<ItemCard>>(&t) {
+            if !cards.is_empty() {
+                return Ok(cards);
+            }
+        }
+    }
+
+    // abilities.vdata is cached under hero_portraits (shared with hero detail).
+    let hp = app.path().app_data_dir().map_err(|e| e.to_string())?.join("hero_portraits");
+    std::fs::create_dir_all(&hp).map_err(|e| e.to_string())?;
+    let abilities = hp.join("abilities.vdata");
+    if refresh || !abilities.exists() {
+        crate::vpk::decompile_from_vpk(&helper_path, &pak_path, "scripts/abilities.vdata_c", &abilities.to_string_lossy())?;
+    }
+    let text = std::fs::read_to_string(&abilities).map_err(|e| e.to_string())?;
+    let names = load_mod_names(&pak_path);
+
+    let defs: Vec<ItemDef> = parse_items(&text)
+        .into_iter()
+        .filter(|d| {
+            !d.disabled
+                && d.icon_internal.is_some()
+                && !d.name.starts_with("item_projectile_test")
+                && !d.name.ends_with("_base")
+                && !d.name.starts_with("cosmetic_")
+        })
+        .collect();
+
+    // Decode icons (one batch of those not already cached).
+    let icon_dir = base.join("icons");
+    std::fs::create_dir_all(&icon_dir).map_err(|e| e.to_string())?;
+    let stem_of = |internal: &str| -> String {
+        internal.rsplit('/').next().unwrap_or(internal).trim_end_matches(".vtex_c").to_string()
+    };
+    let need: Vec<String> = defs
+        .iter()
+        .filter_map(|d| d.icon_internal.clone())
+        .filter(|i| !icon_dir.join(format!("{}.png", stem_of(i))).exists())
+        .collect();
+    if !need.is_empty() {
+        let _ = crate::vpk::texture_batch(&helper_path, &pak_path, &icon_dir.to_string_lossy(), &need);
+    }
+
+    let mut cards: Vec<ItemCard> = defs
+        .iter()
+        .map(|d| {
+            let icon_path = d
+                .icon_internal
+                .as_deref()
+                .map(|i| icon_dir.join(format!("{}.png", stem_of(i))))
+                .filter(|p| p.exists())
+                .map(|p| p.to_string_lossy().into_owned());
+            ItemCard {
+                name: d.name.clone(),
+                display_name: names.get(&d.name).cloned().unwrap_or_else(|| prettify_item(&d.name)),
+                category: d.category.clone(),
+                tier: d.tier,
+                icon_path,
+            }
+        })
+        .collect();
+    cards.sort_by(|a, b| {
+        a.category.cmp(&b.category).then(a.tier.cmp(&b.tier)).then(a.display_name.cmp(&b.display_name))
+    });
+
+    if let Ok(json) = serde_json::to_string(&cards) {
+        let _ = std::fs::write(&roster_cache, json);
+    }
+    Ok(cards)
+}
+
+/// One item's editable sound events (resolved to their `soundevents/mods/*` file
+/// via the index; shared/stale events dropped). Cached per item.
+#[tauri::command]
+pub fn item_detail(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+    item_name: String,
+    refresh: Option<bool>,
+) -> Result<Vec<HeroAbilitySound>, String> {
+    use tauri::Manager;
+    let base = app.path().app_data_dir().map_err(|e| e.to_string())?.join("items");
+    std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
+
+    let detail_cache = base.join(format!("detail_{item_name}.json"));
+    if !refresh.unwrap_or(false) {
+        if let Ok(t) = std::fs::read_to_string(&detail_cache) {
+            if let Ok(cached) = serde_json::from_str::<Vec<HeroAbilitySound>>(&t) {
+                return Ok(cached);
+            }
+        }
+    }
+
+    let hp = app.path().app_data_dir().map_err(|e| e.to_string())?.join("hero_portraits");
+    let abilities = hp.join("abilities.vdata");
+    if !abilities.exists() {
+        crate::vpk::decompile_from_vpk(&helper_path, &pak_path, "scripts/abilities.vdata_c", &abilities.to_string_lossy())?;
+    }
+    let text = std::fs::read_to_string(&abilities).map_err(|e| e.to_string())?;
+    let index = mods_event_index(&helper_path, &pak_path, &base);
+
+    let def = parse_items(&text).into_iter().find(|d| d.name == item_name);
+    let mut sounds = Vec::new();
+    if let Some(d) = def {
+        let mut seen = std::collections::HashSet::new();
+        for (label, event) in &d.sounds {
+            let relpath = match index.get(event) {
+                Some(r) => r,
+                None => continue,
+            };
+            if seen.insert(event.clone()) {
+                sounds.push(HeroAbilitySound {
+                    event_name: event.clone(),
+                    array_key: "vsnd_files".to_string(),
+                    events_relpath: relpath.clone(),
+                    label: label.clone(),
+                });
+            }
+        }
+    }
+    if let Ok(json) = serde_json::to_string(&sounds) {
+        let _ = std::fs::write(&detail_cache, json);
+    }
+    Ok(sounds)
+}
+
 /// Extract one entry from a VPK via the bundled ValvePak helper.
 #[tauri::command]
 pub fn extract_vpk(

@@ -8,8 +8,11 @@ import {
   decodeStock as decodeStockApi,
   downloadEntry,
   heroDetail as heroDetailApi,
+  itemDetail as itemDetailApi,
   type HeroAbility,
+  type HeroAbilitySound,
   type HeroPortrait,
+  type ItemCard,
   loadState,
   newProject,
   probeAudio,
@@ -82,6 +85,20 @@ function heroAbilSlotId(codename: string, eventName: string): string {
     .toLowerCase()}`;
 }
 
+/** Dynamic per-item sound slots (Items tab), id-prefixed like hero slots. */
+const ITEM_SLOT_PREFIX = "itemsnd_";
+
+function itemSndSlotId(itemName: string, eventName: string): string {
+  return `${ITEM_SLOT_PREFIX}${itemName}_${eventName
+    .replace(/[^a-z0-9]+/gi, "_")
+    .toLowerCase()}`;
+}
+
+/** A dynamically-created (hero or item) slot that should persist only with content. */
+function isDynamicSlot(id: string): boolean {
+  return id.startsWith(HERO_SLOT_PREFIX) || id.startsWith(ITEM_SLOT_PREFIX);
+}
+
 /** A slot carries user content worth persisting. */
 function slotHasContent(e: EventProject): boolean {
   return (
@@ -102,10 +119,7 @@ function reconcileProject(saved: Project, def: Project): Project {
   const defIds = new Set(def.events.map((e) => e.id));
   const merged = def.events.map((d) => savedById.get(d.id) ?? d);
   const extras = saved.events.filter(
-    (e) =>
-      !defIds.has(e.id) &&
-      e.id.startsWith(HERO_SLOT_PREFIX) &&
-      slotHasContent(e),
+    (e) => !defIds.has(e.id) && isDynamicSlot(e.id) && slotHasContent(e),
   );
   return { ...saved, events: [...merged, ...extras] };
 }
@@ -135,6 +149,10 @@ export default function App() {
   const [heroAbilities, setHeroAbilities] = useState<HeroAbility[] | null>(null);
   const [heroDetailLoading, setHeroDetailLoading] = useState(false);
   const [selectedAbility, setSelectedAbility] = useState<string | null>(null);
+  // Selected shop item (Items tab) -> drill-in to its sound events.
+  const [selectedItem, setSelectedItem] = useState<ItemCard | null>(null);
+  const [itemSounds, setItemSounds] = useState<HeroAbilitySound[] | null>(null);
+  const [itemDetailLoading, setItemDetailLoading] = useState(false);
   // Soundevents files already decompiled into the vanilla merge base this session.
   const ensuredFiles = useRef<Set<string>>(new Set());
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -452,7 +470,7 @@ export default function App() {
         if (!prev) return prev;
         let changed = false;
         const events = prev.events.map((e) => {
-          if (e.id.startsWith(HERO_SLOT_PREFIX)) {
+          if (isDynamicSlot(e.id)) {
             const first = map[e.id]?.entries?.[0];
             if (first && first !== e.stockEntry) {
               changed = true;
@@ -976,6 +994,72 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedHero, selectedAbility, heroAbilities]);
 
+  // Materialize an item's sound slots (created empty, pruned if unused). Returns
+  // the updated project so the caller can pool the new slots immediately.
+  function ensureItemSlots(itemName: string, sounds: HeroAbilitySound[]): Project | null {
+    const prev = projectRef.current;
+    if (!prev) return null;
+    const have = new Set(prev.events.map((e) => e.id));
+    const add: EventProject[] = [];
+    for (const snd of sounds) {
+      const id = itemSndSlotId(itemName, snd.eventName);
+      if (have.has(id)) continue;
+      add.push({
+        id,
+        group: ITEMS,
+        side: snd.label,
+        eventName: snd.eventName,
+        arrayKey: snd.arrayKey,
+        stockEntry: "",
+        vsndDurationMode: "auto",
+        vsndDurationManual: null,
+        songs: [],
+        previousOwnedNames: [],
+        excludedEntries: [],
+        removedEntries: [],
+        adopted: [],
+        eventsRelpath: snd.eventsRelpath,
+      });
+    }
+    if (!add.length) return prev;
+    const next = { ...prev, events: [...prev.events, ...add] };
+    setProject(next);
+    return next;
+  }
+
+  // Load a selected item's sounds, decompile their files into vanilla, and
+  // materialize the slots (all sounds shown at once — no sub-abilities).
+  useEffect(() => {
+    if (!selectedItem) {
+      setItemSounds(null);
+      return;
+    }
+    let cancelled = false;
+    setItemDetailLoading(true);
+    setItemSounds(null);
+    (async () => {
+      const s = settingsRef.current;
+      try {
+        const sounds = await itemDetailApi(s.vpkHelperPath, s.deadlockPak, selectedItem.name);
+        if (cancelled) return;
+        setItemSounds(sounds);
+        const relpaths = Array.from(new Set(sounds.map((x) => x.eventsRelpath)));
+        await ensureVanillaFiles(relpaths);
+        if (cancelled) return;
+        const next = ensureItemSlots(selectedItem.name, sounds);
+        void load(next ?? undefined);
+      } catch (e) {
+        if (!cancelled) push("error", `Couldn't load ${selectedItem.displayName}: ${e}`);
+      } finally {
+        if (!cancelled) setItemDetailLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedItem]);
+
   const visibleSlots = (project?.events ?? []).filter((e) => e.group === activeTab);
   const songCount = (project?.events ?? []).reduce((n, e) => n + e.songs.length, 0);
 
@@ -1011,6 +1095,20 @@ export default function App() {
   // slot exists.
   const renderSound = (sound: { eventName: string; label: string }) => {
     const id = selectedHero ? heroAbilSlotId(selectedHero, sound.eventName) : "";
+    const slot = project?.events.find((e) => e.id === id);
+    if (!slot) {
+      return (
+        <div key={id || sound.eventName} className="text-xs text-zinc-600">
+          preparing {sound.label}…
+        </div>
+      );
+    }
+    return renderPanel(slot);
+  };
+
+  // Same, for the selected shop item's sound slots.
+  const renderItemSound = (sound: { eventName: string; label: string }) => {
+    const id = selectedItem ? itemSndSlotId(selectedItem.name, sound.eventName) : "";
     const slot = project?.events.find((e) => e.id === id);
     if (!slot) {
       return (
@@ -1110,7 +1208,16 @@ export default function App() {
             onMerge={mergeModIntoProject}
           />
         ) : activeTab === ITEMS ? (
-          <ItemsTab />
+          <ItemsTab
+            helperPath={settings.vpkHelperPath}
+            pakPath={settings.deadlockPak}
+            selected={selectedItem}
+            onSelect={setSelectedItem}
+            onBack={() => setSelectedItem(null)}
+            sounds={itemSounds}
+            loading={itemDetailLoading}
+            renderSound={renderItemSound}
+          />
         ) : activeTab === "heroes" ? (
           selectedHero ? (
             <HeroDetail

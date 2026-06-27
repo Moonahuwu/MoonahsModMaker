@@ -274,6 +274,35 @@ export function heroDetail(
   return invoke("hero_detail", { helperPath, pakPath, codename, refresh });
 }
 
+/** A shop item card (icon + category + tier) for the Items tab. */
+export interface ItemCard {
+  name: string;
+  displayName: string;
+  /** "weapon" | "vitality" | "spirit" | "other" */
+  category: string;
+  /** 1..5 (0 = unknown) */
+  tier: number;
+  iconPath: string | null;
+}
+
+export function itemRoster(
+  helperPath: string,
+  pakPath: string,
+  refresh = false,
+): Promise<ItemCard[]> {
+  return invoke("item_roster", { helperPath, pakPath, refresh });
+}
+
+/** An item's editable sound events (same shape as hero ability sounds). */
+export function itemDetail(
+  helperPath: string,
+  pakPath: string,
+  itemName: string,
+  refresh = false,
+): Promise<HeroAbilitySound[]> {
+  return invoke("item_detail", { helperPath, pakPath, itemName, refresh });
+}
+
 export function loadProject(path: string): Promise<Project> {
   return invoke("load_project", { path });
 }
