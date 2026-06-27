@@ -576,3 +576,33 @@ pub fn save_project(path: String, project: Project) -> Result<(), String> {
         .save(&PathBuf::from(path))
         .map_err(|e| e.to_string())
 }
+
+/// Path of the persisted user settings in the OS app-data dir. Settings are
+/// machine-specific (tool/game paths) so they live here, not in a shareable
+/// project file — durable across restarts and localStorage clears.
+fn settings_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    use tauri::Manager;
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.join("settings.json"))
+}
+
+/// Persist the settings blob (shape is owned by the frontend) to app-data.
+#[tauri::command]
+pub fn save_settings(app: tauri::AppHandle, settings: serde_json::Value) -> Result<(), String> {
+    let text = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+    std::fs::write(settings_path(&app)?, text).map_err(|e| e.to_string())
+}
+
+/// Load the persisted settings blob, or None if none saved yet.
+#[tauri::command]
+pub fn load_settings(app: tauri::AppHandle) -> Result<Option<serde_json::Value>, String> {
+    let path = settings_path(&app)?;
+    if path.exists() {
+        let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        let v = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+        Ok(Some(v))
+    } else {
+        Ok(None)
+    }
+}

@@ -25,6 +25,8 @@ pub fn run() {
             commands::save_project,
             commands::save_state,
             commands::load_state,
+            commands::save_settings,
+            commands::load_settings,
             commands::probe_audio,
             commands::process_audio,
             commands::pack_vpk,

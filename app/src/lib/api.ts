@@ -247,3 +247,13 @@ export function loadState(): Promise<Project | null> {
 export function saveProject(path: string, project: Project): Promise<void> {
   return invoke("save_project", { path, project });
 }
+
+/** Persist the settings blob to the app-data dir (durable, machine-scoped). */
+export function saveSettings(settings: unknown): Promise<void> {
+  return invoke("save_settings", { settings });
+}
+
+/** Load persisted settings, or null if none saved yet. */
+export function loadSettings<T = unknown>(): Promise<T | null> {
+  return invoke("load_settings");
+}

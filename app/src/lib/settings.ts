@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { CompileConfig, EventCompile } from "./api";
+import { loadSettings, saveSettings } from "./api";
 import type { EventProject } from "../types";
 import { songHash } from "./songHash";
 
@@ -60,6 +61,8 @@ export const DEFAULT_SETTINGS: Settings = {
 const STORAGE_KEY = "eim.settings.v1";
 
 export function useSettings() {
+  // Render immediately from the localStorage cache (sync), then reconcile with the
+  // durable backend copy once it loads.
   const [settings, setSettings] = useState<Settings>(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
@@ -68,6 +71,22 @@ export function useSettings() {
       return DEFAULT_SETTINGS;
     }
   });
+  // Gate backend writes until the initial backend load has merged, so we never
+  // clobber the persisted file with defaults on a fresh webview.
+  const loaded = useRef(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const remote = await loadSettings<Partial<Settings>>();
+        if (remote) setSettings((s) => ({ ...DEFAULT_SETTINGS, ...s, ...remote }));
+      } catch {
+        /* backend settings optional */
+      } finally {
+        loaded.current = true;
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     try {
@@ -75,6 +94,9 @@ export function useSettings() {
     } catch {
       /* ignore */
     }
+    if (!loaded.current) return;
+    const id = setTimeout(() => void saveSettings(settings), 400);
+    return () => clearTimeout(id);
   }, [settings]);
 
   const update = (patch: Partial<Settings>) =>

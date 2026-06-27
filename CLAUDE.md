@@ -79,8 +79,16 @@ contains `{` braces).
   bypasses resourcecompiler for tests. `is_up_to_date()` skips unchanged songs via a hash.
 - `audio.rs` — ffmpeg probe + render (trim/gain/fade-in/fade-out via `build_af`).
 - `vpk.rs` — shells out to the C# helper.
+- `install.rs` — one-click install into Deadlock's `game/citadel/addons`. Addons mount as
+  `pakNN_dir.vpk` (NN = 01..99); a slot is "occupied" if any file there ends `pak<NN>_dir.vpk`
+  (plain OR prefixed, e.g. `600744_pak07_dir.vpk`). `install()` picks the next free slot (or
+  overwrites a caller-given one, backing up the occupant under `.eim_backups/`) and, when
+  asked, adds the `citadel/addons` search path to the sibling `gameinfo.gi` if missing
+  (with a `.gi.eim.bak`). Commands: `scan_addon_slots`, `install_to_game`.
 - `commands.rs` + `lib.rs` — Tauri command surface (registered in `lib.rs`
   `invoke_handler!`). **All backend types serialize camelCase** to match the TS side.
+  `autodetect_paths` also returns the addons dir; `save_settings`/`load_settings` persist
+  the (frontend-shaped) settings blob as `settings.json` in app-data.
 
 #### The CSDK compile recipe (load-bearing, don't "fix" casually)
 Headless compile uses the community **Reduced CSDK** toolchain via the content/game
@@ -97,16 +105,25 @@ Thin wrapper over **ValvePak** + **ValveResourceFormat**. Subcommands (see
 `Program.cs` switch): `pack`, `extract`, `extractall`, `list`, `decode` (`.vsnd_c` →
 playable audio, used for "compare to original" and downloads), `decompile`
 (`.vsndevts_c` → KV3 text, used to import other mods and refresh vanilla data).
+Shipped **self-contained**: `npm run build:helper` (in `app/`) publishes a single-file
+`tools/vpk-helper/dist/vpk-helper.exe` (~92MB, no .NET runtime needed); the tauri build
+bundles it as a resource via `beforeBuildCommand: npm run build:bundle`. `vpk.rs` runs a
+`.exe` directly or a `.dll` via `dotnet`. Path resolution prefers `dist/vpk-helper.exe`
+(autodetect checks the bundled resource dir + a dev parent-walk).
 
 ### Frontend (`app/src`)
 React 19 + Vite 7 + Tailwind v4 + `motion`. `lib/api.ts` is the typed wrapper around every
 Tauri command; `types.ts` mirrors the Rust types (camelCase). State lives in `App.tsx`
 (slots keyed by id, pools keyed by `eventName::arrayKey`); project state autosaves
-(debounced) to the OS app-data dir via `save_state`/`load_state`; settings persist to
-localStorage (`lib/settings.ts`, with `buildCompileConfig`). Left sidebar = tabs (groups)
-+ a ⚙ cog opening `SetupSection` as a modal; sticky `CompileBar` drives compile. Waveform
-peaks are cached in-memory (`lib/peaksCache.ts`); `lib/songHash.ts` fingerprints a song to
-skip unchanged recompiles.
+(debounced) to the OS app-data dir via `save_state`/`load_state`; settings persist
+durably via `save_settings`/`load_settings` (app-data `settings.json`) with a localStorage
+cache for instant first paint (`lib/settings.ts`, with `buildCompileConfig` +
+`installSrcVpk`). Left sidebar = tabs (groups) + a ⚙ cog opening `SetupSection` as a modal;
+sticky `CompileBar` drives compile **and install** (Add-next-free vs Replace-slot-N,
+install-after-compile, patch-gameinfo). `FirstRunWizard` shows on first launch
+(`firstRunDone`) and runs one-click setup (autodetect → import live game music data).
+Waveform peaks are cached in-memory (`lib/peaksCache.ts`); `lib/songHash.ts` fingerprints
+a song to skip unchanged recompiles.
 
 ### Adding a new tab / slot
 Add the slot(s) with a new `group` + `events_relpath` in `project.rs` `new_project`, add a
