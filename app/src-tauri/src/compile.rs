@@ -495,26 +495,46 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
             }
 
             if let Some(slots) = by_file.get(rel) {
-                let merges: Vec<EventMerge> = slots
-                    .iter()
-                    .map(|ev| {
-                        let current =
-                            kv3_core::read_event_array(&text, &ev.event_name, &ev.array_key)
-                                .ok()
-                                .and_then(|x| x.vsnd_duration);
-                        event_merge(ev, &cfg.sound_folder, current)
-                    })
-                    .collect();
-                match kv3_core::apply_merges(&text, &merges) {
-                    Ok(t) => {
-                        text = t;
-                        report.ok_step(
-                            format!("[{}] merge {rel}", v.name),
-                            format!("{} slot(s)", merges.len()),
-                        );
+                let mut applied = 0;
+                let mut skipped: Vec<String> = Vec::new();
+                for ev in slots {
+                    let current = kv3_core::read_event_array(&text, &ev.event_name, &ev.array_key)
+                        .ok()
+                        .and_then(|x| x.vsnd_duration);
+                    let merge = event_merge(ev, &cfg.sound_folder, current);
+                    match kv3_core::apply_merge(&text, &merge) {
+                        Ok(t) => {
+                            text = t;
+                            applied += 1;
+                        }
+                        // The game drifts between patches — an event/array we own may
+                        // have been removed or renamed. We can't merge into what's
+                        // gone, so skip that slot with a note instead of aborting the
+                        // whole compile (MERGE, NEVER REPLACE).
+                        Err(kv3_core::Kv3Error::EventNotFound(_))
+                        | Err(kv3_core::Kv3Error::ArrayNotFound(_)) => {
+                            let label = if ev.array_key == "vsnd_files" {
+                                ev.event_name.clone()
+                            } else {
+                                format!("{}.{}", ev.event_name, ev.array_key)
+                            };
+                            skipped.push(label);
+                        }
+                        Err(e) => {
+                            return report.fail(format!("[{}] merge {rel}", v.name), e.to_string())
+                        }
                     }
-                    Err(e) => return report.fail(format!("[{}] merge {rel}", v.name), e.to_string()),
                 }
+                let detail = if skipped.is_empty() {
+                    format!("{applied} slot(s)")
+                } else {
+                    format!(
+                        "{applied} slot(s); skipped {} not in game: {}",
+                        skipped.len(),
+                        skipped.join(", ")
+                    )
+                };
+                report.ok_step(format!("[{}] merge {rel}", v.name), detail);
             }
 
             let events_dest = content_root.join(rel);
