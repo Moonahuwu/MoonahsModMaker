@@ -462,6 +462,8 @@ pub struct HeroPortrait {
     pub display_name: String,
     /// Absolute path to the decoded card PNG (frontend wraps with convertFileSrc).
     pub portrait_path: String,
+    /// Absolute path to the decoded "gloat" card PNG (hover state), if it exists.
+    pub gloat_path: Option<String>,
     /// Disabled or still in development — hidden unless "show experimental" is on.
     pub experimental: bool,
 }
@@ -588,11 +590,22 @@ pub fn hero_roster(
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let refresh = refresh.unwrap_or(false);
 
-    // 1. Decode every hero card portrait (one pass), keyed by portrait code.
-    let have_pngs = std::fs::read_dir(&dir)
-        .map(|r| r.flatten().any(|e| e.path().extension().is_some_and(|x| x == "png")))
-        .unwrap_or(false);
-    if refresh || !have_pngs {
+    // 1. Decode every hero card portrait (one pass), keyed by portrait code. Also
+    //    require the gloat (hover) cards — re-decode if the cache predates them.
+    let mut have_pngs = false;
+    let mut have_gloat = false;
+    if let Ok(rd) = std::fs::read_dir(&dir) {
+        for e in rd.flatten() {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            if name.ends_with("_gloat.png") {
+                have_gloat = true;
+            } else if name.ends_with(".png") {
+                have_pngs = true;
+            }
+        }
+    }
+    if refresh || !have_pngs || !have_gloat {
         crate::vpk::heroes(&helper_path, &pak_path, &dir.to_string_lossy())?;
     }
 
@@ -630,6 +643,13 @@ pub fn hero_roster(
         if std::fs::metadata(&png).map(|m| m.len()).unwrap_or(0) < 4000 {
             continue;
         }
+        // The matching gloat (hover) card, if one was decoded.
+        let gloat_path = png
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .map(|stem| dir.join(format!("{stem}_gloat.png")))
+            .filter(|p| p.exists())
+            .map(|p| p.to_string_lossy().into_owned());
         let display_name = h
             .name
             .as_deref()
@@ -639,6 +659,7 @@ pub fn hero_roster(
             codename: h.code,
             display_name,
             portrait_path: png.to_string_lossy().into_owned(),
+            gloat_path,
             experimental: h.disabled || h.in_dev,
         });
     }

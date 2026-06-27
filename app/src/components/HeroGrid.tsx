@@ -108,10 +108,21 @@ export function HeroGrid({
                 src={convertFileSrc(h.portraitPath)}
                 alt={h.displayName}
                 loading="lazy"
-                className={`h-full w-full object-cover object-top ${
+                className={`h-full w-full object-cover object-top transition-opacity duration-200 ${
                   h.experimental ? "opacity-70 saturate-50" : ""
-                }`}
+                } ${h.gloatPath ? "group-hover:opacity-0" : ""}`}
               />
+              {h.gloatPath && (
+                <img
+                  src={convertFileSrc(h.gloatPath)}
+                  alt=""
+                  aria-hidden
+                  loading="lazy"
+                  className={`absolute inset-0 h-full w-full object-cover object-top opacity-0 transition-opacity duration-200 group-hover:opacity-100 ${
+                    h.experimental ? "saturate-50" : ""
+                  }`}
+                />
+              )}
               {h.experimental && (
                 <span className="pointer-events-none absolute left-1 top-1 rounded bg-amber-500/80 px-1 text-[8px] font-bold uppercase tracking-wide text-black">
                   exp

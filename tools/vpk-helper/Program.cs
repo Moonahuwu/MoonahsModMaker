@@ -299,7 +299,9 @@ static int Heroes(string[] args)
     const string dirPrefix = "panorama/images/heroes/";
     // Lower rank = preferred.
     string[] suffixes = { "_card_psd", "_vertical_psd", "_sm_psd", "_mm_psd" };
+    const string gloatSuffix = "_card_gloat_psd";
     var best = new Dictionary<string, (int rank, PackageEntry entry)>();
+    var gloat = new Dictionary<string, PackageEntry>();
 
     foreach (var byExt in package.Entries)
     {
@@ -312,6 +314,14 @@ static int Heroes(string[] args)
             if (name.Contains('/')) continue; // skip nested folders
             name = name[..^".vtex_c".Length];
 
+            // The "gloat" card variant — decoded to <code>_gloat.png for the
+            // hover effect. Collected separately from the primary card.
+            if (name.EndsWith(gloatSuffix, StringComparison.OrdinalIgnoreCase))
+            {
+                gloat[name[..^gloatSuffix.Length]] = e;
+                continue;
+            }
+
             int rank = -1;
             string? code = null;
             for (int i = 0; i < suffixes.Length; i++)
@@ -323,7 +333,7 @@ static int Heroes(string[] args)
                     break;
                 }
             }
-            // No recognized suffix (e.g. hashed/critical/gloat variants) -> skip.
+            // No recognized suffix (e.g. hashed/critical variants) -> skip.
             if (code is null || code.Length == 0) continue;
             if (code.Contains("_card", StringComparison.OrdinalIgnoreCase)) continue;
 
@@ -343,6 +353,23 @@ static int Heroes(string[] args)
             var outPath = Path.Combine(destDir, kv.Key + ".png");
             WritePng(tex, outPath);
             Console.WriteLine(kv.Key + "\t" + outPath);
+
+            // Decode the matching gloat card, if any.
+            if (gloat.TryGetValue(kv.Key, out var ge))
+            {
+                try
+                {
+                    package.ReadEntry(ge, out var gbytes);
+                    using var gres = new Resource();
+                    gres.Read(new MemoryStream(gbytes));
+                    if (gres.DataBlock is Texture gtex)
+                        WritePng(gtex, Path.Combine(destDir, kv.Key + "_gloat.png"));
+                }
+                catch (Exception gex)
+                {
+                    Console.Error.WriteLine($"skip gloat {kv.Key}: {gex.Message}");
+                }
+            }
         }
         catch (Exception ex)
         {

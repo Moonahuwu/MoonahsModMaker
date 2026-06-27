@@ -234,6 +234,8 @@ export interface HeroPortrait {
   codename: string;
   displayName: string;
   portraitPath: string;
+  /** "Gloat" card shown on hover, if the game has one. */
+  gloatPath: string | null;
   /** Disabled / in-development per the game data (hidden unless opted in). */
   experimental: boolean;
 }
