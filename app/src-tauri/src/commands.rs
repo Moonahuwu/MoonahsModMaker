@@ -456,28 +456,35 @@ pub fn autodetect_paths(app: tauri::AppHandle) -> DetectedPaths {
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HeroPortrait {
-    /// Internal hero codename (e.g. `archer`, `punkgoat`).
+    /// Hero codename from the game data (e.g. `orion`, `punkgoat`).
     pub codename: String,
-    /// Prettified name for display (codename Title-cased; not the in-game name).
+    /// The in-game display name (e.g. "Grey Talon", "Billy").
     pub display_name: String,
-    /// Absolute path to the decoded PNG (frontend wraps it with convertFileSrc).
+    /// Absolute path to the decoded card PNG (frontend wraps with convertFileSrc).
     pub portrait_path: String,
+    /// Disabled or still in development — hidden unless "show experimental" is on.
+    pub experimental: bool,
 }
 
-/// Non-hero entries that live in panorama/images/heroes/ but aren't playable.
-const HERO_DENYLIST: &[&str] = &[
-    "generic",
-    "genericperson",
-    "targetdummy",
-    "dummy",
+/// Template / dummy / placeholder hero keys that are never real playable heroes
+/// (and would otherwise show as duplicates, e.g. `testhero` == Calico's art).
+const HERO_CODE_DENYLIST: &[&str] = &[
     "base",
-    "default",
-    "neutral",
-    "hero_template",
+    "testhero",
+    "targetdummy",
+    "genericperson",
+    "generic",
+    "dummy",
 ];
 
-fn prettify_codename(code: &str) -> String {
-    code.split('_')
+fn prettify_words(raw: &str) -> String {
+    // Hand-fixes where the asset name isn't quite the in-game display name.
+    match raw {
+        "mo_krill" => return "Mo & Krill".to_string(),
+        "mcginnis" => return "McGinnis".to_string(),
+        _ => {}
+    }
+    raw.split('_')
         .filter(|w| !w.is_empty())
         .map(|w| {
             let mut c = w.chars();
@@ -490,10 +497,74 @@ fn prettify_codename(code: &str) -> String {
         .join(" ")
 }
 
-/// Decode (and cache) every hero's card portrait from the game pak, returning the
-/// roster. Cached PNGs live in app-data/hero_portraits; pass `refresh = true` to
-/// re-decode (e.g. after a game update). Blank/placeholder cards (tiny files) and
-/// known non-hero entries are filtered out.
+#[derive(Default)]
+struct HeroInfo {
+    /// vdata key minus the `hero_` prefix (e.g. `orion`).
+    code: String,
+    /// In-game name from the logo SVG (e.g. `grey_talon`), if any.
+    name: Option<String>,
+    /// Portrait image code from `m_strIconHeroCard` (e.g. `archer`), if any.
+    card_code: Option<String>,
+    disabled: bool,
+    in_dev: bool,
+}
+
+/// Substring of `line` between `start` and `end` markers (first occurrence).
+fn between<'a>(line: &'a str, start: &str, end: &str) -> Option<&'a str> {
+    let s = line.find(start)? + start.len();
+    let rest = &line[s..];
+    let e = rest.find(end)?;
+    Some(&rest[..e])
+}
+
+/// Parse `heroes.vdata` (KV3 text) into per-hero name/portrait/flags. Line-based:
+/// a `hero_<code> =` line opens a hero; its `m_bDisabled`, `m_bInDevelopment`,
+/// `m_strLogoImageEnglish` (real name) and `m_strIconHeroCard` (portrait code)
+/// follow within the block.
+fn parse_heroes_vdata(text: &str) -> Vec<HeroInfo> {
+    let mut out: Vec<HeroInfo> = Vec::new();
+    let mut cur: Option<HeroInfo> = None;
+    for line in text.lines() {
+        let t = line.trim();
+        let key = t.strip_suffix('=').map(str::trim);
+        if let Some(k) = key {
+            if let Some(code) = k.strip_prefix("hero_") {
+                if !code.is_empty()
+                    && code.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                {
+                    if let Some(h) = cur.take() {
+                        out.push(h);
+                    }
+                    cur = Some(HeroInfo { code: code.to_string(), ..Default::default() });
+                    continue;
+                }
+            }
+        }
+        let Some(h) = cur.as_mut() else { continue };
+        if t.starts_with("m_bDisabled") {
+            h.disabled = t.contains("true");
+        } else if t.starts_with("m_bInDevelopment") {
+            h.in_dev = t.contains("true");
+        } else if h.name.is_none() && t.starts_with("m_strLogoImageEnglish") {
+            if let Some(n) = between(t, "hero_names/", ".svg") {
+                h.name = Some(n.trim_end_matches("_localized").to_string());
+            }
+        } else if h.card_code.is_none() && t.starts_with("m_strIconHeroCard") {
+            if let Some(c) = between(t, "heroes/", "_card.psd") {
+                h.card_code = Some(c.to_string());
+            }
+        }
+    }
+    if let Some(h) = cur.take() {
+        out.push(h);
+    }
+    out
+}
+
+/// Decode (and cache) hero card portraits and resolve the real roster from the
+/// game's `heroes.vdata`: in-game names, portrait join, and an experimental flag
+/// (disabled / in-development). Cache lives in app-data/hero_portraits; pass
+/// `refresh = true` to re-pull after a game update.
 #[tauri::command]
 pub fn hero_roster(
     app: tauri::AppHandle,
@@ -508,35 +579,67 @@ pub fn hero_roster(
         .map_err(|e| e.to_string())?
         .join("hero_portraits");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let refresh = refresh.unwrap_or(false);
 
-    let has_cache = std::fs::read_dir(&dir)
-        .map(|mut r| r.any(|e| e.is_ok()))
+    // 1. Decode every hero card portrait (one pass), keyed by portrait code.
+    let have_pngs = std::fs::read_dir(&dir)
+        .map(|r| r.flatten().any(|e| e.path().extension().is_some_and(|x| x == "png")))
         .unwrap_or(false);
-    if refresh.unwrap_or(false) || !has_cache {
+    if refresh || !have_pngs {
         crate::vpk::heroes(&helper_path, &pak_path, &dir.to_string_lossy())?;
     }
 
+    // 2. Decompile the hero data (authoritative names + flags + portrait codes).
+    let vdata = dir.join("heroes.vdata");
+    if refresh || !vdata.exists() {
+        crate::vpk::decompile_from_vpk(
+            &helper_path,
+            &pak_path,
+            "scripts/heroes.vdata_c",
+            &vdata.to_string_lossy(),
+        )?;
+    }
+    let text = std::fs::read_to_string(&vdata).map_err(|e| e.to_string())?;
+
+    // 3. Join each hero to its decoded portrait.
     let mut out = Vec::new();
-    for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())?.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("png") {
+    for h in parse_heroes_vdata(&text) {
+        if HERO_CODE_DENYLIST.contains(&h.code.as_str()) {
             continue;
         }
-        let Some(code) = path.file_stem().and_then(|s| s.to_str()) else { continue };
-        if HERO_DENYLIST.contains(&code) {
+        // The portrait file is keyed by the card code (e.g. orion -> archer);
+        // fall back to the hero code if there's no explicit card image.
+        let png = h
+            .card_code
+            .as_deref()
+            .map(|c| dir.join(format!("{c}.png")))
+            .filter(|p| p.exists())
+            .or_else(|| {
+                let p = dir.join(format!("{}.png", h.code));
+                p.exists().then_some(p)
+            });
+        let Some(png) = png else { continue };
+        // Skip blank/placeholder cards (tiny PNGs).
+        if std::fs::metadata(&png).map(|m| m.len()).unwrap_or(0) < 4000 {
             continue;
         }
-        // Blank/placeholder cards (e.g. an unreleased hero) decode to a tiny PNG.
-        if std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0) < 4000 {
-            continue;
-        }
+        let display_name = h
+            .name
+            .as_deref()
+            .map(prettify_words)
+            .unwrap_or_else(|| prettify_words(&h.code));
         out.push(HeroPortrait {
-            codename: code.to_string(),
-            display_name: prettify_codename(code),
-            portrait_path: path.to_string_lossy().into_owned(),
+            codename: h.code,
+            display_name,
+            portrait_path: png.to_string_lossy().into_owned(),
+            experimental: h.disabled || h.in_dev,
         });
     }
-    out.sort_by(|a, b| a.codename.cmp(&b.codename));
+    out.sort_by(|a, b| {
+        a.experimental
+            .cmp(&b.experimental)
+            .then_with(|| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()))
+    });
     Ok(out)
 }
 

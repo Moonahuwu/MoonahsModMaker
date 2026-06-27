@@ -751,6 +751,7 @@ export default function App() {
             <HeroGrid
               helperPath={settings.vpkHelperPath}
               pakPath={settings.deadlockPak}
+              showExperimental={settings.showExperimentalHeroes}
               selected={selectedHero}
               onSelect={setSelectedHero}
             />

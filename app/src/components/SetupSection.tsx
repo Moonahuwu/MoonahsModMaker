@@ -137,6 +137,25 @@ export function SetupSection({
         </button>
       </div>
 
+      {/* Experimental */}
+      <div className="mb-4 rounded-lg border border-zinc-800 bg-zinc-950/50 p-3">
+        <label className="flex cursor-pointer items-center gap-2.5">
+          <input
+            type="checkbox"
+            checked={settings.showExperimentalHeroes}
+            onChange={(e) => update({ showExperimentalHeroes: e.target.checked })}
+            className="accent-amber-500"
+          />
+          <span className="text-xs font-medium text-zinc-300">
+            Show experimental heroes
+          </span>
+        </label>
+        <p className="mt-1 pl-6 text-[10px] text-zinc-600">
+          Reveal disabled / in-development heroes (unreleased, may lack data) in the
+          Heroes tab.
+        </p>
+      </div>
+
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         <Field
           label="CSDK root"

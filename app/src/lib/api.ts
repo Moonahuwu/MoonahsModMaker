@@ -234,6 +234,8 @@ export interface HeroPortrait {
   codename: string;
   displayName: string;
   portraitPath: string;
+  /** Disabled / in-development per the game data (hidden unless opted in). */
+  experimental: boolean;
 }
 
 /** Decode (cached) + list the hero roster with card-portrait PNG paths. Pass

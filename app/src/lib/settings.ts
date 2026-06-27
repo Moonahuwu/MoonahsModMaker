@@ -32,6 +32,8 @@ export interface Settings {
   installSlot: number | null;
   /** Set once the first-run setup wizard has been completed or skipped. */
   firstRunDone: boolean;
+  /** Show disabled / in-development ("experimental") heroes in the Heroes grid. */
+  showExperimentalHeroes: boolean;
 }
 
 const REPO = "C:/Users/ethob/Desktop/DeadlockModding/EasyIntroModder";
@@ -56,6 +58,7 @@ export const DEFAULT_SETTINGS: Settings = {
   patchGameinfo: true,
   installSlot: null,
   firstRunDone: false,
+  showExperimentalHeroes: false,
 };
 
 const STORAGE_KEY = "eim.settings.v1";

@@ -12,11 +12,13 @@ import { heroRoster, type HeroPortrait } from "../lib/api";
 export function HeroGrid({
   helperPath,
   pakPath,
+  showExperimental,
   selected,
   onSelect,
 }: {
   helperPath: string;
   pakPath: string;
+  showExperimental: boolean;
   selected: string | null;
   onSelect: (codename: string) => void;
 }) {
@@ -64,22 +66,30 @@ export function HeroGrid({
     );
   }
 
+  const shown = showExperimental ? heroes : heroes.filter((h) => !h.experimental);
+  const hiddenExp = heroes.length - heroes.filter((h) => !h.experimental).length;
+
   return (
     <div>
       <div className="mb-3 flex items-center gap-3">
-        <span className="text-xs text-zinc-500">{heroes.length} heroes</span>
+        <span className="text-xs text-zinc-500">{shown.length} heroes</span>
+        {!showExperimental && hiddenExp > 0 && (
+          <span className="text-[11px] text-zinc-600">
+            +{hiddenExp} experimental hidden (enable in Setup)
+          </span>
+        )}
         <button
           onClick={() => void load(true)}
           disabled={loading}
-          title="Re-decode the portraits from the current game files"
-          className="rounded border border-zinc-700 px-2 py-1 text-[11px] text-zinc-400 transition hover:border-zinc-500 hover:text-zinc-200 disabled:opacity-50"
+          title="Re-decode the portraits + hero data from the current game files"
+          className="ml-auto rounded border border-zinc-700 px-2 py-1 text-[11px] text-zinc-400 transition hover:border-zinc-500 hover:text-zinc-200 disabled:opacity-50"
         >
           ⟳ Re-pull from game
         </button>
       </div>
 
       <div className="grid grid-cols-4 gap-2 sm:grid-cols-6 lg:grid-cols-8">
-        {heroes.map((h) => {
+        {shown.map((h) => {
           const active = selected === h.codename;
           return (
             <motion.button
@@ -98,8 +108,15 @@ export function HeroGrid({
                 src={convertFileSrc(h.portraitPath)}
                 alt={h.displayName}
                 loading="lazy"
-                className="h-full w-full object-cover object-top"
+                className={`h-full w-full object-cover object-top ${
+                  h.experimental ? "opacity-70 saturate-50" : ""
+                }`}
               />
+              {h.experimental && (
+                <span className="pointer-events-none absolute left-1 top-1 rounded bg-amber-500/80 px-1 text-[8px] font-bold uppercase tracking-wide text-black">
+                  exp
+                </span>
+              )}
               <span className="pointer-events-none absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-black/85 to-transparent px-1.5 pb-1 pt-5 text-[10px] font-medium text-zinc-100 opacity-0 transition group-hover:opacity-100">
                 {h.displayName}
               </span>
