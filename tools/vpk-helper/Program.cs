@@ -12,6 +12,7 @@ using SteamDatabase.ValvePak;
 using ValveResourceFormat;
 using ValveResourceFormat.IO;
 using ValveResourceFormat.ResourceTypes;
+using SkiaSharp;
 
 return args.Length == 0 ? Usage() : Dispatch(args);
 
@@ -33,6 +34,8 @@ static int Dispatch(string[] args)
             "decode" => Decode(args),
             "decompile" => Decompile(args),
             "extractall" => ExtractAll(args),
+            "texture" => TextureCmd(args),
+            "heroes" => Heroes(args),
             _ => Unknown(args[0]),
         };
     }
@@ -226,6 +229,140 @@ static int Decompile(string[] args)
     File.WriteAllBytes(outFile, content.Data);
     Console.WriteLine(outFile);
     return 0;
+}
+
+// texture <vpk> <internalVtexC> <outPng>   (from a vpk)
+// texture <vtex_c file> <outPng>            (loose file)
+// Decodes a compiled Source 2 texture (.vtex_c) to a PNG.
+static int TextureCmd(string[] args)
+{
+    byte[] bytes;
+    string outFile;
+    if (args.Length >= 4)
+    {
+        var vpk = Path.GetFullPath(args[1]);
+        var internalPath = args[2].Replace('\\', '/').TrimStart('/');
+        outFile = Path.GetFullPath(args[3]);
+        using var package = new Package();
+        package.Read(vpk);
+        var entry = package.FindEntry(internalPath);
+        if (entry is null)
+        {
+            Console.Error.WriteLine($"entry not found: {internalPath}");
+            return 1;
+        }
+        package.ReadEntry(entry, out bytes);
+    }
+    else if (args.Length == 3)
+    {
+        bytes = File.ReadAllBytes(Path.GetFullPath(args[1]));
+        outFile = Path.GetFullPath(args[2]);
+    }
+    else
+    {
+        Console.Error.WriteLine(
+            "usage: texture <vpk> <internalVtexC> <outPng> | texture <vtex_c> <outPng>");
+        return 2;
+    }
+
+    using var resource = new Resource();
+    resource.Read(new MemoryStream(bytes));
+    if (resource.DataBlock is not Texture texture)
+    {
+        Console.Error.WriteLine("not a texture resource");
+        return 1;
+    }
+    WritePng(texture, outFile);
+    Console.WriteLine(outFile);
+    return 0;
+}
+
+// heroes <vpk> <destDir>
+// Batch-decodes each hero's card portrait under panorama/images/heroes/ to
+// <destDir>/<codename>.png in a single pass (one Package.Read). Prefers the
+// "_card_psd" art, falling back to _vertical/_sm/_mm. Prints "codename\tpath"
+// per hero. Variant tags (_critical/_gloat/hashed) are ignored.
+static int Heroes(string[] args)
+{
+    if (args.Length < 3)
+    {
+        Console.Error.WriteLine("usage: heroes <vpk> <destDir>");
+        return 2;
+    }
+    var vpk = Path.GetFullPath(args[1]);
+    var destDir = Path.GetFullPath(args[2]);
+    Directory.CreateDirectory(destDir);
+
+    using var package = new Package();
+    package.Read(vpk);
+
+    const string dirPrefix = "panorama/images/heroes/";
+    // Lower rank = preferred.
+    string[] suffixes = { "_card_psd", "_vertical_psd", "_sm_psd", "_mm_psd" };
+    var best = new Dictionary<string, (int rank, PackageEntry entry)>();
+
+    foreach (var byExt in package.Entries)
+    {
+        foreach (var e in byExt.Value)
+        {
+            var full = e.GetFullPath();
+            if (!full.StartsWith(dirPrefix, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!full.EndsWith(".vtex_c", StringComparison.OrdinalIgnoreCase)) continue;
+            var name = full.Substring(dirPrefix.Length);
+            if (name.Contains('/')) continue; // skip nested folders
+            name = name[..^".vtex_c".Length];
+
+            int rank = -1;
+            string? code = null;
+            for (int i = 0; i < suffixes.Length; i++)
+            {
+                if (name.EndsWith(suffixes[i], StringComparison.OrdinalIgnoreCase))
+                {
+                    code = name[..^suffixes[i].Length];
+                    rank = i;
+                    break;
+                }
+            }
+            // No recognized suffix (e.g. hashed/critical/gloat variants) -> skip.
+            if (code is null || code.Length == 0) continue;
+            if (code.Contains("_card", StringComparison.OrdinalIgnoreCase)) continue;
+
+            if (!best.TryGetValue(code, out var cur) || rank < cur.rank)
+                best[code] = (rank, e);
+        }
+    }
+
+    foreach (var kv in best.OrderBy(k => k.Key, StringComparer.Ordinal))
+    {
+        try
+        {
+            package.ReadEntry(kv.Value.entry, out var bytes);
+            using var resource = new Resource();
+            resource.Read(new MemoryStream(bytes));
+            if (resource.DataBlock is not Texture tex) continue;
+            var outPath = Path.Combine(destDir, kv.Key + ".png");
+            WritePng(tex, outPath);
+            Console.WriteLine(kv.Key + "\t" + outPath);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"skip {kv.Key}: {ex.Message}");
+        }
+    }
+    return 0;
+}
+
+// Decode a Texture to a PNG file (creating parent dirs).
+static void WritePng(Texture texture, string outFile)
+{
+    using var bitmap = texture.GenerateBitmap();
+    var dir = Path.GetDirectoryName(outFile);
+    if (!string.IsNullOrEmpty(dir))
+        Directory.CreateDirectory(dir);
+    using var image = SKImage.FromBitmap(bitmap);
+    using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+    using var fs = File.Create(outFile);
+    data.SaveTo(fs);
 }
 
 // Fallback lookup for when an exact .vsnd_c path isn't found: match by stem

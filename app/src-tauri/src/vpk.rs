@@ -86,6 +86,21 @@ pub fn decode(
     run(cmd, "decode")
 }
 
+/// Batch-decode each hero's card portrait from `vpk` into `dest_dir`. Returns
+/// `(codename, png_path)` pairs (one Package.Read for the whole roster).
+pub fn heroes(helper_path: &str, vpk: &str, dest_dir: &str) -> Result<Vec<(String, String)>, String> {
+    let mut cmd = helper_command(helper_path);
+    cmd.args(["heroes", vpk, dest_dir]);
+    let out = run(cmd, "heroes")?;
+    Ok(out
+        .lines()
+        .filter_map(|l| {
+            let mut it = l.splitn(2, '\t');
+            Some((it.next()?.trim().to_string(), it.next()?.trim().to_string()))
+        })
+        .collect())
+}
+
 /// Extract one entry (`internal_path`) from `vpk` to `out_file`.
 pub fn extract(
     helper_path: &str,

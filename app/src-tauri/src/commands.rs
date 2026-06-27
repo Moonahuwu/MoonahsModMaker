@@ -453,6 +453,93 @@ pub fn autodetect_paths(app: tauri::AppHandle) -> DetectedPaths {
     }
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeroPortrait {
+    /// Internal hero codename (e.g. `archer`, `punkgoat`).
+    pub codename: String,
+    /// Prettified name for display (codename Title-cased; not the in-game name).
+    pub display_name: String,
+    /// Absolute path to the decoded PNG (frontend wraps it with convertFileSrc).
+    pub portrait_path: String,
+}
+
+/// Non-hero entries that live in panorama/images/heroes/ but aren't playable.
+const HERO_DENYLIST: &[&str] = &[
+    "generic",
+    "genericperson",
+    "targetdummy",
+    "dummy",
+    "base",
+    "default",
+    "neutral",
+    "hero_template",
+];
+
+fn prettify_codename(code: &str) -> String {
+    code.split('_')
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Decode (and cache) every hero's card portrait from the game pak, returning the
+/// roster. Cached PNGs live in app-data/hero_portraits; pass `refresh = true` to
+/// re-decode (e.g. after a game update). Blank/placeholder cards (tiny files) and
+/// known non-hero entries are filtered out.
+#[tauri::command]
+pub fn hero_roster(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+    refresh: Option<bool>,
+) -> Result<Vec<HeroPortrait>, String> {
+    use tauri::Manager;
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("hero_portraits");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+
+    let has_cache = std::fs::read_dir(&dir)
+        .map(|mut r| r.any(|e| e.is_ok()))
+        .unwrap_or(false);
+    if refresh.unwrap_or(false) || !has_cache {
+        crate::vpk::heroes(&helper_path, &pak_path, &dir.to_string_lossy())?;
+    }
+
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())?.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("png") {
+            continue;
+        }
+        let Some(code) = path.file_stem().and_then(|s| s.to_str()) else { continue };
+        if HERO_DENYLIST.contains(&code) {
+            continue;
+        }
+        // Blank/placeholder cards (e.g. an unreleased hero) decode to a tiny PNG.
+        if std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0) < 4000 {
+            continue;
+        }
+        out.push(HeroPortrait {
+            codename: code.to_string(),
+            display_name: prettify_codename(code),
+            portrait_path: path.to_string_lossy().into_owned(),
+        });
+    }
+    out.sort_by(|a, b| a.codename.cmp(&b.codename));
+    Ok(out)
+}
+
 /// Extract one entry from a VPK via the bundled ValvePak helper.
 #[tauri::command]
 pub fn extract_vpk(

@@ -21,6 +21,7 @@ import { SetupSection } from "./components/SetupSection";
 import { FirstRunWizard } from "./components/FirstRunWizard";
 import { ImportedMods } from "./components/ImportedMods";
 import { CompileBar } from "./components/CompileBar";
+import { HeroGrid } from "./components/HeroGrid";
 import { useToast } from "./components/Toaster";
 import { useSettings } from "./lib/settings";
 import { songHash } from "./lib/songHash";
@@ -72,6 +73,9 @@ export default function App() {
   const [expandedSongs, setExpandedSongs] = useState<Record<string, boolean>>({});
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<string>("intro");
+  // Selected hero in the Heroes grid (codename, e.g. "punkgoat"); drives the
+  // per-hero drill-in below the grid.
+  const [selectedHero, setSelectedHero] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const { settings, update: updateSettings } = useSettings();
   const { push } = useToast();
@@ -633,6 +637,43 @@ export default function App() {
   const visibleSlots = (project?.events ?? []).filter((e) => e.group === activeTab);
   const songCount = (project?.events ?? []).reduce((n, e) => n + e.songs.length, 0);
 
+  // Heroes-group slots belonging to a given hero codename (event keys are
+  // prefixed by the codename, e.g. "Punkgoat.Blasted.Lp" -> "punkgoat").
+  const heroSlots = (codename: string) =>
+    (project?.events ?? []).filter(
+      (e) =>
+        e.group === "heroes" &&
+        e.eventName.toLowerCase().startsWith(codename.toLowerCase()),
+    );
+
+  // One SidePanel for a slot, with all its handlers wired (shared by the normal
+  // tabs and the Heroes drill-in).
+  const renderPanel = (ev: EventProject) => (
+    <SidePanel
+      key={ev.id}
+      ev={ev}
+      view={pools[ev.id]}
+      soundFolder={project!.soundFolder}
+      ffmpegPath={settings.ffmpegPath || undefined}
+      accent={accentFor(ev)}
+      dropActive={dropTarget === ev.id}
+      expandedSongs={expandedSongs}
+      onToggleSongExpanded={toggleSongExpanded}
+      panelRef={(el) => (panelEls.current[ev.id] = el)}
+      onSongChange={updateSong}
+      onSongRename={renameSong}
+      onSongRemove={removeSong}
+      onReorderSongs={reorderSongs}
+      onToggleEntry={toggleEntry}
+      onRemoveEntry={removeEntry}
+      onRestoreEntry={restoreEntry}
+      onDecodeStock={decodeStock}
+      onEditAdopted={editAdopted}
+      onDownloadEntry={downloadEntryTo}
+      onDownloadSong={downloadSong}
+    />
+  );
+
   return (
     <div className="flex h-screen overflow-hidden">
       {/* Left sidebar: brand + tabs — fixed, never scrolls */}
@@ -705,33 +746,28 @@ export default function App() {
             update={updateSettings}
             onMerge={mergeModIntoProject}
           />
+        ) : activeTab === "heroes" ? (
+          <>
+            <HeroGrid
+              helperPath={settings.vpkHelperPath}
+              pakPath={settings.deadlockPak}
+              selected={selectedHero}
+              onSelect={setSelectedHero}
+            />
+            {selectedHero &&
+              (heroSlots(selectedHero).length > 0 ? (
+                <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+                  {heroSlots(selectedHero).map(renderPanel)}
+                </div>
+              ) : (
+                <p className="text-sm text-zinc-500">
+                  No sounds wired for this hero yet — coming soon.
+                </p>
+              ))}
+          </>
         ) : (
           <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-            {visibleSlots.map((ev) => (
-              <SidePanel
-                key={ev.id}
-                ev={ev}
-                view={pools[ev.id]}
-                soundFolder={project!.soundFolder}
-                ffmpegPath={settings.ffmpegPath || undefined}
-                accent={accentFor(ev)}
-                dropActive={dropTarget === ev.id}
-                expandedSongs={expandedSongs}
-                onToggleSongExpanded={toggleSongExpanded}
-                panelRef={(el) => (panelEls.current[ev.id] = el)}
-                onSongChange={updateSong}
-                onSongRename={renameSong}
-                onSongRemove={removeSong}
-                onReorderSongs={reorderSongs}
-                onToggleEntry={toggleEntry}
-                onRemoveEntry={removeEntry}
-                onRestoreEntry={restoreEntry}
-                onDecodeStock={decodeStock}
-                onEditAdopted={editAdopted}
-                onDownloadEntry={downloadEntryTo}
-                onDownloadSong={downloadSong}
-              />
-            ))}
+            {visibleSlots.map(renderPanel)}
           </div>
         )}
 

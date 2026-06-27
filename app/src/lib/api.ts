@@ -230,6 +230,22 @@ export function installToGame(
   return invoke("install_to_game", { srcVpk, addonsDir, slot, patchGameinfo });
 }
 
+export interface HeroPortrait {
+  codename: string;
+  displayName: string;
+  portraitPath: string;
+}
+
+/** Decode (cached) + list the hero roster with card-portrait PNG paths. Pass
+ *  refresh=true to re-decode from the game pak (e.g. after a game update). */
+export function heroRoster(
+  helperPath: string,
+  pakPath: string,
+  refresh = false,
+): Promise<HeroPortrait[]> {
+  return invoke("hero_roster", { helperPath, pakPath, refresh });
+}
+
 export function loadProject(path: string): Promise<Project> {
   return invoke("load_project", { path });
 }
