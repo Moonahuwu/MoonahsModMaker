@@ -482,6 +482,13 @@ fn prettify_words(raw: &str) -> String {
     match raw {
         "mo_krill" => return "Mo & Krill".to_string(),
         "mcginnis" => return "McGinnis".to_string(),
+        // Recent heroes whose logo asset still uses the old codename.
+        "familiar" => return "Rem".to_string(),
+        "fencer" => return "Apollo".to_string(),
+        "necro" => return "Graves".to_string(),
+        "priest" => return "Venator".to_string(),
+        "unicorn" => return "Celeste".to_string(),
+        "werewolf" => return "Silver".to_string(),
         _ => {}
     }
     raw.split('_')
