@@ -269,8 +269,9 @@ export function heroDetail(
   helperPath: string,
   pakPath: string,
   codename: string,
+  refresh = false,
 ): Promise<HeroAbility[]> {
-  return invoke("hero_detail", { helperPath, pakPath, codename });
+  return invoke("hero_detail", { helperPath, pakPath, codename, refresh });
 }
 
 export function loadProject(path: string): Promise<Project> {

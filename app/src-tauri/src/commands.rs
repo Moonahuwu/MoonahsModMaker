@@ -619,6 +619,21 @@ pub fn hero_roster(
             &vdata.to_string_lossy(),
         )?;
     }
+    // A refresh re-pulls game data, so the cached vdata + per-hero ability detail
+    // may be stale — drop them so they rebuild on next open.
+    if refresh {
+        let _ = std::fs::remove_file(dir.join("abilities.vdata"));
+        let _ = std::fs::remove_file(dir.join("hero_sound_files.txt"));
+        if let Ok(rd) = std::fs::read_dir(&dir) {
+            for e in rd.flatten() {
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                if name.starts_with("detail_") && name.ends_with(".json") {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
+    }
     let text = std::fs::read_to_string(&vdata).map_err(|e| e.to_string())?;
 
     // 3. Join each hero to its decoded portrait.
@@ -671,7 +686,7 @@ pub fn hero_roster(
     Ok(out)
 }
 
-#[derive(serde::Serialize, Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct HeroAbilitySound {
     /// Soundevent name, e.g. `Doorman.CallBell.Cast`.
@@ -684,7 +699,7 @@ pub struct HeroAbilitySound {
     pub label: String,
 }
 
-#[derive(serde::Serialize, Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct HeroAbility {
     /// Signature slot 1..4.
@@ -758,22 +773,26 @@ fn clean_sound_label(key: &str) -> String {
 }
 
 /// Parse `abilities.vdata` into `ability_name -> {icon, sounds}` in one pass.
+/// Ability entity names vary wildly (`ability_*`, `citadel_ability_*`, and bare
+/// names like `viscous_goo_grenade`), so top-level blocks are detected by
+/// indentation (exactly one leading tab), not by a name prefix.
 fn parse_abilities(vdata: &str) -> std::collections::HashMap<String, AbilityDef> {
     let mut map = std::collections::HashMap::new();
     let mut cur_name: Option<String> = None;
     let mut cur = AbilityDef { icon_internal: None, sounds: vec![] };
     for line in vdata.lines() {
+        let top_level = line.starts_with('\t') && !line.starts_with("\t\t");
         let t = line.trim();
-        // Top-level ability opener: `ability_x =` (value/brace on next line).
-        if let Some(k) = t.strip_suffix('=').map(str::trim) {
-            if k.starts_with("ability_")
-                && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-            {
-                if let Some(name) = cur_name.take() {
-                    map.insert(name, std::mem::replace(&mut cur, AbilityDef { icon_internal: None, sounds: vec![] }));
+        // Top-level block opener: `<name> =` (the `{` is on the next line).
+        if top_level {
+            if let Some(k) = t.strip_suffix('=').map(str::trim) {
+                if !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                    if let Some(name) = cur_name.take() {
+                        map.insert(name, std::mem::replace(&mut cur, AbilityDef { icon_internal: None, sounds: vec![] }));
+                    }
+                    cur_name = Some(k.to_string());
+                    continue;
                 }
-                cur_name = Some(k.to_string());
-                continue;
             }
         }
         if cur_name.is_none() {
@@ -803,15 +822,53 @@ fn event_relpath(event: &str) -> String {
     format!("soundevents/hero/{seg}.vsndevts")
 }
 
+/// The set of hero soundevent file stems that actually exist in the pak
+/// (e.g. `abrams`, `viper`, `magician`). Cached to a text file so abilities that
+/// reference shared/global events (`Player.Barrier.Activate`, `Ability.*`, …)
+/// can be filtered out — those don't live in a per-hero file and aren't editable
+/// here. Refreshed when the cache is missing.
+fn valid_hero_stems(
+    helper_path: &str,
+    pak_path: &str,
+    cache: &std::path::Path,
+) -> std::collections::HashSet<String> {
+    let text = if cache.exists() {
+        std::fs::read_to_string(cache).unwrap_or_default()
+    } else {
+        let listed = crate::vpk::list(helper_path, pak_path, Some("soundevents/hero/"))
+            .unwrap_or_default();
+        let joined = listed.join("\n");
+        let _ = std::fs::write(cache, &joined);
+        joined
+    };
+    text.lines()
+        .filter_map(|l| {
+            let l = l.trim();
+            let name = l.rsplit('/').next().unwrap_or(l);
+            let stem = name
+                .strip_suffix(".vsndevts_c")
+                .or_else(|| name.strip_suffix(".vsndevts"))?;
+            if stem.starts_with('_') {
+                None // skip `_shared.vsndevts`
+            } else {
+                Some(stem.to_string())
+            }
+        })
+        .collect()
+}
+
 /// A hero's 4 abilities with icons + the distinct sounds each triggers, parsed
-/// live from `heroes.vdata` + `abilities.vdata` (decompiled + cached). Drives the
-/// per-hero menu's ability bar and inline sound lists.
+/// from `heroes.vdata` + `abilities.vdata`. The result (abilities + icon paths +
+/// which sound events exist) is **static** game data, so it's cached per-hero to
+/// `detail_<code>.json` — the frontend reads the live sound *pools* separately,
+/// so only sounds you actually edit ever change. Pass `refresh: true` to rebuild.
 #[tauri::command]
 pub fn hero_detail(
     app: tauri::AppHandle,
     helper_path: String,
     pak_path: String,
     codename: String,
+    refresh: Option<bool>,
 ) -> Result<Vec<HeroAbility>, String> {
     use tauri::Manager;
     let base = app
@@ -820,6 +877,18 @@ pub fn hero_detail(
         .map_err(|e| e.to_string())?
         .join("hero_portraits");
     std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
+
+    // Serve the cached per-hero detail unless a refresh was requested.
+    let detail_cache = base.join(format!("detail_{codename}.json"));
+    if !refresh.unwrap_or(false) {
+        if let Ok(text) = std::fs::read_to_string(&detail_cache) {
+            if let Ok(cached) = serde_json::from_str::<Vec<HeroAbility>>(&text) {
+                if !cached.is_empty() {
+                    return Ok(cached);
+                }
+            }
+        }
+    }
 
     // Ensure the two data files are cached (decompiled from the pak).
     let heroes = base.join("heroes.vdata");
@@ -838,6 +907,7 @@ pub fn hero_detail(
         return Err(format!("no bound abilities for hero '{codename}'"));
     }
     let ability_map = parse_abilities(&abilities_text);
+    let hero_stems = valid_hero_stems(&helper_path, &pak_path, &base.join("hero_sound_files.txt"));
 
     // Decode the ability icons (one batch).
     let icon_dir = base.join("ability_icons").join(&codename);
@@ -873,11 +943,18 @@ pub fn hero_detail(
             .filter(|p| p.exists())
             .map(|p| p.to_string_lossy().into_owned());
 
-        // Distinct sound events (keep first label per event).
+        // Distinct sound events (keep first label per event). Drop events that
+        // don't live in a real per-hero soundevents file (shared/global events
+        // like `Player.Barrier.Activate` — not editable here, and they'd map to a
+        // non-existent `soundevents/hero/player.vsndevts`).
         let mut seen = std::collections::HashSet::new();
         let mut sounds = Vec::new();
         if let Some(d) = def {
             for (label, event) in &d.sounds {
+                let stem = event.split('.').next().unwrap_or(event).to_lowercase();
+                if !hero_stems.contains(&stem) {
+                    continue;
+                }
                 if seen.insert(event.clone()) {
                     sounds.push(HeroAbilitySound {
                         event_name: event.clone(),
@@ -889,6 +966,11 @@ pub fn hero_detail(
             }
         }
         out.push(HeroAbility { slot, ability, icon_path, sounds });
+    }
+
+    // Cache the static detail for instant subsequent opens.
+    if let Ok(json) = serde_json::to_string(&out) {
+        let _ = std::fs::write(&detail_cache, json);
     }
     Ok(out)
 }

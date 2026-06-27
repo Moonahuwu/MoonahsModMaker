@@ -264,15 +264,17 @@ export default function App() {
         if (v) map[e.id] = v;
       });
       setPools(map);
-      // Pin dynamic hero ability slots' stock to the live first entry (once),
-      // so the existing game sound shows as the stock row.
+      // Sync dynamic hero ability slots' stock to the live first entry, so the
+      // existing game sound shows as the stock row. Re-synced each load (not just
+      // when empty) so a stale pinned ref from an earlier session self-heals
+      // instead of previewing the wrong sound.
       setProject((prev) => {
         if (!prev) return prev;
         let changed = false;
         const events = prev.events.map((e) => {
-          if (e.id.startsWith(HERO_SLOT_PREFIX) && !e.stockEntry) {
+          if (e.id.startsWith(HERO_SLOT_PREFIX)) {
             const first = map[e.id]?.entries?.[0];
-            if (first) {
+            if (first && first !== e.stockEntry) {
               changed = true;
               return { ...e, stockEntry: first };
             }

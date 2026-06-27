@@ -452,6 +452,10 @@ static PackageEntry? FindFuzzy(Package package, string internalPath)
     var noExt = internalPath.EndsWith(".vsnd_c", StringComparison.OrdinalIgnoreCase)
         ? internalPath[..^7]
         : internalPath;
+    // Guard against a near-empty prefix matching (and returning) an arbitrary
+    // short sound — that surfaces as a misleading "beep" preview.
+    if (noExt.Trim('/').Length < 4)
+        return null;
     PackageEntry? best = null;
     foreach (var byExt in package.Entries)
     {
