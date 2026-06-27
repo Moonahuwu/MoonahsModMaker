@@ -7,6 +7,9 @@ import {
   copyToDownloads,
   decodeStock as decodeStockApi,
   downloadEntry,
+  heroDetail as heroDetailApi,
+  type HeroAbility,
+  type HeroPortrait,
   loadState,
   newProject,
   probeAudio,
@@ -22,6 +25,7 @@ import { FirstRunWizard } from "./components/FirstRunWizard";
 import { ImportedMods } from "./components/ImportedMods";
 import { CompileBar } from "./components/CompileBar";
 import { HeroGrid } from "./components/HeroGrid";
+import { HeroDetail } from "./components/HeroDetail";
 import { useToast } from "./components/Toaster";
 import { useSettings } from "./lib/settings";
 import { songHash } from "./lib/songHash";
@@ -47,13 +51,42 @@ function baseName(path: string): string {
   return file.replace(/\.[^.]+$/, "");
 }
 
+/** Dynamic per-hero ability-sound slots (created on demand, not in the default
+ *  schema) are id-prefixed so reconcile can recognize and keep them. */
+const HERO_SLOT_PREFIX = "heroabil_";
+
+function heroAbilSlotId(codename: string, eventName: string): string {
+  return `${HERO_SLOT_PREFIX}${codename}_${eventName
+    .replace(/[^a-z0-9]+/gi, "_")
+    .toLowerCase()}`;
+}
+
+/** A slot carries user content worth persisting. */
+function slotHasContent(e: EventProject): boolean {
+  return (
+    e.songs.length > 0 ||
+    e.adopted.length > 0 ||
+    e.excludedEntries.length > 0 ||
+    e.removedEntries.length > 0
+  );
+}
+
 /** Align a saved project to the current slot schema: ordered by the default,
  *  preferring saved slot data (songs, refreshed stock) where the id still exists,
- *  dropping saved slots no longer in the schema, and adding any new default slots. */
+ *  dropping saved slots no longer in the schema, and adding any new default slots.
+ *  Dynamic hero ability slots are kept only when they hold content (empty ones,
+ *  created just by browsing a hero, are pruned). */
 function reconcileProject(saved: Project, def: Project): Project {
   const savedById = new Map(saved.events.map((e) => [e.id, e]));
-  const events = def.events.map((d) => savedById.get(d.id) ?? d);
-  return { ...saved, events };
+  const defIds = new Set(def.events.map((e) => e.id));
+  const merged = def.events.map((d) => savedById.get(d.id) ?? d);
+  const extras = saved.events.filter(
+    (e) =>
+      !defIds.has(e.id) &&
+      e.id.startsWith(HERO_SLOT_PREFIX) &&
+      slotHasContent(e),
+  );
+  return { ...saved, events: [...merged, ...extras] };
 }
 
 function accentFor(ev: { group: string; side: string }): string {
@@ -73,9 +106,15 @@ export default function App() {
   const [expandedSongs, setExpandedSongs] = useState<Record<string, boolean>>({});
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<string>("intro");
-  // Selected hero in the Heroes grid (codename, e.g. "punkgoat"); drives the
-  // per-hero drill-in below the grid.
+  // Selected hero in the Heroes grid (codename, e.g. "punkgoat") -> opens the
+  // per-hero menu (background + ability bar + inline sounds).
   const [selectedHero, setSelectedHero] = useState<string | null>(null);
+  const [selectedHeroInfo, setSelectedHeroInfo] = useState<HeroPortrait | null>(null);
+  const [heroAbilities, setHeroAbilities] = useState<HeroAbility[] | null>(null);
+  const [heroDetailLoading, setHeroDetailLoading] = useState(false);
+  const [selectedAbility, setSelectedAbility] = useState<string | null>(null);
+  // Soundevents files already decompiled into the vanilla merge base this session.
+  const ensuredFiles = useRef<Set<string>>(new Set());
   const [settingsOpen, setSettingsOpen] = useState(false);
   const { settings, update: updateSettings } = useSettings();
   const { push } = useToast();
@@ -225,6 +264,23 @@ export default function App() {
         if (v) map[e.id] = v;
       });
       setPools(map);
+      // Pin dynamic hero ability slots' stock to the live first entry (once),
+      // so the existing game sound shows as the stock row.
+      setProject((prev) => {
+        if (!prev) return prev;
+        let changed = false;
+        const events = prev.events.map((e) => {
+          if (e.id.startsWith(HERO_SLOT_PREFIX) && !e.stockEntry) {
+            const first = map[e.id]?.entries?.[0];
+            if (first) {
+              changed = true;
+              return { ...e, stockEntry: first };
+            }
+          }
+          return e;
+        });
+        return changed ? { ...prev, events } : prev;
+      });
     } catch (e) {
       push("error", `Couldn't read events file: ${e}`);
     }
@@ -634,17 +690,105 @@ export default function App() {
     await refreshVanilla({ helper, pak });
   }
 
+  // Decompile the given soundevents files into the vanilla merge base (once each),
+  // so ability-sound pools can be read and merged. Points vanillaRoot at the
+  // app-managed copy.
+  async function ensureVanillaFiles(relpaths: string[]) {
+    const s = settingsRef.current;
+    const todo = relpaths.filter((r) => r && !ensuredFiles.current.has(r));
+    if (todo.length === 0) return;
+    try {
+      const res = await refreshVanillaApi(s.vpkHelperPath, s.deadlockPak, todo);
+      todo.forEach((r) => ensuredFiles.current.add(r));
+      if (res.vanillaRoot && res.vanillaRoot !== s.vanillaRoot) {
+        updateSettings({ vanillaRoot: res.vanillaRoot });
+      }
+    } catch (e) {
+      push("error", `Couldn't load hero sound data: ${e}`);
+    }
+  }
+
+  // Ensure project slots exist for an ability's sound events (created empty;
+  // pruned on next launch if still empty). Lets the user add sounds to them.
+  function ensureAbilitySlots(codename: string, ability: HeroAbility) {
+    setProject((prev) => {
+      if (!prev) return prev;
+      const have = new Set(prev.events.map((e) => e.id));
+      const add: EventProject[] = [];
+      for (const snd of ability.sounds) {
+        const id = heroAbilSlotId(codename, snd.eventName);
+        if (have.has(id)) continue;
+        add.push({
+          id,
+          group: "heroes",
+          side: snd.label,
+          eventName: snd.eventName,
+          arrayKey: snd.arrayKey,
+          stockEntry: "",
+          vsndDurationMode: "auto",
+          vsndDurationManual: null,
+          songs: [],
+          previousOwnedNames: [],
+          excludedEntries: [],
+          removedEntries: [],
+          adopted: [],
+          eventsRelpath: snd.eventsRelpath,
+        });
+      }
+      return add.length ? { ...prev, events: [...prev.events, ...add] } : prev;
+    });
+  }
+
+  // Load a hero's abilities when selected; decompile its sound files into vanilla.
+  useEffect(() => {
+    if (!selectedHero) {
+      setHeroAbilities(null);
+      setSelectedAbility(null);
+      return;
+    }
+    let cancelled = false;
+    setHeroDetailLoading(true);
+    setSelectedAbility(null);
+    setHeroAbilities(null);
+    (async () => {
+      const s = settingsRef.current;
+      try {
+        const abilities = await heroDetailApi(
+          s.vpkHelperPath,
+          s.deadlockPak,
+          selectedHero,
+        );
+        if (cancelled) return;
+        setHeroAbilities(abilities);
+        const relpaths = Array.from(
+          new Set(abilities.flatMap((a) => a.sounds.map((x) => x.eventsRelpath))),
+        );
+        await ensureVanillaFiles(relpaths);
+        if (!cancelled) void load();
+      } catch (e) {
+        if (!cancelled) push("error", `Couldn't load ${selectedHero}: ${e}`);
+      } finally {
+        if (!cancelled) setHeroDetailLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedHero]);
+
+  // When an ability is opened, materialize its sound slots + (re)read pools.
+  useEffect(() => {
+    if (!selectedHero || !selectedAbility || !heroAbilities) return;
+    const ability = heroAbilities.find((a) => a.ability === selectedAbility);
+    if (!ability) return;
+    ensureAbilitySlots(selectedHero, ability);
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedHero, selectedAbility, heroAbilities]);
+
   const visibleSlots = (project?.events ?? []).filter((e) => e.group === activeTab);
   const songCount = (project?.events ?? []).reduce((n, e) => n + e.songs.length, 0);
-
-  // Heroes-group slots belonging to a given hero codename (event keys are
-  // prefixed by the codename, e.g. "Punkgoat.Blasted.Lp" -> "punkgoat").
-  const heroSlots = (codename: string) =>
-    (project?.events ?? []).filter(
-      (e) =>
-        e.group === "heroes" &&
-        e.eventName.toLowerCase().startsWith(codename.toLowerCase()),
-    );
 
   // One SidePanel for a slot, with all its handlers wired (shared by the normal
   // tabs and the Heroes drill-in).
@@ -673,6 +817,21 @@ export default function App() {
       onDownloadSong={downloadSong}
     />
   );
+
+  // One ability-sound slot, rendered as a panel once its (lazily-created) project
+  // slot exists.
+  const renderSound = (sound: { eventName: string; label: string }) => {
+    const id = selectedHero ? heroAbilSlotId(selectedHero, sound.eventName) : "";
+    const slot = project?.events.find((e) => e.id === id);
+    if (!slot) {
+      return (
+        <div key={id || sound.eventName} className="text-xs text-zinc-600">
+          preparing {sound.label}…
+        </div>
+      );
+    }
+    return renderPanel(slot);
+  };
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -747,25 +906,32 @@ export default function App() {
             onMerge={mergeModIntoProject}
           />
         ) : activeTab === "heroes" ? (
-          <>
+          selectedHero ? (
+            <HeroDetail
+              heroName={selectedHeroInfo?.displayName ?? selectedHero}
+              backgroundSrc={selectedHeroInfo?.portraitPath ?? null}
+              abilities={heroAbilities}
+              loading={heroDetailLoading}
+              selectedAbility={selectedAbility}
+              onSelectAbility={setSelectedAbility}
+              onBack={() => {
+                setSelectedHero(null);
+                setSelectedHeroInfo(null);
+              }}
+              renderSound={renderSound}
+            />
+          ) : (
             <HeroGrid
               helperPath={settings.vpkHelperPath}
               pakPath={settings.deadlockPak}
               showExperimental={settings.showExperimentalHeroes}
               selected={selectedHero}
-              onSelect={setSelectedHero}
+              onSelect={(h) => {
+                setSelectedHero(h.codename);
+                setSelectedHeroInfo(h);
+              }}
             />
-            {selectedHero &&
-              (heroSlots(selectedHero).length > 0 ? (
-                <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-                  {heroSlots(selectedHero).map(renderPanel)}
-                </div>
-              ) : (
-                <p className="text-sm text-zinc-500">
-                  No sounds wired for this hero yet — coming soon.
-                </p>
-              ))}
-          </>
+          )
         ) : (
           <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
             {visibleSlots.map(renderPanel)}

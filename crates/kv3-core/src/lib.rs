@@ -311,8 +311,10 @@ fn rebuild_entries(existing: &[String], edit: &EventMerge) -> Vec<String> {
     let excluded: HashSet<&str> = edit.excluded.iter().map(String::as_str).collect();
 
     let mut out = Vec::with_capacity(existing.len() + edit.owned_in_order.len() + 1);
-    // Stock first, unless the user disabled it.
-    if !excluded.contains(edit.stock_entry.as_str()) {
+    // Stock first, unless the user disabled it. An empty stock entry means "no
+    // designated stock" (e.g. dynamic ability slots) — existing entries are then
+    // all preserved as foreign and ours are appended.
+    if !edit.stock_entry.is_empty() && !excluded.contains(edit.stock_entry.as_str()) {
         out.push(edit.stock_entry.clone());
     }
     for e in existing {

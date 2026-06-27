@@ -250,6 +250,29 @@ export function heroRoster(
   return invoke("hero_roster", { helperPath, pakPath, refresh });
 }
 
+export interface HeroAbilitySound {
+  eventName: string;
+  arrayKey: string;
+  eventsRelpath: string;
+  label: string;
+}
+
+export interface HeroAbility {
+  slot: number;
+  ability: string;
+  iconPath: string | null;
+  sounds: HeroAbilitySound[];
+}
+
+/** A hero's 4 signature abilities with icon + the sound events each triggers. */
+export function heroDetail(
+  helperPath: string,
+  pakPath: string,
+  codename: string,
+): Promise<HeroAbility[]> {
+  return invoke("hero_detail", { helperPath, pakPath, codename });
+}
+
 export function loadProject(path: string): Promise<Project> {
   return invoke("load_project", { path });
 }

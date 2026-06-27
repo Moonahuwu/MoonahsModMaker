@@ -20,7 +20,7 @@ export function HeroGrid({
   pakPath: string;
   showExperimental: boolean;
   selected: string | null;
-  onSelect: (codename: string) => void;
+  onSelect: (hero: HeroPortrait) => void;
 }) {
   const [heroes, setHeroes] = useState<HeroPortrait[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -96,7 +96,7 @@ export function HeroGrid({
               key={h.codename}
               whileHover={{ scale: 1.04 }}
               whileTap={{ scale: 0.97 }}
-              onClick={() => onSelect(h.codename)}
+              onClick={() => onSelect(h)}
               title={h.displayName}
               className={`group relative aspect-[3/4] overflow-hidden rounded-lg border bg-gradient-to-b from-zinc-700/40 to-zinc-950 transition ${
                 active
