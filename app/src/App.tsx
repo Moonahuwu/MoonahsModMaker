@@ -18,6 +18,7 @@ import {
 } from "./lib/api";
 import { SidePanel } from "./components/SidePanel";
 import { SetupSection } from "./components/SetupSection";
+import { FirstRunWizard } from "./components/FirstRunWizard";
 import { ImportedMods } from "./components/ImportedMods";
 import { CompileBar } from "./components/CompileBar";
 import { useToast } from "./components/Toaster";
@@ -511,13 +512,17 @@ export default function App() {
   // Refresh the merge base from the live game pak: decompile its events files,
   // repoint vanillaRoot at the fresh copy, re-read pools, and correct each slot's
   // stockEntry to the live first entry (kills drifted stock refs).
-  async function refreshVanilla() {
+  async function refreshVanilla(opts?: { helper?: string; pak?: string }) {
     const proj = projectRef.current;
     const s = settingsRef.current;
     if (!proj) return;
+    // Allow freshly-detected values to be passed in directly (first-run setup
+    // runs detect then refresh in one tick, before settingsRef has updated).
+    const helper = opts?.helper ?? s.vpkHelperPath;
+    const pak = opts?.pak ?? s.deadlockPak;
     try {
       const relpaths = Array.from(new Set(proj.events.map((e) => e.eventsRelpath)));
-      const res = await refreshVanillaApi(s.vpkHelperPath, s.deadlockPak, relpaths);
+      const res = await refreshVanillaApi(helper, pak, relpaths);
       updateSettings({ vanillaRoot: res.vanillaRoot });
 
       const root = res.vanillaRoot.replace(/[/\\]+$/, "");
@@ -582,6 +587,29 @@ export default function App() {
     } catch (e) {
       push("error", `Auto-detect failed: ${e}`);
     }
+  }
+
+  // First-run / one-click setup: detect tool+game paths, then pull the current
+  // game's music data in as the merge base — so a new user is ready to compile
+  // without typing any paths or supplying a ModFiles snapshot.
+  async function runFirstSetup() {
+    let helper = settingsRef.current.vpkHelperPath;
+    let pak = settingsRef.current.deadlockPak;
+    try {
+      const d = await autodetectPaths();
+      const patch: Partial<typeof settings> = {};
+      if (d.csdkRoot) patch.csdkRoot = d.csdkRoot;
+      if (d.deadlockPak) (patch.deadlockPak = d.deadlockPak), (pak = d.deadlockPak);
+      if (d.addonsDir) patch.addonsDir = d.addonsDir;
+      if (d.vpkHelper) (patch.vpkHelperPath = d.vpkHelper), (helper = d.vpkHelper);
+      if (d.ffmpeg && d.ffmpeg !== "ffmpeg") patch.ffmpegPath = d.ffmpeg;
+      if (Object.keys(patch).length) updateSettings(patch);
+    } catch (e) {
+      push("error", `Auto-detect failed: ${e}`);
+    }
+    // Pull live game music data in as the merge base (fixes the need for a local
+    // ModFiles snapshot + drifted stock refs). Uses the just-detected paths.
+    await refreshVanilla({ helper, pak });
   }
 
   const visibleSlots = (project?.events ?? []).filter((e) => e.group === activeTab);
@@ -700,6 +728,14 @@ export default function App() {
           />
         )}
       </main>
+
+      {project && !settings.firstRunDone && (
+        <FirstRunWizard
+          settings={settings}
+          onRunSetup={runFirstSetup}
+          onDone={() => updateSettings({ firstRunDone: true })}
+        />
+      )}
 
       <AnimatePresence>
         {settingsOpen && (

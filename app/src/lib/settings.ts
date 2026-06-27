@@ -29,6 +29,8 @@ export interface Settings {
    *  pakNN_dir.vpk. Set to the resolved slot after an auto install so repeated
    *  compile+installs reuse the same slot instead of filling new ones. */
   installSlot: number | null;
+  /** Set once the first-run setup wizard has been completed or skipped. */
+  firstRunDone: boolean;
 }
 
 const REPO = "C:/Users/ethob/Desktop/DeadlockModding/EasyIntroModder";
@@ -52,6 +54,7 @@ export const DEFAULT_SETTINGS: Settings = {
   installAfterCompile: false,
   patchGameinfo: true,
   installSlot: null,
+  firstRunDone: false,
 };
 
 const STORAGE_KEY = "eim.settings.v1";
