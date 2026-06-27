@@ -1,6 +1,7 @@
 mod audio;
 mod commands;
 mod compile;
+mod install;
 mod paths;
 mod project;
 mod vpk;
@@ -31,6 +32,8 @@ pub fn run() {
             commands::decode_stock,
             commands::refresh_vanilla,
             commands::autodetect_paths,
+            commands::scan_addon_slots,
+            commands::install_to_game,
             commands::compile_project,
         ])
         .run(tauri::generate_context!())

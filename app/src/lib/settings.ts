@@ -19,6 +19,16 @@ export interface Settings {
   vpkName: string;
   /** Other mods' pak01_dir.vpk paths to combine in on compile. */
   importedMods: string[];
+  /** Deadlock's `game/citadel/addons` folder — where installs are copied. */
+  addonsDir: string;
+  /** After a successful compile, also install the .vpk into the game. */
+  installAfterCompile: boolean;
+  /** Patch gameinfo.gi's addons search path on install if it's missing. */
+  patchGameinfo: boolean;
+  /** Install slot: null = auto-pick the next free slot; a number = overwrite that
+   *  pakNN_dir.vpk. Set to the resolved slot after an auto install so repeated
+   *  compile+installs reuse the same slot instead of filling new ones. */
+  installSlot: number | null;
 }
 
 const REPO = "C:/Users/ethob/Desktop/DeadlockModding/EasyIntroModder";
@@ -37,6 +47,11 @@ export const DEFAULT_SETTINGS: Settings = {
   outputMode: "vpk",
   vpkName: "pak01_dir.vpk",
   importedMods: [],
+  addonsDir:
+    "D:/SteamLibrary/steamapps/common/Deadlock/game/citadel/addons",
+  installAfterCompile: false,
+  patchGameinfo: true,
+  installSlot: null,
 };
 
 const STORAGE_KEY = "eim.settings.v1";
@@ -63,6 +78,13 @@ export function useSettings() {
     setSettings((s) => ({ ...s, ...patch }));
 
   return { settings, update };
+}
+
+/** The compiled .vpk to install: the `combined/` variant when mods are imported
+ *  (it contains yours + theirs), otherwise the `mine/` variant. */
+export function installSrcVpk(s: Settings): string {
+  const variant = s.importedMods.length > 0 ? "combined" : "mine";
+  return `${s.outputDir}/${variant}/${s.vpkName}`;
 }
 
 /** Derive the full CompileConfig from settings + the project's events. */

@@ -79,6 +79,7 @@ export function SetupSection({
     ["VPK helper", settings.vpkHelperPath],
     ["Events", musicEvents],
     ["Game pak", settings.deadlockPak],
+    ["Addons", settings.addonsDir],
   ] as const;
 
   useEffect(() => {
@@ -95,7 +96,7 @@ export function SetupSection({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [compiler, gameinfo, settings.vpkHelperPath, musicEvents, settings.deadlockPak]);
+  }, [compiler, gameinfo, settings.vpkHelperPath, musicEvents, settings.deadlockPak, settings.addonsDir]);
 
   return (
     <div className="w-full max-w-2xl rounded-2xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl">
@@ -180,6 +181,12 @@ export function SetupSection({
           label="Output dir"
           value={settings.outputDir}
           onChange={(v) => update({ outputDir: v })}
+        />
+        <Field
+          label="Deadlock addons folder"
+          value={settings.addonsDir}
+          onChange={(v) => update({ addonsDir: v })}
+          hint="game/citadel/addons — where 'Install to game' copies the .vpk"
         />
       </div>
     </div>

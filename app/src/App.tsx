@@ -569,6 +569,7 @@ export default function App() {
       const patch: Partial<typeof settings> = {};
       if (d.csdkRoot) patch.csdkRoot = d.csdkRoot;
       if (d.deadlockPak) patch.deadlockPak = d.deadlockPak;
+      if (d.addonsDir) patch.addonsDir = d.addonsDir;
       if (d.vpkHelper) patch.vpkHelperPath = d.vpkHelper;
       if (d.ffmpeg && d.ffmpeg !== "ffmpeg") patch.ffmpegPath = d.ffmpeg;
       const found = Object.keys(patch).length;

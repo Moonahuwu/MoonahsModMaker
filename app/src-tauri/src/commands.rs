@@ -4,6 +4,7 @@
 
 use crate::audio::{self, AudioInfo, ProcessReq};
 use crate::compile::{self, CompileConfig, CompileReport};
+use crate::install::{self, InstallResult, SlotScan};
 use crate::paths::{self, DerivedPaths};
 use crate::project::Project;
 use kv3_core::EventView;
@@ -232,12 +233,39 @@ pub fn refresh_vanilla(
     })
 }
 
+/// Scan the Deadlock addons folder for occupied `pakNN_dir.vpk` slots + the next
+/// free one (drives the install slot picker UI).
+#[tauri::command]
+pub fn scan_addon_slots(addons_dir: String) -> SlotScan {
+    install::scan_slots(std::path::Path::new(&addons_dir))
+}
+
+/// Install a compiled `.vpk` into Deadlock's `game/citadel/addons` folder.
+/// `slot = None` auto-picks the lowest free slot; `Some(n)` overwrites slot `n`
+/// (backing up any existing occupant). `patch_gameinfo` adds the addons search
+/// path to `gameinfo.gi` if missing.
+#[tauri::command]
+pub fn install_to_game(
+    src_vpk: String,
+    addons_dir: String,
+    slot: Option<u32>,
+    patch_gameinfo: bool,
+) -> Result<InstallResult, String> {
+    install::install(
+        std::path::Path::new(&src_vpk),
+        std::path::Path::new(&addons_dir),
+        slot,
+        patch_gameinfo,
+    )
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DetectedPaths {
     pub csdk_root: Option<String>,
     pub resource_compiler: Option<String>,
     pub deadlock_pak: Option<String>,
+    pub addons_dir: Option<String>,
     pub ffmpeg: Option<String>,
     pub vpk_helper: Option<String>,
 }
@@ -399,6 +427,11 @@ pub fn autodetect_paths(app: tauri::AppHandle) -> DetectedPaths {
     });
     let deadlock_pak = deadlock_pak.filter(|p| std::path::Path::new(p).exists());
 
+    let addons_dir = deadlock.as_ref().map(|r| {
+        r.join("game/citadel/addons").to_string_lossy().replace('\\', "/")
+    });
+    let addons_dir = addons_dir.filter(|p| std::path::Path::new(p).is_dir());
+
     let csdk = find_csdk(&home, exe_dir.as_deref());
     let resource_compiler = csdk.as_ref().map(|c| {
         c.join("game/bin_tools/win64/resourcecompiler.exe").to_string_lossy().replace('\\', "/")
@@ -408,6 +441,7 @@ pub fn autodetect_paths(app: tauri::AppHandle) -> DetectedPaths {
         csdk_root: csdk.map(|c| c.to_string_lossy().replace('\\', "/")),
         resource_compiler,
         deadlock_pak,
+        addons_dir,
         ffmpeg: if ffmpeg_on_path() { Some("ffmpeg".into()) } else { None },
         vpk_helper: find_vpk_helper(exe_dir.as_deref(), resource_dir.as_deref())
             .map(|p| p.replace('\\', "/")),

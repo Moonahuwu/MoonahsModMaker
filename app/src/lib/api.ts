@@ -187,6 +187,7 @@ export interface DetectedPaths {
   csdkRoot: string | null;
   resourceCompiler: string | null;
   deadlockPak: string | null;
+  addonsDir: string | null;
   ffmpeg: string | null;
   vpkHelper: string | null;
 }
@@ -194,6 +195,39 @@ export interface DetectedPaths {
 /** Best-effort auto-detection of tool/game paths (Steam, CSDK, ffmpeg, helper). */
 export function autodetectPaths(): Promise<DetectedPaths> {
   return invoke("autodetect_paths");
+}
+
+export interface SlotScan {
+  /** Slot numbers (1..99) currently occupied by some file in the addons folder. */
+  used: number[];
+  /** Lowest free slot, or null if all are taken. */
+  nextFree: number | null;
+  maxSlot: number;
+}
+
+/** Scan the Deadlock addons folder for used pakNN slots + the next free one. */
+export function scanAddonSlots(addonsDir: string): Promise<SlotScan> {
+  return invoke("scan_addon_slots", { addonsDir });
+}
+
+export interface InstallResult {
+  slot: number;
+  target: string;
+  replaced: boolean;
+  backup: string | null;
+  gameinfoPatched: boolean;
+  gameinfoNote: string;
+}
+
+/** Install a compiled .vpk into Deadlock's addons folder. `slot = null` auto-picks
+ *  the next free slot; a number overwrites that slot (backing up any occupant). */
+export function installToGame(
+  srcVpk: string,
+  addonsDir: string,
+  slot: number | null,
+  patchGameinfo: boolean,
+): Promise<InstallResult> {
+  return invoke("install_to_game", { srcVpk, addonsDir, slot, patchGameinfo });
 }
 
 export function loadProject(path: string): Promise<Project> {
