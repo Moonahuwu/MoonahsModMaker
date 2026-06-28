@@ -129,6 +129,10 @@ pub struct CompileConfig {
     /// `.vsnd_c` staged at the game's own path (no soundevent merge).
     #[serde(default)]
     pub sound_overrides: Vec<SoundOverrideCompile>,
+    /// VFX recolor overrides: decompile a game particle, hue/sat-shift its colors,
+    /// recompile to `.vpcf_c` and stage at the game's own path (whole-file override).
+    #[serde(default)]
+    pub effect_overrides: Vec<EffectCompile>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -174,6 +178,48 @@ impl SoundOverrideCompile {
         } else {
             format!("{dir}/{stem}.vsnd_c")
         }
+    }
+    fn up_to_date(&self, skip_compile: bool, compiled_exists: bool) -> bool {
+        !skip_compile
+            && self.current_hash.is_some()
+            && self.current_hash == self.last_compiled_hash
+            && compiled_exists
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EffectCompile {
+    /// The vanilla `.vpcf` path to shadow (drives output + staging paths).
+    pub target_ref: String,
+    /// Hue rotation in degrees applied to every color literal.
+    #[serde(default)]
+    pub hue: f32,
+    /// Saturation multiplier (1.0 = unchanged).
+    #[serde(default = "default_one")]
+    pub saturation: f32,
+    #[serde(default)]
+    pub current_hash: Option<String>,
+    #[serde(default)]
+    pub last_compiled_hash: Option<String>,
+}
+
+fn default_one() -> f32 {
+    1.0
+}
+
+impl EffectCompile {
+    /// content-relative `.vpcf` source path (where we write the recolored source).
+    fn vpcf_rel(&self) -> String {
+        self.target_ref.trim_matches('/').to_string()
+    }
+    /// content-relative `.vpcf_c` path (the staging + override target).
+    fn vpcf_c_rel(&self) -> String {
+        format!("{}_c", self.vpcf_rel())
+    }
+    fn stem(&self) -> String {
+        let r = self.vpcf_rel();
+        r.rsplit('/').next().unwrap_or(&r).trim_end_matches(".vpcf").to_string()
     }
     fn up_to_date(&self, skip_compile: bool, compiled_exists: bool) -> bool {
         !skip_compile
@@ -446,6 +492,184 @@ fn render_icon(ffmpeg: Option<&str>, src: &str, w: u32, h: u32, hue: f32, out_pn
     }
 }
 
+// ---- Particle (VFX) recolor -------------------------------------------------
+
+fn rgb_to_hsl(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
+    let (r, g, b) = (r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0);
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let l = (max + min) / 2.0;
+    if (max - min).abs() < 1e-6 {
+        return (0.0, 0.0, l);
+    }
+    let d = max - min;
+    let s = if l > 0.5 { d / (2.0 - max - min) } else { d / (max + min) };
+    let h = if max == r {
+        (g - b) / d + if g < b { 6.0 } else { 0.0 }
+    } else if max == g {
+        (b - r) / d + 2.0
+    } else {
+        (r - g) / d + 4.0
+    };
+    (h * 60.0, s, l)
+}
+
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
+    if s.abs() < 1e-6 {
+        let v = (l * 255.0).round() as u8;
+        return (v, v, v);
+    }
+    let q = if l < 0.5 { l * (1.0 + s) } else { l + s - l * s };
+    let p = 2.0 * l - q;
+    let hk = (h / 360.0).rem_euclid(1.0);
+    let t = |mut t: f32| {
+        if t < 0.0 {
+            t += 1.0;
+        }
+        if t > 1.0 {
+            t -= 1.0;
+        }
+        if t < 1.0 / 6.0 {
+            p + (q - p) * 6.0 * t
+        } else if t < 0.5 {
+            q
+        } else if t < 2.0 / 3.0 {
+            p + (q - p) * (2.0 / 3.0 - t) * 6.0
+        } else {
+            p
+        }
+    };
+    (
+        (t(hk + 1.0 / 3.0) * 255.0).round() as u8,
+        (t(hk) * 255.0).round() as u8,
+        (t(hk - 1.0 / 3.0) * 255.0).round() as u8,
+    )
+}
+
+/// Apply a hue rotation + saturation multiply to one RGB triple.
+fn recolor_rgb(r: u8, g: u8, b: u8, hue_deg: f32, sat: f32) -> (u8, u8, u8) {
+    let (h, s, l) = rgb_to_hsl(r, g, b);
+    hsl_to_rgb(h + hue_deg, (s * sat).clamp(0.0, 1.0), l)
+}
+
+/// A vpcf key that holds a recolorable RGB(A) color literal.
+fn is_particle_color_key(key: &str) -> bool {
+    key.starts_with("m_") && key.contains("Color") && !key.contains("Scale") && !key.contains("Blend")
+}
+
+/// Recolor a single `m_*Color* = [ r, g, b(, a) ]` line in place, preserving its
+/// indentation, key, and bracket style. Returns None for non-color lines.
+fn recolor_line(line: &str, hue: f32, sat: f32) -> Option<String> {
+    let eq = line.find('=')?;
+    let key = line[..eq].trim();
+    if !is_particle_color_key(key) {
+        return None;
+    }
+    let open = line[eq..].find('[')? + eq;
+    let close = line.rfind(']')?;
+    if close <= open {
+        return None;
+    }
+    let nums: Vec<u32> = line[open + 1..close]
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.parse::<u32>())
+        .collect::<Result<_, _>>()
+        .ok()?;
+    if nums.len() < 3 || nums.len() > 4 || nums.iter().any(|n| *n > 255) {
+        return None;
+    }
+    let (r, g, b) = recolor_rgb(nums[0] as u8, nums[1] as u8, nums[2] as u8, hue, sat);
+    let inner = if nums.len() == 4 {
+        format!(" {r}, {g}, {b}, {} ", nums[3])
+    } else {
+        format!(" {r}, {g}, {b} ")
+    };
+    Some(format!("{}[{}]{}", &line[..open], inner, &line[close + 1..]))
+}
+
+/// Hue/sat-shift every color literal in a vpcf source, leaving all else intact.
+fn recolor_particle_source(text: &str, hue: f32, sat: f32) -> String {
+    if hue.abs() < 0.01 && (sat - 1.0).abs() < 0.01 {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    for line in text.split_inclusive('\n') {
+        let nl = line.ends_with('\n');
+        let body = line.strip_suffix('\n').unwrap_or(line);
+        match recolor_line(body, hue, sat) {
+            Some(new) => out.push_str(&new),
+            None => out.push_str(body),
+        }
+        if nl {
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// Decompile each VFX override's vanilla particle, hue/sat-shift its colors,
+/// and recompile to a `.vpcf_c` that shadows the game's own particle.
+fn compile_effect_overrides(
+    cfg: &CompileConfig,
+    content_root: &Path,
+    compiled_root: &Path,
+    report: &mut CompileReport,
+) -> Result<(), ()> {
+    if cfg.effect_overrides.is_empty() {
+        return Ok(());
+    }
+    let helper = match cfg.vpk_helper_path.as_deref() {
+        Some(h) => h,
+        None => return report.fail("recolor effects", "vpkHelperPath not set"),
+    };
+    let pak = match cfg.pak_path.as_deref() {
+        Some(p) => p,
+        None => return report.fail("recolor effects", "pakPath not set (needed to read the vanilla particle)"),
+    };
+    for ov in &cfg.effect_overrides {
+        let rel = ov.vpcf_rel();
+        let rel_c = ov.vpcf_c_rel();
+        let stem = ov.stem();
+        let compiled = compiled_root.join(&rel_c);
+        if ov.up_to_date(cfg.skip_compile, compiled.exists()) {
+            report.ok_step(format!("up to date: {stem}"), "unchanged — skipped");
+            continue;
+        }
+        // Decompile the vanilla particle source into the content tree.
+        let content_vpcf = content_root.join(&rel);
+        if let Some(parent) = content_vpcf.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                return report.fail("prepare effect dir", e.to_string());
+            }
+        }
+        if let Err(e) =
+            crate::vpk::decompile_from_vpk(helper, pak, &rel_c, &content_vpcf.to_string_lossy())
+        {
+            return report.fail(format!("decompile particle: {stem}"), e);
+        }
+        // Recolor in place.
+        let text = match std::fs::read_to_string(&content_vpcf) {
+            Ok(t) => t,
+            Err(e) => return report.fail(format!("read particle: {stem}"), e.to_string()),
+        };
+        let recolored = recolor_particle_source(&text, ov.hue, ov.saturation);
+        if let Err(e) = std::fs::write(&content_vpcf, recolored) {
+            return report.fail(format!("write particle: {stem}"), e.to_string());
+        }
+        report.ok_step(format!("recolor: {stem}"), format!("hue {:+.0}° sat {:.2}", ov.hue, ov.saturation));
+        if cfg.skip_compile {
+            continue;
+        }
+        match run_resource_compiler(cfg, &content_vpcf.to_string_lossy()) {
+            Ok(detail) => report.ok_step(format!("compile (effect): {stem}"), detail),
+            Err(e) => return report.fail(format!("compile (effect): {stem}"), e),
+        }
+    }
+    Ok(())
+}
+
 /// Scale + compile all icon mods in one resourcecompiler pass. Returns
 /// `(target_vtexc, produced_vtex_c_abs_path)` pairs for staging. Sources are
 /// written under `panorama/images/eim_icons/` in the content tree and listed in a
@@ -633,6 +857,10 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
             }
         }
     }
+
+    // VFX recolor overrides: decompile + recolor + recompile once (staged into
+    // every variant, like icons).
+    compile_effect_overrides(cfg, content_root, compiled_root, report)?;
 
     // Custom icon overrides: scale + compile once (staged into every variant).
     let icon_outputs = compile_icon_mods(cfg, content_root, compiled_root, report)?;
@@ -901,6 +1129,18 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                 Err(e) => return report.fail(format!("stage override: {rel}"), e.to_string()),
             }
         }
+        // Stage VFX recolor overrides (recompiled .vpcf_c at the game's path).
+        for ov in &cfg.effect_overrides {
+            let rel = ov.vpcf_c_rel();
+            let src = compiled_root.join(&rel);
+            if cfg.skip_compile && !src.exists() {
+                continue;
+            }
+            match copy_into(&src, &stage, &rel) {
+                Ok(_) => staged += 1,
+                Err(e) => return report.fail(format!("stage effect: {rel}"), e.to_string()),
+            }
+        }
         report.ok_step(format!("[{}] stage", v.name), format!("{staged} file(s)"));
 
         if cfg.output_mode == "vpk" {
@@ -925,6 +1165,34 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recolor_shifts_color_lines_only() {
+        let src = "\
+\tm_ConstantColor = [ 255, 0, 0, 255 ]
+\t\tm_LiteralColor = [ 93, 135, 187 ]
+\t\tm_flConstantRadius = 0.9
+\t\tm_ColorFade = [ 60, 60, 60, 255 ]
+\t\tm_vecColorScale = \n";
+        let out = recolor_particle_source(src, 120.0, 1.0);
+        let lines: Vec<&str> = out.lines().collect();
+        // Pure red rotated +120° -> pure green; alpha + style preserved.
+        assert_eq!(lines[0], "\tm_ConstantColor = [ 0, 255, 0, 255 ]");
+        // The blue literal shifts hue but stays a 3-tuple.
+        assert!(lines[1].starts_with("\t\tm_LiteralColor = [ ") && lines[1].matches(',').count() == 2);
+        // Non-color line untouched.
+        assert_eq!(lines[2], "\t\tm_flConstantRadius = 0.9");
+        // Grayscale (s=0) is unchanged by a hue rotation.
+        assert_eq!(lines[3], "\t\tm_ColorFade = [ 60, 60, 60, 255 ]");
+        // A color-ish key whose value isn't a literal array is left alone.
+        assert_eq!(lines[4], "\t\tm_vecColorScale = ");
+    }
+
+    #[test]
+    fn recolor_noop_when_neutral() {
+        let src = "\tm_ConstantColor = [ 10, 20, 30, 255 ]\n";
+        assert_eq!(recolor_particle_source(src, 0.0, 1.0), src);
+    }
 
     #[test]
     fn auto_duration_never_shrinks_below_current() {
@@ -1034,6 +1302,7 @@ mod tests {
             }],
             icon_mods: vec![],
             sound_overrides: vec![],
+            effect_overrides: vec![],
         };
 
         let report = run(&cfg);
@@ -1063,6 +1332,81 @@ mod tests {
 
     fn compiled_root_path(cfg: &CompileConfig) -> std::path::PathBuf {
         std::path::PathBuf::from(&cfg.compiled_root)
+    }
+
+    /// Real VFX-recolor pipeline: decompile Curse's particle from the pak,
+    /// hue-shift it, recompile, pack. Run with:
+    ///   cargo test -p app --lib -- --ignored e2e_recolor_particle --nocapture
+    #[test]
+    #[ignore]
+    fn e2e_recolor_particle() {
+        let csdk = r"C:\Users\ethob\Desktop\DeadlockModding\Reduced_CSDK_12";
+        let addon = "eim_fx_e2e_addon";
+        let content_root = format!(r"{csdk}\content\citadel_addons\{addon}");
+        let compiled_root = format!(r"{csdk}\game\citadel_addons\{addon}");
+        let out = std::env::temp_dir().join("eim_fx_e2e_out");
+        let _ = std::fs::remove_dir_all(&out);
+        let _ = std::fs::remove_dir_all(&content_root);
+        let _ = std::fs::remove_dir_all(&compiled_root);
+
+        let mut cfg = CompileConfig {
+            content_root: content_root.clone(),
+            compiled_root: compiled_root.clone(),
+            game_info_dir: format!(r"{csdk}\game\citadel"),
+            sound_folder: "sounds/music/match_intro".into(),
+            resource_compiler: format!(r"{csdk}\game\bin_tools\win64\resourcecompiler.exe"),
+            ffmpeg_path: None,
+            vpk_helper_path: Some(
+                r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\tools\vpk-helper\dist\vpk-helper.exe".into(),
+            ),
+            vanilla_root: r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\ModFiles".into(),
+            pak_path: Some(
+                r"D:\SteamLibrary\steamapps\common\Deadlock\game\citadel\pak01_dir.vpk".into(),
+            ),
+            output_dir: out.to_string_lossy().into_owned(),
+            output_mode: "vpk".into(),
+            vpk_name: "pak01_dir.vpk".into(),
+            write_encoding_txt: true,
+            skip_compile: false,
+            imported_mods: vec![],
+            events: vec![],
+            icon_mods: vec![],
+            sound_overrides: vec![],
+            effect_overrides: vec![EffectCompile {
+                target_ref: "particles/abilities/aoe_silence_cast_energy.vpcf".into(),
+                hue: 150.0,
+                saturation: 1.0,
+                current_hash: Some("h1".into()),
+                last_compiled_hash: None,
+            }],
+        };
+
+        let report = run(&cfg);
+        for s in &report.steps {
+            println!("[{}] {} :: {}", if s.ok { "OK" } else { "FAIL" }, s.name, s.detail);
+        }
+        assert!(report.ok, "effect pipeline failed");
+
+        let vpcf_c = Path::new(&compiled_root)
+            .join("particles/abilities/aoe_silence_cast_energy.vpcf_c");
+        assert!(vpcf_c.exists(), "recolored vpcf_c not produced");
+        // The recolored source must differ from vanilla purple at the color lines.
+        let src = std::fs::read_to_string(
+            Path::new(&content_root).join("particles/abilities/aoe_silence_cast_energy.vpcf"),
+        )
+        .unwrap();
+        assert!(!src.contains("[ 198, 141, 227, 255 ]"), "color was not recolored");
+        let vpk = out.join("mine").join("pak01_dir.vpk");
+        assert!(vpk.exists(), "vpk not produced");
+
+        // Second run with matching hashes should skip the recompile (up-to-date).
+        cfg.effect_overrides[0].last_compiled_hash = Some("h1".into());
+        let report2 = run(&cfg);
+        assert!(report2.steps.iter().any(|s| s.detail.contains("unchanged")));
+
+        let _ = std::fs::remove_dir_all(&content_root);
+        let _ = std::fs::remove_dir_all(&compiled_root);
+        let _ = std::fs::remove_dir_all(&out);
     }
 
     fn song_with(current: Option<&str>, last: Option<&str>) -> SongCompile {

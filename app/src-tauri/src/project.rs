@@ -29,6 +29,38 @@ pub struct Project {
     /// `.vsnd_c` at its vanilla path (no soundevent editing). Complements `events`.
     #[serde(default)]
     pub sound_overrides: Vec<SoundOverride>,
+    /// VFX recolor overrides: re-tint a game particle and stage the recompiled
+    /// `.vpcf_c` at its vanilla path. Same whole-file override trick.
+    #[serde(default)]
+    pub effect_overrides: Vec<EffectOverride>,
+}
+
+/// A particle (VFX) recolor: decompile the vanilla `.vpcf`, hue/sat-shift every
+/// color literal, recompile, and stage the `.vpcf_c` at `target_ref`'s path so it
+/// shadows the game's own particle.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EffectOverride {
+    /// Stable id (e.g. `fx_particles_abilities_aoe_silence_cast`).
+    pub id: String,
+    /// The vanilla `.vpcf` reference to shadow, e.g.
+    /// `particles/abilities/aoe_silence_cast.vpcf`.
+    pub target_ref: String,
+    /// Friendly label (defaults to the file stem).
+    pub label: String,
+    /// Hue rotation in degrees applied to every color literal (-180..180).
+    #[serde(default)]
+    pub hue: f32,
+    /// Saturation multiplier (1.0 = unchanged).
+    #[serde(default = "one")]
+    pub saturation: f32,
+    /// Hash recorded after the last successful compile (null = never compiled).
+    #[serde(default)]
+    pub last_compiled_hash: Option<String>,
+}
+
+fn one() -> f32 {
+    1.0
 }
 
 /// A loose-file sound replacement: the user's audio, processed and compiled to a
@@ -595,6 +627,7 @@ impl Project {
             ],
             icon_mods: vec![],
             sound_overrides: vec![],
+            effect_overrides: vec![],
         }
     }
 

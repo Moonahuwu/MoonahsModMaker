@@ -2101,3 +2101,261 @@ fn sound_stem(reference: &str) -> String {
         .trim_end_matches(".vsnd")
         .to_string()
 }
+
+// ---- Effects: particle browser + recolor preview ---------------------------
+// Hero/item ability VFX are particle systems (`particles/**.vpcf_c`). We browse
+// the pak's particle tree exactly like sounds, and for a chosen particle we
+// decompile it, pull its color params + sprite textures, and decode those
+// sprites to PNG so the UI can render an approximate (recolorable) preview.
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParticleFolder {
+    pub name: String,
+    pub prefix: String,
+    pub count: usize,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParticleFile {
+    /// The `.vpcf` reference (override target), e.g. `particles/abilities/x.vpcf`.
+    pub reference: String,
+    pub label: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParticleBrowse {
+    pub folders: Vec<ParticleFolder>,
+    pub files: Vec<ParticleFile>,
+    pub truncated: bool,
+    pub total: usize,
+}
+
+/// Build (and cache) the index of every `particles/**.vpcf_c` path in the pak,
+/// stored as `.vpcf` references (the `_c` stripped).
+fn game_particle_index(
+    app: &tauri::AppHandle,
+    helper_path: &str,
+    pak_path: &str,
+    refresh: bool,
+) -> Result<Vec<String>, String> {
+    use tauri::Manager;
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("hero_portraits");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let cache = dir.join("game_particles.txt");
+    if !refresh {
+        if let Ok(t) = std::fs::read_to_string(&cache) {
+            if !t.trim().is_empty() {
+                return Ok(t.lines().map(|s| s.to_string()).collect());
+            }
+        }
+    }
+    let mut refs: Vec<String> = crate::vpk::list(helper_path, pak_path, Some("particles/"))?
+        .into_iter()
+        .filter(|p| p.ends_with(".vpcf_c"))
+        .map(|p| p.trim_end_matches("_c").to_string())
+        .collect();
+    refs.sort();
+    refs.dedup();
+    let _ = std::fs::write(&cache, refs.join("\n"));
+    Ok(refs)
+}
+
+/// Browse the game's particle tree under `prefix` (lazy folders) or search by
+/// `query` (recursive, capped). Mirrors `browse_game_sounds`.
+#[tauri::command]
+pub fn browse_particles(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+    prefix: String,
+    query: Option<String>,
+    refresh: Option<bool>,
+) -> Result<ParticleBrowse, String> {
+    const CAP: usize = 500;
+    let index = game_particle_index(&app, &helper_path, &pak_path, refresh.unwrap_or(false))?;
+    let total = index.len();
+    let pre = prefix.trim_matches('/');
+    let pre_slash = if pre.is_empty() { String::new() } else { format!("{pre}/") };
+
+    let q = query.unwrap_or_default().trim().to_lowercase();
+    if !q.is_empty() {
+        let mut files: Vec<ParticleFile> = Vec::new();
+        let mut truncated = false;
+        for r in &index {
+            if !pre_slash.is_empty() && !r.starts_with(&pre_slash) {
+                continue;
+            }
+            if !r.to_lowercase().contains(&q) {
+                continue;
+            }
+            if files.len() >= CAP {
+                truncated = true;
+                break;
+            }
+            files.push(ParticleFile { label: particle_stem(r), reference: r.clone() });
+        }
+        return Ok(ParticleBrowse { folders: vec![], files, truncated, total });
+    }
+
+    use std::collections::BTreeMap;
+    let mut folder_counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut files: Vec<ParticleFile> = Vec::new();
+    for r in &index {
+        let rest = if pre_slash.is_empty() {
+            r.as_str()
+        } else if let Some(s) = r.strip_prefix(&pre_slash) {
+            s
+        } else {
+            continue;
+        };
+        match rest.split_once('/') {
+            Some((sub, _)) => {
+                *folder_counts.entry(sub.to_string()).or_insert(0) += 1;
+            }
+            None => files.push(ParticleFile { label: particle_stem(r), reference: r.clone() }),
+        }
+    }
+    let folders = folder_counts
+        .into_iter()
+        .map(|(name, count)| ParticleFolder {
+            prefix: if pre.is_empty() { name.clone() } else { format!("{pre}/{name}") },
+            name,
+            count,
+        })
+        .collect();
+    let truncated = files.len() > CAP;
+    files.truncate(CAP);
+    Ok(ParticleBrowse { folders, files, truncated, total })
+}
+
+/// `particles/abilities/abrams/abrams_charge.vpcf` -> `abrams_charge`.
+fn particle_stem(reference: &str) -> String {
+    reference.rsplit('/').next().unwrap_or(reference).trim_end_matches(".vpcf").to_string()
+}
+
+/// One RGBA color found in a particle source.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, PartialEq)]
+pub struct RgbaColor {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+    pub a: u8,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EffectPreview {
+    /// The `.vpcf` reference this preview is for.
+    pub particle_path: String,
+    /// Absolute paths to decoded sprite PNGs the particle uses.
+    pub sprites: Vec<String>,
+    /// Distinct colors found (for the base tint / dominant color).
+    pub colors: Vec<RgbaColor>,
+}
+
+/// True for a vpcf key that holds an RGB(A) color literal we can recolor.
+fn is_color_key(key: &str) -> bool {
+    key.contains("Color") && !key.contains("Scale") && !key.contains("Blend")
+}
+
+/// Pull every `m_*Color* = [ r, g, b(, a) ]` literal out of a vpcf source.
+fn parse_particle_colors(text: &str) -> Vec<RgbaColor> {
+    let mut out: Vec<RgbaColor> = Vec::new();
+    for line in text.lines() {
+        if let Some(c) = parse_color_line(line) {
+            if !out.contains(&c) {
+                out.push(c);
+            }
+        }
+    }
+    out
+}
+
+/// If `line` is a recolorable color literal, return its parsed color.
+fn parse_color_line(line: &str) -> Option<RgbaColor> {
+    let t = line.trim();
+    let (key, rest) = t.split_once('=')?;
+    let key = key.trim();
+    if !key.starts_with("m_") || !is_color_key(key) {
+        return None;
+    }
+    let inner = rest.trim().strip_prefix('[')?.strip_suffix(']')?;
+    let nums: Vec<u32> = inner
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| s.parse::<u32>().ok())
+        .collect();
+    if nums.len() < 3 || nums.len() > 4 || nums.iter().any(|n| *n > 255) {
+        return None;
+    }
+    Some(RgbaColor {
+        r: nums[0] as u8,
+        g: nums[1] as u8,
+        b: nums[2] as u8,
+        a: if nums.len() == 4 { nums[3] as u8 } else { 255 },
+    })
+}
+
+/// Pull unique `m_hTexture = resource:"...vtex"` references from a vpcf source.
+fn parse_texture_refs(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let t = line.trim();
+        if !t.contains("m_hTexture") {
+            continue;
+        }
+        if let Some(p) = between(t, "resource:\"", "\"") {
+            let p = p.to_string();
+            if p.ends_with(".vtex") && !out.contains(&p) {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+/// Decompile a particle + decode its sprites for an approximate recolor preview.
+/// Cached per particle (decoded sprites are reused).
+#[tauri::command]
+pub fn effect_preview(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+    particle_path: String,
+    refresh: Option<bool>,
+) -> Result<EffectPreview, String> {
+    use tauri::Manager;
+    let base = app.path().app_data_dir().map_err(|e| e.to_string())?.join("hero_portraits");
+    let pdir = base.join("effects");
+    let sdir = base.join("effectsprites");
+    std::fs::create_dir_all(&pdir).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&sdir).map_err(|e| e.to_string())?;
+
+    let stem = particle_path.trim_end_matches(".vpcf").replace(['/', '\\'], "_");
+    let vpcf = pdir.join(format!("{stem}.vpcf"));
+    if refresh.unwrap_or(false) || !vpcf.exists() {
+        crate::vpk::decompile_from_vpk(
+            &helper_path,
+            &pak_path,
+            &format!("{particle_path}_c"),
+            &vpcf.to_string_lossy(),
+        )?;
+    }
+    let text = std::fs::read_to_string(&vpcf).map_err(|e| e.to_string())?;
+    let colors = parse_particle_colors(&text);
+
+    // Decode the referenced sprite textures (as `.vtex_c`) to PNG, one batch.
+    let tex_c: Vec<String> = parse_texture_refs(&text).into_iter().map(|p| format!("{p}_c")).collect();
+    let mut sprites: Vec<String> = Vec::new();
+    if !tex_c.is_empty() {
+        match crate::vpk::texture_batch(&helper_path, &pak_path, &sdir.to_string_lossy(), &tex_c) {
+            Ok(pairs) => sprites = pairs.into_iter().map(|(_, png)| png).collect(),
+            Err(e) => eprintln!("effect_preview: sprite decode failed: {e}"),
+        }
+    }
+    Ok(EffectPreview { particle_path, sprites, colors })
+}

@@ -10,7 +10,7 @@ import {
 } from "../lib/api";
 import { buildCompileConfig, installSrcVpk, type Settings } from "../lib/settings";
 import { useToast } from "./Toaster";
-import type { EventProject, IconMod, SoundOverride } from "../types";
+import type { EffectOverride, EventProject, IconMod, SoundOverride } from "../types";
 
 const pakName = (n: number) => `pak${String(n).padStart(2, "0")}_dir.vpk`;
 
@@ -20,6 +20,7 @@ export function CompileBar({
   events,
   iconMods,
   soundOverrides,
+  effectOverrides,
   onCompiled,
 }: {
   settings: Settings;
@@ -27,6 +28,7 @@ export function CompileBar({
   events: EventProject[];
   iconMods: IconMod[];
   soundOverrides: SoundOverride[];
+  effectOverrides: EffectOverride[];
   /** Called after a successful compile so the project can record compiled hashes. */
   onCompiled: () => void;
 }) {
@@ -39,7 +41,11 @@ export function CompileBar({
   const songCount = events.reduce((n, e) => n + e.songs.length, 0);
   const modCount = settings.importedMods.length;
   const canCompile =
-    songCount > 0 || modCount > 0 || iconMods.length > 0 || soundOverrides.length > 0;
+    songCount > 0 ||
+    modCount > 0 ||
+    iconMods.length > 0 ||
+    soundOverrides.length > 0 ||
+    effectOverrides.length > 0;
 
   // Refresh the addon-slot picture (for the "next free" hint + conflict warning).
   const rescanSlots = useCallback(() => {
@@ -93,7 +99,7 @@ export function CompileBar({
     setRunning(true);
     setReport(null);
     try {
-      const config = buildCompileConfig(settings, events, false, iconMods, soundOverrides);
+      const config = buildCompileConfig(settings, events, false, iconMods, soundOverrides, effectOverrides);
       const r = await compileProject(config);
       setReport(r);
       if (r.ok) {

@@ -107,6 +107,7 @@ export interface CompileConfig {
   events: EventCompile[];
   iconMods?: IconCompile[];
   soundOverrides?: SoundOverrideCompile[];
+  effectOverrides?: EffectCompile[];
 }
 
 export interface IconCompile {
@@ -115,6 +116,14 @@ export interface IconCompile {
   width: number;
   height: number;
   hue: number;
+}
+
+export interface EffectCompile {
+  targetRef: string;
+  hue: number;
+  saturation: number;
+  currentHash: string;
+  lastCompiledHash?: string | null;
 }
 
 export interface SoundOverrideCompile {
@@ -347,6 +356,60 @@ export function heroSounds(
   refresh = false,
 ): Promise<HeroSound[]> {
   return invoke("hero_sounds", { helperPath, pakPath, codename, refresh });
+}
+
+// ---- Effects (particle VFX) ----
+
+export interface ParticleFolder {
+  name: string;
+  prefix: string;
+  count: number;
+}
+export interface ParticleFile {
+  /** The `.vpcf` reference (override target), e.g. `particles/abilities/x.vpcf`. */
+  reference: string;
+  label: string;
+}
+export interface ParticleBrowse {
+  folders: ParticleFolder[];
+  files: ParticleFile[];
+  truncated: boolean;
+  total: number;
+}
+
+/** Browse the game's particle tree (lazy folders, or recursive search). */
+export function browseParticles(
+  helperPath: string,
+  pakPath: string,
+  prefix: string,
+  query?: string,
+  refresh = false,
+): Promise<ParticleBrowse> {
+  return invoke("browse_particles", { helperPath, pakPath, prefix, query, refresh });
+}
+
+export interface RgbaColor {
+  r: number;
+  g: number;
+  b: number;
+  a: number;
+}
+export interface EffectPreview {
+  particlePath: string;
+  /** Absolute paths to decoded sprite PNGs the particle uses. */
+  sprites: string[];
+  /** Distinct colors found (for the base tint / dominant color). */
+  colors: RgbaColor[];
+}
+
+/** Decompile a particle + decode its sprites for an approximate recolor preview. */
+export function effectPreview(
+  helperPath: string,
+  pakPath: string,
+  particlePath: string,
+  refresh = false,
+): Promise<EffectPreview> {
+  return invoke("effect_preview", { helperPath, pakPath, particlePath, refresh });
 }
 
 /** One sub-folder in the game's sound tree (lazy browse). */

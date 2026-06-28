@@ -43,6 +43,11 @@ export function overrideHash(o: {
   ].join("|");
 }
 
+/** Fingerprint of a VFX recolor override (target + hue + saturation). */
+export function effectHash(e: { targetRef: string; hue: number; saturation: number }): string {
+  return [e.targetRef, e.hue, e.saturation].join("|");
+}
+
 /** Compile status of a song relative to its last successful compile. */
 export type SongStatus = "new" | "compiled" | "stale";
 

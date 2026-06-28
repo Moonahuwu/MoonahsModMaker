@@ -106,6 +106,19 @@ export interface SoundOverride {
   lastCompiledHash?: string | null;
 }
 
+/** A VFX recolor override: a game particle re-tinted and staged at its path. */
+export interface EffectOverride {
+  id: string;
+  /** The `.vpcf` reference to shadow, e.g. `particles/abilities/x.vpcf`. */
+  targetRef: string;
+  label: string;
+  /** Hue rotation in degrees (-180..180) applied to every color literal. */
+  hue: number;
+  /** Saturation multiplier (1 = unchanged). */
+  saturation: number;
+  lastCompiledHash?: string | null;
+}
+
 export interface Project {
   version: number;
   gameContentRoot: string;
@@ -116,6 +129,7 @@ export interface Project {
   events: EventProject[];
   iconMods?: IconMod[];
   soundOverrides?: SoundOverride[];
+  effectOverrides?: EffectOverride[];
 }
 
 /// Classification of one array entry relative to a side's project state.

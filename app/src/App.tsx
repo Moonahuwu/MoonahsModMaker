@@ -46,7 +46,7 @@ import { OverrideEditor } from "./components/OverrideEditor";
 import { ProfileSwitcher } from "./components/ProfileSwitcher";
 import { useToast } from "./components/Toaster";
 import { useSettings } from "./lib/settings";
-import { songHash, overrideHash } from "./lib/songHash";
+import { songHash, overrideHash, effectHash } from "./lib/songHash";
 import type { EventProject, EventView, Project, Song, SoundOverride } from "./types";
 import "./index.css";
 
@@ -855,6 +855,10 @@ export default function App() {
             soundOverrides: (prev.soundOverrides ?? []).map((o) => ({
               ...o,
               lastCompiledHash: overrideHash(o),
+            })),
+            effectOverrides: (prev.effectOverrides ?? []).map((e) => ({
+              ...e,
+              lastCompiledHash: effectHash(e),
             })),
           }
         : prev,
@@ -1706,6 +1710,7 @@ export default function App() {
             events={project.events}
             iconMods={project.iconMods ?? []}
             soundOverrides={project.soundOverrides ?? []}
+            effectOverrides={project.effectOverrides ?? []}
             onCompiled={markAllCompiled}
           />
         )}
