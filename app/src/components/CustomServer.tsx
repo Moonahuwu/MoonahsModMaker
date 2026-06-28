@@ -44,6 +44,9 @@ export function CustomServer({
   globalOverrides,
   onSetGlobal,
   onClearGlobal,
+  onRandomize,
+  onReset,
+  randomizing,
 }: {
   helperPath: string;
   pakPath: string;
@@ -56,8 +59,12 @@ export function CustomServer({
   globalOverrides: GlobalOverride[];
   onSetGlobal: (key: string, value: string) => void;
   onClearGlobal: (key: string) => void;
+  onRandomize: () => void;
+  onReset: () => void;
+  randomizing: boolean;
 }) {
   const [section, setSection] = useState<Section>("heroes");
+  const [confirmReset, setConfirmReset] = useState(false);
   const editCount = overrides.length + globalOverrides.length;
 
   return (
@@ -115,8 +122,8 @@ export function CustomServer({
           </p>
         )}
 
-        {/* Section nav */}
-        <div className="mb-4 flex gap-1.5">
+        {/* Section nav + randomize/reset */}
+        <div className="mb-4 flex flex-wrap items-center gap-1.5">
           {([
             ["heroes", "🦸 Heroes"],
             ["items", "🛒 Items & stats"],
@@ -134,6 +141,44 @@ export function CustomServer({
               {label}
             </button>
           ))}
+          <div className="ml-auto flex items-center gap-1.5">
+            <button
+              onClick={onRandomize}
+              disabled={randomizing}
+              title="Roll a random value for every gameplay number"
+              className="rounded-lg border border-fuchsia-500/50 bg-fuchsia-500/10 px-3 py-1.5 text-sm font-medium text-fuchsia-300 transition hover:bg-fuchsia-500/20 disabled:opacity-50"
+            >
+              {randomizing ? "Rolling…" : "🎲 Randomize all"}
+            </button>
+            {confirmReset ? (
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => {
+                    onReset();
+                    setConfirmReset(false);
+                  }}
+                  className="rounded-lg border border-red-500/50 bg-red-500/15 px-3 py-1.5 text-sm font-medium text-red-300 transition hover:bg-red-500/25"
+                >
+                  Reset everything?
+                </button>
+                <button
+                  onClick={() => setConfirmReset(false)}
+                  className="rounded-lg px-2 py-1.5 text-sm text-zinc-400 hover:text-zinc-200"
+                >
+                  ✕
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setConfirmReset(true)}
+                disabled={editCount === 0}
+                title="Clear all gameplay edits (back to vanilla)"
+                className="rounded-lg border border-zinc-700 bg-zinc-800/60 px-3 py-1.5 text-sm font-medium text-zinc-300 transition hover:bg-zinc-800 disabled:opacity-40"
+              >
+                ↺ Reset to default
+              </button>
+            )}
+          </div>
         </div>
 
         {section === "heroes" && (

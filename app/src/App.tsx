@@ -14,6 +14,7 @@ import {
   openInViewer,
   itemParticles,
   itemDetail as itemDetailApi,
+  randomizeConfig,
   type HeroAbility,
   type HeroAbilitySound,
   type HeroPortrait,
@@ -1533,6 +1534,33 @@ export default function App() {
     );
   }
 
+  // Randomize EVERY gameplay number (abilities, items, global). Replaces all
+  // current gameplay edits and auto-enables the include-in-build toggle.
+  const [randomizing, setRandomizing] = useState(false);
+  async function randomizeGameplay() {
+    if (!settings.vpkHelperPath || !settings.deadlockPak) {
+      push("error", "Set the VPK helper and game pak in Setup first");
+      return;
+    }
+    setRandomizing(true);
+    try {
+      const rolled = await randomizeConfig(settings.vpkHelperPath, settings.deadlockPak);
+      setProject((prev) => (prev ? { ...prev, vdataOverrides: rolled.vdata, globalOverrides: rolled.global } : prev));
+      updateSettings({ includeGameplay: true });
+      push("success", `Randomized ${rolled.vdata.length + rolled.global.length} values 🎲`);
+    } catch (e) {
+      push("error", `Randomize failed: ${e}`);
+    } finally {
+      setRandomizing(false);
+    }
+  }
+
+  // Clear all gameplay + global edits (back to vanilla).
+  function resetGameplay() {
+    setProject((prev) => (prev ? { ...prev, vdataOverrides: [], globalOverrides: [] } : prev));
+    push("info", "Gameplay config reset to default");
+  }
+
   // "Open in real viewer": launch VRF's Source2Viewer on the particle (extracted
   // from the pak). Needs the viewer path set in Setup.
   async function openEffectInViewer(reference: string) {
@@ -1816,6 +1844,9 @@ export default function App() {
             globalOverrides={project?.globalOverrides ?? []}
             onSetGlobal={setGlobalOverride}
             onClearGlobal={clearGlobalOverride}
+            onRandomize={randomizeGameplay}
+            onReset={resetGameplay}
+            randomizing={randomizing}
           />
         ) : activeTab === EFFECTS ? (
           <EffectsBrowser

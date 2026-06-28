@@ -1144,6 +1144,124 @@ pub fn global_config(
     Ok(out)
 }
 
+// ---------------------------------------------------------------------------
+// Randomize mode (Custom Server): roll a random factor over every positive
+// gameplay number — abilities, items, and curated global stats.
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RandomConfig {
+    pub vdata: Vec<crate::project::VdataOverride>,
+    pub global: Vec<crate::project::GlobalOverride>,
+}
+
+/// xorshift64 — small deterministic RNG so we don't pull in the `rand` crate.
+fn xorshift(state: &mut u64) -> f64 {
+    let mut x = *state;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    *state = x;
+    (x >> 11) as f64 / (1u64 << 53) as f64 // [0, 1)
+}
+
+/// Format a randomized number, matching the vanilla value's int/float style and
+/// re-appending its unit suffix.
+fn fmt_random(n: f64, is_float: bool, unit: &str) -> String {
+    if is_float {
+        let mut s = format!("{:.2}", (n * 100.0).round() / 100.0);
+        while s.contains('.') && s.ends_with('0') {
+            s.pop();
+        }
+        if s.ends_with('.') {
+            s.pop();
+        }
+        format!("{s}{unit}")
+    } else {
+        format!("{}{}", n.round() as i64, unit)
+    }
+}
+
+/// Randomize every positive gameplay number (×0.5..2.0). Returns a full override
+/// set the frontend swaps in. Non-positive values (0 / -1 sentinels) are left
+/// alone so we don't flip "disabled" flags into broken states.
+#[tauri::command]
+pub fn randomize_config(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+) -> Result<RandomConfig, String> {
+    use tauri::Manager;
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("hero_portraits");
+    std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
+
+    // Seed from the clock (randomize doesn't need to be reproducible).
+    let mut seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0x9E3779B97F4A7C15)
+        | 1;
+
+    let roll = |seed: &mut u64, val: &str| -> Option<String> {
+        let (num, unit) = split_value_unit(val);
+        if num <= 0.0 {
+            return None;
+        }
+        let factor = 0.5 + xorshift(seed) * 1.5; // 0.5 .. 2.0
+        Some(fmt_random(num * factor, val.contains('.'), &unit))
+    };
+
+    // Abilities + items (every entity in abilities.vdata).
+    let abilities = base.join("abilities.vdata");
+    if !abilities.exists() {
+        crate::vpk::decompile_from_vpk(&helper_path, &pak_path, "scripts/abilities.vdata_c", &abilities.to_string_lossy())?;
+    }
+    let atext = std::fs::read_to_string(&abilities).map_err(|e| e.to_string())?;
+    let map = parse_abilities(&atext);
+    let mut vdata = Vec::new();
+    for (entity, def) in &map {
+        for (prop_key, val) in &def.props {
+            if let Some(value) = roll(&mut seed, val) {
+                vdata.push(crate::project::VdataOverride {
+                    ability_key: entity.clone(),
+                    prop_key: prop_key.clone(),
+                    value,
+                });
+            }
+        }
+    }
+
+    // Curated global stats.
+    let gd = base.join("generic_data.vdata");
+    if !gd.exists() {
+        crate::vpk::decompile_from_vpk(&helper_path, &pak_path, "scripts/generic_data.vdata_c", &gd.to_string_lossy())?;
+    }
+    let gtext = std::fs::read_to_string(&gd).map_err(|e| e.to_string())?;
+    let mut seen = std::collections::HashSet::new();
+    let mut global = Vec::new();
+    for line in gtext.lines() {
+        let t = line.trim();
+        if let Some((k, v)) = t.split_once(" = ") {
+            if seen.contains(k) {
+                continue;
+            }
+            if GLOBAL_FIELDS.iter().any(|(key, _, _)| *key == k) {
+                seen.insert(k.to_string());
+                if let Some(value) = roll(&mut seed, v.trim().trim_matches('"')) {
+                    global.push(crate::project::GlobalOverride { key: k.to_string(), value });
+                }
+            }
+        }
+    }
+
+    Ok(RandomConfig { vdata, global })
+}
+
 /// Read one item's editable properties (`m_mapAbilityProperties`) out of the live
 /// `abilities.vdata`. Items live in the same file as abilities, so they share the
 /// override pipeline — `item_name` is the entity key (e.g. `upgrade_base`).

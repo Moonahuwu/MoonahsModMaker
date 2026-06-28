@@ -376,6 +376,16 @@ export function globalConfig(helperPath: string, pakPath: string): Promise<Globa
   return invoke("global_config", { helperPath, pakPath });
 }
 
+/** A full randomized override set (every positive gameplay number, ×0.5..2). */
+export interface RandomConfig {
+  vdata: { abilityKey: string; propKey: string; value: string }[];
+  global: { key: string; value: string }[];
+}
+
+export function randomizeConfig(helperPath: string, pakPath: string): Promise<RandomConfig> {
+  return invoke("randomize_config", { helperPath, pakPath });
+}
+
 /** One of a hero's voicelines (single-clip soundevent). */
 export interface VoiceLine {
   eventName: string;
