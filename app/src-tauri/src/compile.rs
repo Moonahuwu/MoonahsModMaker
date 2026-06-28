@@ -791,21 +791,31 @@ fn compile_effect_overrides(
 const ABILITIES_VDATA_REL: &str = "scripts/abilities.vdata";
 const ABILITIES_VDATA_C_REL: &str = "scripts/abilities.vdata_c";
 
-/// Rewrite each `(ability_key, prop_key)` override's `m_strValue` in the
-/// decompiled `abilities.vdata` text, leaving every other byte intact.
+/// Rewrite each override in the decompiled `abilities.vdata`, leaving every other
+/// byte intact. A normal `prop_key` rewrites the matching `m_mapAbilityProperties`
+/// `m_strValue`; a `@upgrade:N` key rewrites the Nth `m_strBonus` (T1/T2/T3 ability
+/// upgrade) within that ability, preserving its quote style.
 fn apply_vdata_overrides(text: &str, overrides: &[VdataCompile]) -> String {
     use std::collections::HashMap;
     let mut want: HashMap<&str, HashMap<&str, &str>> = HashMap::new();
+    let mut want_upg: HashMap<&str, HashMap<usize, &str>> = HashMap::new();
     for ov in overrides {
-        want.entry(ov.ability_key.as_str())
-            .or_default()
-            .insert(ov.prop_key.as_str(), ov.value.as_str());
+        match ov.prop_key.strip_prefix("@upgrade:").and_then(|s| s.parse::<usize>().ok()) {
+            Some(idx) => {
+                want_upg.entry(ov.ability_key.as_str()).or_default().insert(idx, ov.value.as_str());
+            }
+            None => {
+                want.entry(ov.ability_key.as_str()).or_default().insert(ov.prop_key.as_str(), ov.value.as_str());
+            }
+        }
     }
     let mut out = String::with_capacity(text.len() + 64);
-    let mut in_wanted_ability = false;
+    let mut in_wanted = false;
+    let mut in_wanted_upg = false;
     let mut cur_ability: Option<&str> = None;
     let mut props_depth: Option<usize> = None;
     let mut pending: Option<&str> = None; // value to write at the next m_strValue
+    let mut bonus_idx: usize = 0; // m_strBonus occurrence counter within the ability
     for line in text.split_inclusive('\n') {
         let nl = line.ends_with('\n');
         let body = line.strip_suffix('\n').unwrap_or(line);
@@ -818,16 +828,18 @@ fn apply_vdata_overrides(text: &str, overrides: &[VdataCompile]) -> String {
             if let Some(k) = t.strip_suffix('=').map(str::trim) {
                 if !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
                     cur_ability = Some(k);
-                    in_wanted_ability = want.contains_key(k);
+                    in_wanted = want.contains_key(k);
+                    in_wanted_upg = want_upg.contains_key(k);
                     props_depth = None;
                     pending = None;
+                    bonus_idx = 0;
                     out.push_str(line);
                     continue;
                 }
             }
         }
 
-        // Rewrite the value when one is pending.
+        // Rewrite a base property value when one is pending.
         if pending.is_some() && t.starts_with("m_strValue") {
             if let (Some(a), Some(b)) = (body.find('"'), body.rfind('"')) {
                 if b > a {
@@ -843,7 +855,30 @@ fn apply_vdata_overrides(text: &str, overrides: &[VdataCompile]) -> String {
             }
         }
 
-        if in_wanted_ability {
+        // Rewrite an upgrade bonus by occurrence index (preserve quote style).
+        if in_wanted_upg && t.starts_with("m_strBonus") {
+            let this = bonus_idx;
+            bonus_idx += 1;
+            if let Some(v) = cur_ability.and_then(|a| want_upg.get(a)).and_then(|m| m.get(&this)) {
+                if let Some(eq) = body.find(" = ") {
+                    let quoted = body[eq + 3..].trim_start().starts_with('"');
+                    out.push_str(&body[..eq + 3]);
+                    if quoted {
+                        out.push('"');
+                        out.push_str(v);
+                        out.push('"');
+                    } else {
+                        out.push_str(v);
+                    }
+                    if nl {
+                        out.push('\n');
+                    }
+                    continue;
+                }
+            }
+        }
+
+        if in_wanted {
             if let Some(pd) = props_depth {
                 if depth <= pd && t == "}" {
                     props_depth = None;
@@ -1645,6 +1680,57 @@ mod tests {
         assert!(out.contains("\t\tm_flScoringTime = 12"));
         // The SECOND occurrence of the same key is left as-is.
         assert!(out.contains("\tm_nTier1GoldKill = 9999"));
+    }
+
+    #[test]
+    fn vdata_override_rewrites_upgrade_bonus_by_index() {
+        let src = "\
+\tability_x =
+\t{
+\t\tm_mapAbilityProperties =
+\t\t{
+\t\t\tAbilityCooldown =
+\t\t\t{
+\t\t\t\tm_strValue = \"6\"
+\t\t\t}
+\t\t}
+\t\tm_vecAbilityUpgrades =
+\t\t[
+\t\t\t{
+\t\t\t\tm_vecPropertyUpgrades =
+\t\t\t\t[
+\t\t\t\t\t{
+\t\t\t\t\t\tm_strPropertyName = \"AbilityCooldown\"
+\t\t\t\t\t\tm_strBonus = -12.0
+\t\t\t\t\t},
+\t\t\t\t]
+\t\t\t},
+\t\t\t{
+\t\t\t\tm_vecPropertyUpgrades =
+\t\t\t\t[
+\t\t\t\t\t{
+\t\t\t\t\t\tm_strPropertyName = \"AbilityCharges\"
+\t\t\t\t\t\tm_strBonus = \"2\"
+\t\t\t\t\t},
+\t\t\t\t]
+\t\t\t},
+\t\t]
+\t}
+";
+        let ovs = vec![
+            VdataCompile { ability_key: "ability_x".into(), prop_key: "@upgrade:0".into(), value: "-30".into() },
+            VdataCompile { ability_key: "ability_x".into(), prop_key: "@upgrade:1".into(), value: "5".into() },
+            VdataCompile { ability_key: "ability_x".into(), prop_key: "AbilityCooldown".into(), value: "3".into() },
+        ];
+        let out = apply_vdata_overrides(src, &ovs);
+        // Bare bonus stays bare; quoted bonus stays quoted.
+        assert!(out.contains("m_strBonus = -30"));
+        assert!(out.contains("m_strBonus = \"5\""));
+        // Base prop still edited independently.
+        assert!(out.contains("m_strValue = \"3\""));
+        // Originals gone.
+        assert!(!out.contains("-12.0"));
+        assert!(!out.contains("m_strBonus = \"2\""));
     }
 
     #[test]

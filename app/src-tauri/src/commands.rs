@@ -789,6 +789,10 @@ struct AbilityDef {
     /// `m_strValue` — the editable designer-facing numbers (cooldown, range,
     /// damage, …). Declaration order preserved.
     props: Vec<(String, String)>,
+    /// T1/T2/T3 ability-upgrade bonuses from `m_vecAbilityUpgrades`:
+    /// (tier, propertyName, bonus). Declaration order = the `m_strBonus`
+    /// occurrence index used to address them on rewrite (`@upgrade:N`).
+    upgrades: Vec<(u32, String, String)>,
 }
 
 /// Count leading tab characters (block depth in the decompiled KV3).
@@ -821,12 +825,17 @@ fn clean_sound_label(key: &str) -> String {
 fn parse_abilities(vdata: &str) -> std::collections::HashMap<String, AbilityDef> {
     let mut map = std::collections::HashMap::new();
     let mut cur_name: Option<String> = None;
-    let mut cur = AbilityDef { icon_internal: None, sounds: vec![], props: vec![] };
+    let mut cur = AbilityDef { icon_internal: None, sounds: vec![], props: vec![], upgrades: vec![] };
     // Tab depth of the `m_mapAbilityProperties` key while we're inside its block
     // (None when outside). Property openers sit at `props_depth + 1`, their
     // `m_strValue` at `props_depth + 2`.
     let mut props_depth: Option<usize> = None;
     let mut cur_prop: Option<String> = None;
+    // Tab depth of `m_vecAbilityUpgrades` while inside it. Tier objects open at
+    // `up_depth + 1`; property/bonus pairs sit at `up_depth + 4`.
+    let mut up_depth: Option<usize> = None;
+    let mut up_tier: u32 = 0;
+    let mut up_prop: Option<String> = None;
     for line in vdata.lines() {
         let top_level = line.starts_with('\t') && !line.starts_with("\t\t");
         let depth = tab_depth(line);
@@ -836,11 +845,14 @@ fn parse_abilities(vdata: &str) -> std::collections::HashMap<String, AbilityDef>
             if let Some(k) = t.strip_suffix('=').map(str::trim) {
                 if !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
                     if let Some(name) = cur_name.take() {
-                        map.insert(name, std::mem::replace(&mut cur, AbilityDef { icon_internal: None, sounds: vec![], props: vec![] }));
+                        map.insert(name, std::mem::replace(&mut cur, AbilityDef { icon_internal: None, sounds: vec![], props: vec![], upgrades: vec![] }));
                     }
                     cur_name = Some(k.to_string());
                     props_depth = None;
                     cur_prop = None;
+                    up_depth = None;
+                    up_tier = 0;
+                    up_prop = None;
                     continue;
                 }
             }
@@ -869,9 +881,30 @@ fn parse_abilities(vdata: &str) -> std::collections::HashMap<String, AbilityDef>
             }
             continue;
         }
+        // Track the m_vecAbilityUpgrades vector to harvest per-tier bonuses.
+        if let Some(ud) = up_depth {
+            if depth <= ud && t == "]" {
+                up_depth = None;
+            } else if depth == ud + 1 && t == "{" {
+                up_tier += 1; // each direct child object is the next upgrade tier
+            } else if depth == ud + 4 && t.starts_with("m_strPropertyName") {
+                up_prop = between(t, "\"", "\"").map(str::to_string);
+            } else if depth == ud + 4 && t.starts_with("m_strBonus") {
+                // value may be quoted ("2") or bare (-12.0).
+                let raw = t.split_once('=').map(|(_, v)| v.trim().trim_matches('"').to_string());
+                if let (Some(prop), Some(v)) = (up_prop.take(), raw) {
+                    cur.upgrades.push((up_tier, prop, v));
+                }
+            }
+            continue;
+        }
         if t.starts_with("m_mapAbilityProperties") && t.ends_with('=') {
             props_depth = Some(depth);
             cur_prop = None;
+        } else if t.starts_with("m_vecAbilityUpgrades") && t.ends_with('=') {
+            up_depth = Some(depth);
+            up_tier = 0;
+            up_prop = None;
         } else if cur.icon_internal.is_none() && t.starts_with("m_strAbilityImage") {
             if let Some(p) = between(t, "{images}/", ".psd") {
                 cur.icon_internal = Some(format!("panorama/images/{p}_psd.vtex_c"));
@@ -946,6 +979,32 @@ fn prettify_prop_key(key: &str) -> String {
             out.push(' ');
         }
         out.push(ch);
+    }
+    out
+}
+
+/// Build the full editable-prop list for one ability/item: its base
+/// `m_mapAbilityProperties` followed by its T1/T2/T3 upgrade bonuses. Upgrades
+/// are keyed `@upgrade:<index>` so the same override pipeline can rewrite the
+/// matching `m_strBonus`.
+fn ability_props(def: &AbilityDef) -> Vec<AbilityProp> {
+    let mut out: Vec<AbilityProp> = def
+        .props
+        .iter()
+        .map(|(k, v)| {
+            let (number, unit) = split_value_unit(v);
+            AbilityProp { key: k.clone(), label: prettify_prop_key(k), value: v.clone(), number, unit }
+        })
+        .collect();
+    for (i, (tier, prop, bonus)) in def.upgrades.iter().enumerate() {
+        let (number, unit) = split_value_unit(bonus);
+        out.push(AbilityProp {
+            key: format!("@upgrade:{i}"),
+            label: format!("T{tier} upgrade · {}", prettify_prop_key(prop)),
+            value: bonus.clone(),
+            number,
+            unit,
+        });
     }
     out
 }
@@ -1028,23 +1087,7 @@ pub fn hero_config(
             .filter(|p| p.exists())
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let props = def
-            .map(|d| {
-                d.props
-                    .iter()
-                    .map(|(k, v)| {
-                        let (number, unit) = split_value_unit(v);
-                        AbilityProp {
-                            key: k.clone(),
-                            label: prettify_prop_key(k),
-                            value: v.clone(),
-                            number,
-                            unit,
-                        }
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let props = def.map(ability_props).unwrap_or_default();
         out.push(AbilityConfig {
             name: prettify_ability_name(&key),
             key,
@@ -1212,9 +1255,20 @@ pub fn randomize_config(
         .unwrap_or(0x9E3779B97F4A7C15)
         | 1;
 
+    // Base props: skip 0/-1 sentinels (only randomize positive values).
     let roll = |seed: &mut u64, val: &str| -> Option<String> {
         let (num, unit) = split_value_unit(val);
         if num <= 0.0 {
+            return None;
+        }
+        let factor = ((xorshift(seed) * 2.0 - 1.0) * k).exp();
+        Some(fmt_random(num * factor, val.contains('.'), &unit))
+    };
+    // Upgrade bonuses: sign-preserving (negatives like -12 cooldown are real
+    // bonuses, not sentinels). Skip only exact zero.
+    let roll_signed = |seed: &mut u64, val: &str| -> Option<String> {
+        let (num, unit) = split_value_unit(val);
+        if num == 0.0 {
             return None;
         }
         let factor = ((xorshift(seed) * 2.0 - 1.0) * k).exp();
@@ -1235,6 +1289,16 @@ pub fn randomize_config(
                 vdata.push(crate::project::VdataOverride {
                     ability_key: entity.clone(),
                     prop_key: prop_key.clone(),
+                    value,
+                });
+            }
+        }
+        // T1/T2/T3 upgrade bonuses, addressed by occurrence index.
+        for (i, (_, _, bonus)) in def.upgrades.iter().enumerate() {
+            if let Some(value) = roll_signed(&mut seed, bonus) {
+                vdata.push(crate::project::VdataOverride {
+                    ability_key: entity.clone(),
+                    prop_key: format!("@upgrade:{i}"),
                     value,
                 });
             }
@@ -1291,20 +1355,7 @@ pub fn item_config(
     let text = std::fs::read_to_string(&abilities).map_err(|e| e.to_string())?;
     let map = parse_abilities(&text);
     let def = map.get(&item_name).ok_or_else(|| format!("item '{item_name}' not found"))?;
-    Ok(def
-        .props
-        .iter()
-        .map(|(k, v)| {
-            let (number, unit) = split_value_unit(v);
-            AbilityProp {
-                key: k.clone(),
-                label: prettify_prop_key(k),
-                value: v.clone(),
-                number,
-                unit,
-            }
-        })
-        .collect())
+    Ok(ability_props(def))
 }
 
 /// The set of hero soundevent file stems that actually exist in the pak
