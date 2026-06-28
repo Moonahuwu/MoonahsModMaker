@@ -384,6 +384,31 @@ export function globalConfig(helperPath: string, pakPath: string): Promise<Globa
   return invoke("global_config", { helperPath, pakPath });
 }
 
+/** Readiness of the install to host a custom dedicated game. */
+export interface HostStatus {
+  deadlockRoot: string;
+  exeFound: boolean;
+  gameinfoFound: boolean;
+  p2pPatched: boolean;
+  dedicatedPatched: boolean;
+  ready: boolean;
+}
+
+export function hostStatus(deadlockRoot: string): Promise<HostStatus> {
+  return invoke("host_status", { deadlockRoot });
+}
+/** Apply the gameinfo.gi edits that enable dedicated hosting (backed up). */
+export function setupHosting(deadlockRoot: string): Promise<HostStatus> {
+  return invoke("setup_hosting", { deadlockRoot });
+}
+export function revertHosting(deadlockRoot: string): Promise<HostStatus> {
+  return invoke("revert_hosting", { deadlockRoot });
+}
+/** Launch the client as a dedicated host on `map`. Returns the PID. */
+export function launchHost(deadlockRoot: string, map: string): Promise<number> {
+  return invoke("launch_host", { deadlockRoot, map });
+}
+
 /** A flat-scalar world entity (minion / box / powerup) and its editable fields. */
 export interface EntityConfig {
   key: string;

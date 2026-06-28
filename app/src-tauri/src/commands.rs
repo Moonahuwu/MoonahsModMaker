@@ -259,6 +259,32 @@ pub fn install_to_game(
     )
 }
 
+// --- Custom-game hosting (Custom Server tab) ---------------------------------
+
+/// Report whether the install is ready to host (exe present + both gameinfo edits).
+#[tauri::command]
+pub fn host_status(deadlock_root: String) -> crate::host::HostStatus {
+    crate::host::status(std::path::Path::new(&deadlock_root))
+}
+
+/// Apply the two `gameinfo.gi` edits that enable dedicated P2P hosting (backed up).
+#[tauri::command]
+pub fn setup_hosting(deadlock_root: String) -> Result<crate::host::HostStatus, String> {
+    crate::host::setup(std::path::Path::new(&deadlock_root))
+}
+
+/// Remove the hosting edits (leaves the addons search path intact).
+#[tauri::command]
+pub fn revert_hosting(deadlock_root: String) -> Result<crate::host::HostStatus, String> {
+    crate::host::revert(std::path::Path::new(&deadlock_root))
+}
+
+/// Launch the installed client as a dedicated host on `map`. Returns the PID.
+#[tauri::command]
+pub fn launch_host(deadlock_root: String, map: String) -> Result<u32, String> {
+    crate::host::launch(std::path::Path::new(&deadlock_root), &map)
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DetectedPaths {
@@ -1229,10 +1255,11 @@ fn fmt_random(n: f64, is_float: bool, unit: &str) -> String {
 
 /// Randomize every positive gameplay number. `temperature` (0..1) sets the
 /// intensity: each value is multiplied by `exp(uniform(-k, +k))` where
-/// `k = 0.1 + temperature*3.4`. So temp 0 → ×0.9..1.1 (tame), temp 1 → ×0.03..30
-/// (insane). The exponential keeps the spread symmetric (halving as likely as
-/// doubling). Returns a full override set the frontend swaps in. Non-positive
-/// values (0 / -1 sentinels) are left alone so we don't break "disabled" flags.
+/// `k = 0.1 + t*3.4 + t^5*4.0`. The `t^5` term stays near-zero through the low/mid
+/// range (so tame..wild feels the same as before) then ramps hard at the very top:
+/// temp 0 → ×0.9..1.1, temp 0.5 → ×0.16..6, temp 1 → ×0.0005..1800 (apocalyptic).
+/// The exponential keeps the spread symmetric. Non-positive values (0 / -1
+/// sentinels) are left alone so we don't break "disabled" flags.
 #[tauri::command]
 pub fn randomize_config(
     app: tauri::AppHandle,
@@ -1240,7 +1267,8 @@ pub fn randomize_config(
     pak_path: String,
     temperature: Option<f64>,
 ) -> Result<RandomConfig, String> {
-    let k = 0.1 + temperature.unwrap_or(0.5).clamp(0.0, 1.0) * 3.4;
+    let t = temperature.unwrap_or(0.5).clamp(0.0, 1.0);
+    let k = 0.1 + t * 3.4 + t.powi(5) * 4.0;
     use tauri::Manager;
     let base = app
         .path()

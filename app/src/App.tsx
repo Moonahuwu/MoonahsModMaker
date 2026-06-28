@@ -1863,6 +1863,11 @@ export default function App() {
           <CustomServer
             helperPath={settings.vpkHelperPath}
             pakPath={settings.deadlockPak}
+            deadlockRoot={
+              settings.deadlockPak
+                ? settings.deadlockPak.replace(/[\\/]/g, "/").split("/").slice(0, -3).join("/")
+                : ""
+            }
             showExperimental={settings.showExperimentalHeroes}
             includeGameplay={settings.includeGameplay}
             onToggleGameplay={(on) => updateSettings({ includeGameplay: on })}

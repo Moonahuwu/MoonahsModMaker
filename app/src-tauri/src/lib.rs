@@ -1,6 +1,7 @@
 mod audio;
 mod commands;
 mod compile;
+mod host;
 mod install;
 mod paths;
 mod project;
@@ -41,6 +42,10 @@ pub fn run() {
             commands::autodetect_paths,
             commands::scan_addon_slots,
             commands::install_to_game,
+            commands::host_status,
+            commands::setup_hosting,
+            commands::revert_hosting,
+            commands::launch_host,
             commands::hero_roster,
             commands::hero_detail,
             commands::hero_config,

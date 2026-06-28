@@ -4,18 +4,24 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import {
   globalConfig,
   heroConfig,
+  hostStatus,
   itemConfig,
   itemRoster,
+  launchHost,
+  revertHosting,
+  setupHosting,
   worldConfig,
   type AbilityConfig,
   type AbilityProp,
   type EntityConfig,
   type GlobalStat,
+  type HostStatus,
   type HeroPortrait,
   type ItemCard,
 } from "../lib/api";
 import type { GlobalOverride, VdataOverride, WorldOverride } from "../types";
 import { HeroGrid } from "./HeroGrid";
+import { useToast } from "./Toaster";
 
 /**
  * Custom Server tab — dedicated-server hosting + a gameplay config editor.
@@ -38,6 +44,7 @@ type WorldKind = "minions" | "boxes" | "powerups";
 export function CustomServer({
   helperPath,
   pakPath,
+  deadlockRoot,
   showExperimental,
   includeGameplay,
   onToggleGameplay,
@@ -56,6 +63,7 @@ export function CustomServer({
 }: {
   helperPath: string;
   pakPath: string;
+  deadlockRoot: string;
   showExperimental: boolean;
   includeGameplay: boolean;
   onToggleGameplay: (on: boolean) => void;
@@ -79,31 +87,13 @@ export function CustomServer({
 
   // Flavor label + peak multiplier for the current temperature.
   const tempLabel =
-    temp < 0.15 ? "Tame" : temp < 0.4 ? "Spicy" : temp < 0.65 ? "Wild" : temp < 0.88 ? "Crazy" : "INSANE";
-  const peakMult = Math.exp(0.1 + temp * 3.4); // matches backend k
+    temp < 0.15 ? "Tame" : temp < 0.4 ? "Spicy" : temp < 0.65 ? "Wild" : temp < 0.85 ? "Crazy" : temp < 0.97 ? "INSANE" : "APOCALYPSE";
+  const peakMult = Math.exp(0.1 + temp * 3.4 + temp ** 5 * 4.0); // matches backend k
+  const peakLabel = peakMult < 10 ? peakMult.toFixed(1) : Math.round(peakMult).toLocaleString();
 
   return (
     <div className="flex flex-col gap-5">
-      {/* Dedicated server hosting */}
-      <section className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-5">
-        <div className="flex items-start gap-4">
-          <span className="text-3xl">🖥️</span>
-          <div className="min-w-0 flex-1">
-            <h3 className="text-lg font-bold text-zinc-100">Dedicated Server Hosting</h3>
-            <p className="mt-1 text-sm text-zinc-400">
-              The config you build below compiles into your mod VPK. Gameplay changes only
-              take effect <b className="text-zinc-300">server-side</b>, so drop the VPK into
-              your dedicated server's <code className="text-zinc-300">addons</code> folder.
-            </p>
-            <button
-              onClick={() => void openUrl(HOSTING_URL)}
-              className="mt-3 inline-flex items-center gap-2 rounded-md border border-sky-500/50 bg-sky-500/10 px-3 py-1.5 text-sm font-medium text-sky-300 transition hover:bg-sky-500/20"
-            >
-              Open hosting guide ↗
-            </button>
-          </div>
-        </div>
-      </section>
+      <HostPanel deadlockRoot={deadlockRoot} />
 
       {/* Gameplay config editor */}
       <section className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-5">
@@ -170,7 +160,7 @@ export function CustomServer({
                 value={Math.round(temp * 100)}
                 onChange={(e) => setTemp(Number(e.target.value) / 100)}
                 className="h-1.5 w-28 cursor-pointer appearance-none rounded-full bg-gradient-to-r from-emerald-500 via-amber-500 to-rose-600 accent-zinc-100"
-                title={`Randomness: up to ×${peakMult.toFixed(peakMult < 10 ? 1 : 0)}`}
+                title={`Randomness: up to ×${peakLabel}`}
               />
               <span className="text-xs font-semibold text-rose-400">Insane</span>
               <span className="w-14 text-[11px] tabular-nums text-zinc-400">
@@ -180,7 +170,7 @@ export function CustomServer({
             <button
               onClick={() => onRandomize(temp)}
               disabled={randomizing}
-              title={`Roll every gameplay number — up to ×${peakMult.toFixed(peakMult < 10 ? 1 : 0)}`}
+              title={`Roll every gameplay number — up to ×${peakLabel}`}
               className="rounded-lg border border-fuchsia-500/50 bg-fuchsia-500/10 px-3 py-1.5 text-sm font-medium text-fuchsia-300 transition hover:bg-fuchsia-500/20 disabled:opacity-50"
             >
               {randomizing ? "Rolling…" : temp > 0.85 ? "💥 Randomize" : "🎲 Randomize"}
@@ -790,5 +780,143 @@ function PropCard({
         ))}
       </div>
     </div>
+  );
+}
+
+// --------------------------------------------------------------------------- Host a game
+
+function HostPanel({ deadlockRoot }: { deadlockRoot: string }) {
+  const [status, setStatus] = useState<HostStatus | null>(null);
+  const [map, setMap] = useState("dl_midtown");
+  const [busy, setBusy] = useState(false);
+  const { push } = useToast();
+
+  useEffect(() => {
+    if (!deadlockRoot) return;
+    hostStatus(deadlockRoot).then(setStatus).catch(() => setStatus(null));
+  }, [deadlockRoot]);
+
+  async function doSetup() {
+    setBusy(true);
+    try {
+      setStatus(await setupHosting(deadlockRoot));
+      push("success", "Hosting enabled — gameinfo.gi patched (backed up)");
+    } catch (e) {
+      push("error", `Setup failed: ${e}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function doRevert() {
+    setBusy(true);
+    try {
+      setStatus(await revertHosting(deadlockRoot));
+      push("info", "Hosting edits removed");
+    } catch (e) {
+      push("error", `Revert failed: ${e}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function doLaunch() {
+    setBusy(true);
+    try {
+      const pid = await launchHost(deadlockRoot, map);
+      push("success", `Dedicated server starting on ${map} (pid ${pid})`);
+    } catch (e) {
+      push("error", `Launch failed: ${e}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const Check = ({ ok, label }: { ok: boolean; label: string }) => (
+    <li className="flex items-center gap-2 text-sm">
+      <span className={ok ? "text-emerald-400" : "text-zinc-600"}>{ok ? "✓" : "○"}</span>
+      <span className={ok ? "text-zinc-300" : "text-zinc-500"}>{label}</span>
+    </li>
+  );
+
+  return (
+    <section className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-5">
+      <div className="flex items-start gap-4">
+        <span className="text-3xl">🖥️</span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <h3 className="text-lg font-bold text-zinc-100">Host a Custom Game</h3>
+            {status?.ready && (
+              <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
+                READY
+              </span>
+            )}
+          </div>
+          <p className="mt-1 text-sm text-zinc-400">
+            Runs your installed Deadlock as a dedicated host (no separate download). It patches
+            two <code className="text-zinc-300">gameinfo.gi</code> lines (backed up) and launches
+            with the hosting flags. Friends join from their console with{" "}
+            <code className="text-zinc-300">connect &lt;your-ip&gt;</code>.
+          </p>
+
+          {!deadlockRoot ? (
+            <p className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+              Set your Deadlock game pak in Setup first so I can find the install.
+            </p>
+          ) : (
+            <>
+              <ul className="mt-3 space-y-1">
+                <Check ok={!!status?.exeFound} label="Deadlock client found" />
+                <Check ok={!!status?.p2pPatched} label="P2P listen socket enabled" />
+                <Check ok={!!status?.dedicatedPatched} label="Dedicated listen convar set" />
+              </ul>
+
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                {!status?.ready ? (
+                  <button
+                    onClick={doSetup}
+                    disabled={busy}
+                    className="rounded-md border border-sky-500/50 bg-sky-500/10 px-3 py-1.5 text-sm font-medium text-sky-300 transition hover:bg-sky-500/20 disabled:opacity-50"
+                  >
+                    1 · Enable hosting (patch gameinfo)
+                  </button>
+                ) : (
+                  <button
+                    onClick={doRevert}
+                    disabled={busy}
+                    className="rounded-md border border-zinc-700 bg-zinc-800/60 px-3 py-1.5 text-sm text-zinc-300 transition hover:bg-zinc-800 disabled:opacity-50"
+                  >
+                    Revert hosting edits
+                  </button>
+                )}
+                <div className="flex items-center gap-1.5">
+                  <label className="text-xs text-zinc-500">Map</label>
+                  <input
+                    value={map}
+                    onChange={(e) => setMap(e.target.value)}
+                    className="w-32 rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-200 outline-none focus:border-zinc-500"
+                  />
+                </div>
+                <button
+                  onClick={doLaunch}
+                  disabled={busy || !status?.exeFound}
+                  className="rounded-md border border-emerald-500/50 bg-emerald-500/10 px-3 py-1.5 text-sm font-bold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50"
+                >
+                  ▶ Host game now
+                </button>
+                <button
+                  onClick={() => void openUrl(HOSTING_URL)}
+                  className="rounded-md px-2 py-1.5 text-xs text-zinc-500 transition hover:text-zinc-300"
+                >
+                  Hosting guide ↗
+                </button>
+              </div>
+              <p className="mt-2 text-[11px] text-zinc-600">
+                Tip: build &amp; install your mod (with gameplay edits) first, then host — the
+                server loads it from <code>citadel/addons</code>.
+              </p>
+            </>
+          )}
+        </div>
+      </div>
+    </section>
   );
 }
