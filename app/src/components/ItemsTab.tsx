@@ -33,6 +33,9 @@ export function ItemsTab({
   onHueChange,
   onPickIcon,
   onRemoveIcon,
+  effects,
+  onOpenEffectViewer,
+  onRecolorEffect,
 }: {
   helperPath: string;
   pakPath: string;
@@ -47,6 +50,12 @@ export function ItemsTab({
   onHueChange: (hue: number) => void;
   onPickIcon: () => void;
   onRemoveIcon: () => void;
+  /** This item's particle effects (null = loading). */
+  effects: string[] | null;
+  /** Open one of the item's particles in the external viewer. */
+  onOpenEffectViewer: (reference: string) => void;
+  /** Jump to the Effects tab to recolor. */
+  onRecolorEffect: () => void;
 }) {
   const [items, setItems] = useState<ItemCard[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -179,6 +188,41 @@ export function ItemsTab({
             </div>
           )}
         </div>
+
+        {/* Item effect (particles) — open in the real viewer or recolor */}
+        {effects && effects.length > 0 && (
+          <div className="mt-5 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
+            <div className="mb-2 flex items-center gap-2">
+              <span className="text-sm font-semibold text-zinc-200">✦ Effect</span>
+              <span className="text-xs text-zinc-500">{effects.length} particle{effects.length === 1 ? "" : "s"}</span>
+              <button
+                onClick={onRecolorEffect}
+                className="ml-auto rounded-md border border-violet-500/50 px-2.5 py-1 text-xs text-violet-300 transition hover:bg-violet-500/10"
+              >
+                Recolor in Effects tab →
+              </button>
+            </div>
+            <div className="flex max-h-56 flex-col gap-1 overflow-y-auto">
+              {effects.map((ref) => (
+                <div
+                  key={ref}
+                  className="flex items-center gap-2 rounded-md border border-zinc-800 bg-zinc-950/40 px-2.5 py-1.5"
+                >
+                  <span className="min-w-0 flex-1 truncate text-xs text-zinc-300" title={ref}>
+                    {ref.replace("particles/", "").replace(".vpcf", "")}
+                  </span>
+                  <button
+                    onClick={() => onOpenEffectViewer(ref)}
+                    title="Open this particle in Source2Viewer"
+                    className="shrink-0 rounded border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-300 transition hover:border-zinc-500 hover:text-white"
+                  >
+                    Open in viewer
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="mt-5">
           {loading && !sounds ? (

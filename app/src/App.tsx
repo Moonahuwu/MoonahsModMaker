@@ -12,6 +12,7 @@ import {
   heroVoicelines as heroVoicelinesApi,
   heroSounds as heroSoundsApi,
   openInViewer,
+  itemParticles,
   itemDetail as itemDetailApi,
   type HeroAbility,
   type HeroAbilitySound,
@@ -68,9 +69,15 @@ const EFFECTS = "effects";
 const PARTICLE_CATEGORIES: { key: string; label: string; prefix: string; hint?: string }[] = [
   {
     key: "abilities",
-    label: "Abilities & Items",
+    label: "Hero Abilities",
     prefix: "particles/abilities",
-    hint: "Hero abilities + item effects (Curse = aoe_silence)",
+    hint: "Per-hero ability VFX",
+  },
+  {
+    key: "upgrades",
+    label: "Items & Upgrades",
+    prefix: "particles/upgrades",
+    hint: "Item effects (Cursed Relic = upgrade_glitch)",
   },
   { key: "weapons", label: "Weapons & Gunfire", prefix: "particles/weapons" },
   { key: "world", label: "World & Map", prefix: "particles/world" },
@@ -233,6 +240,8 @@ export default function App() {
   const [selectedItem, setSelectedItem] = useState<ItemCard | null>(null);
   const [itemSounds, setItemSounds] = useState<HeroAbilitySound[] | null>(null);
   const [itemDetailLoading, setItemDetailLoading] = useState(false);
+  // The selected item's particle effects (for the "open in viewer" buttons).
+  const [itemFx, setItemFx] = useState<string[] | null>(null);
   // Soundevents files already decompiled into the vanilla merge base this session.
   const ensuredFiles = useRef<Set<string>>(new Set());
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1276,6 +1285,23 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedItem]);
 
+  // Load the selected item's particle effects (for "open in viewer").
+  useEffect(() => {
+    if (!selectedItem) {
+      setItemFx(null);
+      return;
+    }
+    let cancelled = false;
+    setItemFx(null);
+    const s = settingsRef.current;
+    itemParticles(s.vpkHelperPath, s.deadlockPak, selectedItem.name)
+      .then((fx) => !cancelled && setItemFx(fx))
+      .catch(() => !cancelled && setItemFx([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedItem]);
+
   // Set a custom icon for an item: scale to the icon's native size on compile.
   async function setItemIcon(item: ItemCard, imagePath: string) {
     if (!item.iconInternal) {
@@ -1708,6 +1734,9 @@ export default function App() {
             onHueChange={(hue) => selectedItem && setItemHue(selectedItem.name, hue)}
             onPickIcon={() => selectedItem && void pickItemIcon(selectedItem)}
             onRemoveIcon={() => selectedItem && removeItemIcon(selectedItem.name)}
+            effects={itemFx}
+            onOpenEffectViewer={(ref) => void openEffectInViewer(ref)}
+            onRecolorEffect={() => setActiveTab(EFFECTS)}
           />
         ) : activeTab === REPLACE_SOUNDS ? (
           <SoundBrowser

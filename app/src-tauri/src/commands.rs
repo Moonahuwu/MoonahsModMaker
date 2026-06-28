@@ -1357,8 +1357,21 @@ pub fn open_in_viewer(
     if viewer_path.trim().is_empty() {
         return Err("No Source2Viewer path configured".into());
     }
-    if !std::path::Path::new(&viewer_path).exists() {
-        return Err(format!("Viewer not found at {viewer_path}"));
+    // Tolerate a folder path: resolve it to the Source2Viewer.exe inside.
+    let mut viewer = std::path::PathBuf::from(viewer_path.trim());
+    if viewer.is_dir() {
+        let candidate = viewer.join("Source2Viewer.exe");
+        if candidate.is_file() {
+            viewer = candidate;
+        } else {
+            return Err(format!(
+                "'{}' is a folder with no Source2Viewer.exe — point this at the .exe in Setup",
+                viewer.display()
+            ));
+        }
+    }
+    if !viewer.is_file() {
+        return Err(format!("Source2Viewer.exe not found at {}", viewer.display()));
     }
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("viewer");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -1367,11 +1380,37 @@ pub fn open_in_viewer(
     // Extract the compiled resource straight from the pak (no decompile).
     crate::vpk::extract(&helper_path, &pak_path, &format!("{particle_path}_c"), &out.to_string_lossy())
         .map_err(|e| format!("extract particle: {e}"))?;
-    std::process::Command::new(&viewer_path)
+    std::process::Command::new(&viewer)
         .arg(&out)
         .spawn()
         .map_err(|e| format!("launch viewer: {e}"))?;
     Ok(())
+}
+
+/// Particle effects belonging to an item, by name convention. Item effects live
+/// under `particles/upgrades/<item_name>_*` (e.g. Cursed Relic = `upgrade_glitch`
+/// → `particles/upgrades/upgrade_glitch_*`); some also reuse `particles/abilities`.
+#[tauri::command]
+pub fn item_particles(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+    item_name: String,
+) -> Result<Vec<String>, String> {
+    let index = game_particle_index(&app, &helper_path, &pak_path, false)?;
+    let name = item_name.to_lowercase();
+    let stripped = name.strip_prefix("upgrade_").unwrap_or(&name);
+    let mut out: Vec<String> = index
+        .into_iter()
+        .filter(|p| {
+            let pl = p.to_lowercase();
+            pl.contains(&name)
+                || (pl.starts_with("particles/upgrades/") && !stripped.is_empty() && pl.contains(stripped))
+        })
+        .collect();
+    out.sort();
+    out.dedup();
+    Ok(out)
 }
 
 // ---- Items (shop) ----------------------------------------------------------

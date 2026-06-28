@@ -49,6 +49,7 @@ pub fn run() {
             commands::browse_particles,
             commands::effect_preview,
             commands::open_in_viewer,
+            commands::item_particles,
             commands::item_roster,
             commands::item_detail,
             commands::compile_project,

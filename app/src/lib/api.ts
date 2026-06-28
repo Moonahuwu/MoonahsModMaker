@@ -476,6 +476,15 @@ export function itemRoster(
   return invoke("item_roster", { helperPath, pakPath, refresh });
 }
 
+/** The particle effects belonging to an item (by name convention). */
+export function itemParticles(
+  helperPath: string,
+  pakPath: string,
+  itemName: string,
+): Promise<string[]> {
+  return invoke("item_particles", { helperPath, pakPath, itemName });
+}
+
 /** An item's editable sound events (same shape as hero ability sounds). */
 export function itemDetail(
   helperPath: string,
