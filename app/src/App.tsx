@@ -46,6 +46,7 @@ import { ItemsTab } from "./components/ItemsTab";
 import { SoundBrowser } from "./components/SoundBrowser";
 import { OverrideEditor } from "./components/OverrideEditor";
 import { EffectsBrowser } from "./components/EffectsBrowser";
+import { CustomServer } from "./components/CustomServer";
 import { ProfileSwitcher } from "./components/ProfileSwitcher";
 import { useToast } from "./components/Toaster";
 import { useSettings } from "./lib/settings";
@@ -64,6 +65,8 @@ const ITEMS = "items";
 const REPLACE_SOUNDS = "replacesounds";
 /** Special always-present tab for recoloring particle (VFX) effects. */
 const EFFECTS = "effects";
+/** Special always-present tab for dedicated-server hosting + config editor. */
+const CUSTOM_SERVER = "customserver";
 
 /** Curated top categories for the particle (VFX) browser. */
 const PARTICLE_CATEGORIES: { key: string; label: string; prefix: string; hint?: string }[] = [
@@ -127,6 +130,7 @@ const TAB_LABELS: Record<string, string> = {
   [ITEMS]: "Items",
   [REPLACE_SOUNDS]: "Replace Sounds",
   [EFFECTS]: "Effects",
+  [CUSTOM_SERVER]: "Custom Server",
   [MOD_COMBINER]: "Mod combiner",
 };
 
@@ -209,6 +213,7 @@ function accentFor(ev: { group: string; side: string }): string {
   if (ev.group === "ui") return "#38bdf8"; // sky (menus)
   if (ev.group === ITEMS) return "#f59e0b"; // amber (items)
   if (ev.group === EFFECTS) return "#c084fc"; // violet (VFX)
+  if (ev.group === CUSTOM_SERVER) return "#38bdf8"; // sky (server)
   return "#e0564f"; // heroes
 }
 
@@ -273,6 +278,7 @@ export default function App() {
     if (!seen.includes(ITEMS)) seen.push(ITEMS);
     if (!seen.includes(REPLACE_SOUNDS)) seen.push(REPLACE_SOUNDS);
     if (!seen.includes(EFFECTS)) seen.push(EFFECTS);
+    if (!seen.includes(CUSTOM_SERVER)) seen.push(CUSTOM_SERVER);
     seen.push(MOD_COMBINER);
     return seen;
   }, [project]);
@@ -1756,6 +1762,8 @@ export default function App() {
               />
             )}
           />
+        ) : activeTab === CUSTOM_SERVER ? (
+          <CustomServer />
         ) : activeTab === EFFECTS ? (
           <EffectsBrowser
             helperPath={settings.vpkHelperPath}

@@ -470,14 +470,34 @@ fn copy_into(src: &Path, dest_root: &Path, relpath: &str) -> std::io::Result<Pat
     Ok(dest)
 }
 
+/// The CSS `hue-rotate(deg)` color matrix as an ffmpeg `colorchannelmixer`
+/// filter, so the compiled icon matches the in-app CSS preview exactly. Uses the
+/// W3C luma-preserving rotation (Rec.709 weights 0.213/0.715/0.072) — NOT ffmpeg's
+/// `hue` filter, which rotates in YUV and diverges on saturated colors.
+fn hue_rotate_mixer(hue_deg: f32) -> String {
+    let a = hue_deg.to_radians();
+    let (c, s) = (a.cos(), a.sin());
+    let rr = 0.213 + c * 0.787 - s * 0.213;
+    let rg = 0.715 - c * 0.715 - s * 0.715;
+    let rb = 0.072 - c * 0.072 + s * 0.928;
+    let gr = 0.213 - c * 0.213 + s * 0.143;
+    let gg = 0.715 + c * 0.285 + s * 0.140;
+    let gb = 0.072 - c * 0.072 - s * 0.283;
+    let br = 0.213 - c * 0.213 - s * 0.787;
+    let bg = 0.715 - c * 0.715 + s * 0.715;
+    let bb = 0.072 + c * 0.928 + s * 0.072;
+    // alpha row left at default (aa=1), so transparency is preserved.
+    format!("colorchannelmixer=rr={rr}:rg={rg}:rb={rb}:gr={gr}:gg={gg}:gb={gb}:br={br}:bg={bg}:bb={bb}")
+}
+
 /// Scale a source image to `w`x`h` PNG via ffmpeg (preserves alpha). `hue` is a
 /// rotation in degrees applied after scaling (0 = leave colors untouched).
 fn render_icon(ffmpeg: Option<&str>, src: &str, w: u32, h: u32, hue: f32, out_png: &str) -> Result<(), String> {
     let exe = ffmpeg.unwrap_or("ffmpeg");
     let mut vf = format!("scale={w}:{h}:flags=lanczos");
     if hue.abs() > 0.01 {
-        // ffmpeg's `hue` filter operates on yuva, so the alpha channel survives.
-        vf.push_str(&format!(",hue=h={hue}"));
+        vf.push(',');
+        vf.push_str(&hue_rotate_mixer(hue));
     }
     let out = Command::new(exe)
         .args([
