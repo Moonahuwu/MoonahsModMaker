@@ -12,6 +12,7 @@ export function HeroDetail({
   heroName,
   backgroundSrc,
   accent,
+  accent2,
   abilities,
   loading,
   selectedAbility,
@@ -22,6 +23,7 @@ export function HeroDetail({
   heroName: string;
   backgroundSrc: string | null;
   accent: string;
+  accent2: string;
   abilities: HeroAbility[] | null;
   loading: boolean;
   selectedAbility: string | null;
@@ -47,10 +49,10 @@ export function HeroDetail({
           />
         )}
         <div className="absolute inset-0 bg-gradient-to-t from-zinc-950 via-zinc-950/70 to-zinc-950/30" />
-        {/* hero-color wash */}
+        {/* hero-color wash (primary → secondary, like the in-game card) */}
         <div
           className="absolute inset-0 opacity-40"
-          style={{ background: `linear-gradient(120deg, ${accent}40, transparent 60%)` }}
+          style={{ background: `linear-gradient(120deg, ${accent}55, ${accent2}22 55%, transparent 75%)` }}
         />
 
         <div className="relative flex flex-col gap-4 p-5">

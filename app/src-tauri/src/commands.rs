@@ -466,8 +466,9 @@ pub struct HeroPortrait {
     pub gloat_path: Option<String>,
     /// Disabled or still in development — hidden unless "show experimental" is on.
     pub experimental: bool,
-    /// The hero's in-game UI theme color (`#RRGGBB` from `m_colorUI`), if any.
+    /// The hero's in-game UI theme colors (`#RRGGBB` from `m_colorUI`), if any.
     pub color: Option<String>,
+    pub color_secondary: Option<String>,
 }
 
 /// Template / dummy / placeholder hero keys that are never real playable heroes
@@ -518,8 +519,10 @@ struct HeroInfo {
     card_code: Option<String>,
     disabled: bool,
     in_dev: bool,
-    /// The hero's first `m_colorUI` as a `#RRGGBB` hex (the in-game theme color).
+    /// The hero's `m_colorUI` theme colors as `#RRGGBB` (primary, then secondary).
+    /// The in-game hero cards use both as a gradient.
     color: Option<String>,
+    color_secondary: Option<String>,
 }
 
 /// `m_colorUI = [ 32, 146, 174 ]` -> `#2092ae`.
@@ -581,8 +584,13 @@ fn parse_heroes_vdata(text: &str) -> Vec<HeroInfo> {
             if let Some(c) = between(t, "heroes/", "_card.psd") {
                 h.card_code = Some(c.to_string());
             }
-        } else if h.color.is_none() && t.starts_with("m_colorUI") {
-            h.color = parse_color_ui(t);
+        } else if t.starts_with("m_colorUI") {
+            // First m_colorUI = primary, second = secondary.
+            if h.color.is_none() {
+                h.color = parse_color_ui(t);
+            } else if h.color_secondary.is_none() {
+                h.color_secondary = parse_color_ui(t);
+            }
         }
     }
     if let Some(h) = cur.take() {
@@ -700,6 +708,7 @@ pub fn hero_roster(
             gloat_path,
             experimental: h.disabled || h.in_dev,
             color: h.color,
+            color_secondary: h.color_secondary,
         });
     }
     out.sort_by(|a, b| {

@@ -92,6 +92,7 @@ export function HeroGrid({
         {shown.map((h) => {
           const active = selected === h.codename;
           const accent = h.color ?? "#e0564f";
+          const accent2 = h.colorSecondary ?? accent;
           return (
             <motion.button
               key={h.codename}
@@ -107,10 +108,10 @@ export function HeroGrid({
                 active ? "" : "border-zinc-800 hover:border-zinc-600"
               }`}
             >
-              {/* hero-color accent bar at the bottom */}
+              {/* hero-color accent bar (primary→secondary gradient, like in-game) */}
               <span
                 className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-[3px]"
-                style={{ background: accent }}
+                style={{ background: `linear-gradient(90deg, ${accent}, ${accent2})` }}
               />
               <img
                 src={convertFileSrc(h.portraitPath)}
