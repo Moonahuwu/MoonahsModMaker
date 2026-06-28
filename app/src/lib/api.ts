@@ -412,6 +412,16 @@ export function effectPreview(
   return invoke("effect_preview", { helperPath, pakPath, particlePath, refresh });
 }
 
+/** Open a particle in an external viewer (VRF's Source2Viewer). */
+export function openInViewer(
+  viewerPath: string,
+  helperPath: string,
+  pakPath: string,
+  particlePath: string,
+): Promise<void> {
+  return invoke("open_in_viewer", { viewerPath, helperPath, pakPath, particlePath });
+}
+
 /** One sub-folder in the game's sound tree (lazy browse). */
 export interface SoundFolder {
   name: string;

@@ -48,6 +48,7 @@ pub fn run() {
             commands::browse_game_sounds,
             commands::browse_particles,
             commands::effect_preview,
+            commands::open_in_viewer,
             commands::item_roster,
             commands::item_detail,
             commands::compile_project,

@@ -1342,6 +1342,38 @@ pub fn hero_sounds(
     Ok(sounds)
 }
 
+/// Open a game particle in an external viewer (VRF's Source2Viewer). Extracts
+/// the compiled `.vpcf_c` from the pak to a temp file and launches `viewer_path`
+/// on it. The viewer renders the real particle simulation (separate window).
+#[tauri::command]
+pub fn open_in_viewer(
+    app: tauri::AppHandle,
+    viewer_path: String,
+    helper_path: String,
+    pak_path: String,
+    particle_path: String,
+) -> Result<(), String> {
+    use tauri::Manager;
+    if viewer_path.trim().is_empty() {
+        return Err("No Source2Viewer path configured".into());
+    }
+    if !std::path::Path::new(&viewer_path).exists() {
+        return Err(format!("Viewer not found at {viewer_path}"));
+    }
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("viewer");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let stem = particle_path.trim_end_matches(".vpcf").replace(['/', '\\'], "_");
+    let out = dir.join(format!("{stem}.vpcf_c"));
+    // Extract the compiled resource straight from the pak (no decompile).
+    crate::vpk::extract(&helper_path, &pak_path, &format!("{particle_path}_c"), &out.to_string_lossy())
+        .map_err(|e| format!("extract particle: {e}"))?;
+    std::process::Command::new(&viewer_path)
+        .arg(&out)
+        .spawn()
+        .map_err(|e| format!("launch viewer: {e}"))?;
+    Ok(())
+}
+
 // ---- Items (shop) ----------------------------------------------------------
 // Items are abilities too (in abilities.vdata) with `m_strShopIconLarge`. The
 // Items tab recreates the shop: grouped by category (slot type) and tier, each

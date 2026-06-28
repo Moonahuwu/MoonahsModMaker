@@ -186,6 +186,12 @@ export function SetupSection({
           onChange={(v) => update({ ffmpegPath: v })}
         />
         <Field
+          label="Source2Viewer path (optional)"
+          value={settings.source2ViewerPath}
+          onChange={(v) => update({ source2ViewerPath: v })}
+          hint="VRF's Source2Viewer.exe — enables 'Open in real viewer' for effects"
+        />
+        <Field
           label="Sound folder (content-relative)"
           value={settings.soundFolder}
           onChange={(v) => update({ soundFolder: v })}

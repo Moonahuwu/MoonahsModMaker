@@ -34,6 +34,8 @@ export interface Settings {
   firstRunDone: boolean;
   /** Show disabled / in-development ("experimental") heroes in the Heroes grid. */
   showExperimentalHeroes: boolean;
+  /** Path to VRF's Source2Viewer.exe — enables "Open in real viewer" for effects. */
+  source2ViewerPath: string;
   /** Name of the currently-loaded profile (build config). Empty until the first
    *  profile is bootstrapped. The active profile owns `importedMods`. */
   activeProfile: string;
@@ -62,6 +64,7 @@ export const DEFAULT_SETTINGS: Settings = {
   installSlot: null,
   firstRunDone: false,
   showExperimentalHeroes: false,
+  source2ViewerPath: "",
   activeProfile: "",
 };
 

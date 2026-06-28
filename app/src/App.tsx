@@ -11,6 +11,7 @@ import {
   heroDetail as heroDetailApi,
   heroVoicelines as heroVoicelinesApi,
   heroSounds as heroSoundsApi,
+  openInViewer,
   itemDetail as itemDetailApi,
   type HeroAbility,
   type HeroAbilitySound,
@@ -43,11 +44,12 @@ import { VoicelinesPanel } from "./components/VoicelinesPanel";
 import { ItemsTab } from "./components/ItemsTab";
 import { SoundBrowser } from "./components/SoundBrowser";
 import { OverrideEditor } from "./components/OverrideEditor";
+import { EffectsBrowser } from "./components/EffectsBrowser";
 import { ProfileSwitcher } from "./components/ProfileSwitcher";
 import { useToast } from "./components/Toaster";
 import { useSettings } from "./lib/settings";
 import { songHash, overrideHash, effectHash } from "./lib/songHash";
-import type { EventProject, EventView, Project, Song, SoundOverride } from "./types";
+import type { EffectOverride, EventProject, EventView, Project, Song, SoundOverride } from "./types";
 import "./index.css";
 
 const AUDIO_EXT = /\.(mp3|wav|flac|ogg|m4a|aac)$/i;
@@ -59,6 +61,22 @@ const MOD_COMBINER = "modcombiner";
 const ITEMS = "items";
 /** Special always-present tab for loose-file sound replacement (any game sound). */
 const REPLACE_SOUNDS = "replacesounds";
+/** Special always-present tab for recoloring particle (VFX) effects. */
+const EFFECTS = "effects";
+
+/** Curated top categories for the particle (VFX) browser. */
+const PARTICLE_CATEGORIES: { key: string; label: string; prefix: string; hint?: string }[] = [
+  {
+    key: "abilities",
+    label: "Abilities & Items",
+    prefix: "particles/abilities",
+    hint: "Hero abilities + item effects (Curse = aoe_silence)",
+  },
+  { key: "weapons", label: "Weapons & Gunfire", prefix: "particles/weapons" },
+  { key: "world", label: "World & Map", prefix: "particles/world" },
+  { key: "status", label: "Status Effects", prefix: "particles/status_effects" },
+  { key: "all", label: "Everything (all particles)", prefix: "particles", hint: "Full tree — power users" },
+];
 
 /** Curated top categories for the loose-file sound browser (path prefixes into
  *  the game's sound tree). Keeps 79k sounds navigable instead of a flat dump. */
@@ -101,6 +119,7 @@ const TAB_LABELS: Record<string, string> = {
   ui: "UI",
   [ITEMS]: "Items",
   [REPLACE_SOUNDS]: "Replace Sounds",
+  [EFFECTS]: "Effects",
   [MOD_COMBINER]: "Mod combiner",
 };
 
@@ -182,6 +201,7 @@ function accentFor(ev: { group: string; side: string }): string {
   if (ev.group === "shop") return "#10b981"; // emerald (souls/shop)
   if (ev.group === "ui") return "#38bdf8"; // sky (menus)
   if (ev.group === ITEMS) return "#f59e0b"; // amber (items)
+  if (ev.group === EFFECTS) return "#c084fc"; // violet (VFX)
   return "#e0564f"; // heroes
 }
 
@@ -243,6 +263,7 @@ export default function App() {
     }
     if (!seen.includes(ITEMS)) seen.push(ITEMS);
     if (!seen.includes(REPLACE_SOUNDS)) seen.push(REPLACE_SOUNDS);
+    if (!seen.includes(EFFECTS)) seen.push(EFFECTS);
     seen.push(MOD_COMBINER);
     return seen;
   }, [project]);
@@ -1402,6 +1423,58 @@ export default function App() {
     }
   }
 
+  // ---- VFX recolor overrides (Effects tab) --------------------------------
+  function addEffectOverride(reference: string, label: string) {
+    const id = `fx_${reference.replace(/[^a-z0-9]+/gi, "_").toLowerCase()}`;
+    setProject((prev) => {
+      if (!prev) return prev;
+      if ((prev.effectOverrides ?? []).some((e) => e.targetRef === reference)) return prev;
+      return {
+        ...prev,
+        effectOverrides: [
+          ...(prev.effectOverrides ?? []),
+          { id, targetRef: reference, label, hue: 0, saturation: 1, lastCompiledHash: null },
+        ],
+      };
+    });
+  }
+
+  function updateEffectOverride(reference: string, patch: Partial<EffectOverride>) {
+    setProject((prev) =>
+      prev
+        ? {
+            ...prev,
+            effectOverrides: (prev.effectOverrides ?? []).map((e) =>
+              e.targetRef === reference ? { ...e, ...patch, lastCompiledHash: null } : e,
+            ),
+          }
+        : prev,
+    );
+  }
+
+  function removeEffectOverride(reference: string) {
+    setProject((prev) =>
+      prev
+        ? { ...prev, effectOverrides: (prev.effectOverrides ?? []).filter((e) => e.targetRef !== reference) }
+        : prev,
+    );
+  }
+
+  // "Open in real viewer": launch VRF's Source2Viewer on the particle (extracted
+  // from the pak). Needs the viewer path set in Setup.
+  async function openEffectInViewer(reference: string) {
+    const viewer = settings.source2ViewerPath;
+    if (!viewer) {
+      push("info", "Set the Source2Viewer path in Setup to open effects in the real viewer.");
+      return;
+    }
+    try {
+      await openInViewer(viewer, settings.vpkHelperPath, settings.deadlockPak, reference);
+    } catch (e) {
+      push("error", `Couldn't open viewer: ${e}`);
+    }
+  }
+
   const visibleSlots = (project?.events ?? []).filter((e) => e.group === activeTab);
   const songCount = (project?.events ?? []).reduce((n, e) => n + e.songs.length, 0);
 
@@ -1468,9 +1541,11 @@ export default function App() {
       ? settings.importedMods.length
       : g === REPLACE_SOUNDS
         ? (project?.soundOverrides ?? []).length
-        : (project?.events ?? [])
-            .filter((e) => e.group === g)
-            .reduce((n, e) => n + e.songs.length, 0);
+        : g === EFFECTS
+          ? (project?.effectOverrides ?? []).length
+          : (project?.events ?? [])
+              .filter((e) => e.group === g)
+              .reduce((n, e) => n + e.songs.length, 0);
 
   // One sidebar tab button (indented when nested under a parent category).
   const renderTabButton = (g: string, indented: boolean) => {
@@ -1582,7 +1657,9 @@ export default function App() {
                 ? "Merge other mods' sounds into your compile — nothing of yours is removed."
                 : activeTab === REPLACE_SOUNDS
                   ? "Replace any game sound directly by its file — no soundevents touched. Browse a category, preview, then drop in your audio."
-                  : "Your entries merge in — every other mod stays untouched."}
+                  : activeTab === EFFECTS
+                    ? "Recolor any particle effect — hero abilities, item effects, and more. Preview the recolor live, then compile to apply."
+                    : "Your entries merge in — every other mod stays untouched."}
             </p>
           </div>
           {profiles.length > 0 && (
@@ -1649,6 +1726,18 @@ export default function App() {
                 onPickFile={() => void pickOverrideFile(o)}
               />
             )}
+          />
+        ) : activeTab === EFFECTS ? (
+          <EffectsBrowser
+            helperPath={settings.vpkHelperPath}
+            pakPath={settings.deadlockPak}
+            categories={PARTICLE_CATEGORIES}
+            overrides={project?.effectOverrides ?? []}
+            accent="#c084fc"
+            onAdd={addEffectOverride}
+            onUpdate={updateEffectOverride}
+            onRemove={removeEffectOverride}
+            onOpenViewer={(ref) => void openEffectInViewer(ref)}
           />
         ) : activeTab === "heroes" ? (
           selectedHero && showVoicelines ? (
