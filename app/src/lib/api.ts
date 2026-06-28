@@ -96,6 +96,8 @@ export interface CompileConfig {
   ffmpegPath?: string;
   vpkHelperPath?: string;
   vanillaRoot: string;
+  /** Live game pak — lets compile auto-fetch a missing vanilla events file. */
+  pakPath?: string;
   outputDir: string;
   outputMode: string;
   vpkName: string;
@@ -104,6 +106,7 @@ export interface CompileConfig {
   importedMods: string[];
   events: EventCompile[];
   iconMods?: IconCompile[];
+  soundOverrides?: SoundOverrideCompile[];
 }
 
 export interface IconCompile {
@@ -111,6 +114,19 @@ export interface IconCompile {
   targetVtexc: string;
   width: number;
   height: number;
+}
+
+export interface SoundOverrideCompile {
+  targetRef: string;
+  sourceAudio: string;
+  trimStart: number;
+  trimEnd: number;
+  gainDb: number;
+  fadeIn: number;
+  fadeOut: number;
+  looping: boolean;
+  currentHash: string;
+  lastCompiledHash: string | null;
 }
 
 export interface StepResult {
@@ -283,6 +299,59 @@ export function heroDetail(
   refresh = false,
 ): Promise<HeroAbility[]> {
   return invoke("hero_detail", { helperPath, pakPath, codename, refresh });
+}
+
+/** One of a hero's voicelines (single-clip soundevent). */
+export interface VoiceLine {
+  eventName: string;
+  arrayKey: string;
+  eventsRelpath: string;
+  label: string;
+  /** First stock clip reference, for preview. */
+  stockRef: string | null;
+}
+
+/** All of a hero's voicelines (often 1000+). Cached per hero; refresh re-pulls. */
+export function heroVoicelines(
+  helperPath: string,
+  pakPath: string,
+  codename: string,
+  refresh = false,
+): Promise<VoiceLine[]> {
+  return invoke("hero_voicelines", { helperPath, pakPath, codename, refresh });
+}
+
+/** One sub-folder in the game's sound tree (lazy browse). */
+export interface SoundFolder {
+  name: string;
+  prefix: string;
+  count: number;
+}
+
+/** One game sound file (override target). */
+export interface SoundFile {
+  /** The `.vsnd` reference to override, e.g. `sounds/vo/atlas/x.vsnd`. */
+  reference: string;
+  label: string;
+}
+
+export interface SoundBrowse {
+  folders: SoundFolder[];
+  files: SoundFile[];
+  truncated: boolean;
+  total: number;
+}
+
+/** Browse the game's sound tree under `prefix` (lazy). With `query`, returns a
+ *  flat recursive search; without, immediate subfolders + files at that level. */
+export function browseGameSounds(
+  helperPath: string,
+  pakPath: string,
+  prefix: string,
+  query = "",
+  refresh = false,
+): Promise<SoundBrowse> {
+  return invoke("browse_game_sounds", { helperPath, pakPath, prefix, query, refresh });
 }
 
 /** A shop item card (icon + category + tier) for the Items tab. */

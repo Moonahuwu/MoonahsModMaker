@@ -9,10 +9,12 @@ import {
   decodeStock as decodeStockApi,
   downloadEntry,
   heroDetail as heroDetailApi,
+  heroVoicelines as heroVoicelinesApi,
   itemDetail as itemDetailApi,
   type HeroAbility,
   type HeroAbilitySound,
   type HeroPortrait,
+  type VoiceLine,
   type ItemCard,
   loadState,
   newProject,
@@ -35,12 +37,15 @@ import { ImportedMods } from "./components/ImportedMods";
 import { CompileBar } from "./components/CompileBar";
 import { HeroGrid } from "./components/HeroGrid";
 import { HeroDetail } from "./components/HeroDetail";
+import { VoicelinesPanel } from "./components/VoicelinesPanel";
 import { ItemsTab } from "./components/ItemsTab";
+import { SoundBrowser } from "./components/SoundBrowser";
+import { OverrideEditor } from "./components/OverrideEditor";
 import { ProfileSwitcher } from "./components/ProfileSwitcher";
 import { useToast } from "./components/Toaster";
 import { useSettings } from "./lib/settings";
-import { songHash } from "./lib/songHash";
-import type { EventProject, EventView, Project, Song } from "./types";
+import { songHash, overrideHash } from "./lib/songHash";
+import type { EventProject, EventView, Project, Song, SoundOverride } from "./types";
 import "./index.css";
 
 const AUDIO_EXT = /\.(mp3|wav|flac|ogg|m4a|aac)$/i;
@@ -50,6 +55,27 @@ const DEFAULT_GAIN_DB = 6;
 const MOD_COMBINER = "modcombiner";
 /** Special always-present tab for shop items (scaffold; sounds wired later). */
 const ITEMS = "items";
+/** Special always-present tab for loose-file sound replacement (any game sound). */
+const REPLACE_SOUNDS = "replacesounds";
+
+/** Curated top categories for the loose-file sound browser (path prefixes into
+ *  the game's sound tree). Keeps 79k sounds navigable instead of a flat dump. */
+const SOUND_CATEGORIES: { key: string; label: string; prefix: string; hint?: string }[] = [
+  { key: "vo", label: "Announcer & Hero VO", prefix: "sounds/vo", hint: "Voice lines (by hero)" },
+  { key: "abilities", label: "Hero Abilities", prefix: "sounds/abilities", hint: "Ability SFX (by hero)" },
+  { key: "weapons", label: "Weapons & Gunfire", prefix: "sounds/weapons", hint: "Per-hero + shared" },
+  { key: "music", label: "Music", prefix: "sounds/music", hint: "Stingers, menu, intro" },
+  { key: "ui", label: "UI & Menus", prefix: "sounds/ui" },
+  { key: "mods", label: "Items", prefix: "sounds/mods", hint: "Weapon / armor / tech" },
+  { key: "hit", label: "Hit Markers", prefix: "sounds/hit_indicators" },
+  { key: "player", label: "Player & Foley", prefix: "sounds/player", hint: "Footsteps, movement" },
+  { key: "world", label: "World & Objectives", prefix: "sounds/world" },
+  { key: "gameplay", label: "Gameplay", prefix: "sounds/gameplay" },
+  { key: "guardian", label: "Guardians & NPCs", prefix: "sounds/npc" },
+  { key: "ambient", label: "Ambience", prefix: "sounds/ambient" },
+  { key: "cosmetics", label: "Cosmetics", prefix: "sounds/cosmetics" },
+  { key: "all", label: "Everything (all sounds)", prefix: "sounds", hint: "Full tree — power users" },
+];
 
 /** The built-in, undeletable empty profile = stock game (no tracks). */
 const VANILLA_NAME = "Vanilla";
@@ -65,12 +91,21 @@ function cleanProfileName(s: string): string {
 const TAB_LABELS: Record<string, string> = {
   intro: "Deadlock Intro",
   urn: "Urn Music",
+  midboss: "Midboss",
+  powerups: "Powerups",
+  teamobj: "Team Objectives",
   heroes: "Heroes",
   shop: "Shop Music",
   ui: "UI",
   [ITEMS]: "Items",
+  [REPLACE_SOUNDS]: "Replace Sounds",
   [MOD_COMBINER]: "Mod combiner",
 };
+
+/** Parent groupings in the sidebar: a collapsible header over related tabs. */
+const TAB_CATEGORIES: { label: string; tabs: string[] }[] = [
+  { label: "Map", tabs: ["urn", "midboss", "powerups", "teamobj"] },
+];
 
 function baseName(path: string): string {
   const file = path.split(/[\\/]/).pop() ?? path;
@@ -138,7 +173,10 @@ function reconcileProject(saved: Project, def: Project): Project {
 
 function accentFor(ev: { group: string; side: string }): string {
   if (ev.group === "intro") return ev.side === "Mother" ? "#3974ae" : "#ffac10";
-  if (ev.group === "urn") return "#a855f7";
+  if (ev.group === "urn") return "#a855f7"; // violet
+  if (ev.group === "midboss") return "#f97316"; // orange
+  if (ev.group === "powerups") return "#84cc16"; // lime
+  if (ev.group === "teamobj") return "#60a5fa"; // blue
   if (ev.group === "shop") return "#10b981"; // emerald (souls/shop)
   if (ev.group === "ui") return "#38bdf8"; // sky (menus)
   if (ev.group === ITEMS) return "#f59e0b"; // amber (items)
@@ -161,6 +199,10 @@ export default function App() {
   const [heroAbilities, setHeroAbilities] = useState<HeroAbility[] | null>(null);
   const [heroDetailLoading, setHeroDetailLoading] = useState(false);
   const [selectedAbility, setSelectedAbility] = useState<string | null>(null);
+  // Voicelines view for the selected hero (toggled from the hero menu).
+  const [showVoicelines, setShowVoicelines] = useState(false);
+  const [voicelines, setVoicelines] = useState<VoiceLine[] | null>(null);
+  const [voicelinesLoading, setVoicelinesLoading] = useState(false);
   // Selected shop item (Items tab) -> drill-in to its sound events.
   const [selectedItem, setSelectedItem] = useState<ItemCard | null>(null);
   const [itemSounds, setItemSounds] = useState<HeroAbilitySound[] | null>(null);
@@ -194,9 +236,38 @@ export default function App() {
       if (!seen.includes(e.group)) seen.push(e.group);
     }
     if (!seen.includes(ITEMS)) seen.push(ITEMS);
+    if (!seen.includes(REPLACE_SOUNDS)) seen.push(REPLACE_SOUNDS);
     seen.push(MOD_COMBINER);
     return seen;
   }, [project]);
+
+  // Sidebar nav structure: standalone tabs, with category tabs collapsed under a
+  // single parent header (rendered at the position of the first member tab).
+  const navItems = useMemo(() => {
+    const items: (
+      | { type: "tab"; key: string }
+      | { type: "category"; label: string; tabs: string[] }
+    )[] = [];
+    const usedCats = new Set<string>();
+    for (const g of tabs) {
+      const cat = TAB_CATEGORIES.find((c) => c.tabs.includes(g));
+      if (cat) {
+        if (usedCats.has(cat.label)) continue;
+        usedCats.add(cat.label);
+        items.push({
+          type: "category",
+          label: cat.label,
+          tabs: cat.tabs.filter((t) => tabs.includes(t)),
+        });
+      } else {
+        items.push({ type: "tab", key: g });
+      }
+    }
+    return items;
+  }, [tabs]);
+
+  // Which parent categories are collapsed (default: all expanded).
+  const [collapsedCats, setCollapsedCats] = useState<Set<string>>(new Set());
 
   const hydrated = useRef(false);
 
@@ -775,6 +846,10 @@ export default function App() {
               ...e,
               songs: e.songs.map((s) => ({ ...s, lastCompiledHash: songHash(s) })),
             })),
+            soundOverrides: (prev.soundOverrides ?? []).map((o) => ({
+              ...o,
+              lastCompiledHash: overrideHash(o),
+            })),
           }
         : prev,
     );
@@ -973,6 +1048,8 @@ export default function App() {
 
   // Load a hero's abilities when selected; decompile its sound files into vanilla.
   useEffect(() => {
+    setShowVoicelines(false);
+    setVoicelines(null);
     if (!selectedHero) {
       setHeroAbilities(null);
       setSelectedAbility(null);
@@ -1020,6 +1097,63 @@ export default function App() {
     void load(next ?? undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedHero, selectedAbility, heroAbilities]);
+
+  // Load the selected hero's voicelines the first time the Voicelines view opens.
+  useEffect(() => {
+    if (!selectedHero || !showVoicelines || voicelines) return;
+    let cancelled = false;
+    setVoicelinesLoading(true);
+    (async () => {
+      const s = settingsRef.current;
+      try {
+        const lines = await heroVoicelinesApi(s.vpkHelperPath, s.deadlockPak, selectedHero);
+        if (!cancelled) setVoicelines(lines);
+      } catch (e) {
+        if (!cancelled) push("error", `Couldn't load voicelines: ${e}`);
+      } finally {
+        if (!cancelled) setVoicelinesLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedHero, showVoicelines]);
+
+  // Materialize a single voiceline's editor slot (lazy, on first expand) and
+  // make sure its VO soundevents file is decompiled into the merge base.
+  function ensureVoicelineSlot(codename: string, vl: VoiceLine): Project | null {
+    const prev = projectRef.current;
+    if (!prev) return null;
+    const id = heroAbilSlotId(codename, vl.eventName);
+    if (prev.events.some((e) => e.id === id)) return prev;
+    const slot: EventProject = {
+      id,
+      group: "heroes",
+      side: vl.label,
+      eventName: vl.eventName,
+      arrayKey: vl.arrayKey,
+      stockEntry: "",
+      vsndDurationMode: "auto",
+      vsndDurationManual: null,
+      songs: [],
+      previousOwnedNames: [],
+      excludedEntries: [],
+      removedEntries: [],
+      adopted: [],
+      eventsRelpath: vl.eventsRelpath,
+    };
+    const next = { ...prev, events: [...prev.events, slot] };
+    setProject(next);
+    return next;
+  }
+
+  async function openVoiceline(vl: VoiceLine) {
+    if (!selectedHero) return;
+    await ensureVanillaFiles([vl.eventsRelpath]);
+    const next = ensureVoicelineSlot(selectedHero, vl);
+    void load(next ?? undefined);
+  }
 
   // Materialize an item's sound slots (created empty, pruned if unused). Returns
   // the updated project so the caller can pool the new slots immediately.
@@ -1133,6 +1267,91 @@ export default function App() {
     }
   }
 
+  // ---- Loose-file sound overrides (Replace Sounds tab) --------------------
+  const AUDIO_PICK = [
+    { name: "Audio", extensions: ["mp3", "wav", "flac", "ogg", "m4a", "aac"] },
+  ];
+
+  async function pickAudioFile(): Promise<string | null> {
+    const sel = await openDialog({ multiple: false, filters: AUDIO_PICK });
+    return typeof sel === "string" ? sel : null;
+  }
+
+  async function audioDuration(path: string): Promise<number> {
+    try {
+      return (await probeAudio(path, settings.ffmpegPath || undefined)).duration;
+    } catch {
+      return 0;
+    }
+  }
+
+  // Start a replacement for a game sound: pick audio, create the override.
+  async function replaceSound(reference: string, label: string) {
+    try {
+      const sel = await pickAudioFile();
+      if (!sel) return;
+      const dur = await audioDuration(sel);
+      const id = `snd_${reference.replace(/[^a-z0-9]+/gi, "_").toLowerCase()}`;
+      setProject((prev) => {
+        if (!prev) return prev;
+        const list = (prev.soundOverrides ?? []).filter((o) => o.targetRef !== reference);
+        list.push({
+          id,
+          targetRef: reference,
+          label,
+          sourceAudio: sel,
+          trimStart: 0,
+          trimEnd: dur || 0,
+          gainDb: 0,
+          fadeIn: 0,
+          fadeOut: 0,
+          looping: false,
+          lastCompiledHash: null,
+        });
+        return { ...prev, soundOverrides: list };
+      });
+      push("success", `Replacement set for ${label} — compile to apply`);
+    } catch (e) {
+      push("error", `Couldn't pick audio: ${e}`);
+    }
+  }
+
+  function updateOverride(id: string, patch: Partial<SoundOverride>) {
+    setProject((prev) =>
+      prev
+        ? {
+            ...prev,
+            soundOverrides: (prev.soundOverrides ?? []).map((o) =>
+              o.id === id ? { ...o, ...patch, lastCompiledHash: null } : o,
+            ),
+          }
+        : prev,
+    );
+  }
+
+  function removeOverrideByRef(reference: string) {
+    setProject((prev) =>
+      prev
+        ? {
+            ...prev,
+            soundOverrides: (prev.soundOverrides ?? []).filter((o) => o.targetRef !== reference),
+          }
+        : prev,
+    );
+  }
+
+  // Swap the source audio file for an existing override.
+  async function pickOverrideFile(o: SoundOverride) {
+    try {
+      const sel = await pickAudioFile();
+      if (!sel) return;
+      const dur = await audioDuration(sel);
+      updateOverride(o.id, { sourceAudio: sel, trimStart: 0, trimEnd: dur || o.trimEnd });
+    } catch (e) {
+      push("error", `Couldn't pick audio: ${e}`);
+    }
+  }
+
   const visibleSlots = (project?.events ?? []).filter((e) => e.group === activeTab);
   const songCount = (project?.events ?? []).reduce((n, e) => n + e.songs.length, 0);
 
@@ -1193,43 +1412,98 @@ export default function App() {
     return renderPanel(slot);
   };
 
+  // Track count for a tab (imported-mod count for the combiner, else songs).
+  const tabCount = (g: string): number =>
+    g === MOD_COMBINER
+      ? settings.importedMods.length
+      : g === REPLACE_SOUNDS
+        ? (project?.soundOverrides ?? []).length
+        : (project?.events ?? [])
+            .filter((e) => e.group === g)
+            .reduce((n, e) => n + e.songs.length, 0);
+
+  // One sidebar tab button (indented when nested under a parent category).
+  const renderTabButton = (g: string, indented: boolean) => {
+    const count = tabCount(g);
+    const active = g === activeTab;
+    return (
+      <button
+        key={g}
+        onClick={() => setActiveTab(g)}
+        className={`flex items-center justify-between rounded-lg py-2 pr-3 text-left text-sm transition ${
+          indented ? "pl-6" : "px-3"
+        } ${
+          active
+            ? "bg-zinc-800 text-zinc-100"
+            : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"
+        }`}
+      >
+        <span className="flex items-center gap-2">
+          {indented && (
+            <span
+              className="h-1.5 w-1.5 shrink-0 rounded-full"
+              style={{ backgroundColor: accentFor({ group: g, side: "" }) }}
+            />
+          )}
+          {TAB_LABELS[g] ?? g}
+        </span>
+        {count > 0 && (
+          <span className="rounded bg-emerald-500/15 px-1.5 text-[10px] font-semibold text-emerald-300">
+            {count}
+          </span>
+        )}
+      </button>
+    );
+  };
+
   return (
     <div className="flex h-screen overflow-hidden">
       {/* Left sidebar: brand + tabs — fixed, never scrolls */}
       <aside className="flex h-screen w-52 shrink-0 flex-col gap-1 border-r border-zinc-800 bg-zinc-950/60 p-4">
         <div className="mb-4">
           <h1 className="text-sm font-bold uppercase tracking-wider text-zinc-300">
-            Deadlock
+            Moonah's
           </h1>
-          <p className="text-[11px] text-zinc-600">Music Modder</p>
+          <p className="text-[11px] text-zinc-600">Mod Maker</p>
         </div>
-        {tabs.map((g) => {
-          const count =
-            g === MOD_COMBINER
-              ? settings.importedMods.length
-              : (project?.events ?? [])
-                  .filter((e) => e.group === g)
-                  .reduce((n, e) => n + e.songs.length, 0);
-          const active = g === activeTab;
-          return (
-            <button
-              key={g}
-              onClick={() => setActiveTab(g)}
-              className={`flex items-center justify-between rounded-lg px-3 py-2 text-left text-sm transition ${
-                active
-                  ? "bg-zinc-800 text-zinc-100"
-                  : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"
-              }`}
-            >
-              <span>{TAB_LABELS[g] ?? g}</span>
-              {count > 0 && (
-                <span className="rounded bg-emerald-500/15 px-1.5 text-[10px] font-semibold text-emerald-300">
-                  {count}
-                </span>
-              )}
-            </button>
-          );
-        })}
+        <nav className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
+          {navItems.map((item) => {
+            if (item.type === "tab") return renderTabButton(item.key, false);
+            // Category: a collapsible parent header over its member tabs.
+            const collapsed = collapsedCats.has(item.label);
+            const catCount = item.tabs.reduce((n, t) => n + tabCount(t), 0);
+            const hasActive = item.tabs.includes(activeTab);
+            return (
+              <div key={item.label} className="flex flex-col gap-1">
+                <button
+                  onClick={() =>
+                    setCollapsedCats((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(item.label)) next.delete(item.label);
+                      else next.add(item.label);
+                      return next;
+                    })
+                  }
+                  className={`flex items-center justify-between rounded-lg px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider transition ${
+                    hasActive ? "text-zinc-200" : "text-zinc-500 hover:text-zinc-300"
+                  }`}
+                >
+                  <span className="flex items-center gap-1.5">
+                    <span className="text-[9px] text-zinc-600">{collapsed ? "▶" : "▼"}</span>
+                    {item.label}
+                  </span>
+                  {catCount > 0 && (
+                    <span className="rounded bg-emerald-500/15 px-1.5 text-[10px] font-semibold text-emerald-300">
+                      {catCount}
+                    </span>
+                  )}
+                </button>
+                {!collapsed &&
+                  item.tabs.map((t) => renderTabButton(t, true))}
+              </div>
+            );
+          })}
+        </nav>
         <div className="mt-auto flex items-center justify-between pt-2">
           <button
             onClick={() => setSettingsOpen(true)}
@@ -1256,7 +1530,9 @@ export default function App() {
             <p className="mt-1 text-sm text-zinc-500">
               {activeTab === MOD_COMBINER
                 ? "Merge other mods' sounds into your compile — nothing of yours is removed."
-                : "Your entries merge in — every other mod stays untouched."}
+                : activeTab === REPLACE_SOUNDS
+                  ? "Replace any game sound directly by its file — no soundevents touched. Browse a category, preview, then drop in your audio."
+                  : "Your entries merge in — every other mod stays untouched."}
             </p>
           </div>
           {profiles.length > 0 && (
@@ -1299,8 +1575,37 @@ export default function App() {
             onPickIcon={() => selectedItem && void pickItemIcon(selectedItem)}
             onRemoveIcon={() => selectedItem && removeItemIcon(selectedItem.name)}
           />
+        ) : activeTab === REPLACE_SOUNDS ? (
+          <SoundBrowser
+            helperPath={settings.vpkHelperPath}
+            pakPath={settings.deadlockPak}
+            categories={SOUND_CATEGORIES}
+            overrides={project?.soundOverrides ?? []}
+            accent="#f472b6"
+            onPreview={(ref) => decodeStock(ref)}
+            onReplace={(ref, label) => void replaceSound(ref, label)}
+            onRemoveOverride={removeOverrideByRef}
+            renderEditor={(o) => (
+              <OverrideEditor
+                override={o}
+                onChange={(patch) => updateOverride(o.id, patch)}
+                onPickFile={() => void pickOverrideFile(o)}
+              />
+            )}
+          />
         ) : activeTab === "heroes" ? (
-          selectedHero ? (
+          selectedHero && showVoicelines ? (
+            <VoicelinesPanel
+              heroName={selectedHeroInfo?.displayName ?? selectedHero}
+              accent={selectedHeroInfo?.color ?? "#e0564f"}
+              voicelines={voicelines}
+              loading={voicelinesLoading}
+              onBack={() => setShowVoicelines(false)}
+              onPreview={(ref) => decodeStock(ref)}
+              onOpen={(vl) => void openVoiceline(vl)}
+              renderSound={renderSound}
+            />
+          ) : selectedHero ? (
             <HeroDetail
               heroName={selectedHeroInfo?.displayName ?? selectedHero}
               backgroundSrc={selectedHeroInfo?.portraitPath ?? null}
@@ -1310,6 +1615,7 @@ export default function App() {
               loading={heroDetailLoading}
               selectedAbility={selectedAbility}
               onSelectAbility={setSelectedAbility}
+              onShowVoicelines={() => setShowVoicelines(true)}
               onBack={() => {
                 setSelectedHero(null);
                 setSelectedHeroInfo(null);
@@ -1342,6 +1648,7 @@ export default function App() {
             update={updateSettings}
             events={project.events}
             iconMods={project.iconMods ?? []}
+            soundOverrides={project.soundOverrides ?? []}
             onCompiled={markAllCompiled}
           />
         )}

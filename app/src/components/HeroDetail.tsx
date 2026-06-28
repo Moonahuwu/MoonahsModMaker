@@ -17,6 +17,7 @@ export function HeroDetail({
   loading,
   selectedAbility,
   onSelectAbility,
+  onShowVoicelines,
   onBack,
   renderSound,
 }: {
@@ -28,6 +29,7 @@ export function HeroDetail({
   loading: boolean;
   selectedAbility: string | null;
   onSelectAbility: (ability: string | null) => void;
+  onShowVoicelines: () => void;
   onBack: () => void;
   renderSound: (sound: HeroAbilitySound) => React.ReactNode;
 }) {
@@ -66,6 +68,13 @@ export function HeroDetail({
             <h2 className="text-2xl font-bold tracking-tight text-white drop-shadow">
               {heroName}
             </h2>
+            <button
+              onClick={onShowVoicelines}
+              style={{ borderColor: `${accent}99` }}
+              className="ml-auto rounded-md border bg-zinc-900/60 px-3 py-1 text-xs font-medium text-zinc-200 transition hover:bg-zinc-800 hover:text-white"
+            >
+              🎙 Voicelines
+            </button>
           </div>
 
           {/* Ability bar (1–4) */}

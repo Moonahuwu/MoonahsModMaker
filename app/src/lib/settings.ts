@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import type { CompileConfig, EventCompile } from "./api";
+import type { CompileConfig, EventCompile, SoundOverrideCompile } from "./api";
 import { loadSettings, saveSettings } from "./api";
-import type { EventProject } from "../types";
-import { songHash } from "./songHash";
+import type { EventProject, SoundOverride } from "../types";
+import { songHash, overrideHash } from "./songHash";
 
 // User-facing settings. We derive the verbose CompileConfig paths from a CSDK
 // root + addon name so the user only manages a few friendly fields.
@@ -128,7 +128,20 @@ export function buildCompileConfig(
   events: EventProject[],
   skipCompile = false,
   iconMods: { sourceImage: string; targetVtexc: string; width: number; height: number }[] = [],
+  soundOverrides: SoundOverride[] = [],
 ): CompileConfig {
+  const overrideCompiles: SoundOverrideCompile[] = soundOverrides.map((o) => ({
+    targetRef: o.targetRef,
+    sourceAudio: o.sourceAudio,
+    trimStart: o.trimStart,
+    trimEnd: o.trimEnd,
+    gainDb: o.gainDb,
+    fadeIn: o.fadeIn,
+    fadeOut: o.fadeOut,
+    looping: o.looping,
+    currentHash: overrideHash(o),
+    lastCompiledHash: o.lastCompiledHash ?? null,
+  }));
   const eventCompiles: EventCompile[] = events.map((ev) => ({
     eventName: ev.eventName,
     arrayKey: ev.arrayKey,
@@ -166,6 +179,7 @@ export function buildCompileConfig(
     ffmpegPath: s.ffmpegPath || undefined,
     vpkHelperPath: s.vpkHelperPath || undefined,
     vanillaRoot: s.vanillaRoot,
+    pakPath: s.deadlockPak || undefined,
     outputDir: s.outputDir,
     outputMode: s.outputMode,
     vpkName: s.vpkName,
@@ -174,5 +188,6 @@ export function buildCompileConfig(
     importedMods: s.importedMods,
     events: eventCompiles,
     iconMods,
+    soundOverrides: overrideCompiles,
   };
 }

@@ -20,6 +20,29 @@ export function songHash(song: Song): string {
   ].join("|");
 }
 
+/** Fingerprint of a loose-file sound override (same idea as songHash). */
+export function overrideHash(o: {
+  sourceAudio: string;
+  targetRef: string;
+  trimStart: number;
+  trimEnd: number;
+  gainDb: number;
+  fadeIn: number;
+  fadeOut: number;
+  looping: boolean;
+}): string {
+  return [
+    o.sourceAudio,
+    o.targetRef,
+    o.trimStart,
+    o.trimEnd,
+    o.gainDb,
+    o.fadeIn,
+    o.fadeOut,
+    o.looping ? 1 : 0,
+  ].join("|");
+}
+
 /** Compile status of a song relative to its last successful compile. */
 export type SongStatus = "new" | "compiled" | "stale";
 

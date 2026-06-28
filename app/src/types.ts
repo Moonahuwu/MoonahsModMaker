@@ -88,6 +88,22 @@ export interface IconMod {
   height: number;
 }
 
+/** A loose-file sound override: user audio compiled + staged at a vanilla path. */
+export interface SoundOverride {
+  id: string;
+  /** The `.vsnd` reference to shadow, e.g. `sounds/vo/atlas/x.vsnd`. */
+  targetRef: string;
+  label: string;
+  sourceAudio: string;
+  trimStart: number;
+  trimEnd: number;
+  gainDb: number;
+  fadeIn: number;
+  fadeOut: number;
+  looping: boolean;
+  lastCompiledHash?: string | null;
+}
+
 export interface Project {
   version: number;
   gameContentRoot: string;
@@ -97,6 +113,7 @@ export interface Project {
   output: Output;
   events: EventProject[];
   iconMods?: IconMod[];
+  soundOverrides?: SoundOverride[];
 }
 
 /// Classification of one array entry relative to a side's project state.

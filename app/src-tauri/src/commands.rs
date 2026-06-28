@@ -1094,6 +1094,138 @@ pub fn hero_detail(
     Ok(out)
 }
 
+// ---- Hero voicelines -------------------------------------------------------
+// Each hero has a big `soundevents/vo/generated_vo_hero_<code>.vsndevts` (often
+// 1000+ single-clip events). The Voicelines view lists them compactly; editor
+// slots are only materialized for the few a user actually changes.
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceLine {
+    pub event_name: String,
+    pub array_key: String,
+    pub events_relpath: String,
+    pub label: String,
+    /// The first stock clip reference (for preview), if any.
+    pub stock_ref: Option<String>,
+}
+
+/// `atlas_ally_astro_bounce_pad_01_hero_3d` -> "Ally Astro Bounce Pad 01".
+fn prettify_voiceline(event: &str, code: &str) -> String {
+    let mut s = event.strip_prefix(&format!("{code}_")).unwrap_or(event);
+    for suf in ["_hero_3d", "_hero_2d", "_world_3d", "_3d", "_2d"] {
+        if let Some(t) = s.strip_suffix(suf) {
+            s = t;
+            break;
+        }
+    }
+    s.split('_')
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                Some(f) => f.to_uppercase().chain(c).collect::<String>(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Parse a VO `.vsndevts` into `(event, first vsnd ref)` pairs.
+fn parse_vo_events(text: &str) -> Vec<(String, Option<String>)> {
+    let mut out: Vec<(String, Option<String>)> = Vec::new();
+    let mut cur: Option<String> = None;
+    let mut cur_ref: Option<String> = None;
+    let mut in_vsnd = false;
+    for line in text.lines() {
+        let top = line.starts_with('\t') && !line.starts_with("\t\t");
+        let t = line.trim();
+        if top {
+            if let Some(k) = t.strip_suffix('=').map(str::trim) {
+                if !k.is_empty()
+                    && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+                {
+                    if let Some(name) = cur.take() {
+                        out.push((name, cur_ref.take()));
+                    }
+                    cur = Some(k.to_string());
+                    cur_ref = None;
+                    in_vsnd = false;
+                    continue;
+                }
+            }
+        }
+        if cur.is_none() {
+            continue;
+        }
+        if t.starts_with("vsnd_files") {
+            in_vsnd = true;
+        }
+        if in_vsnd && cur_ref.is_none() {
+            if let Some(r) = between(t, "\"", ".vsnd\"") {
+                cur_ref = Some(format!("{r}.vsnd"));
+            }
+        }
+    }
+    if let Some(name) = cur.take() {
+        out.push((name, cur_ref.take()));
+    }
+    out
+}
+
+/// A hero's voicelines (from `soundevents/vo/generated_vo_hero_<code>.vsndevts`).
+/// Cached per hero. Returns an empty list if the hero has no VO file.
+#[tauri::command]
+pub fn hero_voicelines(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+    codename: String,
+    refresh: Option<bool>,
+) -> Result<Vec<VoiceLine>, String> {
+    use tauri::Manager;
+    let base = app.path().app_data_dir().map_err(|e| e.to_string())?.join("hero_portraits");
+    std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
+
+    let cache = base.join(format!("vo_{codename}.json"));
+    if !refresh.unwrap_or(false) {
+        if let Ok(t) = std::fs::read_to_string(&cache) {
+            if let Ok(v) = serde_json::from_str::<Vec<VoiceLine>>(&t) {
+                return Ok(v);
+            }
+        }
+    }
+
+    let relpath = format!("soundevents/vo/generated_vo_hero_{codename}.vsndevts");
+    let vo_dir = base.join("voevents");
+    std::fs::create_dir_all(&vo_dir).map_err(|e| e.to_string())?;
+    let vo_file = vo_dir.join(format!("{codename}.vsndevts"));
+    if refresh.unwrap_or(false) || !vo_file.exists() {
+        // Missing file = hero has no VO; return empty rather than erroring.
+        if crate::vpk::decompile_from_vpk(&helper_path, &pak_path, &format!("{relpath}_c"), &vo_file.to_string_lossy()).is_err() {
+            let _ = std::fs::write(&cache, "[]");
+            return Ok(vec![]);
+        }
+    }
+    let text = std::fs::read_to_string(&vo_file).map_err(|e| e.to_string())?;
+    let lines: Vec<VoiceLine> = parse_vo_events(&text)
+        .into_iter()
+        .filter(|(_, r)| r.is_some())
+        .map(|(event, stock_ref)| VoiceLine {
+            label: prettify_voiceline(&event, &codename),
+            event_name: event,
+            array_key: "vsnd_files".to_string(),
+            events_relpath: relpath.clone(),
+            stock_ref,
+        })
+        .collect();
+    if let Ok(json) = serde_json::to_string(&lines) {
+        let _ = std::fs::write(&cache, json);
+    }
+    Ok(lines)
+}
+
 // ---- Items (shop) ----------------------------------------------------------
 // Items are abilities too (in abilities.vdata) with `m_strShopIconLarge`. The
 // Items tab recreates the shop: grouped by category (slot type) and tier, each
@@ -1701,4 +1833,155 @@ pub fn rename_profile(app: tauri::AppHandle, from: String, to: String) -> Result
         return Err(format!("profile '{from}' not found"));
     }
     std::fs::rename(&src, &dst).map_err(|e| e.to_string())
+}
+
+// ---- Loose-file sound browser ---------------------------------------------
+// The game pak has ~79k `sounds/**.vsnd_c`. We cache the full path index once,
+// then serve it as a lazy folder tree (immediate subfolders + files) or a
+// recursive search under a prefix — so the UI never loads the whole list.
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SoundFolder {
+    pub name: String,
+    /// Full prefix to drill into (e.g. `sounds/vo/atlas`).
+    pub prefix: String,
+    /// Number of sound files anywhere under this folder.
+    pub count: usize,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SoundFile {
+    /// The `.vsnd` reference (override target), e.g. `sounds/vo/atlas/x.vsnd`.
+    pub reference: String,
+    /// Friendly label (the file stem).
+    pub label: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SoundBrowse {
+    pub folders: Vec<SoundFolder>,
+    pub files: Vec<SoundFile>,
+    /// True when the result was capped (refine with search).
+    pub truncated: bool,
+    /// Total sound files in the index (for display).
+    pub total: usize,
+}
+
+/// Build (and cache) the index of every `sounds/**.vsnd_c` path in the pak.
+fn game_sound_index(
+    app: &tauri::AppHandle,
+    helper_path: &str,
+    pak_path: &str,
+    refresh: bool,
+) -> Result<Vec<String>, String> {
+    use tauri::Manager;
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("hero_portraits");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let cache = dir.join("game_sounds.txt");
+    if !refresh {
+        if let Ok(t) = std::fs::read_to_string(&cache) {
+            if !t.trim().is_empty() {
+                return Ok(t.lines().map(|s| s.to_string()).collect());
+            }
+        }
+    }
+    // List + keep only sound references, stored as `.vsnd` (strip the `_c`).
+    let mut refs: Vec<String> = crate::vpk::list(helper_path, pak_path, Some("sounds/"))?
+        .into_iter()
+        .filter(|p| p.ends_with(".vsnd_c"))
+        .map(|p| p.trim_end_matches("_c").to_string())
+        .collect();
+    refs.sort();
+    refs.dedup();
+    let _ = std::fs::write(&cache, refs.join("\n"));
+    Ok(refs)
+}
+
+/// Browse the game's sound tree under `prefix` (lazy). With `query`, returns a
+/// flat recursive search (capped); without, returns immediate subfolders + the
+/// files directly at this level.
+#[tauri::command]
+pub fn browse_game_sounds(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+    prefix: String,
+    query: Option<String>,
+    refresh: Option<bool>,
+) -> Result<SoundBrowse, String> {
+    const CAP: usize = 500;
+    let index = game_sound_index(&app, &helper_path, &pak_path, refresh.unwrap_or(false))?;
+    let total = index.len();
+    let pre = prefix.trim_matches('/');
+    let pre_slash = if pre.is_empty() { String::new() } else { format!("{pre}/") };
+
+    let q = query.unwrap_or_default().trim().to_lowercase();
+    if !q.is_empty() {
+        // Recursive search under the prefix.
+        let mut files: Vec<SoundFile> = Vec::new();
+        let mut truncated = false;
+        for r in &index {
+            if !pre_slash.is_empty() && !r.starts_with(&pre_slash) {
+                continue;
+            }
+            if !r.to_lowercase().contains(&q) {
+                continue;
+            }
+            if files.len() >= CAP {
+                truncated = true;
+                break;
+            }
+            files.push(SoundFile {
+                label: sound_stem(r),
+                reference: r.clone(),
+            });
+        }
+        return Ok(SoundBrowse { folders: vec![], files, truncated, total });
+    }
+
+    // Folder view: immediate subfolders (with recursive counts) + direct files.
+    use std::collections::BTreeMap;
+    let mut folder_counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut files: Vec<SoundFile> = Vec::new();
+    for r in &index {
+        let rest = if pre_slash.is_empty() {
+            r.as_str()
+        } else if let Some(s) = r.strip_prefix(&pre_slash) {
+            s
+        } else {
+            continue;
+        };
+        match rest.split_once('/') {
+            Some((sub, _)) => {
+                *folder_counts.entry(sub.to_string()).or_insert(0) += 1;
+            }
+            None => {
+                files.push(SoundFile { label: sound_stem(r), reference: r.clone() });
+            }
+        }
+    }
+    let folders = folder_counts
+        .into_iter()
+        .map(|(name, count)| SoundFolder {
+            prefix: if pre.is_empty() { name.clone() } else { format!("{pre}/{name}") },
+            name,
+            count,
+        })
+        .collect();
+    let truncated = files.len() > CAP;
+    files.truncate(CAP);
+    Ok(SoundBrowse { folders, files, truncated, total })
+}
+
+/// `sounds/vo/atlas/atlas_ally_x.vsnd` -> `atlas_ally_x`.
+fn sound_stem(reference: &str) -> String {
+    reference
+        .rsplit('/')
+        .next()
+        .unwrap_or(reference)
+        .trim_end_matches(".vsnd")
+        .to_string()
 }

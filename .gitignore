@@ -19,6 +19,9 @@ tools/vpk-helper/publish
 /soundevents
 /compilerstuff
 /VanillaFiles
+# Reference-only: the user's old manual megamod (1.3GB compiled .vpk), kept
+# locally to model the loose-file sound-override workflow we'll automate later.
+/OldMegapack
 
 # ---- OS / editor ----
 .DS_Store

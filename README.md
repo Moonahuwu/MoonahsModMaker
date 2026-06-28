@@ -1,8 +1,11 @@
-# EasyIntroModder
+# Moonah's Mod Maker
 
-A local desktop app for managing custom Deadlock music mods — match-intro tracks,
-urn (Idol) music, and hero ability music — and compiling them into a ready-to-use
-`.vpk`.
+A local desktop app for building custom Deadlock sound/UI mods — match-intro tracks,
+map music (urn/Idol, midboss, powerups, team objectives), hero ability sounds and
+voicelines, shop-item sounds, and custom item icons — and compiling them into a
+ready-to-install `.vpk`.
+
+> Formerly **EasyIntroModder** — renamed as the scope grew well beyond the intro.
 
 It merges your entries into the game's shared sound-event files (`music.vsndevts`,
 `hero/*.vsndevts`) **without disturbing other mods**: it only touches the array

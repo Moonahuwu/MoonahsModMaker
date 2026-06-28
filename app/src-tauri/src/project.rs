@@ -25,6 +25,43 @@ pub struct Project {
     /// Custom item/UI icon overrides (PNG/JPG → compiled `.vtex_c`).
     #[serde(default)]
     pub icon_mods: Vec<IconMod>,
+    /// Loose-file sound overrides: replace ANY game sound by staging a compiled
+    /// `.vsnd_c` at its vanilla path (no soundevent editing). Complements `events`.
+    #[serde(default)]
+    pub sound_overrides: Vec<SoundOverride>,
+}
+
+/// A loose-file sound replacement: the user's audio, processed and compiled to a
+/// `.vsnd_c`, staged at `target_ref`'s path so it shadows the game's own file.
+/// No soundevents are touched (the "named the same as vanilla" override trick).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SoundOverride {
+    /// Stable id (e.g. `snd_sounds_vo_atlas_x`).
+    pub id: String,
+    /// The vanilla `.vsnd` reference to shadow, e.g.
+    /// `sounds/vo/atlas/atlas_ally_x.vsnd`. Drives both the compiled output path
+    /// and the in-VPK staging path.
+    pub target_ref: String,
+    /// Friendly label (defaults to the file stem).
+    pub label: String,
+    /// Absolute path to the user's source audio.
+    pub source_audio: String,
+    #[serde(default)]
+    pub trim_start: f64,
+    #[serde(default)]
+    pub trim_end: f64,
+    #[serde(default)]
+    pub gain_db: f64,
+    #[serde(default)]
+    pub fade_in: f64,
+    #[serde(default)]
+    pub fade_out: f64,
+    #[serde(default)]
+    pub looping: bool,
+    /// Hash recorded after the last successful compile (null = never compiled).
+    #[serde(default)]
+    pub last_compiled_hash: Option<String>,
 }
 
 /// One custom icon: a user image that, on compile, is scaled + compiled to a
@@ -336,6 +373,174 @@ impl Project {
                     "sounds/music/music_idol_announce.vsnd",
                     "soundevents/music.vsndevts",
                 ),
+                // --- Tab (Map): Midboss (arrival stinger + the Rejuvenator drop) ---
+                slot(
+                    "midboss_arrived",
+                    "midboss",
+                    "Mid-boss arrived",
+                    "Stinger.MidBoss.Arrived",
+                    "vsnd_files",
+                    "sounds/music/music_stinger_mid_boss_arrived.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "midboss_rejuv_descent",
+                    "midboss",
+                    "Rejuvenator descending",
+                    "Stinger.Rejuvinator.Descent",
+                    "vsnd_files",
+                    "sounds/music/music_stinger_rejuv_drop_6s.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "midboss_rejuv_claim_team",
+                    "midboss",
+                    "Rejuvenator claimed (your team)",
+                    "Stinger.Rejuvinator.Claimed.Friendly",
+                    "vsnd_files",
+                    "sounds/music/music_stinger_rejuv_won.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "midboss_rejuv_claim_enemy",
+                    "midboss",
+                    "Rejuvenator claimed (enemy)",
+                    "Stinger.Rejuvinator.Claimed.Enemy",
+                    "vsnd_files",
+                    "sounds/music/music_stinger_rejuv_lost.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "midboss_rejuv_respawn",
+                    "midboss",
+                    "Rejuvenator respawn",
+                    "Stinger.Respawn.Rejuvinator",
+                    "vsnd_files",
+                    "sounds/music/music_stinger_rejuv_won.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "midboss_rejuv_expired",
+                    "midboss",
+                    "Rejuvenator expired",
+                    "Stinger.Rejuvinator.Expired",
+                    "vsnd_files",
+                    "sounds/music/music_stinger_rejuv_lost.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                // --- Tab (Map): Powerups (world powerup category loops, in
+                //     soundevents/world.vsndevts). The game ships 4 looping
+                //     category tracks; there is no Spirit loop event (the
+                //     powerup_spirit_lp file is unreferenced). ---
+                slot(
+                    "powerup_casting",
+                    "powerups",
+                    "Casting",
+                    "Powerup.Casting_Lp",
+                    "vsnd_files",
+                    "sounds/world/powerup/powerup_casting_lp.vsnd",
+                    "soundevents/world.vsndevts",
+                ),
+                slot(
+                    "powerup_gun",
+                    "powerups",
+                    "Gun",
+                    "Powerup.Gun_Lp",
+                    "vsnd_files",
+                    "sounds/world/powerup/powerup_gun_lp.vsnd",
+                    "soundevents/world.vsndevts",
+                ),
+                slot(
+                    "powerup_movement",
+                    "powerups",
+                    "Movement",
+                    "Powerup.Movement_Lp",
+                    "vsnd_files",
+                    "sounds/world/powerup/powerup_movement_lp.vsnd",
+                    "soundevents/world.vsndevts",
+                ),
+                slot(
+                    "powerup_survival",
+                    "powerups",
+                    "Survival",
+                    "Powerup.Survival_Lp",
+                    "vsnd_files",
+                    "sounds/world/powerup/powerup_survival_lp.vsnd",
+                    "soundevents/world.vsndevts",
+                ),
+                // --- Tab (Map): Team Objectives (tower / guardian / patron kills) ---
+                slot(
+                    "obj_guardian_team",
+                    "teamobj",
+                    "Guardian killed (your team)",
+                    "Stinger.Tier1.Killed.Friendly",
+                    "vsnd_files",
+                    "sounds/music/music_stinger_t1_killed.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "obj_guardian_enemy",
+                    "teamobj",
+                    "Guardian killed (enemy)",
+                    "Stinger.Tier1.Killed.Enemy",
+                    "vsnd_files",
+                    "sounds/music/music_stinger_t1_killed.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "obj_walker_team",
+                    "teamobj",
+                    "Walker killed (your team)",
+                    "Stinger.Tier2.Killed.Friendly",
+                    "vsnd_files",
+                    "sounds/music/music_stinger_t1_killed.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "obj_walker_enemy",
+                    "teamobj",
+                    "Walker killed (enemy)",
+                    "Stinger.Tier2.Killed.Enemy",
+                    "vsnd_files",
+                    "sounds/music/music_stinger_t1_killed.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "obj_shrine_team",
+                    "teamobj",
+                    "Patron shield killed (your team)",
+                    "Stinger.TitanShield1.Killed.Friendly",
+                    "vsnd_files",
+                    "sounds/music/music_stinger_generator_killed.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "obj_shrine_enemy",
+                    "teamobj",
+                    "Patron shield killed (enemy)",
+                    "Stinger.TitanShield1.Killed.Enemy",
+                    "vsnd_files",
+                    "sounds/music/music_stinger_generator_killed.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "obj_patron_team",
+                    "teamobj",
+                    "Patron killed (your team)",
+                    "Stinger.Titan.Killed.Friendly",
+                    "vsnd_files",
+                    "sounds/music/music_stinger_t3_killed.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "obj_patron_enemy",
+                    "teamobj",
+                    "Patron killed (enemy)",
+                    "Stinger.Titan.Killed.Enemy",
+                    "vsnd_files",
+                    "sounds/music/music_stinger_t3_killed.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
                 // --- Tab: Heroes (Billy = "PunkGoat") ---
                 slot(
                     "hero_billy_blasted",
@@ -386,6 +591,7 @@ impl Project {
                 ),
             ],
             icon_mods: vec![],
+            sound_overrides: vec![],
         }
     }
 
@@ -410,7 +616,7 @@ mod tests {
         let p = Project::default_for_match_intro();
         let json = serde_json::to_string_pretty(&p).unwrap();
         let back: Project = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.events.len(), 13);
+        assert_eq!(back.events.len(), 31);
         assert_eq!(back.events[0].id, "intro_king");
         assert_eq!(back.events[0].event_name, "Music.MatchIntro.MatchStart.King");
         // The enemy-contest slot targets the opponent-control array.

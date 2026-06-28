@@ -43,6 +43,8 @@ pub fn run() {
             commands::install_to_game,
             commands::hero_roster,
             commands::hero_detail,
+            commands::hero_voicelines,
+            commands::browse_game_sounds,
             commands::item_roster,
             commands::item_detail,
             commands::compile_project,

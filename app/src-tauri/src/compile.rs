@@ -101,6 +101,10 @@ pub struct CompileConfig {
     /// & merge into (has all other mods' entries). Each slot's events file is
     /// `<vanilla_root>/<events_relpath>`.
     pub vanilla_root: String,
+    /// The live game pak. Used to auto-decompile a missing vanilla events file
+    /// (e.g. a soundevents file not pulled by an earlier refresh) on demand.
+    #[serde(default)]
+    pub pak_path: Option<String>,
     pub output_dir: String,
     /// "folder" or "vpk"
     pub output_mode: String,
@@ -121,6 +125,62 @@ pub struct CompileConfig {
     /// override the game's icons.
     #[serde(default)]
     pub icon_mods: Vec<IconCompile>,
+    /// Loose-file sound overrides: render + compile the user's audio to a
+    /// `.vsnd_c` staged at the game's own path (no soundevent merge).
+    #[serde(default)]
+    pub sound_overrides: Vec<SoundOverrideCompile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SoundOverrideCompile {
+    /// The vanilla `.vsnd` path to shadow (drives output + staging paths).
+    pub target_ref: String,
+    pub source_audio: String,
+    #[serde(default)]
+    pub trim_start: f64,
+    #[serde(default)]
+    pub trim_end: f64,
+    #[serde(default)]
+    pub gain_db: f64,
+    #[serde(default)]
+    pub fade_in: f64,
+    #[serde(default)]
+    pub fade_out: f64,
+    #[serde(default)]
+    pub looping: bool,
+    #[serde(default)]
+    pub current_hash: Option<String>,
+    #[serde(default)]
+    pub last_compiled_hash: Option<String>,
+}
+
+impl SoundOverrideCompile {
+    /// content/game-relative folder + stem the compiled file lands at, derived
+    /// from `target_ref` (e.g. `sounds/vo/atlas/x.vsnd` -> `("sounds/vo/atlas", "x")`).
+    fn folder_stem(&self) -> (String, String) {
+        let rel = self.target_ref.trim_matches('/');
+        let rel = rel.strip_suffix(".vsnd").unwrap_or(rel);
+        match rel.rsplit_once('/') {
+            Some((dir, stem)) => (dir.to_string(), stem.to_string()),
+            None => (String::new(), rel.to_string()),
+        }
+    }
+    /// content-relative `.vsnd_c` path (the staging + override target).
+    fn vsnd_c_rel(&self) -> String {
+        let (dir, stem) = self.folder_stem();
+        if dir.is_empty() {
+            format!("{stem}.vsnd_c")
+        } else {
+            format!("{dir}/{stem}.vsnd_c")
+        }
+    }
+    fn up_to_date(&self, skip_compile: bool, compiled_exists: bool) -> bool {
+        !skip_compile
+            && self.current_hash.is_some()
+            && self.current_hash == self.last_compiled_hash
+            && compiled_exists
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -157,6 +217,30 @@ fn build_encoding_txt(events: &[EventCompile]) -> String {
                     song.sound_name, dur,
                 ));
             }
+        }
+    }
+    if !files.is_empty() {
+        s.push_str("\tfiles = \n\t[\n");
+        s.push_str(&files);
+        s.push_str("\t]\n");
+    }
+    s.push_str("}\n");
+    s
+}
+
+/// Same as `build_encoding_txt` but for loose-file sound overrides (keyed by the
+/// target file stem, since overrides aren't grouped into events).
+fn build_override_encoding_txt(overrides: &[&SoundOverrideCompile]) -> String {
+    let mut s = String::from(ENCODING_HEADER);
+    s.push_str("{\n\tcompress = \n\t{\n\t\tformat = \"mp3\"\n\t\tminbitrate = 128\n\t\tmaxbitrate = 320\n\t\tvbr = 1\n\t}\n");
+    let mut files = String::new();
+    for ov in overrides {
+        if ov.looping {
+            let dur = (ov.trim_end - ov.trim_start).max(0.01);
+            let stem = ov.folder_stem().1;
+            files.push_str(&format!(
+                "\t\t{{ fileName = \"{stem}.wav\" loop = {{ loop_start_time = 0.0 loop_end_time = {dur:.6} }} }},\n",
+            ));
         }
     }
     if !files.is_empty() {
@@ -483,6 +567,64 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
         }
     }
 
+    // Loose-file sound overrides: render the user's audio into the content tree
+    // at the game's OWN path, write a per-folder encoding.txt (mp3 + loop), and
+    // compile to a `.vsnd_c` that will shadow the vanilla file. No soundevents.
+    if !cfg.sound_overrides.is_empty() {
+        use std::collections::BTreeMap;
+        // Group by folder so each folder gets one encoding.txt covering its files.
+        let mut by_folder: BTreeMap<String, Vec<&SoundOverrideCompile>> = BTreeMap::new();
+        for ov in &cfg.sound_overrides {
+            by_folder.entry(ov.folder_stem().0).or_default().push(ov);
+        }
+        if cfg.write_encoding_txt {
+            for (folder, ovs) in &by_folder {
+                let enc = content_root.join(folder.trim_matches('/')).join("encoding.txt");
+                if let Some(parent) = enc.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                if let Err(e) = std::fs::write(&enc, build_override_encoding_txt(ovs)) {
+                    return report.fail("write encoding.txt (overrides)", e.to_string());
+                }
+            }
+        }
+        for ov in &cfg.sound_overrides {
+            let (folder, stem) = ov.folder_stem();
+            let compiled = compiled_root.join(ov.vsnd_c_rel());
+            if ov.up_to_date(cfg.skip_compile, compiled.exists()) {
+                report.ok_step(format!("up to date: {stem}"), "unchanged — skipped");
+                continue;
+            }
+            let content_audio = content_root.join(folder.trim_matches('/')).join(format!("{stem}.wav"));
+            if let Some(parent) = content_audio.parent() {
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    return report.fail("prepare override dir", e.to_string());
+                }
+            }
+            let audio_path = content_audio.to_string_lossy().into_owned();
+            if let Err(e) = crate::audio::render_to(
+                ffmpeg,
+                &ov.source_audio,
+                ov.trim_start,
+                ov.trim_end,
+                ov.gain_db,
+                ov.fade_in,
+                ov.fade_out,
+                &audio_path,
+            ) {
+                return report.fail(format!("ffmpeg (override): {stem}"), e);
+            }
+            report.ok_step(format!("ffmpeg (override): {stem}"), audio_path.clone());
+            if cfg.skip_compile {
+                continue;
+            }
+            match run_resource_compiler(cfg, &audio_path) {
+                Ok(detail) => report.ok_step(format!("compile (override): {stem}"), detail),
+                Err(e) => return report.fail(format!("compile (override): {stem}"), e),
+            }
+        }
+    }
+
     // Custom icon overrides: scale + compile once (staged into every variant).
     let icon_outputs = compile_icon_mods(cfg, content_root, compiled_root, report)?;
 
@@ -560,6 +702,28 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
             let rel = relpath.trim_matches('/');
             let vanilla = Path::new(&cfg.vanilla_root).join(rel);
             let mod_texts = if v.with_imported { imported_texts.get(rel) } else { None };
+
+            // If the vanilla base is missing this events file (e.g. a soundevents
+            // file referenced by a slot but not pulled by an earlier refresh),
+            // decompile it straight from the live pak so compile self-heals.
+            if !vanilla.exists() {
+                if let (Some(helper), Some(pak)) =
+                    (helper_opt, cfg.pak_path.as_deref().filter(|p| !p.is_empty()))
+                {
+                    if let Some(parent) = vanilla.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    let internal = format!("{rel}_c");
+                    if vpk::decompile_from_vpk(helper, pak, &internal, &vanilla.to_string_lossy())
+                        .is_ok()
+                    {
+                        report.ok_step(
+                            format!("[{}] fetch vanilla {rel}", v.name),
+                            "from game pak".to_string(),
+                        );
+                    }
+                }
+            }
 
             let (mut text, additions): (String, &[String]) = if vanilla.exists() {
                 match std::fs::read_to_string(&vanilla) {
@@ -716,6 +880,18 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                 Err(e) => return report.fail(format!("stage icon: {target}"), e.to_string()),
             }
         }
+        // Stage loose-file sound overrides (compiled .vsnd_c at the game's path).
+        for ov in &cfg.sound_overrides {
+            let rel = ov.vsnd_c_rel();
+            let src = compiled_root.join(&rel);
+            if cfg.skip_compile && !src.exists() {
+                continue;
+            }
+            match copy_into(&src, &stage, &rel) {
+                Ok(_) => staged += 1,
+                Err(e) => return report.fail(format!("stage override: {rel}"), e.to_string()),
+            }
+        }
         report.ok_step(format!("[{}] stage", v.name), format!("{staged} file(s)"));
 
         if cfg.output_mode == "vpk" {
@@ -817,6 +993,7 @@ mod tests {
             ),
             vanilla_root:
                 r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\ModFiles".into(),
+            pak_path: None,
             output_dir: out.to_string_lossy().into_owned(),
             output_mode: "vpk".into(),
             vpk_name: "pak01_dir.vpk".into(),
@@ -847,6 +1024,7 @@ mod tests {
                 }],
             }],
             icon_mods: vec![],
+            sound_overrides: vec![],
         };
 
         let report = run(&cfg);
