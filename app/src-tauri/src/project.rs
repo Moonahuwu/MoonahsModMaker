@@ -49,14 +49,23 @@ pub struct EffectOverride {
     /// Friendly label (defaults to the file stem).
     pub label: String,
     /// Hue rotation in degrees applied to every color literal (-180..180).
+    /// For `rainbow`/`pulse` this is a phase/base-hue offset.
     #[serde(default)]
     pub hue: f32,
     /// Saturation multiplier (1.0 = unchanged).
     #[serde(default = "one")]
     pub saturation: f32,
+    /// Color mode: "static" (hue/sat shift) | "rainbow" | "pulse" (animated over
+    /// particle lifetime).
+    #[serde(default = "static_mode")]
+    pub mode: String,
     /// Hash recorded after the last successful compile (null = never compiled).
     #[serde(default)]
     pub last_compiled_hash: Option<String>,
+}
+
+fn static_mode() -> String {
+    "static".to_string()
 }
 
 fn one() -> f32 {

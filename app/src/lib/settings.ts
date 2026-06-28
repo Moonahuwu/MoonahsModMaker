@@ -145,6 +145,7 @@ export function buildCompileConfig(
     targetRef: e.targetRef,
     hue: e.hue,
     saturation: e.saturation,
+    mode: e.mode,
     currentHash: effectHash(e),
     lastCompiledHash: e.lastCompiledHash ?? null,
   }));

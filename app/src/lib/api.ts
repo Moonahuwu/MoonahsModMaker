@@ -122,6 +122,7 @@ export interface EffectCompile {
   targetRef: string;
   hue: number;
   saturation: number;
+  mode: string;
   currentHash: string;
   lastCompiledHash?: string | null;
 }

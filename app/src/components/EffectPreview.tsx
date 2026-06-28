@@ -14,18 +14,20 @@ export function EffectPreview({
   baseColor,
   hue,
   saturation,
+  mode = "static",
   height = 260,
 }: {
   sprites: string[];
   baseColor: RgbaColor | null;
   hue: number;
   saturation: number;
+  mode?: "static" | "rainbow" | "pulse";
   height?: number;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   // Live values read by the animation loop without restarting it.
-  const params = useRef({ hue, saturation });
-  params.current = { hue, saturation };
+  const params = useRef({ hue, saturation, mode });
+  params.current = { hue, saturation, mode };
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -42,12 +44,20 @@ export function EffectPreview({
     const tint = document.createElement("canvas");
     const tg = tint.getContext("2d")!;
     let lastKey = "";
-    function retint() {
+    function retint(tSec: number) {
       if (!ready) return;
-      const { hue, saturation } = params.current;
-      let h = (baseHsl.h + hue) % 360;
-      if (h < 0) h += 360;
-      const c = hslToRgb(h, Math.min(1, baseHsl.s * saturation), baseHsl.l);
+      const { hue, saturation, mode } = params.current;
+      let h = baseHsl.h + hue;
+      let s = Math.min(1, baseHsl.s * saturation);
+      let l = baseHsl.l;
+      if (mode === "rainbow") {
+        h += tSec * 120; // ~3s per full cycle
+        s = Math.min(1, Math.max(baseHsl.s, 0.65) * saturation);
+      } else if (mode === "pulse") {
+        l = baseHsl.l * (0.55 + 0.45 * Math.sin(tSec * 4)); // brightness oscillation
+      }
+      h = ((h % 360) + 360) % 360;
+      const c = hslToRgb(h, s, l);
       const key = `${c.r},${c.g},${c.b}`;
       if (key === lastKey) return;
       lastKey = key;
@@ -63,7 +73,7 @@ export function EffectPreview({
     img.onload = () => {
       ready = true;
       lastKey = "";
-      retint();
+      retint(0);
     };
     if (sprites[0]) img.src = convertFileSrc(sprites[0]);
 
@@ -86,11 +96,12 @@ export function EffectPreview({
     }
 
     let raf = 0;
-    let prev = performance.now();
+    const start = performance.now();
+    let prev = start;
     function frame(now: number) {
       const dt = Math.min(0.05, (now - prev) / 1000);
       prev = now;
-      retint();
+      retint((now - start) / 1000);
       for (let i = 0; i < 3; i++) spawn();
       g.globalCompositeOperation = "source-over";
       g.fillStyle = "rgba(0,0,0,0.26)";

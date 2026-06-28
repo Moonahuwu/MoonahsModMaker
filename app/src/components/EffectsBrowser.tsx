@@ -243,8 +243,11 @@ export function EffectsBrowser({
                         className="rounded px-1.5 text-[10px] font-semibold"
                         style={{ backgroundColor: `${accent}22`, color: accent }}
                       >
-                        {ov.hue > 0 ? "+" : ""}
-                        {Math.round(ov.hue)}°
+                        {ov.mode === "rainbow"
+                          ? "🌈 rainbow"
+                          : ov.mode === "pulse"
+                            ? "pulse"
+                            : `${ov.hue > 0 ? "+" : ""}${Math.round(ov.hue)}°`}
                       </span>
                     )}
                     <button
@@ -292,6 +295,7 @@ export function EffectsBrowser({
                               baseColor={dominantColor(prev.colors)}
                               hue={ov.hue}
                               saturation={ov.saturation}
+                              mode={ov.mode}
                               height={200}
                             />
                           )}
@@ -302,8 +306,33 @@ export function EffectsBrowser({
                         </div>
 
                         <div className="flex min-w-0 flex-1 flex-col gap-3">
+                          {/* Color mode */}
+                          <div className="flex items-center gap-2 text-xs text-zinc-400">
+                            <span className="w-20 shrink-0">Mode</span>
+                            <div className="flex gap-1">
+                              {(
+                                [
+                                  ["static", "Static"],
+                                  ["rainbow", "🌈 Rainbow"],
+                                  ["pulse", "Pulse"],
+                                ] as const
+                              ).map(([m, label]) => (
+                                <button
+                                  key={m}
+                                  onClick={() => onUpdate(file.reference, { mode: m })}
+                                  style={ov.mode === m ? { borderColor: accent, color: accent } : undefined}
+                                  className="rounded-md border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-300 transition hover:border-zinc-500 hover:text-white"
+                                >
+                                  {label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+
                           <label className="flex items-center gap-2 text-xs text-zinc-400">
-                            <span className="w-20 shrink-0">Hue</span>
+                            <span className="w-20 shrink-0">
+                              {ov.mode === "rainbow" ? "Phase" : ov.mode === "pulse" ? "Color" : "Hue"}
+                            </span>
                             <input
                               type="range"
                               min={-180}
@@ -341,8 +370,8 @@ export function EffectsBrowser({
 
                           <div className="mt-1 flex flex-wrap gap-2">
                             <button
-                              onClick={() => onUpdate(file.reference, { hue: 0, saturation: 1 })}
-                              disabled={ov.hue === 0 && ov.saturation === 1}
+                              onClick={() => onUpdate(file.reference, { hue: 0, saturation: 1, mode: "static" })}
+                              disabled={ov.hue === 0 && ov.saturation === 1 && ov.mode === "static"}
                               className="rounded-md border border-zinc-700 px-2.5 py-1 text-[11px] text-zinc-400 transition hover:border-zinc-500 hover:text-zinc-200 disabled:opacity-30"
                             >
                               Reset

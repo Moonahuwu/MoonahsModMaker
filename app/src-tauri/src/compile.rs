@@ -192,12 +192,15 @@ impl SoundOverrideCompile {
 pub struct EffectCompile {
     /// The vanilla `.vpcf` path to shadow (drives output + staging paths).
     pub target_ref: String,
-    /// Hue rotation in degrees applied to every color literal.
+    /// Hue rotation in degrees applied to every color literal (phase for animated).
     #[serde(default)]
     pub hue: f32,
     /// Saturation multiplier (1.0 = unchanged).
     #[serde(default = "default_one")]
     pub saturation: f32,
+    /// "static" | "rainbow" | "pulse".
+    #[serde(default = "default_static")]
+    pub mode: String,
     #[serde(default)]
     pub current_hash: Option<String>,
     #[serde(default)]
@@ -206,6 +209,10 @@ pub struct EffectCompile {
 
 fn default_one() -> f32 {
     1.0
+}
+
+fn default_static() -> String {
+    "static".to_string()
 }
 
 impl EffectCompile {
@@ -589,6 +596,59 @@ fn recolor_line(line: &str, hue: f32, sat: f32) -> Option<String> {
     Some(format!("{}[{}]{}", &line[..open], inner, &line[close + 1..]))
 }
 
+/// Build a chain of `C_OP_ColorInterpolate` operators that animate a particle's
+/// color over its lifetime: `rainbow` cycles the full hue wheel, `pulse`
+/// oscillates a hue's brightness. Each op fades to its target over a time window.
+fn color_animation_ops(mode: &str, hue: f32, sat: f32) -> String {
+    let s = sat.clamp(0.0, 1.0);
+    // (r,g,b) targets for the cycle, tiled across particle age [0,1].
+    let stops: Vec<(u8, u8, u8)> = if mode == "pulse" {
+        let bright = hsl_to_rgb(hue, s.max(0.2), 0.6);
+        let dim = hsl_to_rgb(hue, s.max(0.2), 0.12);
+        vec![bright, dim, bright, dim, bright]
+    } else {
+        // rainbow: 6 hue steps around the wheel (+ closing the loop = 7 targets).
+        (0..=6).map(|i| hsl_to_rgb(hue + i as f32 * 60.0, s.max(0.6), 0.5)).collect()
+    };
+    let n = stops.len();
+    let mut out = String::new();
+    for (i, (r, g, b)) in stops.iter().enumerate() {
+        // First target snaps in fast; the rest tile the remaining lifetime.
+        let (start, end) = if i == 0 {
+            (0.0_f32, 0.02_f32)
+        } else {
+            ((i - 1) as f32 / (n - 1) as f32, i as f32 / (n - 1) as f32)
+        };
+        out.push_str(&format!(
+            "\t\t{{\n\t\t\t_class = \"C_OP_ColorInterpolate\"\n\t\t\tm_ColorFade = [ {r}, {g}, {b}, 255 ]\n\t\t\tm_flFadeStartTime = {start}\n\t\t\tm_flFadeEndTime = {end}\n\t\t}},\n"
+        ));
+    }
+    out
+}
+
+/// Inject color-animation operators into a vpcf's `m_Operators` array. Falls back
+/// to a static recolor when the particle has no operators array to extend.
+fn animate_particle_source(text: &str, mode: &str, hue: f32, sat: f32) -> String {
+    let ops = color_animation_ops(mode, hue, sat);
+    // Find the `m_Operators = ` key, then its opening `[` + newline, insert after.
+    if let Some(k) = text.find("m_Operators") {
+        if let Some(rel) = text[k..].find('[') {
+            let bracket = k + rel;
+            // advance past the newline following '['
+            if let Some(nl) = text[bracket..].find('\n') {
+                let insert_at = bracket + nl + 1;
+                let mut out = String::with_capacity(text.len() + ops.len());
+                out.push_str(&text[..insert_at]);
+                out.push_str(&ops);
+                out.push_str(&text[insert_at..]);
+                return out;
+            }
+        }
+    }
+    // No operators array — animation can't be injected; recolor statically.
+    recolor_particle_source(text, hue, sat)
+}
+
 /// Hue/sat-shift every color literal in a vpcf source, leaving all else intact.
 fn recolor_particle_source(text: &str, hue: f32, sat: f32) -> String {
     if hue.abs() < 0.01 && (sat - 1.0).abs() < 0.01 {
@@ -654,11 +714,19 @@ fn compile_effect_overrides(
             Ok(t) => t,
             Err(e) => return report.fail(format!("read particle: {stem}"), e.to_string()),
         };
-        let recolored = recolor_particle_source(&text, ov.hue, ov.saturation);
-        if let Err(e) = std::fs::write(&content_vpcf, recolored) {
+        let transformed = match ov.mode.as_str() {
+            "rainbow" | "pulse" => animate_particle_source(&text, &ov.mode, ov.hue, ov.saturation),
+            _ => recolor_particle_source(&text, ov.hue, ov.saturation),
+        };
+        if let Err(e) = std::fs::write(&content_vpcf, transformed) {
             return report.fail(format!("write particle: {stem}"), e.to_string());
         }
-        report.ok_step(format!("recolor: {stem}"), format!("hue {:+.0}° sat {:.2}", ov.hue, ov.saturation));
+        let detail = match ov.mode.as_str() {
+            "rainbow" => "rainbow".to_string(),
+            "pulse" => "pulse".to_string(),
+            _ => format!("hue {:+.0}° sat {:.2}", ov.hue, ov.saturation),
+        };
+        report.ok_step(format!("recolor: {stem}"), detail);
         if cfg.skip_compile {
             continue;
         }
@@ -1195,6 +1263,26 @@ mod tests {
     }
 
     #[test]
+    fn rainbow_injects_color_ops_into_operators() {
+        let src = "{\n\tm_Operators = \n\t[\n\t\t{\n\t\t\t_class = \"C_OP_BasicMovement\"\n\t\t},\n\t]\n}\n";
+        let out = animate_particle_source(src, "rainbow", 0.0, 1.0);
+        // Injected several ColorInterpolate ops with fade windows, before the existing op.
+        assert!(out.matches("C_OP_ColorInterpolate").count() >= 6);
+        assert!(out.contains("m_flFadeEndTime"));
+        let ci = out.find("C_OP_ColorInterpolate").unwrap();
+        let bm = out.find("C_OP_BasicMovement").unwrap();
+        assert!(ci < bm, "animation ops must be inside m_Operators, before existing ops");
+    }
+
+    #[test]
+    fn animate_falls_back_to_recolor_without_operators() {
+        // No m_Operators array → static recolor instead of a broken injection.
+        let src = "\tm_ConstantColor = [ 255, 0, 0, 255 ]\n";
+        let out = animate_particle_source(src, "rainbow", 120.0, 1.0);
+        assert_eq!(out, "\tm_ConstantColor = [ 0, 255, 0, 255 ]\n");
+    }
+
+    #[test]
     fn auto_duration_never_shrinks_below_current() {
         let ev = EventCompile {
             event_name: "E".into(),
@@ -1376,6 +1464,7 @@ mod tests {
                 target_ref: "particles/abilities/aoe_silence_cast_energy.vpcf".into(),
                 hue: 150.0,
                 saturation: 1.0,
+                mode: "static".into(),
                 current_hash: Some("h1".into()),
                 last_compiled_hash: None,
             }],

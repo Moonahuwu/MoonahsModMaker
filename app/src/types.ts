@@ -112,10 +112,12 @@ export interface EffectOverride {
   /** The `.vpcf` reference to shadow, e.g. `particles/abilities/x.vpcf`. */
   targetRef: string;
   label: string;
-  /** Hue rotation in degrees (-180..180) applied to every color literal. */
+  /** Hue rotation in degrees (-180..180). Phase/base hue for animated modes. */
   hue: number;
   /** Saturation multiplier (1 = unchanged). */
   saturation: number;
+  /** Color mode: static recolor, or animated over particle lifetime. */
+  mode: "static" | "rainbow" | "pulse";
   lastCompiledHash?: string | null;
 }
 

@@ -43,9 +43,14 @@ export function overrideHash(o: {
   ].join("|");
 }
 
-/** Fingerprint of a VFX recolor override (target + hue + saturation). */
-export function effectHash(e: { targetRef: string; hue: number; saturation: number }): string {
-  return [e.targetRef, e.hue, e.saturation].join("|");
+/** Fingerprint of a VFX recolor override (target + hue + saturation + mode). */
+export function effectHash(e: {
+  targetRef: string;
+  hue: number;
+  saturation: number;
+  mode: string;
+}): string {
+  return [e.targetRef, e.hue, e.saturation, e.mode].join("|");
 }
 
 /** Compile status of a song relative to its last successful compile. */

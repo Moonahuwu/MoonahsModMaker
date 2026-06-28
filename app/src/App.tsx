@@ -1459,7 +1459,7 @@ export default function App() {
         ...prev,
         effectOverrides: [
           ...(prev.effectOverrides ?? []),
-          { id, targetRef: reference, label, hue: 0, saturation: 1, lastCompiledHash: null },
+          { id, targetRef: reference, label, hue: 0, saturation: 1, mode: "static", lastCompiledHash: null },
         ],
       };
     });
