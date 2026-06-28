@@ -382,12 +382,13 @@ export interface RandomConfig {
   global: { key: string; value: string }[];
 }
 
+/** temperature: 0 = tame (±10%), 1 = insane (×0.03–30). */
 export function randomizeConfig(
   helperPath: string,
   pakPath: string,
-  mode: "normal" | "super" = "normal",
+  temperature = 0.5,
 ): Promise<RandomConfig> {
-  return invoke("randomize_config", { helperPath, pakPath, mode });
+  return invoke("randomize_config", { helperPath, pakPath, temperature });
 }
 
 /** One of a hero's voicelines (single-clip soundevent). */

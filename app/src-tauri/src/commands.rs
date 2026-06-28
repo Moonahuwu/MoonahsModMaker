@@ -1183,22 +1183,20 @@ fn fmt_random(n: f64, is_float: bool, unit: &str) -> String {
     }
 }
 
-/// Randomize every positive gameplay number. `mode = "super"` uses an insane
-/// ×0.1..25 range (vs the normal ×0.5..2). Returns a full override set the
-/// frontend swaps in. Non-positive values (0 / -1 sentinels) are left alone so
-/// we don't flip "disabled" flags into broken states.
+/// Randomize every positive gameplay number. `temperature` (0..1) sets the
+/// intensity: each value is multiplied by `exp(uniform(-k, +k))` where
+/// `k = 0.1 + temperature*3.4`. So temp 0 → ×0.9..1.1 (tame), temp 1 → ×0.03..30
+/// (insane). The exponential keeps the spread symmetric (halving as likely as
+/// doubling). Returns a full override set the frontend swaps in. Non-positive
+/// values (0 / -1 sentinels) are left alone so we don't break "disabled" flags.
 #[tauri::command]
 pub fn randomize_config(
     app: tauri::AppHandle,
     helper_path: String,
     pak_path: String,
-    mode: Option<String>,
+    temperature: Option<f64>,
 ) -> Result<RandomConfig, String> {
-    // (factor_base, factor_span): factor = base + rand[0,1) * span.
-    let (fbase, fspan) = match mode.as_deref() {
-        Some("super") => (0.1, 24.9), // 0.1 .. 25.0 — chaos
-        _ => (0.5, 1.5),              // 0.5 .. 2.0 — sane
-    };
+    let k = 0.1 + temperature.unwrap_or(0.5).clamp(0.0, 1.0) * 3.4;
     use tauri::Manager;
     let base = app
         .path()
@@ -1219,7 +1217,7 @@ pub fn randomize_config(
         if num <= 0.0 {
             return None;
         }
-        let factor = fbase + xorshift(seed) * fspan;
+        let factor = ((xorshift(seed) * 2.0 - 1.0) * k).exp();
         Some(fmt_random(num * factor, val.contains('.'), &unit))
     };
 

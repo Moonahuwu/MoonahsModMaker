@@ -59,13 +59,19 @@ export function CustomServer({
   globalOverrides: GlobalOverride[];
   onSetGlobal: (key: string, value: string) => void;
   onClearGlobal: (key: string) => void;
-  onRandomize: (mode: "normal" | "super") => void;
+  onRandomize: (temperature: number) => void;
   onReset: () => void;
   randomizing: boolean;
 }) {
   const [section, setSection] = useState<Section>("heroes");
   const [confirmReset, setConfirmReset] = useState(false);
+  const [temp, setTemp] = useState(0.4);
   const editCount = overrides.length + globalOverrides.length;
+
+  // Flavor label + peak multiplier for the current temperature.
+  const tempLabel =
+    temp < 0.15 ? "Tame" : temp < 0.4 ? "Spicy" : temp < 0.65 ? "Wild" : temp < 0.88 ? "Crazy" : "INSANE";
+  const peakMult = Math.exp(0.1 + temp * 3.4); // matches backend k
 
   return (
     <div className="flex flex-col gap-5">
@@ -141,22 +147,31 @@ export function CustomServer({
               {label}
             </button>
           ))}
-          <div className="ml-auto flex items-center gap-1.5">
+          <div className="ml-auto flex items-center gap-2.5">
+            {/* Temperature slider: tame → insane */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-zinc-500">Tame</span>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={Math.round(temp * 100)}
+                onChange={(e) => setTemp(Number(e.target.value) / 100)}
+                className="h-1.5 w-28 cursor-pointer appearance-none rounded-full bg-gradient-to-r from-emerald-500 via-amber-500 to-rose-600 accent-zinc-100"
+                title={`Randomness: up to ×${peakMult.toFixed(peakMult < 10 ? 1 : 0)}`}
+              />
+              <span className="text-xs font-semibold text-rose-400">Insane</span>
+              <span className="w-14 text-[11px] tabular-nums text-zinc-400">
+                {tempLabel}
+              </span>
+            </div>
             <button
-              onClick={() => onRandomize("normal")}
+              onClick={() => onRandomize(temp)}
               disabled={randomizing}
-              title="Roll a sane random value (×0.5–2) for every gameplay number"
+              title={`Roll every gameplay number — up to ×${peakMult.toFixed(peakMult < 10 ? 1 : 0)}`}
               className="rounded-lg border border-fuchsia-500/50 bg-fuchsia-500/10 px-3 py-1.5 text-sm font-medium text-fuchsia-300 transition hover:bg-fuchsia-500/20 disabled:opacity-50"
             >
-              {randomizing ? "Rolling…" : "🎲 Randomize all"}
-            </button>
-            <button
-              onClick={() => onRandomize("super")}
-              disabled={randomizing}
-              title="Insane values (×0.1–25) — total chaos, server-only fun"
-              className="rounded-lg border border-rose-500/60 bg-gradient-to-r from-rose-500/20 to-amber-500/20 px-3 py-1.5 text-sm font-bold text-rose-200 transition hover:from-rose-500/30 hover:to-amber-500/30 disabled:opacity-50"
-            >
-              {randomizing ? "Rolling…" : "💥 SUPER random"}
+              {randomizing ? "Rolling…" : temp > 0.85 ? "💥 Randomize" : "🎲 Randomize"}
             </button>
             {confirmReset ? (
               <div className="flex items-center gap-1">
