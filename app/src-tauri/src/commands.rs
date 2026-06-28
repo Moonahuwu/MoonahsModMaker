@@ -1079,6 +1079,9 @@ pub struct ItemCard {
     /// 1..5 (from `m_iItemTier` `EModTier_N`); 0 if unknown.
     pub tier: u32,
     pub icon_path: Option<String>,
+    /// The compiled `.vtex_c` path the game references — the override target for
+    /// a custom icon, e.g. `panorama/images/items/weapon/alchemical_fire_psd.vtex_c`.
+    pub icon_internal: Option<String>,
 }
 
 struct ItemDef {
@@ -1274,7 +1277,8 @@ pub fn item_roster(
     std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
     let refresh = refresh.unwrap_or(false);
 
-    let roster_cache = base.join("roster.json");
+    // `_v2` adds iconInternal (override target) — invalidate pre-field caches.
+    let roster_cache = base.join("roster_v2.json");
     if refresh {
         let _ = std::fs::remove_file(&roster_cache);
         let _ = std::fs::remove_file(base.join("mods_event_index.json"));
@@ -1345,6 +1349,7 @@ pub fn item_roster(
                 category: d.category.clone(),
                 tier: d.tier,
                 icon_path,
+                icon_internal: d.icon_internal.clone(),
             }
         })
         .collect();

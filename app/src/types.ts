@@ -77,6 +77,17 @@ export interface Output {
   outputDir: string;
 }
 
+export interface IconMod {
+  id: string;
+  name: string;
+  /** Compiled vtex_c path the game references (override target in the VPK). */
+  targetVtexc: string;
+  /** Absolute path to the user's source PNG/JPG. */
+  sourceImage: string;
+  width: number;
+  height: number;
+}
+
 export interface Project {
   version: number;
   gameContentRoot: string;
@@ -85,6 +96,7 @@ export interface Project {
   tools: Tools;
   output: Output;
   events: EventProject[];
+  iconMods?: IconMod[];
 }
 
 /// Classification of one array entry relative to a side's project state.

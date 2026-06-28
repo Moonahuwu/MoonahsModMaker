@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   autodetectPaths,
   copyToDownloads,
@@ -43,6 +44,7 @@ import type { EventProject, EventView, Project, Song } from "./types";
 import "./index.css";
 
 const AUDIO_EXT = /\.(mp3|wav|flac|ogg|m4a|aac)$/i;
+const IMAGE_EXT = /\.(png|jpe?g|webp|bmp)$/i;
 const DEFAULT_GAIN_DB = 6;
 
 const MOD_COMBINER = "modcombiner";
@@ -73,6 +75,16 @@ const TAB_LABELS: Record<string, string> = {
 function baseName(path: string): string {
   const file = path.split(/[\\/]/).pop() ?? path;
   return file.replace(/\.[^.]+$/, "");
+}
+
+/** Natural pixel size of an image URL (falls back to 200×200 on error). */
+function imageNaturalSize(src: string): Promise<{ w: number; h: number }> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve({ w: img.naturalWidth || 200, h: img.naturalHeight || 200 });
+    img.onerror = () => resolve({ w: 200, h: 200 });
+    img.src = src;
+  });
 }
 
 /** Dynamic per-hero ability-sound slots (created on demand, not in the default
@@ -169,6 +181,11 @@ export default function App() {
   projectRef.current = project;
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
+  // Refs for the global drag-drop handler (which has stable deps).
+  const selectedItemRef = useRef<ItemCard | null>(null);
+  selectedItemRef.current = selectedItem;
+  const activeTabRef = useRef(activeTab);
+  activeTabRef.current = activeTab;
 
   // Slot-group tabs (in slot order) plus the special Mod Combiner tab.
   const tabs = useMemo(() => {
@@ -409,6 +426,16 @@ export default function App() {
         setDropTarget(null);
         const vpks = p.paths.filter((pp) => /\.vpk$/i.test(pp));
         const audio = p.paths.filter((pp) => AUDIO_EXT.test(pp));
+        const images = p.paths.filter((pp) => IMAGE_EXT.test(pp));
+
+        // Dropped image while viewing an item → set it as that item's icon.
+        if (images.length > 0) {
+          if (activeTabRef.current === ITEMS && selectedItemRef.current) {
+            void setItemIcon(selectedItemRef.current, images[0]);
+          } else {
+            push("info", "Open an item in the Items tab, then drop a PNG/JPG to set its icon");
+          }
+        }
 
         // Dropped mod .vpk(s) → add to the Mod combiner list.
         if (vpks.length > 0) {
@@ -434,8 +461,8 @@ export default function App() {
           }
         }
 
-        if (vpks.length === 0 && audio.length === 0) {
-          push("error", "Drop an .mp3 (onto a slot) or a mod .vpk");
+        if (vpks.length === 0 && audio.length === 0 && images.length === 0) {
+          push("error", "Drop an .mp3 (onto a slot), an image (onto an item), or a mod .vpk");
         }
       }
     });
@@ -1060,6 +1087,52 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedItem]);
 
+  // Set a custom icon for an item: scale to the icon's native size on compile.
+  async function setItemIcon(item: ItemCard, imagePath: string) {
+    if (!item.iconInternal) {
+      push("error", `No icon target for ${item.displayName}`);
+      return;
+    }
+    const size = item.iconPath
+      ? await imageNaturalSize(convertFileSrc(item.iconPath))
+      : { w: 200, h: 200 };
+    const id = `icon_${item.name}`;
+    setProject((prev) => {
+      if (!prev) return prev;
+      const mods = (prev.iconMods ?? []).filter((m) => m.id !== id);
+      mods.push({
+        id,
+        name: item.displayName,
+        targetVtexc: item.iconInternal!,
+        sourceImage: imagePath,
+        width: size.w,
+        height: size.h,
+      });
+      return { ...prev, iconMods: mods };
+    });
+    push("success", `Custom icon set for ${item.displayName} — compile to apply`);
+  }
+
+  function removeItemIcon(itemName: string) {
+    const id = `icon_${itemName}`;
+    setProject((prev) =>
+      prev ? { ...prev, iconMods: (prev.iconMods ?? []).filter((m) => m.id !== id) } : prev,
+    );
+  }
+
+  // Click-to-pick an image file for the selected item's icon.
+  async function pickItemIcon(item: ItemCard) {
+    try {
+      const sel = await openDialog({
+        multiple: false,
+        filters: [{ name: "Image", extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }],
+      });
+      if (typeof sel === "string") await setItemIcon(item, sel);
+    } catch (e) {
+      push("error", `Couldn't pick image: ${e}`);
+    }
+  }
+
   const visibleSlots = (project?.events ?? []).filter((e) => e.group === activeTab);
   const songCount = (project?.events ?? []).reduce((n, e) => n + e.songs.length, 0);
 
@@ -1217,6 +1290,14 @@ export default function App() {
             sounds={itemSounds}
             loading={itemDetailLoading}
             renderSound={renderItemSound}
+            customIconSource={
+              selectedItem
+                ? (project?.iconMods ?? []).find((m) => m.id === `icon_${selectedItem.name}`)
+                    ?.sourceImage ?? null
+                : null
+            }
+            onPickIcon={() => selectedItem && void pickItemIcon(selectedItem)}
+            onRemoveIcon={() => selectedItem && removeItemIcon(selectedItem.name)}
           />
         ) : activeTab === "heroes" ? (
           selectedHero ? (
@@ -1258,6 +1339,7 @@ export default function App() {
             settings={settings}
             update={updateSettings}
             events={project.events}
+            iconMods={project.iconMods ?? []}
             onCompiled={markAllCompiled}
           />
         )}

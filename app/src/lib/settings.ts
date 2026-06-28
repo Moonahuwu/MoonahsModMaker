@@ -127,6 +127,7 @@ export function buildCompileConfig(
   s: Settings,
   events: EventProject[],
   skipCompile = false,
+  iconMods: { sourceImage: string; targetVtexc: string; width: number; height: number }[] = [],
 ): CompileConfig {
   const eventCompiles: EventCompile[] = events.map((ev) => ({
     eventName: ev.eventName,
@@ -172,5 +173,6 @@ export function buildCompileConfig(
     skipCompile,
     importedMods: s.importedMods,
     events: eventCompiles,
+    iconMods,
   };
 }

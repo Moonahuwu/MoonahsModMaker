@@ -22,6 +22,27 @@ pub struct Project {
     pub tools: Tools,
     pub output: Output,
     pub events: Vec<EventProject>,
+    /// Custom item/UI icon overrides (PNG/JPG → compiled `.vtex_c`).
+    #[serde(default)]
+    pub icon_mods: Vec<IconMod>,
+}
+
+/// One custom icon: a user image that, on compile, is scaled + compiled to a
+/// `.vtex_c` and staged at `target_vtexc` so it overrides the game's icon.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IconMod {
+    pub id: String,
+    /// Display label (e.g. the item name).
+    pub name: String,
+    /// The compiled vtex_c path the game references — the override target inside
+    /// the VPK, e.g. `panorama/images/items/weapon/alchemical_fire_psd.vtex_c`.
+    pub target_vtexc: String,
+    /// Absolute path to the user's source PNG/JPG.
+    pub source_image: String,
+    /// Native icon size to scale the source to.
+    pub width: u32,
+    pub height: u32,
 }
 
 fn default_sound_folder() -> String {
@@ -364,6 +385,7 @@ impl Project {
                     "soundevents/music.vsndevts",
                 ),
             ],
+            icon_mods: vec![],
         }
     }
 

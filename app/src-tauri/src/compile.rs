@@ -117,6 +117,22 @@ pub struct CompileConfig {
     #[serde(default)]
     pub imported_mods: Vec<String>,
     pub events: Vec<EventCompile>,
+    /// Custom icon overrides: scaled + compiled to `.vtex_c` and staged so they
+    /// override the game's icons.
+    #[serde(default)]
+    pub icon_mods: Vec<IconCompile>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IconCompile {
+    /// Absolute path to the user's source PNG/JPG.
+    pub source_image: String,
+    /// The compiled `.vtex_c` path the game references (override target in VPK),
+    /// e.g. `panorama/images/items/weapon/alchemical_fire_psd.vtex_c`.
+    pub target_vtexc: String,
+    pub width: u32,
+    pub height: u32,
 }
 
 fn default_true() -> bool {
@@ -314,6 +330,82 @@ fn copy_into(src: &Path, dest_root: &Path, relpath: &str) -> std::io::Result<Pat
     Ok(dest)
 }
 
+/// Scale a source image to `w`x`h` PNG via ffmpeg (preserves alpha).
+fn render_icon(ffmpeg: Option<&str>, src: &str, w: u32, h: u32, out_png: &str) -> Result<(), String> {
+    let exe = ffmpeg.unwrap_or("ffmpeg");
+    let out = Command::new(exe)
+        .args([
+            "-y",
+            "-i",
+            src,
+            "-vf",
+            &format!("scale={w}:{h}:flags=lanczos"),
+            "-frames:v",
+            "1",
+            out_png,
+        ])
+        .output()
+        .map_err(|e| format!("launching ffmpeg: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).lines().rev().take(2).collect::<Vec<_>>().join(" | "))
+    }
+}
+
+/// Scale + compile all icon mods in one resourcecompiler pass. Returns
+/// `(target_vtexc, produced_vtex_c_abs_path)` pairs for staging. Sources are
+/// written under `panorama/images/eim_icons/` in the content tree and listed in a
+/// `panorama_image_list` vdata (the headless equivalent of the Asset Browser's
+/// "Recompile"); the compiler emits `<n>_png.vtex_c`, which we stage at the
+/// game's `_psd.vtex_c` path so it overrides (the suffix is just naming).
+fn compile_icon_mods(
+    cfg: &CompileConfig,
+    content_root: &Path,
+    compiled_root: &Path,
+    report: &mut CompileReport,
+) -> Result<Vec<(String, PathBuf)>, ()> {
+    if cfg.icon_mods.is_empty() {
+        return Ok(vec![]);
+    }
+    let icons_dir = content_root.join("panorama/images/eim_icons");
+    if let Err(e) = std::fs::create_dir_all(&icons_dir) {
+        report.fail("prepare icons dir", e.to_string())?;
+    }
+    let mut list = String::new();
+    let mut produced: Vec<(String, PathBuf)> = Vec::new();
+    for (i, m) in cfg.icon_mods.iter().enumerate() {
+        let w = m.width.clamp(1, 4096);
+        let h = m.height.clamp(1, 4096);
+        let png = icons_dir.join(format!("icon_{i}.png"));
+        let label = m.target_vtexc.rsplit('/').next().unwrap_or(&m.target_vtexc);
+        if let Err(e) = render_icon(cfg.ffmpeg_path.as_deref(), &m.source_image, w, h, &png.to_string_lossy()) {
+            return report.fail(format!("scale icon: {label}"), e).map(|_| vec![]);
+        }
+        list.push_str(&format!("\t\tpanorama:\"file://{{images}}/eim_icons/icon_{i}.png\",\n"));
+        let out_c = compiled_root.join(format!("panorama/images/eim_icons/icon_{i}_png.vtex_c"));
+        produced.push((m.target_vtexc.trim_matches('/').to_string(), out_c));
+    }
+    report.ok_step("scale icons", format!("{} icon(s)", cfg.icon_mods.len()));
+
+    if cfg.skip_compile {
+        return Ok(produced);
+    }
+
+    let vdata = content_root.join("eim_icons.vdata");
+    let body = format!(
+        "{ENCODING_HEADER}{{\n\tgeneric_data_type = \"panorama_image_list\"\n\timage_list =\n\t[\n{list}\t]\n}}\n"
+    );
+    if let Err(e) = std::fs::write(&vdata, body) {
+        return report.fail("write icon vdata", e.to_string()).map(|_| vec![]);
+    }
+    match run_resource_compiler(cfg, &vdata.to_string_lossy()) {
+        Ok(detail) => report.ok_step("compile icons", detail),
+        Err(e) => return report.fail("compile icons", e).map(|_| vec![]),
+    }
+    Ok(produced)
+}
+
 /// Run the full pipeline. Returns a per-step report (never panics; failures are
 /// recorded and stop subsequent steps).
 pub fn run(cfg: &CompileConfig) -> CompileReport {
@@ -390,6 +482,9 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
             }
         }
     }
+
+    // Custom icon overrides: scale + compile once (staged into every variant).
+    let icon_outputs = compile_icon_mods(cfg, content_root, compiled_root, report)?;
 
     // Group our slots by their events file.
     use std::collections::{BTreeMap, BTreeSet};
@@ -610,6 +705,17 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                 }
             }
         }
+        // Stage custom icon overrides (the compiled vtex_c staged at the game's
+        // referenced `_psd.vtex_c` path).
+        for (target, src) in &icon_outputs {
+            if cfg.skip_compile && !src.exists() {
+                continue;
+            }
+            match copy_into(src, &stage, target) {
+                Ok(_) => staged += 1,
+                Err(e) => return report.fail(format!("stage icon: {target}"), e.to_string()),
+            }
+        }
         report.ok_step(format!("[{}] stage", v.name), format!("{staged} file(s)"));
 
         if cfg.output_mode == "vpk" {
@@ -740,6 +846,7 @@ mod tests {
                     last_compiled_hash: None,
                 }],
             }],
+            icon_mods: vec![],
         };
 
         let report = run(&cfg);

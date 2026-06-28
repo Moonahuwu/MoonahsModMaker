@@ -28,6 +28,9 @@ export function ItemsTab({
   sounds,
   loading,
   renderSound,
+  customIconSource,
+  onPickIcon,
+  onRemoveIcon,
 }: {
   helperPath: string;
   pakPath: string;
@@ -37,6 +40,9 @@ export function ItemsTab({
   sounds: HeroAbilitySound[] | null;
   loading: boolean;
   renderSound: (s: HeroAbilitySound) => React.ReactNode;
+  customIconSource: string | null;
+  onPickIcon: () => void;
+  onRemoveIcon: () => void;
 }) {
   const [items, setItems] = useState<ItemCard[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -93,6 +99,45 @@ export function ItemsTab({
                 {cat?.label ?? selected.category} · Tier {selected.tier || "?"}
               </span>
             </div>
+          </div>
+        </div>
+
+        {/* Custom icon override */}
+        <div className="mt-5 flex items-center gap-4 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
+          <span
+            className="flex h-16 w-16 shrink-0 items-center justify-center rounded-lg border-2"
+            style={{ borderColor: cat?.color ?? "#52525b", background: "rgba(0,0,0,0.4)" }}
+          >
+            <img
+              src={convertFileSrc(customIconSource ?? selected.iconPath ?? "")}
+              alt=""
+              className="h-12 w-12 object-contain"
+            />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-semibold text-zinc-200">
+              Custom icon {customIconSource && <span className="text-emerald-400">· set</span>}
+            </div>
+            <p className="mt-0.5 text-xs text-zinc-500">
+              Drag a PNG/JPG anywhere here, or click Choose — it’s auto-scaled to the
+              icon size and compiled into your mod.
+            </p>
+          </div>
+          <div className="flex shrink-0 gap-2">
+            <button
+              onClick={onPickIcon}
+              className="rounded-md border border-zinc-700 px-3 py-1.5 text-xs text-zinc-200 transition hover:border-zinc-500"
+            >
+              Choose image…
+            </button>
+            {customIconSource && (
+              <button
+                onClick={onRemoveIcon}
+                className="rounded-md px-3 py-1.5 text-xs text-red-400 transition hover:bg-red-500/10"
+              >
+                Remove
+              </button>
+            )}
           </div>
         </div>
 

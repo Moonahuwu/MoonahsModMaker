@@ -103,6 +103,14 @@ export interface CompileConfig {
   skipCompile: boolean;
   importedMods: string[];
   events: EventCompile[];
+  iconMods?: IconCompile[];
+}
+
+export interface IconCompile {
+  sourceImage: string;
+  targetVtexc: string;
+  width: number;
+  height: number;
 }
 
 export interface StepResult {
@@ -283,6 +291,8 @@ export interface ItemCard {
   /** 1..5 (0 = unknown) */
   tier: number;
   iconPath: string | null;
+  /** Compiled vtex_c path the game references (override target for a custom icon). */
+  iconInternal: string | null;
 }
 
 export function itemRoster(

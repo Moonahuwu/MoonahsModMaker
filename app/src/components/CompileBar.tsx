@@ -10,7 +10,7 @@ import {
 } from "../lib/api";
 import { buildCompileConfig, installSrcVpk, type Settings } from "../lib/settings";
 import { useToast } from "./Toaster";
-import type { EventProject } from "../types";
+import type { EventProject, IconMod } from "../types";
 
 const pakName = (n: number) => `pak${String(n).padStart(2, "0")}_dir.vpk`;
 
@@ -18,11 +18,13 @@ export function CompileBar({
   settings,
   update,
   events,
+  iconMods,
   onCompiled,
 }: {
   settings: Settings;
   update: (patch: Partial<Settings>) => void;
   events: EventProject[];
+  iconMods: IconMod[];
   /** Called after a successful compile so the project can record compiled hashes. */
   onCompiled: () => void;
 }) {
@@ -34,7 +36,7 @@ export function CompileBar({
 
   const songCount = events.reduce((n, e) => n + e.songs.length, 0);
   const modCount = settings.importedMods.length;
-  const canCompile = songCount > 0 || modCount > 0;
+  const canCompile = songCount > 0 || modCount > 0 || iconMods.length > 0;
 
   // Refresh the addon-slot picture (for the "next free" hint + conflict warning).
   const rescanSlots = useCallback(() => {
@@ -88,7 +90,7 @@ export function CompileBar({
     setRunning(true);
     setReport(null);
     try {
-      const config = buildCompileConfig(settings, events);
+      const config = buildCompileConfig(settings, events, false, iconMods);
       const r = await compileProject(config);
       setReport(r);
       if (r.ok) {
