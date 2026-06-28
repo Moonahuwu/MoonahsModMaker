@@ -114,6 +114,7 @@ export interface IconCompile {
   targetVtexc: string;
   width: number;
   height: number;
+  hue: number;
 }
 
 export interface SoundOverrideCompile {
@@ -319,6 +320,33 @@ export function heroVoicelines(
   refresh = false,
 ): Promise<VoiceLine[]> {
   return invoke("hero_voicelines", { helperPath, pakPath, codename, refresh });
+}
+
+/** Coarse bucket for a hero sound event. */
+export type HeroSoundCategory = "gunfire" | "abilities" | "movement" | "other";
+
+/**
+ * One of a hero's non-VO sound events (gunfire, abilities, movement…). Same
+ * shape as {@link VoiceLine} plus a `category`, so it reuses the voiceline
+ * lazy-materialization path.
+ */
+export interface HeroSound {
+  eventName: string;
+  arrayKey: string;
+  eventsRelpath: string;
+  label: string;
+  stockRef: string | null;
+  category: HeroSoundCategory;
+}
+
+/** A hero's gunfire/ability/movement sound events. Cached per hero. */
+export function heroSounds(
+  helperPath: string,
+  pakPath: string,
+  codename: string,
+  refresh = false,
+): Promise<HeroSound[]> {
+  return invoke("hero_sounds", { helperPath, pakPath, codename, refresh });
 }
 
 /** One sub-folder in the game's sound tree (lazy browse). */

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { CompileConfig, EventCompile, SoundOverrideCompile } from "./api";
+import type { CompileConfig, EventCompile, IconCompile, SoundOverrideCompile } from "./api";
 import { loadSettings, saveSettings } from "./api";
 import type { EventProject, SoundOverride } from "../types";
 import { songHash, overrideHash } from "./songHash";
@@ -127,9 +127,16 @@ export function buildCompileConfig(
   s: Settings,
   events: EventProject[],
   skipCompile = false,
-  iconMods: { sourceImage: string; targetVtexc: string; width: number; height: number }[] = [],
+  iconMods: { sourceImage: string; targetVtexc: string; width: number; height: number; hue?: number }[] = [],
   soundOverrides: SoundOverride[] = [],
 ): CompileConfig {
+  const iconCompiles: IconCompile[] = iconMods.map((m) => ({
+    sourceImage: m.sourceImage,
+    targetVtexc: m.targetVtexc,
+    width: m.width,
+    height: m.height,
+    hue: m.hue ?? 0,
+  }));
   const overrideCompiles: SoundOverrideCompile[] = soundOverrides.map((o) => ({
     targetRef: o.targetRef,
     sourceAudio: o.sourceAudio,
@@ -187,7 +194,7 @@ export function buildCompileConfig(
     skipCompile,
     importedMods: s.importedMods,
     events: eventCompiles,
-    iconMods,
+    iconMods: iconCompiles,
     soundOverrides: overrideCompiles,
   };
 }

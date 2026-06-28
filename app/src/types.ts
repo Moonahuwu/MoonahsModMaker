@@ -86,6 +86,8 @@ export interface IconMod {
   sourceImage: string;
   width: number;
   height: number;
+  /** Hue rotation in degrees (-180..180) applied on compile. 0 = unchanged. */
+  hue?: number;
 }
 
 /** A loose-file sound override: user audio compiled + staged at a vanilla path. */

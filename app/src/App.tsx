@@ -10,10 +10,12 @@ import {
   downloadEntry,
   heroDetail as heroDetailApi,
   heroVoicelines as heroVoicelinesApi,
+  heroSounds as heroSoundsApi,
   itemDetail as itemDetailApi,
   type HeroAbility,
   type HeroAbilitySound,
   type HeroPortrait,
+  type HeroSound,
   type VoiceLine,
   type ItemCard,
   loadState,
@@ -203,6 +205,10 @@ export default function App() {
   const [showVoicelines, setShowVoicelines] = useState(false);
   const [voicelines, setVoicelines] = useState<VoiceLine[] | null>(null);
   const [voicelinesLoading, setVoicelinesLoading] = useState(false);
+  // The hero's full non-VO sound set (gunfire/abilities/movement), shown in the
+  // hero detail under the ability bar.
+  const [heroSounds, setHeroSounds] = useState<HeroSound[] | null>(null);
+  const [heroSoundsLoading, setHeroSoundsLoading] = useState(false);
   // Selected shop item (Items tab) -> drill-in to its sound events.
   const [selectedItem, setSelectedItem] = useState<ItemCard | null>(null);
   const [itemSounds, setItemSounds] = useState<HeroAbilitySound[] | null>(null);
@@ -1050,6 +1056,7 @@ export default function App() {
   useEffect(() => {
     setShowVoicelines(false);
     setVoicelines(null);
+    setHeroSounds(null);
     if (!selectedHero) {
       setHeroAbilities(null);
       setSelectedAbility(null);
@@ -1119,6 +1126,29 @@ export default function App() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedHero, showVoicelines]);
+
+  // Load the selected hero's non-VO sound set (gunfire/abilities/movement) for
+  // the "More sounds" section. Cheap (one decompile + parse), cached per hero.
+  useEffect(() => {
+    if (!selectedHero) return;
+    let cancelled = false;
+    setHeroSoundsLoading(true);
+    (async () => {
+      const s = settingsRef.current;
+      try {
+        const list = await heroSoundsApi(s.vpkHelperPath, s.deadlockPak, selectedHero);
+        if (!cancelled) setHeroSounds(list);
+      } catch (e) {
+        if (!cancelled) push("error", `Couldn't load hero sounds: ${e}`);
+      } finally {
+        if (!cancelled) setHeroSoundsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedHero]);
 
   // Materialize a single voiceline's editor slot (lazy, on first expand) and
   // make sure its VO soundevents file is decompiled into the merge base.
@@ -1233,6 +1263,8 @@ export default function App() {
     const id = `icon_${item.name}`;
     setProject((prev) => {
       if (!prev) return prev;
+      // Keep any hue the user already dialed in when they swap the image.
+      const prevHue = (prev.iconMods ?? []).find((m) => m.id === id)?.hue ?? 0;
       const mods = (prev.iconMods ?? []).filter((m) => m.id !== id);
       mods.push({
         id,
@@ -1241,10 +1273,24 @@ export default function App() {
         sourceImage: imagePath,
         width: size.w,
         height: size.h,
+        hue: prevHue,
       });
       return { ...prev, iconMods: mods };
     });
     push("success", `Custom icon set for ${item.displayName} — compile to apply`);
+  }
+
+  // Live-adjust the hue of an item's custom icon (no-op if no icon is set yet).
+  function setItemHue(itemName: string, hue: number) {
+    const id = `icon_${itemName}`;
+    setProject((prev) =>
+      prev
+        ? {
+            ...prev,
+            iconMods: (prev.iconMods ?? []).map((m) => (m.id === id ? { ...m, hue } : m)),
+          }
+        : prev,
+    );
   }
 
   function removeItemIcon(itemName: string) {
@@ -1572,6 +1618,13 @@ export default function App() {
                     ?.sourceImage ?? null
                 : null
             }
+            customHue={
+              selectedItem
+                ? (project?.iconMods ?? []).find((m) => m.id === `icon_${selectedItem.name}`)
+                    ?.hue ?? 0
+                : 0
+            }
+            onHueChange={(hue) => selectedItem && setItemHue(selectedItem.name, hue)}
             onPickIcon={() => selectedItem && void pickItemIcon(selectedItem)}
             onRemoveIcon={() => selectedItem && removeItemIcon(selectedItem.name)}
           />
@@ -1621,6 +1674,10 @@ export default function App() {
                 setSelectedHeroInfo(null);
               }}
               renderSound={renderSound}
+              sounds={heroSounds}
+              soundsLoading={heroSoundsLoading}
+              onPreviewSound={(ref) => decodeStock(ref)}
+              onOpenSound={(s) => void openVoiceline(s)}
             />
           ) : (
             <HeroGrid

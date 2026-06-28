@@ -80,6 +80,9 @@ pub struct IconMod {
     /// Native icon size to scale the source to.
     pub width: u32,
     pub height: u32,
+    /// Hue rotation applied on compile, in degrees (-180..180). 0 = unchanged.
+    #[serde(default)]
+    pub hue: f32,
 }
 
 fn default_sound_folder() -> String {

@@ -1226,6 +1226,122 @@ pub fn hero_voicelines(
     Ok(lines)
 }
 
+/// One non-VO hero sound event (gunfire, ability, movement…) from
+/// `soundevents/hero/<code>.vsndevts`, tagged with a coarse `category` so the UI
+/// can group it. Shaped like `VoiceLine` (+ `category`) so it reuses the exact
+/// same lazy slot-materialization path on the frontend.
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct HeroSound {
+    pub event_name: String,
+    pub array_key: String,
+    pub events_relpath: String,
+    pub label: String,
+    /// The first stock clip reference (for preview), if any.
+    pub stock_ref: Option<String>,
+    /// "gunfire" | "abilities" | "movement" | "other".
+    pub category: String,
+}
+
+/// Coarse bucket for a hero sound event, by name convention. Order matters:
+/// weapon first, then abilities, then movement/melee, else "other".
+fn hero_sound_category(event: &str) -> &'static str {
+    let segs: Vec<&str> = event.split('.').collect();
+    let has = |names: &[&str]| {
+        segs.iter()
+            .any(|s| names.iter().any(|n| s.eq_ignore_ascii_case(n)))
+    };
+    // Weapon / bullet: Abrams.Wpn.Fire.Main, *.Whizby, *.Reload.*
+    if has(&["Wpn", "Weapon", "Gun", "Bullet", "Whizby", "Reload"]) {
+        return "gunfire";
+    }
+    // Abilities: `Ability.*`, an `A1`..`A4` segment, or common ability verbs.
+    let has_slot_seg = segs.iter().any(|s| {
+        let b = s.as_bytes();
+        b.len() == 2 && b[0] == b'A' && b[1].is_ascii_digit()
+    });
+    if event.starts_with("Ability.") || has_slot_seg || has(&["Charge", "Leap", "Cast", "Ultimate"]) {
+        return "abilities";
+    }
+    // Movement & melee foley.
+    if has(&[
+        "Footstep", "Footsteps", "Movement", "Jump", "JumpLand", "Land", "Mantle", "Melee", "Slide",
+        "Dash", "Sprint", "Step", "Zipline", "Roll",
+    ]) {
+        return "movement";
+    }
+    "other"
+}
+
+/// `Abrams.Wpn.Fire.Main` -> "Wpn Fire Main" (drop a leading hero-code or
+/// `Ability` segment; the full event name stays available as a tooltip).
+fn prettify_hero_sound(event: &str, code: &str) -> String {
+    let mut parts: Vec<&str> = event.split('.').collect();
+    while let Some(first) = parts.first() {
+        if first.eq_ignore_ascii_case(code) || first.eq_ignore_ascii_case("Ability") {
+            parts.remove(0);
+        } else {
+            break;
+        }
+    }
+    if parts.is_empty() {
+        return event.to_string();
+    }
+    parts.join(" ")
+}
+
+/// A hero's non-VO sound events (gunfire, abilities, movement) from
+/// `soundevents/hero/<code>.vsndevts`. Cached per hero. Empty if no file.
+#[tauri::command]
+pub fn hero_sounds(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+    codename: String,
+    refresh: Option<bool>,
+) -> Result<Vec<HeroSound>, String> {
+    use tauri::Manager;
+    let base = app.path().app_data_dir().map_err(|e| e.to_string())?.join("hero_portraits");
+    std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
+
+    let cache = base.join(format!("herosnd_{codename}.json"));
+    if !refresh.unwrap_or(false) {
+        if let Ok(t) = std::fs::read_to_string(&cache) {
+            if let Ok(v) = serde_json::from_str::<Vec<HeroSound>>(&t) {
+                return Ok(v);
+            }
+        }
+    }
+
+    let relpath = format!("soundevents/hero/{codename}.vsndevts");
+    let snd_dir = base.join("heroevents");
+    std::fs::create_dir_all(&snd_dir).map_err(|e| e.to_string())?;
+    let snd_file = snd_dir.join(format!("{codename}.vsndevts"));
+    if refresh.unwrap_or(false) || !snd_file.exists() {
+        if crate::vpk::decompile_from_vpk(&helper_path, &pak_path, &format!("{relpath}_c"), &snd_file.to_string_lossy()).is_err() {
+            let _ = std::fs::write(&cache, "[]");
+            return Ok(vec![]);
+        }
+    }
+    let text = std::fs::read_to_string(&snd_file).map_err(|e| e.to_string())?;
+    let sounds: Vec<HeroSound> = parse_vo_events(&text)
+        .into_iter()
+        .filter(|(_, r)| r.is_some())
+        .map(|(event, stock_ref)| HeroSound {
+            label: prettify_hero_sound(&event, &codename),
+            category: hero_sound_category(&event).to_string(),
+            event_name: event,
+            array_key: "vsnd_files".to_string(),
+            events_relpath: relpath.clone(),
+            stock_ref,
+        })
+        .collect();
+    if let Ok(json) = serde_json::to_string(&sounds) {
+        let _ = std::fs::write(&cache, json);
+    }
+    Ok(sounds)
+}
+
 // ---- Items (shop) ----------------------------------------------------------
 // Items are abilities too (in abilities.vdata) with `m_strShopIconLarge`. The
 // Items tab recreates the shop: grouped by category (slot type) and tier, each

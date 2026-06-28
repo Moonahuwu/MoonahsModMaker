@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from "motion/react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import type { HeroAbility, HeroAbilitySound } from "../lib/api";
+import type { HeroAbility, HeroSound } from "../lib/api";
+import { HeroSoundsSection } from "./HeroSoundsSection";
 
 /**
  * Per-hero menu: a background banner (the hero's card art) with the hero name,
@@ -20,6 +21,10 @@ export function HeroDetail({
   onShowVoicelines,
   onBack,
   renderSound,
+  sounds,
+  soundsLoading,
+  onPreviewSound,
+  onOpenSound,
 }: {
   heroName: string;
   backgroundSrc: string | null;
@@ -31,7 +36,12 @@ export function HeroDetail({
   onSelectAbility: (ability: string | null) => void;
   onShowVoicelines: () => void;
   onBack: () => void;
-  renderSound: (sound: HeroAbilitySound) => React.ReactNode;
+  renderSound: (sound: { eventName: string; label: string }) => React.ReactNode;
+  /** The hero's non-VO sound events (gunfire/abilities/movement). */
+  sounds: HeroSound[] | null;
+  soundsLoading: boolean;
+  onPreviewSound: (ref: string) => Promise<string>;
+  onOpenSound: (s: HeroSound) => void;
 }) {
   const active = abilities?.find((a) => a.ability === selectedAbility) ?? null;
 
@@ -151,6 +161,16 @@ export function HeroDetail({
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Full hero sound set (gunfire / abilities / movement), auto-grouped. */}
+      <HeroSoundsSection
+        accent={accent}
+        sounds={sounds}
+        loading={soundsLoading}
+        onPreview={onPreviewSound}
+        onOpen={onOpenSound}
+        renderSound={renderSound}
+      />
     </div>
   );
 }

@@ -29,6 +29,8 @@ export function ItemsTab({
   loading,
   renderSound,
   customIconSource,
+  customHue,
+  onHueChange,
   onPickIcon,
   onRemoveIcon,
 }: {
@@ -41,6 +43,8 @@ export function ItemsTab({
   loading: boolean;
   renderSound: (s: HeroAbilitySound) => React.ReactNode;
   customIconSource: string | null;
+  customHue: number;
+  onHueChange: (hue: number) => void;
   onPickIcon: () => void;
   onRemoveIcon: () => void;
 }) {
@@ -103,42 +107,77 @@ export function ItemsTab({
         </div>
 
         {/* Custom icon override */}
-        <div className="mt-5 flex items-center gap-4 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
-          <span
-            className="flex h-16 w-16 shrink-0 items-center justify-center rounded-lg border-2"
-            style={{ borderColor: cat?.color ?? "#52525b", background: "rgba(0,0,0,0.4)" }}
-          >
-            <img
-              src={convertFileSrc(customIconSource ?? selected.iconPath ?? "")}
-              alt=""
-              className="h-12 w-12 object-contain"
-            />
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="text-sm font-semibold text-zinc-200">
-              Custom icon {customIconSource && <span className="text-emerald-400">· set</span>}
-            </div>
-            <p className="mt-0.5 text-xs text-zinc-500">
-              Drag a PNG/JPG anywhere here, or click Choose — it’s auto-scaled to the
-              icon size and compiled into your mod.
-            </p>
-          </div>
-          <div className="flex shrink-0 gap-2">
-            <button
-              onClick={onPickIcon}
-              className="rounded-md border border-zinc-700 px-3 py-1.5 text-xs text-zinc-200 transition hover:border-zinc-500"
+        <div className="mt-5 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
+          <div className="flex items-center gap-4">
+            <span
+              className="flex h-16 w-16 shrink-0 items-center justify-center rounded-lg border-2"
+              style={{ borderColor: cat?.color ?? "#52525b", background: "rgba(0,0,0,0.4)" }}
             >
-              Choose image…
-            </button>
-            {customIconSource && (
+              <img
+                src={convertFileSrc(customIconSource ?? selected.iconPath ?? "")}
+                alt=""
+                className="h-12 w-12 object-contain"
+                // Live preview of the hue shift (matches the ffmpeg pass on compile).
+                style={customIconSource ? { filter: `hue-rotate(${customHue}deg)` } : undefined}
+              />
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-semibold text-zinc-200">
+                Custom icon {customIconSource && <span className="text-emerald-400">· set</span>}
+              </div>
+              <p className="mt-0.5 text-xs text-zinc-500">
+                Drag a PNG/JPG anywhere here, or click Choose — it’s auto-scaled to the
+                icon size and compiled into your mod.
+              </p>
+            </div>
+            <div className="flex shrink-0 gap-2">
               <button
-                onClick={onRemoveIcon}
-                className="rounded-md px-3 py-1.5 text-xs text-red-400 transition hover:bg-red-500/10"
+                onClick={onPickIcon}
+                className="rounded-md border border-zinc-700 px-3 py-1.5 text-xs text-zinc-200 transition hover:border-zinc-500"
               >
-                Remove
+                Choose image…
               </button>
-            )}
+              {customIconSource && (
+                <button
+                  onClick={onRemoveIcon}
+                  className="rounded-md px-3 py-1.5 text-xs text-red-400 transition hover:bg-red-500/10"
+                >
+                  Remove
+                </button>
+              )}
+            </div>
           </div>
+
+          {/* Hue adjustment — only meaningful once a custom image is set. */}
+          {customIconSource && (
+            <div className="mt-4 flex items-center gap-3 border-t border-zinc-800 pt-3">
+              <label className="shrink-0 text-xs font-medium text-zinc-400">Hue</label>
+              <input
+                type="range"
+                min={-180}
+                max={180}
+                step={1}
+                value={customHue}
+                onChange={(e) => onHueChange(Number(e.target.value))}
+                className="h-1.5 flex-1 cursor-pointer appearance-none rounded-full"
+                style={{
+                  background:
+                    "linear-gradient(to right, #ff0000, #ffff00, #00ff00, #00ffff, #0000ff, #ff00ff, #ff0000)",
+                }}
+              />
+              <span className="w-12 shrink-0 text-right text-xs tabular-nums text-zinc-300">
+                {customHue > 0 ? "+" : ""}
+                {customHue}°
+              </span>
+              <button
+                onClick={() => onHueChange(0)}
+                disabled={customHue === 0}
+                className="shrink-0 rounded-md border border-zinc-700 px-2 py-1 text-[11px] text-zinc-400 transition hover:border-zinc-500 hover:text-zinc-200 disabled:opacity-30"
+              >
+                Reset
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="mt-5">

@@ -193,6 +193,9 @@ pub struct IconCompile {
     pub target_vtexc: String,
     pub width: u32,
     pub height: u32,
+    /// Hue rotation in degrees applied during the ffmpeg scale pass (0 = none).
+    #[serde(default)]
+    pub hue: f32,
 }
 
 fn default_true() -> bool {
@@ -414,16 +417,22 @@ fn copy_into(src: &Path, dest_root: &Path, relpath: &str) -> std::io::Result<Pat
     Ok(dest)
 }
 
-/// Scale a source image to `w`x`h` PNG via ffmpeg (preserves alpha).
-fn render_icon(ffmpeg: Option<&str>, src: &str, w: u32, h: u32, out_png: &str) -> Result<(), String> {
+/// Scale a source image to `w`x`h` PNG via ffmpeg (preserves alpha). `hue` is a
+/// rotation in degrees applied after scaling (0 = leave colors untouched).
+fn render_icon(ffmpeg: Option<&str>, src: &str, w: u32, h: u32, hue: f32, out_png: &str) -> Result<(), String> {
     let exe = ffmpeg.unwrap_or("ffmpeg");
+    let mut vf = format!("scale={w}:{h}:flags=lanczos");
+    if hue.abs() > 0.01 {
+        // ffmpeg's `hue` filter operates on yuva, so the alpha channel survives.
+        vf.push_str(&format!(",hue=h={hue}"));
+    }
     let out = Command::new(exe)
         .args([
             "-y",
             "-i",
             src,
             "-vf",
-            &format!("scale={w}:{h}:flags=lanczos"),
+            &vf,
             "-frames:v",
             "1",
             out_png,
@@ -463,7 +472,7 @@ fn compile_icon_mods(
         let h = m.height.clamp(1, 4096);
         let png = icons_dir.join(format!("icon_{i}.png"));
         let label = m.target_vtexc.rsplit('/').next().unwrap_or(&m.target_vtexc);
-        if let Err(e) = render_icon(cfg.ffmpeg_path.as_deref(), &m.source_image, w, h, &png.to_string_lossy()) {
+        if let Err(e) = render_icon(cfg.ffmpeg_path.as_deref(), &m.source_image, w, h, m.hue, &png.to_string_lossy()) {
             return report.fail(format!("scale icon: {label}"), e).map(|_| vec![]);
         }
         list.push_str(&format!("\t\tpanorama:\"file://{{images}}/eim_icons/icon_{i}.png\",\n"));
