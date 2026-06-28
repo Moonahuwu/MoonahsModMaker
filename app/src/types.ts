@@ -121,6 +121,13 @@ export interface EffectOverride {
   lastCompiledHash?: string | null;
 }
 
+/** One gameplay-config edit: a changed ability property in abilities.vdata. */
+export interface VdataOverride {
+  abilityKey: string;
+  propKey: string;
+  value: string;
+}
+
 export interface Project {
   version: number;
   gameContentRoot: string;
@@ -132,6 +139,7 @@ export interface Project {
   iconMods?: IconMod[];
   soundOverrides?: SoundOverride[];
   effectOverrides?: EffectOverride[];
+  vdataOverrides?: VdataOverride[];
 }
 
 /// Classification of one array entry relative to a side's project state.

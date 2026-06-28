@@ -1492,6 +1492,30 @@ export default function App() {
     );
   }
 
+  // Gameplay config (Custom Server tab): upsert/clear one ability-property edit.
+  function setVdataOverride(abilityKey: string, propKey: string, value: string) {
+    setProject((prev) => {
+      if (!prev) return prev;
+      const list = prev.vdataOverrides ?? [];
+      const idx = list.findIndex((o) => o.abilityKey === abilityKey && o.propKey === propKey);
+      const next = idx >= 0 ? list.map((o, i) => (i === idx ? { ...o, value } : o)) : [...list, { abilityKey, propKey, value }];
+      return { ...prev, vdataOverrides: next };
+    });
+  }
+
+  function clearVdataOverride(abilityKey: string, propKey: string) {
+    setProject((prev) =>
+      prev
+        ? {
+            ...prev,
+            vdataOverrides: (prev.vdataOverrides ?? []).filter(
+              (o) => !(o.abilityKey === abilityKey && o.propKey === propKey),
+            ),
+          }
+        : prev,
+    );
+  }
+
   // "Open in real viewer": launch VRF's Source2Viewer on the particle (extracted
   // from the pak). Needs the viewer path set in Setup.
   async function openEffectInViewer(reference: string) {
@@ -1763,7 +1787,14 @@ export default function App() {
             )}
           />
         ) : activeTab === CUSTOM_SERVER ? (
-          <CustomServer />
+          <CustomServer
+            helperPath={settings.vpkHelperPath}
+            pakPath={settings.deadlockPak}
+            showExperimental={settings.showExperimentalHeroes}
+            overrides={project?.vdataOverrides ?? []}
+            onSet={setVdataOverride}
+            onClear={clearVdataOverride}
+          />
         ) : activeTab === EFFECTS ? (
           <EffectsBrowser
             helperPath={settings.vpkHelperPath}
@@ -1837,6 +1868,7 @@ export default function App() {
             iconMods={project.iconMods ?? []}
             soundOverrides={project.soundOverrides ?? []}
             effectOverrides={project.effectOverrides ?? []}
+            vdataOverrides={project.vdataOverrides ?? []}
             onCompiled={markAllCompiled}
           />
         )}

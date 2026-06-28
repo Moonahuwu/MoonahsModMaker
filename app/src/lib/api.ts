@@ -108,6 +108,13 @@ export interface CompileConfig {
   iconMods?: IconCompile[];
   soundOverrides?: SoundOverrideCompile[];
   effectOverrides?: EffectCompile[];
+  vdataOverrides?: VdataCompile[];
+}
+
+export interface VdataCompile {
+  abilityKey: string;
+  propKey: string;
+  value: string;
 }
 
 export interface IconCompile {
@@ -310,6 +317,33 @@ export function heroDetail(
   refresh = false,
 ): Promise<HeroAbility[]> {
   return invoke("hero_detail", { helperPath, pakPath, codename, refresh });
+}
+
+/** One editable numeric property of an ability (Custom Server config editor). */
+export interface AbilityProp {
+  key: string;
+  label: string;
+  value: string;
+  number: number;
+  unit: string;
+}
+
+/** A hero signature ability + its editable properties. */
+export interface AbilityConfig {
+  key: string;
+  slot: number;
+  name: string;
+  iconPath: string;
+  props: AbilityProp[];
+}
+
+/** A hero's signature abilities and their editable gameplay values. */
+export function heroConfig(
+  helperPath: string,
+  pakPath: string,
+  codename: string,
+): Promise<AbilityConfig[]> {
+  return invoke("hero_config", { helperPath, pakPath, codename });
 }
 
 /** One of a hero's voicelines (single-clip soundevent). */

@@ -133,6 +133,22 @@ pub struct CompileConfig {
     /// recompile to `.vpcf_c` and stage at the game's own path (whole-file override).
     #[serde(default)]
     pub effect_overrides: Vec<EffectCompile>,
+    /// Gameplay config edits: rewrite ability property values in
+    /// `scripts/abilities.vdata`, recompile to `abilities.vdata_c`, and stage it
+    /// at the game's own path (whole-file override). Custom Server tab.
+    #[serde(default)]
+    pub vdata_overrides: Vec<VdataCompile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VdataCompile {
+    /// Ability entity key, e.g. `ability_incendiary_projectile`.
+    pub ability_key: String,
+    /// Property key inside `m_mapAbilityProperties`.
+    pub prop_key: String,
+    /// New value (string; keeps unit suffixes like `20m`).
+    pub value: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -758,6 +774,164 @@ fn compile_effect_overrides(
     Ok(())
 }
 
+/// Path inside the game tree that `abilities.vdata` compiles/stages to.
+const ABILITIES_VDATA_REL: &str = "scripts/abilities.vdata";
+const ABILITIES_VDATA_C_REL: &str = "scripts/abilities.vdata_c";
+
+/// Rewrite each `(ability_key, prop_key)` override's `m_strValue` in the
+/// decompiled `abilities.vdata` text, leaving every other byte intact.
+fn apply_vdata_overrides(text: &str, overrides: &[VdataCompile]) -> String {
+    use std::collections::HashMap;
+    let mut want: HashMap<&str, HashMap<&str, &str>> = HashMap::new();
+    for ov in overrides {
+        want.entry(ov.ability_key.as_str())
+            .or_default()
+            .insert(ov.prop_key.as_str(), ov.value.as_str());
+    }
+    let mut out = String::with_capacity(text.len() + 64);
+    let mut in_wanted_ability = false;
+    let mut cur_ability: Option<&str> = None;
+    let mut props_depth: Option<usize> = None;
+    let mut pending: Option<&str> = None; // value to write at the next m_strValue
+    for line in text.split_inclusive('\n') {
+        let nl = line.ends_with('\n');
+        let body = line.strip_suffix('\n').unwrap_or(line);
+        let depth = body.chars().take_while(|&c| c == '\t').count();
+        let t = body.trim();
+        let top_level = body.starts_with('\t') && !body.starts_with("\t\t");
+
+        // Top-level ability block opener resets all per-block state.
+        if top_level {
+            if let Some(k) = t.strip_suffix('=').map(str::trim) {
+                if !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                    cur_ability = Some(k);
+                    in_wanted_ability = want.contains_key(k);
+                    props_depth = None;
+                    pending = None;
+                    out.push_str(line);
+                    continue;
+                }
+            }
+        }
+
+        // Rewrite the value when one is pending.
+        if pending.is_some() && t.starts_with("m_strValue") {
+            if let (Some(a), Some(b)) = (body.find('"'), body.rfind('"')) {
+                if b > a {
+                    out.push_str(&body[..=a]);
+                    out.push_str(pending.unwrap());
+                    out.push_str(&body[b..]);
+                    if nl {
+                        out.push('\n');
+                    }
+                    pending = None;
+                    continue;
+                }
+            }
+        }
+
+        if in_wanted_ability {
+            if let Some(pd) = props_depth {
+                if depth <= pd && t == "}" {
+                    props_depth = None;
+                    pending = None;
+                } else if depth == pd + 1 {
+                    if let Some(k) = t.strip_suffix('=').map(str::trim) {
+                        if !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                            pending = cur_ability
+                                .and_then(|a| want.get(a))
+                                .and_then(|m| m.get(k))
+                                .copied();
+                        }
+                    }
+                }
+            } else if t.starts_with("m_mapAbilityProperties") && t.ends_with('=') {
+                props_depth = Some(depth);
+            }
+        }
+        out.push_str(line);
+    }
+    out
+}
+
+/// Drop the top-level `_include = [ … ]` array. The decompiled file already
+/// inlines the resolved data, so the includes are redundant — and the
+/// resourcecompiler aborts on the missing `.vdata_inc` source files if they
+/// remain. (See the vdata spike: stripping this is what makes the recompile work.)
+fn strip_vdata_includes(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut skipping = false;
+    for line in text.split_inclusive('\n') {
+        let body = line.strip_suffix('\n').unwrap_or(line);
+        let depth = body.chars().take_while(|&c| c == '\t').count();
+        let t = body.trim();
+        if skipping {
+            if depth == 1 && t == "]" {
+                skipping = false;
+            }
+            continue; // drop every line of the include block, brackets included
+        }
+        if depth == 1 && t == "_include =" {
+            skipping = true;
+            continue;
+        }
+        out.push_str(line);
+    }
+    out
+}
+
+/// Apply all gameplay-config edits: decompile the vanilla `abilities.vdata`,
+/// rewrite the edited property values, strip `_include`, and recompile to
+/// `abilities.vdata_c`. Returns Ok(()) (the produced `_c` is staged in the
+/// per-variant loop, like icons/effects).
+fn compile_vdata_overrides(
+    cfg: &CompileConfig,
+    content_root: &Path,
+    _compiled_root: &Path,
+    report: &mut CompileReport,
+) -> Result<(), ()> {
+    if cfg.vdata_overrides.is_empty() {
+        return Ok(());
+    }
+    let helper = match cfg.vpk_helper_path.as_deref() {
+        Some(h) => h,
+        None => return report.fail("config edits", "vpkHelperPath not set"),
+    };
+    let pak = match cfg.pak_path.as_deref() {
+        Some(p) => p,
+        None => return report.fail("config edits", "pakPath not set (needed to read vanilla abilities.vdata)"),
+    };
+    let content_vdata = content_root.join(ABILITIES_VDATA_REL);
+    if let Some(parent) = content_vdata.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            return report.fail("prepare config dir", e.to_string());
+        }
+    }
+    if let Err(e) =
+        crate::vpk::decompile_from_vpk(helper, pak, ABILITIES_VDATA_C_REL, &content_vdata.to_string_lossy())
+    {
+        return report.fail("decompile abilities.vdata", e);
+    }
+    let text = match std::fs::read_to_string(&content_vdata) {
+        Ok(t) => t,
+        Err(e) => return report.fail("read abilities.vdata", e.to_string()),
+    };
+    let edited = apply_vdata_overrides(&text, &cfg.vdata_overrides);
+    let stripped = strip_vdata_includes(&edited);
+    if let Err(e) = std::fs::write(&content_vdata, stripped) {
+        return report.fail("write abilities.vdata", e.to_string());
+    }
+    report.ok_step("config edits", format!("{} value(s)", cfg.vdata_overrides.len()));
+    if cfg.skip_compile {
+        return Ok(());
+    }
+    match run_resource_compiler(cfg, &content_vdata.to_string_lossy()) {
+        Ok(detail) => report.ok_step("compile (config)", detail),
+        Err(e) => return report.fail("compile (config)", e),
+    }
+    Ok(())
+}
+
 /// Scale + compile all icon mods in one resourcecompiler pass. Returns
 /// `(target_vtexc, produced_vtex_c_abs_path)` pairs for staging. Sources are
 /// written under `panorama/images/eim_icons/` in the content tree and listed in a
@@ -949,6 +1123,10 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
     // VFX recolor overrides: decompile + recolor + recompile once (staged into
     // every variant, like icons).
     compile_effect_overrides(cfg, content_root, compiled_root, report)?;
+
+    // Gameplay config edits: rewrite abilities.vdata once (staged into every
+    // variant). Custom Server tab.
+    compile_vdata_overrides(cfg, content_root, compiled_root, report)?;
 
     // Custom icon overrides: scale + compile once (staged into every variant).
     let icon_outputs = compile_icon_mods(cfg, content_root, compiled_root, report)?;
@@ -1229,6 +1407,16 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                 Err(e) => return report.fail(format!("stage effect: {rel}"), e.to_string()),
             }
         }
+        // Stage the gameplay-config override (recompiled abilities.vdata_c).
+        if !cfg.vdata_overrides.is_empty() {
+            let src = compiled_root.join(ABILITIES_VDATA_C_REL);
+            if !(cfg.skip_compile && !src.exists()) {
+                match copy_into(&src, &stage, ABILITIES_VDATA_C_REL) {
+                    Ok(_) => staged += 1,
+                    Err(e) => return report.fail("stage config", e.to_string()),
+                }
+            }
+        }
         report.ok_step(format!("[{}] stage", v.name), format!("{staged} file(s)"));
 
         if cfg.output_mode == "vpk" {
@@ -1253,6 +1441,93 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const VDATA_SAMPLE: &str = "\
+<!-- kv3 -->
+{
+\tgeneric_data_type = \"CitadelAbilityVData\"
+\t_include =
+\t[
+\t\tresource_name:\"scripts/abilities/inferno.vdata_inc\",
+\t\tresource_name:\"scripts/abilities/haze.vdata_inc\",
+\t]
+\tability_incendiary_projectile =
+\t{
+\t\t_class = \"citadel_ability\"
+\t\tm_mapAbilityProperties =
+\t\t{
+\t\t\tAbilityCooldownBetweenCharge =
+\t\t\t{
+\t\t\t\tm_strValue = \"6\"
+\t\t\t\tm_strDisableValue = \"0\"
+\t\t\t}
+\t\t\tAbilityCastRange =
+\t\t\t{
+\t\t\t\tm_strValue = \"20m\"
+\t\t\t}
+\t\t}
+\t}
+\tability_other =
+\t{
+\t\tm_mapAbilityProperties =
+\t\t{
+\t\t\tAbilityCastRange =
+\t\t\t{
+\t\t\t\tm_strValue = \"99\"
+\t\t\t}
+\t\t}
+\t}
+}
+";
+
+    #[test]
+    fn vdata_override_rewrites_only_target_prop() {
+        let ovs = vec![
+            VdataCompile {
+                ability_key: "ability_incendiary_projectile".into(),
+                prop_key: "AbilityCooldownBetweenCharge".into(),
+                value: "2.5".into(),
+            },
+            VdataCompile {
+                ability_key: "ability_incendiary_projectile".into(),
+                prop_key: "AbilityCastRange".into(),
+                value: "30m".into(),
+            },
+        ];
+        let out = apply_vdata_overrides(VDATA_SAMPLE, &ovs);
+        // Targeted values changed.
+        assert!(out.contains("m_strValue = \"2.5\""));
+        assert!(out.contains("m_strValue = \"30m\""));
+        // The disable value sitting right after the cooldown is untouched.
+        assert!(out.contains("m_strDisableValue = \"0\""));
+        // The SAME prop name on a different ability is NOT touched.
+        assert!(out.contains("m_strValue = \"99\""));
+        // The original cooldown value is gone.
+        assert!(!out.contains("m_strValue = \"6\""));
+    }
+
+    #[test]
+    fn vdata_strip_includes_removes_block() {
+        let out = strip_vdata_includes(VDATA_SAMPLE);
+        assert!(!out.contains("_include"));
+        assert!(!out.contains("vdata_inc"));
+        // Real data survives.
+        assert!(out.contains("ability_incendiary_projectile"));
+        assert!(out.contains("m_strValue = \"20m\""));
+        // generic_data_type line before the include is kept.
+        assert!(out.contains("CitadelAbilityVData"));
+    }
+
+    #[test]
+    fn vdata_override_noop_for_unknown_keys() {
+        let ovs = vec![VdataCompile {
+            ability_key: "nope".into(),
+            prop_key: "AbilityCastRange".into(),
+            value: "1".into(),
+        }];
+        let out = apply_vdata_overrides(VDATA_SAMPLE, &ovs);
+        assert_eq!(out, VDATA_SAMPLE);
+    }
 
     #[test]
     fn recolor_shifts_color_lines_only() {
@@ -1411,6 +1686,7 @@ mod tests {
             icon_mods: vec![],
             sound_overrides: vec![],
             effect_overrides: vec![],
+            vdata_overrides: vec![],
         };
 
         let report = run(&cfg);
@@ -1488,6 +1764,7 @@ mod tests {
                 current_hash: Some("h1".into()),
                 last_compiled_hash: None,
             }],
+            vdata_overrides: vec![],
         };
 
         let report = run(&cfg);

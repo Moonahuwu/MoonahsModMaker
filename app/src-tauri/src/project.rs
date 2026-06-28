@@ -33,6 +33,25 @@ pub struct Project {
     /// `.vpcf_c` at its vanilla path. Same whole-file override trick.
     #[serde(default)]
     pub effect_overrides: Vec<EffectOverride>,
+    /// Gameplay config overrides (Custom Server tab): edits to ability properties
+    /// in `scripts/abilities.vdata`, compiled into a single `abilities.vdata_c`
+    /// override. Keyed by (abilityKey, propKey).
+    #[serde(default)]
+    pub vdata_overrides: Vec<VdataOverride>,
+}
+
+/// One edited ability property in `abilities.vdata`. The compile step decompiles
+/// the vanilla file, rewrites this property's `m_strValue`, strips the `_include`
+/// block, recompiles, and stages `scripts/abilities.vdata_c`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VdataOverride {
+    /// Ability entity key, e.g. `ability_incendiary_projectile`.
+    pub ability_key: String,
+    /// Property key inside `m_mapAbilityProperties`, e.g. `AbilityCooldownBetweenCharge`.
+    pub prop_key: String,
+    /// New value to store (kept as a string so unit suffixes like `20m` survive).
+    pub value: String,
 }
 
 /// A particle (VFX) recolor: decompile the vanilla `.vpcf`, hue/sat-shift every
@@ -637,6 +656,7 @@ impl Project {
             icon_mods: vec![],
             sound_overrides: vec![],
             effect_overrides: vec![],
+            vdata_overrides: vec![],
         }
     }
 

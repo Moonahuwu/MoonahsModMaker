@@ -785,6 +785,15 @@ struct AbilityDef {
     icon_internal: Option<String>,
     /// (label, event) pairs in declaration order.
     sounds: Vec<(String, String)>,
+    /// (propKey, value) pairs from `m_mapAbilityProperties` that carry an
+    /// `m_strValue` — the editable designer-facing numbers (cooldown, range,
+    /// damage, …). Declaration order preserved.
+    props: Vec<(String, String)>,
+}
+
+/// Count leading tab characters (block depth in the decompiled KV3).
+fn tab_depth(line: &str) -> usize {
+    line.chars().take_while(|&c| c == '\t').count()
 }
 
 /// Turn an ability sound field key into a label, e.g. `m_strCastSound` -> "Cast",
@@ -812,18 +821,26 @@ fn clean_sound_label(key: &str) -> String {
 fn parse_abilities(vdata: &str) -> std::collections::HashMap<String, AbilityDef> {
     let mut map = std::collections::HashMap::new();
     let mut cur_name: Option<String> = None;
-    let mut cur = AbilityDef { icon_internal: None, sounds: vec![] };
+    let mut cur = AbilityDef { icon_internal: None, sounds: vec![], props: vec![] };
+    // Tab depth of the `m_mapAbilityProperties` key while we're inside its block
+    // (None when outside). Property openers sit at `props_depth + 1`, their
+    // `m_strValue` at `props_depth + 2`.
+    let mut props_depth: Option<usize> = None;
+    let mut cur_prop: Option<String> = None;
     for line in vdata.lines() {
         let top_level = line.starts_with('\t') && !line.starts_with("\t\t");
+        let depth = tab_depth(line);
         let t = line.trim();
         // Top-level block opener: `<name> =` (the `{` is on the next line).
         if top_level {
             if let Some(k) = t.strip_suffix('=').map(str::trim) {
                 if !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
                     if let Some(name) = cur_name.take() {
-                        map.insert(name, std::mem::replace(&mut cur, AbilityDef { icon_internal: None, sounds: vec![] }));
+                        map.insert(name, std::mem::replace(&mut cur, AbilityDef { icon_internal: None, sounds: vec![], props: vec![] }));
                     }
                     cur_name = Some(k.to_string());
+                    props_depth = None;
+                    cur_prop = None;
                     continue;
                 }
             }
@@ -831,7 +848,31 @@ fn parse_abilities(vdata: &str) -> std::collections::HashMap<String, AbilityDef>
         if cur_name.is_none() {
             continue;
         }
-        if cur.icon_internal.is_none() && t.starts_with("m_strAbilityImage") {
+        // Track the m_mapAbilityProperties sub-block to harvest editable numbers.
+        if let Some(pd) = props_depth {
+            // The map's own closing brace sits at its own depth.
+            if depth <= pd && t == "}" {
+                props_depth = None;
+                cur_prop = None;
+            } else if depth == pd + 1 {
+                // A property opener: `PropName =`.
+                if let Some(k) = t.strip_suffix('=').map(str::trim) {
+                    if !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                        cur_prop = Some(k.to_string());
+                    }
+                }
+            } else if depth == pd + 2 && t.starts_with("m_strValue") {
+                if let (Some(name), Some(v)) = (cur_prop.as_ref(), between(t, "\"", "\"")) {
+                    cur.props.push((name.clone(), v.to_string()));
+                    cur_prop = None; // first value only; ignore deeper nested ones
+                }
+            }
+            continue;
+        }
+        if t.starts_with("m_mapAbilityProperties") && t.ends_with('=') {
+            props_depth = Some(depth);
+            cur_prop = None;
+        } else if cur.icon_internal.is_none() && t.starts_with("m_strAbilityImage") {
             if let Some(p) = between(t, "{images}/", ".psd") {
                 cur.icon_internal = Some(format!("panorama/images/{p}_psd.vtex_c"));
             }
@@ -846,6 +887,173 @@ fn parse_abilities(vdata: &str) -> std::collections::HashMap<String, AbilityDef>
         map.insert(name, cur);
     }
     map
+}
+
+// ---------------------------------------------------------------------------
+// Gameplay config editor (Custom Server tab): read a hero's signature abilities
+// and their editable numeric properties out of abilities.vdata.
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AbilityProp {
+    /// Raw property key, e.g. `AbilityCooldownBetweenCharge`.
+    pub key: String,
+    /// Friendly label, e.g. "Cooldown Between Charge".
+    pub label: String,
+    /// Raw stored value (may carry a unit suffix, e.g. `20m`).
+    pub value: String,
+    /// Numeric part parsed out of `value` (0 if not numeric).
+    pub number: f64,
+    /// Unit suffix stripped from `value` (e.g. `m`), empty if none.
+    pub unit: String,
+}
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AbilityConfig {
+    /// Ability entity key, e.g. `ability_incendiary_projectile` (the override target).
+    pub key: String,
+    /// Signature slot (1..4).
+    pub slot: u32,
+    /// Friendly ability name.
+    pub name: String,
+    /// Decoded icon PNG path (frontend wraps with convertFileSrc), or "".
+    pub icon_path: String,
+    pub props: Vec<AbilityProp>,
+}
+
+/// Split a stored value like `20m` / `4.5m` / `-1.0` into (number, unit).
+fn split_value_unit(v: &str) -> (f64, String) {
+    let v = v.trim();
+    let end = v
+        .char_indices()
+        .take_while(|(_, c)| c.is_ascii_digit() || *c == '.' || *c == '-' || *c == '+')
+        .map(|(i, c)| i + c.len_utf8())
+        .last()
+        .unwrap_or(0);
+    let (num, unit) = v.split_at(end);
+    (num.parse().unwrap_or(0.0), unit.trim().to_string())
+}
+
+/// `AbilityCooldownBetweenCharge` -> "Cooldown Between Charge" (drops a leading
+/// `Ability` prefix, splits camelCase into words).
+fn prettify_prop_key(key: &str) -> String {
+    let k = key.strip_prefix("Ability").filter(|s| !s.is_empty()).unwrap_or(key);
+    let mut out = String::new();
+    for (i, ch) in k.chars().enumerate() {
+        if ch.is_ascii_uppercase() && i > 0 && !out.ends_with(' ') {
+            out.push(' ');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// `ability_incendiary_projectile` / `citadel_ability_x` -> "Incendiary Projectile".
+fn prettify_ability_name(key: &str) -> String {
+    let k = key
+        .strip_prefix("citadel_ability_")
+        .or_else(|| key.strip_prefix("ability_"))
+        .unwrap_or(key);
+    k.split('_')
+        .filter(|s| !s.is_empty())
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Read a hero's four signature abilities and their editable properties out of
+/// the live `abilities.vdata` (decompiled + cached alongside the hero portraits).
+/// Icons are decoded once and cached. Static game data → safe to cache.
+#[tauri::command]
+pub fn hero_config(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+    codename: String,
+) -> Result<Vec<AbilityConfig>, String> {
+    use tauri::Manager;
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("hero_portraits");
+    std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
+
+    let heroes = base.join("heroes.vdata");
+    if !heroes.exists() {
+        crate::vpk::decompile_from_vpk(&helper_path, &pak_path, "scripts/heroes.vdata_c", &heroes.to_string_lossy())?;
+    }
+    let abilities = base.join("abilities.vdata");
+    if !abilities.exists() {
+        crate::vpk::decompile_from_vpk(&helper_path, &pak_path, "scripts/abilities.vdata_c", &abilities.to_string_lossy())?;
+    }
+    let heroes_text = std::fs::read_to_string(&heroes).map_err(|e| e.to_string())?;
+    let abilities_text = std::fs::read_to_string(&abilities).map_err(|e| e.to_string())?;
+
+    let bound = hero_bound_abilities(&heroes_text, &codename);
+    if bound.is_empty() {
+        return Err(format!("no signature abilities for hero '{codename}'"));
+    }
+    let ability_map = parse_abilities(&abilities_text);
+
+    // Decode the ability icons (one batch), reusing the hero_detail icon cache.
+    let icon_dir = base.join("ability_icons").join(&codename);
+    std::fs::create_dir_all(&icon_dir).map_err(|e| e.to_string())?;
+    let stem_of = |internal: &str| -> String {
+        internal.rsplit('/').next().unwrap_or(internal).trim_end_matches(".vtex_c").to_string()
+    };
+    let need: Vec<String> = bound
+        .iter()
+        .filter_map(|(_, a)| ability_map.get(a).and_then(|d| d.icon_internal.clone()))
+        .filter(|i| !icon_dir.join(format!("{}.png", stem_of(i))).exists())
+        .collect();
+    if !need.is_empty() {
+        let _ = crate::vpk::texture_batch(&helper_path, &pak_path, &icon_dir.to_string_lossy(), &need);
+    }
+
+    let mut out = Vec::new();
+    for (slot, key) in bound {
+        let def = ability_map.get(&key);
+        let icon_path = def
+            .and_then(|d| d.icon_internal.as_deref())
+            .map(|i| icon_dir.join(format!("{}.png", stem_of(i))))
+            .filter(|p| p.exists())
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let props = def
+            .map(|d| {
+                d.props
+                    .iter()
+                    .map(|(k, v)| {
+                        let (number, unit) = split_value_unit(v);
+                        AbilityProp {
+                            key: k.clone(),
+                            label: prettify_prop_key(k),
+                            value: v.clone(),
+                            number,
+                            unit,
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        out.push(AbilityConfig {
+            name: prettify_ability_name(&key),
+            key,
+            slot,
+            icon_path,
+            props,
+        });
+    }
+    Ok(out)
 }
 
 /// The set of hero soundevent file stems that actually exist in the pak
