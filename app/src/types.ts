@@ -121,10 +121,16 @@ export interface EffectOverride {
   lastCompiledHash?: string | null;
 }
 
-/** One gameplay-config edit: a changed ability property in abilities.vdata. */
+/** One gameplay-config edit: a changed ability/item property in abilities.vdata. */
 export interface VdataOverride {
   abilityKey: string;
   propKey: string;
+  value: string;
+}
+
+/** One global match-wide edit: a changed field in generic_data.vdata. */
+export interface GlobalOverride {
+  key: string;
   value: string;
 }
 
@@ -140,6 +146,7 @@ export interface Project {
   soundOverrides?: SoundOverride[];
   effectOverrides?: EffectOverride[];
   vdataOverrides?: VdataOverride[];
+  globalOverrides?: GlobalOverride[];
 }
 
 /// Classification of one array entry relative to a side's project state.

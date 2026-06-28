@@ -109,11 +109,17 @@ export interface CompileConfig {
   soundOverrides?: SoundOverrideCompile[];
   effectOverrides?: EffectCompile[];
   vdataOverrides?: VdataCompile[];
+  globalOverrides?: GlobalCompile[];
 }
 
 export interface VdataCompile {
   abilityKey: string;
   propKey: string;
+  value: string;
+}
+
+export interface GlobalCompile {
+  key: string;
   value: string;
 }
 
@@ -344,6 +350,30 @@ export function heroConfig(
   codename: string,
 ): Promise<AbilityConfig[]> {
   return invoke("hero_config", { helperPath, pakPath, codename });
+}
+
+/** One item's editable properties (same shape as an ability's props). */
+export function itemConfig(
+  helperPath: string,
+  pakPath: string,
+  itemName: string,
+): Promise<AbilityProp[]> {
+  return invoke("item_config", { helperPath, pakPath, itemName });
+}
+
+/** A curated global match value from generic_data.vdata. */
+export interface GlobalStat {
+  key: string;
+  label: string;
+  group: string;
+  value: string;
+  number: number;
+  unit: string;
+}
+
+/** Curated match-wide values (gold, bonus health, durations). */
+export function globalConfig(helperPath: string, pakPath: string): Promise<GlobalStat[]> {
+  return invoke("global_config", { helperPath, pakPath });
 }
 
 /** One of a hero's voicelines (single-clip soundevent). */

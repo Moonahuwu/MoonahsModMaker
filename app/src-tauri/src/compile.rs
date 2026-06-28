@@ -138,6 +138,19 @@ pub struct CompileConfig {
     /// at the game's own path (whole-file override). Custom Server tab.
     #[serde(default)]
     pub vdata_overrides: Vec<VdataCompile>,
+    /// Global match-wide edits: rewrite fields in `scripts/generic_data.vdata`,
+    /// recompile, and stage. Custom Server → Global stats.
+    #[serde(default)]
+    pub global_overrides: Vec<GlobalCompile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalCompile {
+    /// Field name in generic_data.vdata, e.g. `m_nTier1GoldKill`.
+    pub key: String,
+    /// New value (bare number).
+    pub value: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -932,6 +945,93 @@ fn compile_vdata_overrides(
     Ok(())
 }
 
+const GENERIC_DATA_REL: &str = "scripts/generic_data.vdata";
+const GENERIC_DATA_C_REL: &str = "scripts/generic_data.vdata_c";
+
+/// Rewrite the first `<key> = <value>` occurrence for each global override,
+/// preserving indentation and every other byte.
+fn apply_global_overrides(text: &str, overrides: &[GlobalCompile]) -> String {
+    use std::collections::HashMap;
+    let mut want: HashMap<&str, &str> = HashMap::new();
+    for ov in overrides {
+        want.entry(ov.key.as_str()).or_insert(ov.value.as_str());
+    }
+    let mut done: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut out = String::with_capacity(text.len());
+    for line in text.split_inclusive('\n') {
+        let nl = line.ends_with('\n');
+        let body = line.strip_suffix('\n').unwrap_or(line);
+        let t = body.trim_start();
+        let indent = &body[..body.len() - t.len()];
+        if let Some((k, _)) = t.split_once(" = ") {
+            if !done.contains(k) {
+                if let Some(v) = want.get(k) {
+                    out.push_str(indent);
+                    out.push_str(k);
+                    out.push_str(" = ");
+                    out.push_str(v);
+                    if nl {
+                        out.push('\n');
+                    }
+                    done.insert(k);
+                    continue;
+                }
+            }
+        }
+        out.push_str(line);
+    }
+    out
+}
+
+/// Decompile `generic_data.vdata`, rewrite the edited global fields, and
+/// recompile to `generic_data.vdata_c` (no `_include` block in this file).
+fn compile_global_overrides(
+    cfg: &CompileConfig,
+    content_root: &Path,
+    _compiled_root: &Path,
+    report: &mut CompileReport,
+) -> Result<(), ()> {
+    if cfg.global_overrides.is_empty() {
+        return Ok(());
+    }
+    let helper = match cfg.vpk_helper_path.as_deref() {
+        Some(h) => h,
+        None => return report.fail("global stats", "vpkHelperPath not set"),
+    };
+    let pak = match cfg.pak_path.as_deref() {
+        Some(p) => p,
+        None => return report.fail("global stats", "pakPath not set (needed to read vanilla generic_data.vdata)"),
+    };
+    let content_gd = content_root.join(GENERIC_DATA_REL);
+    if let Some(parent) = content_gd.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            return report.fail("prepare global dir", e.to_string());
+        }
+    }
+    if let Err(e) =
+        crate::vpk::decompile_from_vpk(helper, pak, GENERIC_DATA_C_REL, &content_gd.to_string_lossy())
+    {
+        return report.fail("decompile generic_data.vdata", e);
+    }
+    let text = match std::fs::read_to_string(&content_gd) {
+        Ok(t) => t,
+        Err(e) => return report.fail("read generic_data.vdata", e.to_string()),
+    };
+    let edited = apply_global_overrides(&text, &cfg.global_overrides);
+    if let Err(e) = std::fs::write(&content_gd, edited) {
+        return report.fail("write generic_data.vdata", e.to_string());
+    }
+    report.ok_step("global stats", format!("{} value(s)", cfg.global_overrides.len()));
+    if cfg.skip_compile {
+        return Ok(());
+    }
+    match run_resource_compiler(cfg, &content_gd.to_string_lossy()) {
+        Ok(detail) => report.ok_step("compile (global)", detail),
+        Err(e) => return report.fail("compile (global)", e),
+    }
+    Ok(())
+}
+
 /// Scale + compile all icon mods in one resourcecompiler pass. Returns
 /// `(target_vtexc, produced_vtex_c_abs_path)` pairs for staging. Sources are
 /// written under `panorama/images/eim_icons/` in the content tree and listed in a
@@ -1127,6 +1227,9 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
     // Gameplay config edits: rewrite abilities.vdata once (staged into every
     // variant). Custom Server tab.
     compile_vdata_overrides(cfg, content_root, compiled_root, report)?;
+
+    // Global match-wide edits: rewrite generic_data.vdata once. Custom Server.
+    compile_global_overrides(cfg, content_root, compiled_root, report)?;
 
     // Custom icon overrides: scale + compile once (staged into every variant).
     let icon_outputs = compile_icon_mods(cfg, content_root, compiled_root, report)?;
@@ -1417,6 +1520,16 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                 }
             }
         }
+        // Stage the global-stats override (recompiled generic_data.vdata_c).
+        if !cfg.global_overrides.is_empty() {
+            let src = compiled_root.join(GENERIC_DATA_C_REL);
+            if !(cfg.skip_compile && !src.exists()) {
+                match copy_into(&src, &stage, GENERIC_DATA_C_REL) {
+                    Ok(_) => staged += 1,
+                    Err(e) => return report.fail("stage global", e.to_string()),
+                }
+            }
+        }
         report.ok_step(format!("[{}] stage", v.name), format!("{staged} file(s)"));
 
         if cfg.output_mode == "vpk" {
@@ -1516,6 +1629,22 @@ mod tests {
         assert!(out.contains("m_strValue = \"20m\""));
         // generic_data_type line before the include is kept.
         assert!(out.contains("CitadelAbilityVData"));
+    }
+
+    #[test]
+    fn global_override_rewrites_first_match_only() {
+        let src = "{\n\tm_nTier1GoldKill = 1500\n\tnested =\n\t{\n\t\tm_flScoringTime = 6\n\t}\n\tm_nTier1GoldKill = 9999\n}\n";
+        let ovs = vec![
+            GlobalCompile { key: "m_nTier1GoldKill".into(), value: "4242".into() },
+            GlobalCompile { key: "m_flScoringTime".into(), value: "12".into() },
+        ];
+        let out = apply_global_overrides(src, &ovs);
+        // First occurrence rewritten, indentation preserved.
+        assert!(out.contains("\tm_nTier1GoldKill = 4242"));
+        // Nested value rewritten with its deeper indent intact.
+        assert!(out.contains("\t\tm_flScoringTime = 12"));
+        // The SECOND occurrence of the same key is left as-is.
+        assert!(out.contains("\tm_nTier1GoldKill = 9999"));
     }
 
     #[test]
@@ -1687,6 +1816,7 @@ mod tests {
             sound_overrides: vec![],
             effect_overrides: vec![],
             vdata_overrides: vec![],
+            global_overrides: vec![],
         };
 
         let report = run(&cfg);
@@ -1765,6 +1895,7 @@ mod tests {
                 last_compiled_hash: None,
             }],
             vdata_overrides: vec![],
+            global_overrides: vec![],
         };
 
         let report = run(&cfg);

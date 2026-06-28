@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { CompileConfig, EffectCompile, EventCompile, IconCompile, SoundOverrideCompile, VdataCompile } from "./api";
+import type { CompileConfig, EffectCompile, EventCompile, GlobalCompile, IconCompile, SoundOverrideCompile, VdataCompile } from "./api";
 import { loadSettings, saveSettings } from "./api";
 import type { EffectOverride, EventProject, SoundOverride } from "../types";
 import { songHash, overrideHash, effectHash } from "./songHash";
@@ -36,6 +36,10 @@ export interface Settings {
   showExperimentalHeroes: boolean;
   /** Path to VRF's Source2Viewer.exe — enables "Open in real viewer" for effects. */
   source2ViewerPath: string;
+  /** Bake Custom Server gameplay edits (abilities.vdata) into the build. OFF by
+   *  default — gameplay mods only work on private/dedicated servers, not public
+   *  matchmaking, so they're excluded unless you opt in. */
+  includeGameplay: boolean;
   /** Name of the currently-loaded profile (build config). Empty until the first
    *  profile is bootstrapped. The active profile owns `importedMods`. */
   activeProfile: string;
@@ -65,6 +69,7 @@ export const DEFAULT_SETTINGS: Settings = {
   firstRunDone: false,
   showExperimentalHeroes: false,
   source2ViewerPath: "",
+  includeGameplay: false,
   activeProfile: "",
 };
 
@@ -134,6 +139,7 @@ export function buildCompileConfig(
   soundOverrides: SoundOverride[] = [],
   effectOverrides: EffectOverride[] = [],
   vdataOverrides: VdataCompile[] = [],
+  globalOverrides: GlobalCompile[] = [],
 ): CompileConfig {
   const iconCompiles: IconCompile[] = iconMods.map((m) => ({
     sourceImage: m.sourceImage,
@@ -211,5 +217,6 @@ export function buildCompileConfig(
     soundOverrides: overrideCompiles,
     effectOverrides: effectCompiles,
     vdataOverrides,
+    globalOverrides,
   };
 }

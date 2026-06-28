@@ -44,6 +44,8 @@ pub fn run() {
             commands::hero_roster,
             commands::hero_detail,
             commands::hero_config,
+            commands::item_config,
+            commands::global_config,
             commands::hero_voicelines,
             commands::hero_sounds,
             commands::browse_game_sounds,

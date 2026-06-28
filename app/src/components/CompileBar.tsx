@@ -10,7 +10,7 @@ import {
 } from "../lib/api";
 import { buildCompileConfig, installSrcVpk, type Settings } from "../lib/settings";
 import { useToast } from "./Toaster";
-import type { EffectOverride, EventProject, IconMod, SoundOverride, VdataOverride } from "../types";
+import type { EffectOverride, EventProject, GlobalOverride, IconMod, SoundOverride, VdataOverride } from "../types";
 
 const pakName = (n: number) => `pak${String(n).padStart(2, "0")}_dir.vpk`;
 
@@ -22,6 +22,7 @@ export function CompileBar({
   soundOverrides,
   effectOverrides,
   vdataOverrides,
+  globalOverrides,
   onCompiled,
 }: {
   settings: Settings;
@@ -31,6 +32,7 @@ export function CompileBar({
   soundOverrides: SoundOverride[];
   effectOverrides: EffectOverride[];
   vdataOverrides: VdataOverride[];
+  globalOverrides: GlobalOverride[];
   /** Called after a successful compile so the project can record compiled hashes. */
   onCompiled: () => void;
 }) {
@@ -48,7 +50,7 @@ export function CompileBar({
     iconMods.length > 0 ||
     soundOverrides.length > 0 ||
     effectOverrides.length > 0 ||
-    vdataOverrides.length > 0;
+    (settings.includeGameplay && (vdataOverrides.length > 0 || globalOverrides.length > 0));
 
   // Refresh the addon-slot picture (for the "next free" hint + conflict warning).
   const rescanSlots = useCallback(() => {
@@ -102,7 +104,10 @@ export function CompileBar({
     setRunning(true);
     setReport(null);
     try {
-      const config = buildCompileConfig(settings, events, false, iconMods, soundOverrides, effectOverrides, vdataOverrides);
+      // Gameplay (vdata + global) edits are server-only — excluded unless opted in.
+      const gameplay = settings.includeGameplay ? vdataOverrides : [];
+      const global = settings.includeGameplay ? globalOverrides : [];
+      const config = buildCompileConfig(settings, events, false, iconMods, soundOverrides, effectOverrides, gameplay, global);
       const r = await compileProject(config);
       setReport(r);
       if (r.ok) {

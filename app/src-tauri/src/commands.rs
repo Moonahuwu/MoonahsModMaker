@@ -1056,6 +1056,134 @@ pub fn hero_config(
     Ok(out)
 }
 
+// ---------------------------------------------------------------------------
+// Global stats (Custom Server tab): curated match-wide values from
+// scripts/generic_data.vdata (gold, bonus health, durations). Flat nested
+// scalars, matched by their (unique) field name.
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalStat {
+    /// Field name as it appears in generic_data.vdata, e.g. `m_nTier1GoldKill`.
+    pub key: String,
+    /// Friendly label.
+    pub label: String,
+    /// Grouping header (Gold / Health / Timers …).
+    pub group: String,
+    /// Current value string.
+    pub value: String,
+    pub number: f64,
+    pub unit: String,
+}
+
+/// Curated, uniquely-named global fields: (key, group, label). Only fields whose
+/// name occurs exactly once in the file are safe to edit by name match.
+const GLOBAL_FIELDS: &[(&str, &str, &str)] = &[
+    ("m_GoldPerOrb", "Gold", "Gold per Orb"),
+    ("m_nTier1GoldKill", "Gold", "Tier 1 Boss Gold (kill)"),
+    ("m_nTier2GoldKill", "Gold", "Tier 2 Boss Gold (kill)"),
+    ("m_nBaseGuardiansGoldKill", "Gold", "Guardian Gold (kill)"),
+    ("m_nShrinesGoldKill", "Gold", "Shrine Gold (kill)"),
+    ("m_nTier2BonusHealth", "Health", "Tier 2 Bonus Health"),
+    ("m_nComebackBonusHealth", "Health", "Comeback Bonus Health"),
+    ("m_nComebackBonusHealthCritical", "Health", "Comeback Bonus Health (critical)"),
+    ("m_flIdolDropDuration", "Timers", "Idol Drop Duration"),
+    ("m_flRejuvinatorBuffDuration", "Timers", "Rejuvenator Buff Duration"),
+    ("m_flRejuvinatorDropDuration", "Timers", "Rejuvenator Drop Duration"),
+    ("m_flBuyTimeGracePeriod", "Timers", "Buy Time Grace Period"),
+    ("m_flScoringTime", "Timers", "Scoring Time"),
+];
+
+/// Read the current values of the curated global fields out of the live
+/// `generic_data.vdata`. Fields not present in the file are skipped.
+#[tauri::command]
+pub fn global_config(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+) -> Result<Vec<GlobalStat>, String> {
+    use tauri::Manager;
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("hero_portraits");
+    std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
+    let gd = base.join("generic_data.vdata");
+    if !gd.exists() {
+        crate::vpk::decompile_from_vpk(&helper_path, &pak_path, "scripts/generic_data.vdata_c", &gd.to_string_lossy())?;
+    }
+    let text = std::fs::read_to_string(&gd).map_err(|e| e.to_string())?;
+    // key -> current value (first occurrence).
+    let mut found: std::collections::HashMap<&str, String> = std::collections::HashMap::new();
+    for line in text.lines() {
+        let t = line.trim();
+        if let Some((k, v)) = t.split_once(" = ") {
+            for (key, _, _) in GLOBAL_FIELDS {
+                if k == *key && !found.contains_key(key) {
+                    found.insert(key, v.trim().trim_matches('"').to_string());
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for (key, group, label) in GLOBAL_FIELDS {
+        if let Some(v) = found.get(key) {
+            let (number, unit) = split_value_unit(v);
+            out.push(GlobalStat {
+                key: key.to_string(),
+                label: label.to_string(),
+                group: group.to_string(),
+                value: v.clone(),
+                number,
+                unit,
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// Read one item's editable properties (`m_mapAbilityProperties`) out of the live
+/// `abilities.vdata`. Items live in the same file as abilities, so they share the
+/// override pipeline — `item_name` is the entity key (e.g. `upgrade_base`).
+#[tauri::command]
+pub fn item_config(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+    item_name: String,
+) -> Result<Vec<AbilityProp>, String> {
+    use tauri::Manager;
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("hero_portraits");
+    std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
+    let abilities = base.join("abilities.vdata");
+    if !abilities.exists() {
+        crate::vpk::decompile_from_vpk(&helper_path, &pak_path, "scripts/abilities.vdata_c", &abilities.to_string_lossy())?;
+    }
+    let text = std::fs::read_to_string(&abilities).map_err(|e| e.to_string())?;
+    let map = parse_abilities(&text);
+    let def = map.get(&item_name).ok_or_else(|| format!("item '{item_name}' not found"))?;
+    Ok(def
+        .props
+        .iter()
+        .map(|(k, v)| {
+            let (number, unit) = split_value_unit(v);
+            AbilityProp {
+                key: k.clone(),
+                label: prettify_prop_key(k),
+                value: v.clone(),
+                number,
+                unit,
+            }
+        })
+        .collect())
+}
+
 /// The set of hero soundevent file stems that actually exist in the pak
 /// (e.g. `abrams`, `viper`, `magician`). Cached to a text file so abilities that
 /// reference shared/global events (`Player.Barrier.Activate`, `Ability.*`, …)

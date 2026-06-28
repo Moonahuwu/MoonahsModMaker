@@ -38,6 +38,20 @@ pub struct Project {
     /// override. Keyed by (abilityKey, propKey).
     #[serde(default)]
     pub vdata_overrides: Vec<VdataOverride>,
+    /// Global match-wide edits (Custom Server → Global stats): values in
+    /// `scripts/generic_data.vdata`, compiled into a `generic_data.vdata_c` override.
+    #[serde(default)]
+    pub global_overrides: Vec<GlobalOverride>,
+}
+
+/// One edited global field in `generic_data.vdata`, matched by its (unique) name.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalOverride {
+    /// Field name, e.g. `m_nTier1GoldKill`.
+    pub key: String,
+    /// New value (string; bare number, no quotes in the file).
+    pub value: String,
 }
 
 /// One edited ability property in `abilities.vdata`. The compile step decompiles
@@ -657,6 +671,7 @@ impl Project {
             sound_overrides: vec![],
             effect_overrides: vec![],
             vdata_overrides: vec![],
+            global_overrides: vec![],
         }
     }
 

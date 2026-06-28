@@ -1516,6 +1516,23 @@ export default function App() {
     );
   }
 
+  // Global match-wide stats (Custom Server → Global): upsert/clear by field key.
+  function setGlobalOverride(key: string, value: string) {
+    setProject((prev) => {
+      if (!prev) return prev;
+      const list = prev.globalOverrides ?? [];
+      const idx = list.findIndex((o) => o.key === key);
+      const next = idx >= 0 ? list.map((o, i) => (i === idx ? { ...o, value } : o)) : [...list, { key, value }];
+      return { ...prev, globalOverrides: next };
+    });
+  }
+
+  function clearGlobalOverride(key: string) {
+    setProject((prev) =>
+      prev ? { ...prev, globalOverrides: (prev.globalOverrides ?? []).filter((o) => o.key !== key) } : prev,
+    );
+  }
+
   // "Open in real viewer": launch VRF's Source2Viewer on the particle (extracted
   // from the pak). Needs the viewer path set in Setup.
   async function openEffectInViewer(reference: string) {
@@ -1791,9 +1808,14 @@ export default function App() {
             helperPath={settings.vpkHelperPath}
             pakPath={settings.deadlockPak}
             showExperimental={settings.showExperimentalHeroes}
+            includeGameplay={settings.includeGameplay}
+            onToggleGameplay={(on) => updateSettings({ includeGameplay: on })}
             overrides={project?.vdataOverrides ?? []}
             onSet={setVdataOverride}
             onClear={clearVdataOverride}
+            globalOverrides={project?.globalOverrides ?? []}
+            onSetGlobal={setGlobalOverride}
+            onClearGlobal={clearGlobalOverride}
           />
         ) : activeTab === EFFECTS ? (
           <EffectsBrowser
@@ -1869,6 +1891,7 @@ export default function App() {
             soundOverrides={project.soundOverrides ?? []}
             effectOverrides={project.effectOverrides ?? []}
             vdataOverrides={project.vdataOverrides ?? []}
+            globalOverrides={project.globalOverrides ?? []}
             onCompiled={markAllCompiled}
           />
         )}
