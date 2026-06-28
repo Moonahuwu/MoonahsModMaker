@@ -1537,17 +1537,18 @@ export default function App() {
   // Randomize EVERY gameplay number (abilities, items, global). Replaces all
   // current gameplay edits and auto-enables the include-in-build toggle.
   const [randomizing, setRandomizing] = useState(false);
-  async function randomizeGameplay() {
+  async function randomizeGameplay(mode: "normal" | "super" = "normal") {
     if (!settings.vpkHelperPath || !settings.deadlockPak) {
       push("error", "Set the VPK helper and game pak in Setup first");
       return;
     }
     setRandomizing(true);
     try {
-      const rolled = await randomizeConfig(settings.vpkHelperPath, settings.deadlockPak);
+      const rolled = await randomizeConfig(settings.vpkHelperPath, settings.deadlockPak, mode);
       setProject((prev) => (prev ? { ...prev, vdataOverrides: rolled.vdata, globalOverrides: rolled.global } : prev));
       updateSettings({ includeGameplay: true });
-      push("success", `Randomized ${rolled.vdata.length + rolled.global.length} values 🎲`);
+      const n = rolled.vdata.length + rolled.global.length;
+      push("success", mode === "super" ? `💥 SUPER randomized ${n} values!` : `Randomized ${n} values 🎲`);
     } catch (e) {
       push("error", `Randomize failed: ${e}`);
     } finally {

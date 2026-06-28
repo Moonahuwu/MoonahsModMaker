@@ -1183,15 +1183,22 @@ fn fmt_random(n: f64, is_float: bool, unit: &str) -> String {
     }
 }
 
-/// Randomize every positive gameplay number (×0.5..2.0). Returns a full override
-/// set the frontend swaps in. Non-positive values (0 / -1 sentinels) are left
-/// alone so we don't flip "disabled" flags into broken states.
+/// Randomize every positive gameplay number. `mode = "super"` uses an insane
+/// ×0.1..25 range (vs the normal ×0.5..2). Returns a full override set the
+/// frontend swaps in. Non-positive values (0 / -1 sentinels) are left alone so
+/// we don't flip "disabled" flags into broken states.
 #[tauri::command]
 pub fn randomize_config(
     app: tauri::AppHandle,
     helper_path: String,
     pak_path: String,
+    mode: Option<String>,
 ) -> Result<RandomConfig, String> {
+    // (factor_base, factor_span): factor = base + rand[0,1) * span.
+    let (fbase, fspan) = match mode.as_deref() {
+        Some("super") => (0.1, 24.9), // 0.1 .. 25.0 — chaos
+        _ => (0.5, 1.5),              // 0.5 .. 2.0 — sane
+    };
     use tauri::Manager;
     let base = app
         .path()
@@ -1212,7 +1219,7 @@ pub fn randomize_config(
         if num <= 0.0 {
             return None;
         }
-        let factor = 0.5 + xorshift(seed) * 1.5; // 0.5 .. 2.0
+        let factor = fbase + xorshift(seed) * fspan;
         Some(fmt_random(num * factor, val.contains('.'), &unit))
     };
 

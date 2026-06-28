@@ -59,7 +59,7 @@ export function CustomServer({
   globalOverrides: GlobalOverride[];
   onSetGlobal: (key: string, value: string) => void;
   onClearGlobal: (key: string) => void;
-  onRandomize: () => void;
+  onRandomize: (mode: "normal" | "super") => void;
   onReset: () => void;
   randomizing: boolean;
 }) {
@@ -143,12 +143,20 @@ export function CustomServer({
           ))}
           <div className="ml-auto flex items-center gap-1.5">
             <button
-              onClick={onRandomize}
+              onClick={() => onRandomize("normal")}
               disabled={randomizing}
-              title="Roll a random value for every gameplay number"
+              title="Roll a sane random value (×0.5–2) for every gameplay number"
               className="rounded-lg border border-fuchsia-500/50 bg-fuchsia-500/10 px-3 py-1.5 text-sm font-medium text-fuchsia-300 transition hover:bg-fuchsia-500/20 disabled:opacity-50"
             >
               {randomizing ? "Rolling…" : "🎲 Randomize all"}
+            </button>
+            <button
+              onClick={() => onRandomize("super")}
+              disabled={randomizing}
+              title="Insane values (×0.1–25) — total chaos, server-only fun"
+              className="rounded-lg border border-rose-500/60 bg-gradient-to-r from-rose-500/20 to-amber-500/20 px-3 py-1.5 text-sm font-bold text-rose-200 transition hover:from-rose-500/30 hover:to-amber-500/30 disabled:opacity-50"
+            >
+              {randomizing ? "Rolling…" : "💥 SUPER random"}
             </button>
             {confirmReset ? (
               <div className="flex items-center gap-1">

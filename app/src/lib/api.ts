@@ -382,8 +382,12 @@ export interface RandomConfig {
   global: { key: string; value: string }[];
 }
 
-export function randomizeConfig(helperPath: string, pakPath: string): Promise<RandomConfig> {
-  return invoke("randomize_config", { helperPath, pakPath });
+export function randomizeConfig(
+  helperPath: string,
+  pakPath: string,
+  mode: "normal" | "super" = "normal",
+): Promise<RandomConfig> {
+  return invoke("randomize_config", { helperPath, pakPath, mode });
 }
 
 /** One of a hero's voicelines (single-clip soundevent). */
