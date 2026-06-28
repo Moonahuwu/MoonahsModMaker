@@ -11,6 +11,7 @@ import type { HeroAbility, HeroAbilitySound } from "../lib/api";
 export function HeroDetail({
   heroName,
   backgroundSrc,
+  accent,
   abilities,
   loading,
   selectedAbility,
@@ -20,6 +21,7 @@ export function HeroDetail({
 }: {
   heroName: string;
   backgroundSrc: string | null;
+  accent: string;
   abilities: HeroAbility[] | null;
   loading: boolean;
   selectedAbility: string | null;
@@ -32,7 +34,10 @@ export function HeroDetail({
   return (
     <div>
       {/* Background banner + ability bar */}
-      <div className="relative overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900">
+      <div
+        className="relative overflow-hidden rounded-2xl border bg-zinc-900"
+        style={{ borderColor: `${accent}66`, boxShadow: `0 0 24px ${accent}22` }}
+      >
         {backgroundSrc && (
           <img
             src={convertFileSrc(backgroundSrc)}
@@ -42,6 +47,11 @@ export function HeroDetail({
           />
         )}
         <div className="absolute inset-0 bg-gradient-to-t from-zinc-950 via-zinc-950/70 to-zinc-950/30" />
+        {/* hero-color wash */}
+        <div
+          className="absolute inset-0 opacity-40"
+          style={{ background: `linear-gradient(120deg, ${accent}40, transparent 60%)` }}
+        />
 
         <div className="relative flex flex-col gap-4 p-5">
           <div className="flex items-center gap-3">
@@ -71,10 +81,13 @@ export function HeroDetail({
                   className="group flex flex-col items-center gap-1"
                 >
                   <span
-                    className={`relative flex h-16 w-16 items-center justify-center rounded-full border-2 bg-zinc-900/80 transition ${
+                    style={
                       isActive
-                        ? "border-emerald-400 ring-2 ring-emerald-400/40"
-                        : "border-zinc-600 group-hover:border-zinc-300"
+                        ? { borderColor: accent, boxShadow: `0 0 0 2px ${accent}55` }
+                        : undefined
+                    }
+                    className={`relative flex h-16 w-16 items-center justify-center rounded-full border-2 bg-zinc-900/80 transition ${
+                      isActive ? "" : "border-zinc-600 group-hover:border-zinc-300"
                     }`}
                   >
                     {a.iconPath ? (

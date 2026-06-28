@@ -1304,6 +1304,7 @@ export default function App() {
             <HeroDetail
               heroName={selectedHeroInfo?.displayName ?? selectedHero}
               backgroundSrc={selectedHeroInfo?.portraitPath ?? null}
+              accent={selectedHeroInfo?.color ?? "#e0564f"}
               abilities={heroAbilities}
               loading={heroDetailLoading}
               selectedAbility={selectedAbility}

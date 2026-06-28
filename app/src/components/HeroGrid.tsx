@@ -91,6 +91,7 @@ export function HeroGrid({
       <div className="grid grid-cols-4 gap-2 sm:grid-cols-6 lg:grid-cols-8">
         {shown.map((h) => {
           const active = selected === h.codename;
+          const accent = h.color ?? "#e0564f";
           return (
             <motion.button
               key={h.codename}
@@ -98,12 +99,19 @@ export function HeroGrid({
               whileTap={{ scale: 0.97 }}
               onClick={() => onSelect(h)}
               title={h.displayName}
+              style={{
+                borderColor: active ? accent : undefined,
+                boxShadow: active ? `0 0 0 2px ${accent}66, 0 0 18px ${accent}55` : undefined,
+              }}
               className={`group relative aspect-[3/4] overflow-hidden rounded-lg border bg-gradient-to-b from-zinc-700/40 to-zinc-950 transition ${
-                active
-                  ? "border-emerald-400 ring-2 ring-emerald-400/50"
-                  : "border-zinc-800 hover:border-zinc-600"
+                active ? "" : "border-zinc-800 hover:border-zinc-600"
               }`}
             >
+              {/* hero-color accent bar at the bottom */}
+              <span
+                className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-[3px]"
+                style={{ background: accent }}
+              />
               <img
                 src={convertFileSrc(h.portraitPath)}
                 alt={h.displayName}

@@ -246,6 +246,8 @@ export interface HeroPortrait {
   gloatPath: string | null;
   /** Disabled / in-development per the game data (hidden unless opted in). */
   experimental: boolean;
+  /** In-game UI theme color (#RRGGBB from m_colorUI), if any. */
+  color: string | null;
 }
 
 /** Decode (cached) + list the hero roster with card-portrait PNG paths. Pass

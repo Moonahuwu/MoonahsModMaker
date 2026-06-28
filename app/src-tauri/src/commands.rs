@@ -466,6 +466,8 @@ pub struct HeroPortrait {
     pub gloat_path: Option<String>,
     /// Disabled or still in development — hidden unless "show experimental" is on.
     pub experimental: bool,
+    /// The hero's in-game UI theme color (`#RRGGBB` from `m_colorUI`), if any.
+    pub color: Option<String>,
 }
 
 /// Template / dummy / placeholder hero keys that are never real playable heroes
@@ -516,6 +518,23 @@ struct HeroInfo {
     card_code: Option<String>,
     disabled: bool,
     in_dev: bool,
+    /// The hero's first `m_colorUI` as a `#RRGGBB` hex (the in-game theme color).
+    color: Option<String>,
+}
+
+/// `m_colorUI = [ 32, 146, 174 ]` -> `#2092ae`.
+fn parse_color_ui(line: &str) -> Option<String> {
+    let inner = between(line, "[", "]")?;
+    let parts: Vec<u8> = inner
+        .split(',')
+        .filter_map(|s| s.trim().parse::<u32>().ok())
+        .map(|n| n.min(255) as u8)
+        .collect();
+    if parts.len() >= 3 {
+        Some(format!("#{:02x}{:02x}{:02x}", parts[0], parts[1], parts[2]))
+    } else {
+        None
+    }
 }
 
 /// Substring of `line` between `start` and `end` markers (first occurrence).
@@ -562,6 +581,8 @@ fn parse_heroes_vdata(text: &str) -> Vec<HeroInfo> {
             if let Some(c) = between(t, "heroes/", "_card.psd") {
                 h.card_code = Some(c.to_string());
             }
+        } else if h.color.is_none() && t.starts_with("m_colorUI") {
+            h.color = parse_color_ui(t);
         }
     }
     if let Some(h) = cur.take() {
@@ -678,6 +699,7 @@ pub fn hero_roster(
             portrait_path: png.to_string_lossy().into_owned(),
             gloat_path,
             experimental: h.disabled || h.in_dev,
+            color: h.color,
         });
     }
     out.sort_by(|a, b| {
