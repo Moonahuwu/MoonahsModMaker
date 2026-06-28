@@ -110,6 +110,7 @@ export interface CompileConfig {
   effectOverrides?: EffectCompile[];
   vdataOverrides?: VdataCompile[];
   globalOverrides?: GlobalCompile[];
+  worldOverrides?: WorldCompile[];
 }
 
 export interface VdataCompile {
@@ -120,6 +121,13 @@ export interface VdataCompile {
 
 export interface GlobalCompile {
   key: string;
+  value: string;
+}
+
+export interface WorldCompile {
+  file: string;
+  entity: string;
+  field: string;
   value: string;
 }
 
@@ -376,10 +384,28 @@ export function globalConfig(helperPath: string, pakPath: string): Promise<Globa
   return invoke("global_config", { helperPath, pakPath });
 }
 
-/** A full randomized override set (every positive gameplay number, ×0.5..2). */
+/** A flat-scalar world entity (minion / box / powerup) and its editable fields. */
+export interface EntityConfig {
+  key: string;
+  name: string;
+  file: string;
+  fields: AbilityProp[];
+}
+
+/** World entities for a kind: "minions" | "boxes" | "powerups". */
+export function worldConfig(
+  helperPath: string,
+  pakPath: string,
+  kind: "minions" | "boxes" | "powerups",
+): Promise<EntityConfig[]> {
+  return invoke("world_config", { helperPath, pakPath, kind });
+}
+
+/** A full randomized override set (every positive gameplay number). */
 export interface RandomConfig {
   vdata: { abilityKey: string; propKey: string; value: string }[];
   global: { key: string; value: string }[];
+  world: { file: string; entity: string; field: string; value: string }[];
 }
 
 /** temperature: 0 = tame (±10%), 1 = insane (×0.03–30). */

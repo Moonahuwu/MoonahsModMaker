@@ -42,6 +42,25 @@ pub struct Project {
     /// `scripts/generic_data.vdata`, compiled into a `generic_data.vdata_c` override.
     #[serde(default)]
     pub global_overrides: Vec<GlobalOverride>,
+    /// World-entity edits (Custom Server → Minions/Boxes/Powerups): flat scalar
+    /// fields in `scripts/npc_units.vdata` / `scripts/misc.vdata`.
+    #[serde(default)]
+    pub world_overrides: Vec<WorldOverride>,
+}
+
+/// One edited field on a flat-scalar world entity (minion / box / powerup),
+/// scoped by file + entity + field name.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorldOverride {
+    /// e.g. `scripts/npc_units.vdata`.
+    pub file: String,
+    /// Entity key, e.g. `trooper_normal`.
+    pub entity: String,
+    /// Field name, e.g. `m_nMaxHealth`.
+    pub field: String,
+    /// New value.
+    pub value: String,
 }
 
 /// One edited global field in `generic_data.vdata`, matched by its (unique) name.
@@ -672,6 +691,7 @@ impl Project {
             effect_overrides: vec![],
             vdata_overrides: vec![],
             global_overrides: vec![],
+            world_overrides: vec![],
         }
     }
 

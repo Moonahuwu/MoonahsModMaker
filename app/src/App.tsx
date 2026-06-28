@@ -1534,6 +1534,31 @@ export default function App() {
     );
   }
 
+  // World entities (Custom Server → Minions/Boxes/Powerups): upsert/clear by
+  // (file, entity, field).
+  function setWorldOverride(file: string, entity: string, field: string, value: string) {
+    setProject((prev) => {
+      if (!prev) return prev;
+      const list = prev.worldOverrides ?? [];
+      const idx = list.findIndex((o) => o.file === file && o.entity === entity && o.field === field);
+      const next = idx >= 0 ? list.map((o, i) => (i === idx ? { ...o, value } : o)) : [...list, { file, entity, field, value }];
+      return { ...prev, worldOverrides: next };
+    });
+  }
+
+  function clearWorldOverride(file: string, entity: string, field: string) {
+    setProject((prev) =>
+      prev
+        ? {
+            ...prev,
+            worldOverrides: (prev.worldOverrides ?? []).filter(
+              (o) => !(o.file === file && o.entity === entity && o.field === field),
+            ),
+          }
+        : prev,
+    );
+  }
+
   // Randomize EVERY gameplay number (abilities, items, global). Replaces all
   // current gameplay edits and auto-enables the include-in-build toggle.
   const [randomizing, setRandomizing] = useState(false);
@@ -1545,9 +1570,11 @@ export default function App() {
     setRandomizing(true);
     try {
       const rolled = await randomizeConfig(settings.vpkHelperPath, settings.deadlockPak, temperature);
-      setProject((prev) => (prev ? { ...prev, vdataOverrides: rolled.vdata, globalOverrides: rolled.global } : prev));
+      setProject((prev) =>
+        prev ? { ...prev, vdataOverrides: rolled.vdata, globalOverrides: rolled.global, worldOverrides: rolled.world } : prev,
+      );
       updateSettings({ includeGameplay: true });
-      const n = rolled.vdata.length + rolled.global.length;
+      const n = rolled.vdata.length + rolled.global.length + rolled.world.length;
       push("success", `${temperature > 0.85 ? "💥" : "🎲"} Randomized ${n} values`);
     } catch (e) {
       push("error", `Randomize failed: ${e}`);
@@ -1558,7 +1585,7 @@ export default function App() {
 
   // Clear all gameplay + global edits (back to vanilla).
   function resetGameplay() {
-    setProject((prev) => (prev ? { ...prev, vdataOverrides: [], globalOverrides: [] } : prev));
+    setProject((prev) => (prev ? { ...prev, vdataOverrides: [], globalOverrides: [], worldOverrides: [] } : prev));
     push("info", "Gameplay config reset to default");
   }
 
@@ -1845,6 +1872,9 @@ export default function App() {
             globalOverrides={project?.globalOverrides ?? []}
             onSetGlobal={setGlobalOverride}
             onClearGlobal={clearGlobalOverride}
+            worldOverrides={project?.worldOverrides ?? []}
+            onSetWorld={setWorldOverride}
+            onClearWorld={clearWorldOverride}
             onRandomize={randomizeGameplay}
             onReset={resetGameplay}
             randomizing={randomizing}
@@ -1924,6 +1954,7 @@ export default function App() {
             effectOverrides={project.effectOverrides ?? []}
             vdataOverrides={project.vdataOverrides ?? []}
             globalOverrides={project.globalOverrides ?? []}
+            worldOverrides={project.worldOverrides ?? []}
             onCompiled={markAllCompiled}
           />
         )}

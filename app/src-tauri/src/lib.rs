@@ -46,6 +46,7 @@ pub fn run() {
             commands::hero_config,
             commands::item_config,
             commands::global_config,
+            commands::world_config,
             commands::randomize_config,
             commands::hero_voicelines,
             commands::hero_sounds,

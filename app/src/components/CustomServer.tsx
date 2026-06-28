@@ -6,13 +6,15 @@ import {
   heroConfig,
   itemConfig,
   itemRoster,
+  worldConfig,
   type AbilityConfig,
   type AbilityProp,
+  type EntityConfig,
   type GlobalStat,
   type HeroPortrait,
   type ItemCard,
 } from "../lib/api";
-import type { GlobalOverride, VdataOverride } from "../types";
+import type { GlobalOverride, VdataOverride, WorldOverride } from "../types";
 import { HeroGrid } from "./HeroGrid";
 
 /**
@@ -30,7 +32,8 @@ const ITEM_CATEGORY = {
   other: { label: "Other", color: "#71717a" },
 } as const;
 
-type Section = "heroes" | "items" | "global";
+type Section = "heroes" | "items" | "global" | "minions" | "boxes" | "powerups";
+type WorldKind = "minions" | "boxes" | "powerups";
 
 export function CustomServer({
   helperPath,
@@ -44,6 +47,9 @@ export function CustomServer({
   globalOverrides,
   onSetGlobal,
   onClearGlobal,
+  worldOverrides,
+  onSetWorld,
+  onClearWorld,
   onRandomize,
   onReset,
   randomizing,
@@ -59,6 +65,9 @@ export function CustomServer({
   globalOverrides: GlobalOverride[];
   onSetGlobal: (key: string, value: string) => void;
   onClearGlobal: (key: string) => void;
+  worldOverrides: WorldOverride[];
+  onSetWorld: (file: string, entity: string, field: string, value: string) => void;
+  onClearWorld: (file: string, entity: string, field: string) => void;
   onRandomize: (temperature: number) => void;
   onReset: () => void;
   randomizing: boolean;
@@ -66,7 +75,7 @@ export function CustomServer({
   const [section, setSection] = useState<Section>("heroes");
   const [confirmReset, setConfirmReset] = useState(false);
   const [temp, setTemp] = useState(0.4);
-  const editCount = overrides.length + globalOverrides.length;
+  const editCount = overrides.length + globalOverrides.length + worldOverrides.length;
 
   // Flavor label + peak multiplier for the current temperature.
   const tempLabel =
@@ -132,8 +141,11 @@ export function CustomServer({
         <div className="mb-4 flex flex-wrap items-center gap-1.5">
           {([
             ["heroes", "🦸 Heroes"],
-            ["items", "🛒 Items & stats"],
-            ["global", "🌐 Global stats"],
+            ["items", "🛒 Items"],
+            ["global", "🌐 Global"],
+            ["minions", "👹 Minions"],
+            ["boxes", "📦 Boxes"],
+            ["powerups", "⚡ Powerups"],
           ] as const).map(([key, label]) => (
             <button
               key={key}
@@ -230,6 +242,17 @@ export function CustomServer({
             overrides={globalOverrides}
             onSet={onSetGlobal}
             onClear={onClearGlobal}
+          />
+        )}
+        {(section === "minions" || section === "boxes" || section === "powerups") && (
+          <EntitySection
+            key={section}
+            kind={section}
+            helperPath={helperPath}
+            pakPath={pakPath}
+            overrides={worldOverrides}
+            onSet={onSetWorld}
+            onClear={onClearWorld}
           />
         )}
       </section>
@@ -592,6 +615,116 @@ function GlobalSection({
             </div>
           </div>
         ))}
+      </div>
+    </>
+  );
+}
+
+// --------------------------------------------------------------------------- Minions/Boxes/Powerups
+
+const WORLD_BLURB: Record<WorldKind, string> = {
+  minions: "Troopers, neutrals, guardians and bosses — health, speed, damage…",
+  boxes: "Breakable crates / containers — what they drop and how tough they are.",
+  powerups: "Pickups (gun/spirit/movement) and gold drops — their bonus values.",
+};
+
+function EntitySection({
+  kind,
+  helperPath,
+  pakPath,
+  overrides,
+  onSet,
+  onClear,
+}: {
+  kind: WorldKind;
+  helperPath: string;
+  pakPath: string;
+  overrides: WorldOverride[];
+  onSet: (file: string, entity: string, field: string, value: string) => void;
+  onClear: (file: string, entity: string, field: string) => void;
+}) {
+  const [entities, setEntities] = useState<EntityConfig[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [picked, setPicked] = useState<EntityConfig | null>(null);
+
+  useEffect(() => {
+    setEntities(null);
+    setPicked(null);
+    setError(null);
+    worldConfig(helperPath, pakPath, kind).then(setEntities).catch((e) => setError(String(e)));
+  }, [kind, helperPath, pakPath]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return (entities ?? []).filter((e) => q === "" || e.name.toLowerCase().includes(q) || e.key.toLowerCase().includes(q));
+  }, [entities, query]);
+
+  if (picked) {
+    const currentOf = (field: string) =>
+      overrides.find((o) => o.file === picked.file && o.entity === picked.key && o.field === field)?.value;
+    return (
+      <>
+        <div className="mb-4 flex items-center gap-3">
+          <button
+            onClick={() => setPicked(null)}
+            className="rounded-md border border-zinc-700 bg-zinc-800/60 px-3 py-1.5 text-sm text-zinc-300 transition hover:bg-zinc-800"
+          >
+            ← Back
+          </button>
+          <h4 className="text-base font-bold text-zinc-100">{picked.name}</h4>
+          <code className="text-[11px] text-zinc-600">{picked.key}</code>
+        </div>
+        <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-4">
+          <div className="flex flex-col divide-y divide-zinc-800/70">
+            {picked.fields.map((f) => (
+              <StatRow
+                key={f.key}
+                label={f.label}
+                title={f.key}
+                vanillaValue={f.value}
+                vanillaNumber={f.number}
+                unit={f.unit}
+                current={currentOf(f.key)}
+                onSet={(v) => onSet(picked.file, picked.key, f.key, v)}
+                onClear={() => onClear(picked.file, picked.key, f.key)}
+              />
+            ))}
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <p className="mb-3 text-sm text-zinc-400">{WORLD_BLURB[kind]}</p>
+      {error && <p className="text-sm text-red-400">Couldn't load: {error}</p>}
+      <input
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Search…"
+        className="mb-3 w-48 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 outline-none focus:border-zinc-500"
+      />
+      {!entities && !error && <p className="text-sm text-zinc-500">Loading…</p>}
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+        {filtered.map((e) => {
+          const edits = overrides.filter((o) => o.file === e.file && o.entity === e.key).length;
+          return (
+            <button
+              key={e.key}
+              onClick={() => setPicked(e)}
+              className="flex items-center justify-between gap-2 rounded-lg border border-zinc-800 bg-zinc-950/40 p-2.5 text-left transition hover:border-zinc-600 hover:bg-zinc-900"
+            >
+              <span className="min-w-0 flex-1 truncate text-xs text-zinc-200">{e.name}</span>
+              {edits > 0 ? (
+                <span className="shrink-0 rounded-full bg-sky-500/20 px-1.5 text-[10px] font-semibold text-sky-300">{edits}</span>
+              ) : (
+                <span className="shrink-0 text-[10px] text-zinc-600">{e.fields.length}</span>
+              )}
+            </button>
+          );
+        })}
       </div>
     </>
   );

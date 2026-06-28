@@ -142,6 +142,10 @@ pub struct CompileConfig {
     /// recompile, and stage. Custom Server → Global stats.
     #[serde(default)]
     pub global_overrides: Vec<GlobalCompile>,
+    /// World-entity edits (minions/boxes/powerups): rewrite flat fields in
+    /// npc_units.vdata / misc.vdata, recompile, and stage.
+    #[serde(default)]
+    pub world_overrides: Vec<WorldCompile>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -150,6 +154,19 @@ pub struct GlobalCompile {
     /// Field name in generic_data.vdata, e.g. `m_nTier1GoldKill`.
     pub key: String,
     /// New value (bare number).
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorldCompile {
+    /// Source file, e.g. `scripts/npc_units.vdata`.
+    pub file: String,
+    /// Entity key, e.g. `trooper_normal`.
+    pub entity: String,
+    /// Field name, e.g. `m_nMaxHealth`.
+    pub field: String,
+    /// New value.
     pub value: String,
 }
 
@@ -1067,6 +1084,119 @@ fn compile_global_overrides(
     Ok(())
 }
 
+/// Rewrite each `(entity, field)` override's value within its entity block,
+/// matching the field at the entity's top level (depth 2). Preserves quote style.
+fn apply_world_overrides(text: &str, overrides: &[WorldCompile]) -> String {
+    use std::collections::HashMap;
+    // entity -> {field -> value}
+    let mut want: HashMap<&str, HashMap<&str, &str>> = HashMap::new();
+    for ov in overrides {
+        want.entry(ov.entity.as_str()).or_default().insert(ov.field.as_str(), ov.value.as_str());
+    }
+    let mut out = String::with_capacity(text.len() + 64);
+    let mut cur_fields: Option<&HashMap<&str, &str>> = None;
+    for line in text.split_inclusive('\n') {
+        let nl = line.ends_with('\n');
+        let body = line.strip_suffix('\n').unwrap_or(line);
+        let depth = body.chars().take_while(|&c| c == '\t').count();
+        let t = body.trim();
+        let top_level = body.starts_with('\t') && !body.starts_with("\t\t");
+        if top_level {
+            if let Some(k) = t.strip_suffix('=').map(str::trim) {
+                if !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                    cur_fields = want.get(k);
+                    out.push_str(line);
+                    continue;
+                }
+            }
+        }
+        // Rewrite a direct field (depth 2) of a wanted entity. Field names are
+        // unique at the entity's top level, so this hits each at most once.
+        if depth == 2 {
+            if let (Some(fields), Some((k, _))) = (cur_fields, t.split_once(" = ")) {
+                if let Some(v) = fields.get(k) {
+                    if let Some(eq) = body.find(" = ") {
+                        let quoted = body[eq + 3..].trim_start().starts_with('"');
+                        out.push_str(&body[..eq + 3]);
+                        if quoted {
+                            out.push('"');
+                            out.push_str(v);
+                            out.push('"');
+                        } else {
+                            out.push_str(v);
+                        }
+                        if nl {
+                            out.push('\n');
+                        }
+                        continue;
+                    }
+                }
+            }
+        }
+        out.push_str(line);
+    }
+    out
+}
+
+/// Apply world-entity edits: group overrides by source file, then per file
+/// decompile → rewrite fields → strip `_include` (no-op if absent) → recompile.
+/// Returns the list of produced `<file>_c` rels to stage.
+fn compile_world_overrides(
+    cfg: &CompileConfig,
+    content_root: &Path,
+    _compiled_root: &Path,
+    report: &mut CompileReport,
+) -> Result<Vec<String>, ()> {
+    if cfg.world_overrides.is_empty() {
+        return Ok(vec![]);
+    }
+    let helper = match cfg.vpk_helper_path.as_deref() {
+        Some(h) => h,
+        None => return report.fail("world entities", "vpkHelperPath not set").map(|_| vec![]),
+    };
+    let pak = match cfg.pak_path.as_deref() {
+        Some(p) => p,
+        None => return report.fail("world entities", "pakPath not set").map(|_| vec![]),
+    };
+    use std::collections::BTreeMap;
+    let mut by_file: BTreeMap<&str, Vec<&WorldCompile>> = BTreeMap::new();
+    for ov in &cfg.world_overrides {
+        by_file.entry(ov.file.as_str()).or_default().push(ov);
+    }
+    let mut produced = Vec::new();
+    for (file, ovs) in by_file {
+        let rel_c = format!("{file}_c");
+        let content_src = content_root.join(file);
+        if let Some(parent) = content_src.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                return report.fail("prepare world dir", e.to_string()).map(|_| vec![]);
+            }
+        }
+        if let Err(e) = crate::vpk::decompile_from_vpk(helper, pak, &rel_c, &content_src.to_string_lossy()) {
+            return report.fail(format!("decompile {file}"), e).map(|_| vec![]);
+        }
+        let text = match std::fs::read_to_string(&content_src) {
+            Ok(t) => t,
+            Err(e) => return report.fail(format!("read {file}"), e.to_string()).map(|_| vec![]),
+        };
+        let owned: Vec<WorldCompile> = ovs.iter().map(|o| (*o).clone()).collect();
+        let edited = apply_world_overrides(&text, &owned);
+        let stripped = strip_vdata_includes(&edited);
+        if let Err(e) = std::fs::write(&content_src, stripped) {
+            return report.fail(format!("write {file}"), e.to_string()).map(|_| vec![]);
+        }
+        report.ok_step(format!("world edits: {}", file.rsplit('/').next().unwrap_or(file)), format!("{} value(s)", ovs.len()));
+        if !cfg.skip_compile {
+            match run_resource_compiler(cfg, &content_src.to_string_lossy()) {
+                Ok(detail) => report.ok_step(format!("compile (world): {}", file.rsplit('/').next().unwrap_or(file)), detail),
+                Err(e) => return report.fail(format!("compile (world): {file}"), e).map(|_| vec![]),
+            }
+        }
+        produced.push(rel_c);
+    }
+    Ok(produced)
+}
+
 /// Scale + compile all icon mods in one resourcecompiler pass. Returns
 /// `(target_vtexc, produced_vtex_c_abs_path)` pairs for staging. Sources are
 /// written under `panorama/images/eim_icons/` in the content tree and listed in a
@@ -1265,6 +1395,9 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
 
     // Global match-wide edits: rewrite generic_data.vdata once. Custom Server.
     compile_global_overrides(cfg, content_root, compiled_root, report)?;
+
+    // World entities (minions/boxes/powerups): rewrite npc_units/misc once.
+    let world_outputs = compile_world_overrides(cfg, content_root, compiled_root, report)?;
 
     // Custom icon overrides: scale + compile once (staged into every variant).
     let icon_outputs = compile_icon_mods(cfg, content_root, compiled_root, report)?;
@@ -1565,6 +1698,17 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                 }
             }
         }
+        // Stage world-entity overrides (recompiled npc_units/misc .vdata_c).
+        for rel_c in &world_outputs {
+            let src = compiled_root.join(rel_c);
+            if cfg.skip_compile && !src.exists() {
+                continue;
+            }
+            match copy_into(&src, &stage, rel_c) {
+                Ok(_) => staged += 1,
+                Err(e) => return report.fail(format!("stage world: {rel_c}"), e.to_string()),
+            }
+        }
         report.ok_step(format!("[{}] stage", v.name), format!("{staged} file(s)"));
 
         if cfg.output_mode == "vpk" {
@@ -1664,6 +1808,30 @@ mod tests {
         assert!(out.contains("m_strValue = \"20m\""));
         // generic_data_type line before the include is kept.
         assert!(out.contains("CitadelAbilityVData"));
+    }
+
+    #[test]
+    fn world_override_rewrites_field_in_entity_only() {
+        let src = "\
+\ttrooper_normal =
+\t{
+\t\tm_nMaxHealth = 300
+\t\tm_flWalkSpeed = 248
+\t}
+\ttrooper_medic =
+\t{
+\t\tm_nMaxHealth = 300
+\t}
+";
+        let ovs = vec![
+            WorldCompile { file: "scripts/npc_units.vdata".into(), entity: "trooper_normal".into(), field: "m_nMaxHealth".into(), value: "9000".into() },
+            WorldCompile { file: "scripts/npc_units.vdata".into(), entity: "trooper_normal".into(), field: "m_flWalkSpeed".into(), value: "600".into() },
+        ];
+        let out = apply_world_overrides(src, &ovs);
+        assert!(out.contains("\t\tm_nMaxHealth = 9000"));
+        assert!(out.contains("\t\tm_flWalkSpeed = 600"));
+        // The SAME field on a different entity is untouched.
+        assert!(out.contains("\ttrooper_medic =\n\t{\n\t\tm_nMaxHealth = 300"));
     }
 
     #[test]
@@ -1903,6 +2071,7 @@ mod tests {
             effect_overrides: vec![],
             vdata_overrides: vec![],
             global_overrides: vec![],
+            world_overrides: vec![],
         };
 
         let report = run(&cfg);
@@ -1982,6 +2151,7 @@ mod tests {
             }],
             vdata_overrides: vec![],
             global_overrides: vec![],
+            world_overrides: vec![],
         };
 
         let report = run(&cfg);

@@ -1197,6 +1197,7 @@ pub fn global_config(
 pub struct RandomConfig {
     pub vdata: Vec<crate::project::VdataOverride>,
     pub global: Vec<crate::project::GlobalOverride>,
+    pub world: Vec<crate::project::WorldOverride>,
 }
 
 /// xorshift64 — small deterministic RNG so we don't pull in the `rand` crate.
@@ -1328,7 +1329,39 @@ pub fn randomize_config(
         }
     }
 
-    Ok(RandomConfig { vdata, global })
+    // World entities: minions (all of npc_units) + boxes/powerups (filtered misc).
+    let mut world = Vec::new();
+    let world_files: [(&str, fn(&str) -> bool); 2] = [
+        ("scripts/npc_units.vdata", |_| true),
+        ("scripts/misc.vdata", |n: &str| {
+            n.contains("breakable") || n.contains("powerup") || n.contains("pickup")
+        }),
+    ];
+    for (rel, want) in world_files {
+        let stem = rel.rsplit('/').next().unwrap_or(rel);
+        let path = base.join(stem);
+        if !path.exists() {
+            crate::vpk::decompile_from_vpk(&helper_path, &pak_path, &format!("{rel}_c"), &path.to_string_lossy())?;
+        }
+        let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        for (entity, fields) in parse_entities(&text) {
+            if !want(&entity) {
+                continue;
+            }
+            for (field, val) in fields {
+                if let Some(value) = roll(&mut seed, &val) {
+                    world.push(crate::project::WorldOverride {
+                        file: rel.to_string(),
+                        entity: entity.clone(),
+                        field,
+                        value,
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(RandomConfig { vdata, global, world })
 }
 
 /// Read one item's editable properties (`m_mapAbilityProperties`) out of the live
@@ -1356,6 +1389,147 @@ pub fn item_config(
     let map = parse_abilities(&text);
     let def = map.get(&item_name).ok_or_else(|| format!("item '{item_name}' not found"))?;
     Ok(ability_props(def))
+}
+
+// ---------------------------------------------------------------------------
+// World entities (Custom Server): minions (npc_units.vdata) + boxes/powerups
+// (misc.vdata). These are flat-scalar entities (m_nMaxHealth = 300, …), not
+// the m_mapAbilityProperties shape, so they get their own parse + override path.
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct EntityConfig {
+    /// Entity key, e.g. `trooper_normal` / `citadel_breakable_prop_drop_gold`.
+    pub key: String,
+    /// Friendly name.
+    pub name: String,
+    /// Source file the edit targets, e.g. `scripts/npc_units.vdata`.
+    pub file: String,
+    /// Editable direct numeric fields.
+    pub fields: Vec<AbilityProp>,
+}
+
+/// Parse a flat-scalar vdata file into `entity -> direct numeric fields`. Only
+/// depth-2 scalar `m_X = <number>` lines (the entity's own fields) are kept;
+/// nested sub-objects, vectors and flag strings are skipped so edits are
+/// unambiguous (one field name occurs at most once at the entity's top level).
+fn parse_entities(vdata: &str) -> std::collections::HashMap<String, Vec<(String, String)>> {
+    let mut map = std::collections::HashMap::new();
+    let mut cur: Option<String> = None;
+    let mut fields: Vec<(String, String)> = Vec::new();
+    for line in vdata.lines() {
+        let depth = tab_depth(line);
+        let t = line.trim();
+        let top = line.starts_with('\t') && !line.starts_with("\t\t");
+        if top {
+            if let Some(k) = t.strip_suffix('=').map(str::trim) {
+                if !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                    if let Some(name) = cur.take() {
+                        map.insert(name, std::mem::take(&mut fields));
+                    }
+                    cur = Some(k.to_string());
+                    continue;
+                }
+            }
+        }
+        if cur.is_none() {
+            continue;
+        }
+        if depth == 2 {
+            if let Some((k, v)) = t.split_once(" = ") {
+                let vv = v.trim().trim_matches('"');
+                // single bare number only (skip vectors, flags, enums, objects).
+                if k.starts_with("m_") && vv.split_whitespace().count() == 1 && vv.parse::<f64>().is_ok() {
+                    fields.push((k.to_string(), vv.to_string()));
+                }
+            }
+        }
+    }
+    if let Some(name) = cur.take() {
+        map.insert(name, fields);
+    }
+    map
+}
+
+/// `m_nMaxHealth` -> "Max Health" (drops `m_` + the hungarian type prefix).
+fn prettify_field(key: &str) -> String {
+    let k = key.strip_prefix("m_").unwrap_or(key);
+    let k = k.trim_start_matches(|c: char| c.is_ascii_lowercase());
+    let mut out = String::new();
+    for (i, ch) in k.chars().enumerate() {
+        if ch.is_ascii_uppercase() && i > 0 && !out.ends_with(' ') {
+            out.push(' ');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// `citadel_breakable_prop_drop_gold` -> "Breakable Prop Drop Gold".
+fn prettify_entity_name(key: &str) -> String {
+    let k = key.strip_prefix("citadel_").unwrap_or(key);
+    k.split('_')
+        .filter(|s| !s.is_empty())
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Read editable world entities for one `kind`: "minions" (all of
+/// npc_units.vdata), "boxes" (breakable props in misc.vdata) or "powerups"
+/// (powerup/pickup entities in misc.vdata).
+#[tauri::command]
+pub fn world_config(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+    kind: String,
+) -> Result<Vec<EntityConfig>, String> {
+    use tauri::Manager;
+    let (rel, want): (&str, fn(&str) -> bool) = match kind.as_str() {
+        "minions" => ("scripts/npc_units.vdata", |_| true),
+        "boxes" => ("scripts/misc.vdata", |n: &str| n.contains("breakable")),
+        "powerups" => ("scripts/misc.vdata", |n: &str| n.contains("powerup") || n.contains("pickup")),
+        other => return Err(format!("unknown world kind '{other}'")),
+    };
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("hero_portraits");
+    std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
+    let stem = rel.rsplit('/').next().unwrap_or(rel);
+    let path = base.join(stem);
+    if !path.exists() {
+        crate::vpk::decompile_from_vpk(&helper_path, &pak_path, &format!("{rel}_c"), &path.to_string_lossy())?;
+    }
+    let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let map = parse_entities(&text);
+    let mut out: Vec<EntityConfig> = map
+        .into_iter()
+        .filter(|(k, f)| want(k) && !f.is_empty())
+        .map(|(key, fields)| EntityConfig {
+            name: prettify_entity_name(&key),
+            file: rel.to_string(),
+            key,
+            fields: fields
+                .iter()
+                .map(|(k, v)| {
+                    let (number, unit) = split_value_unit(v);
+                    AbilityProp { key: k.clone(), label: prettify_field(k), value: v.clone(), number, unit }
+                })
+                .collect(),
+        })
+        .collect();
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(out)
 }
 
 /// The set of hero soundevent file stems that actually exist in the pak

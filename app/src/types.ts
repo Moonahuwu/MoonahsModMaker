@@ -134,6 +134,14 @@ export interface GlobalOverride {
   value: string;
 }
 
+/** One world-entity edit (minion/box/powerup): a field in npc_units/misc.vdata. */
+export interface WorldOverride {
+  file: string;
+  entity: string;
+  field: string;
+  value: string;
+}
+
 export interface Project {
   version: number;
   gameContentRoot: string;
@@ -147,6 +155,7 @@ export interface Project {
   effectOverrides?: EffectOverride[];
   vdataOverrides?: VdataOverride[];
   globalOverrides?: GlobalOverride[];
+  worldOverrides?: WorldOverride[];
 }
 
 /// Classification of one array entry relative to a side's project state.
