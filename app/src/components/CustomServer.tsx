@@ -1058,8 +1058,9 @@ function HostPanel({ deadlockRoot }: { deadlockRoot: string }) {
                     ))}
                   </div>
                   <p className="mt-1.5 text-[11px] text-zinc-500">
-                    "Fill bots 6v6" sets the practice-bot convars and restarts the map to apply —
-                    bots populate once a player is in. "Kick bots" needs cheats (auto-enabled).
+                    "Bot match 6v6" sets up a solo bot match (so bots actually play) + the match
+                    intro, then restarts the map. <b>Connect after</b> — the match runs its pregame
+                    → intro → play once you're in. Bots stay idle until the match actually starts.
                   </p>
 
                   <form
