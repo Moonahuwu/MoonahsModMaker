@@ -413,9 +413,14 @@ export interface LaunchInfo {
 export function launchHost(deadlockRoot: string, map: string): Promise<LaunchInfo> {
   return invoke("launch_host", { deadlockRoot, map });
 }
-/** Send one RCON command to the running server; returns its console output. */
-export function rconExec(password: string, command: string): Promise<string> {
-  return invoke("rcon_exec", { password, command });
+/** Send one RCON command to the server launched from this app; returns output.
+ * The password is held in the backend (set by launchHost), so any window can call this. */
+export function rconExec(command: string): Promise<string> {
+  return invoke("rcon_exec", { command });
+}
+/** Whether a host has been launched from this app (so we can drive it over RCON). */
+export function rconReady(): Promise<boolean> {
+  return invoke("rcon_ready");
 }
 /** The server's P2P connect id ([A:1:…]) from console.log, or null until up. */
 export function hostConnectId(deadlockRoot: string): Promise<string | null> {

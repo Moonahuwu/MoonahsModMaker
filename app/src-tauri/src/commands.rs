@@ -279,18 +279,46 @@ pub fn revert_hosting(deadlock_root: String) -> Result<crate::host::HostStatus, 
     crate::host::revert(std::path::Path::new(&deadlock_root))
 }
 
-/// Launch the installed client as a dedicated host on `map`. Returns the PID and
-/// the RCON password the admin panel uses to drive the server.
-#[tauri::command]
-pub fn launch_host(deadlock_root: String, map: String) -> Result<crate::host::LaunchInfo, String> {
-    crate::host::launch(std::path::Path::new(&deadlock_root), &map)
+/// Shared host state: the RCON password of the server this app most recently
+/// launched. Lives in Tauri-managed state so *any* window (main UI or the F8
+/// mod-menu overlay) can drive the same server without passing the password
+/// around. Cleared to None until a host is launched from the app.
+#[derive(Default)]
+pub struct HostState {
+    pub rcon_password: std::sync::Mutex<Option<String>>,
 }
 
-/// Send a single RCON command to the running dedicated server and return its
-/// console output. `password` is the value returned by `launch_host`.
+/// Launch the installed client as a dedicated host on `map`. Stores the RCON
+/// password in shared state and also returns it (with the PID) for display.
 #[tauri::command]
-pub fn rcon_exec(password: String, command: String) -> Result<String, String> {
-    crate::rcon::exec_auto(&password, &command)
+pub fn launch_host(
+    state: tauri::State<'_, HostState>,
+    deadlock_root: String,
+    map: String,
+) -> Result<crate::host::LaunchInfo, String> {
+    let info = crate::host::launch(std::path::Path::new(&deadlock_root), &map)?;
+    *state.rcon_password.lock().unwrap() = Some(info.rcon_password.clone());
+    Ok(info)
+}
+
+/// Send a single RCON command to the server launched from this app and return
+/// its console output. Uses the password stashed by `launch_host`.
+#[tauri::command]
+pub fn rcon_exec(state: tauri::State<'_, HostState>, command: String) -> Result<String, String> {
+    let pw = state
+        .rcon_password
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("No host running from this app yet — click \"Host game now\" first.")?;
+    crate::rcon::exec_auto(&pw, &command)
+}
+
+/// Whether a host has been launched from this app (so the admin/overlay knows
+/// it can send commands).
+#[tauri::command]
+pub fn rcon_ready(state: tauri::State<'_, HostState>) -> bool {
+    state.rcon_password.lock().unwrap().is_some()
 }
 
 /// The server's P2P connect id ([A:1:…]) from console.log, once it's up.

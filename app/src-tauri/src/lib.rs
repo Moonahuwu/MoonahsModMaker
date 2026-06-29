@@ -8,11 +8,51 @@ mod project;
 mod rcon;
 mod vpk;
 
+/// Toggle the always-on-top mod-menu overlay window's visibility.
+#[cfg(desktop)]
+fn toggle_overlay(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    if let Some(win) = app.get_webview_window("overlay") {
+        if win.is_visible().unwrap_or(false) {
+            let _ = win.hide();
+        } else {
+            let _ = win.show();
+            let _ = win.set_focus();
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .manage(commands::HostState::default());
+
+    // Global hotkey (F8) to toggle the in-game mod-menu overlay. Desktop only.
+    #[cfg(desktop)]
+    {
+        use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Shortcut, ShortcutState};
+        let overlay_key = Shortcut::new(None, Code::F8);
+        builder = builder
+            .plugin(
+                tauri_plugin_global_shortcut::Builder::new()
+                    .with_handler(move |app, _shortcut, event| {
+                        if event.state == ShortcutState::Pressed {
+                            toggle_overlay(app);
+                        }
+                    })
+                    .build(),
+            )
+            .setup(move |app| {
+                // Best-effort: if the hotkey is already taken we just skip it
+                // (the overlay can still be opened from the app's button).
+                let _ = app.global_shortcut().register(overlay_key);
+                Ok(())
+            });
+    }
+
+    builder
         .invoke_handler(tauri::generate_handler![
             commands::read_event_pool,
             commands::read_event_pools,
@@ -48,6 +88,7 @@ pub fn run() {
             commands::revert_hosting,
             commands::launch_host,
             commands::rcon_exec,
+            commands::rcon_ready,
             commands::host_connect_id,
             commands::hero_roster,
             commands::hero_detail,

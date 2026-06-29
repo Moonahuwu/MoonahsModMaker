@@ -12,10 +12,27 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Moonah's Mod Maker",
         "width": 1180,
         "height": 860,
         "dragDropEnabled": true
+      },
+      {
+        "label": "overlay",
+        "title": "Mod Menu",
+        "url": "index.html#overlay",
+        "width": 320,
+        "height": 440,
+        "minWidth": 280,
+        "minHeight": 240,
+        "visible": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "shadow": false,
+        "resizable": true
       }
     ],
     "security": {

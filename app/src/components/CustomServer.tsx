@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { Window } from "@tauri-apps/api/window";
 import {
   globalConfig,
   heroConfig,
@@ -22,6 +23,7 @@ import {
   type ItemCard,
 } from "../lib/api";
 import type { GlobalOverride, VdataOverride, WorldOverride } from "../types";
+import { quickActions } from "../lib/rconActions";
 import { HeroGrid } from "./HeroGrid";
 import { useToast } from "./Toaster";
 
@@ -809,7 +811,7 @@ function HostPanel({ deadlockRoot }: { deadlockRoot: string }) {
     try {
       for (const cmd of list) {
         try {
-          const out = await rconExec(rconPassword, cmd);
+          const out = await rconExec(cmd);
           setRconLog((l) => [...l, { cmd, out: out.trim() || "(ok)" }].slice(-40));
         } catch (e) {
           setRconLog((l) => [...l, { cmd, out: String(e), err: true }].slice(-40));
@@ -993,27 +995,23 @@ function HostPanel({ deadlockRoot }: { deadlockRoot: string }) {
                     <span className="rounded-full bg-violet-500/15 px-2 py-0.5 text-[10px] font-semibold text-violet-300">
                       LIVE
                     </span>
+                    <button
+                      onClick={() => {
+                        void Window.getByLabel("overlay").then((w) => w?.show().then(() => w.setFocus()));
+                      }}
+                      className="ml-auto rounded-md border border-violet-500/40 bg-violet-500/10 px-2 py-1 text-[11px] font-medium text-violet-200 transition hover:bg-violet-500/20"
+                    >
+                      Pop out overlay (F8)
+                    </button>
                   </div>
                   <p className="mt-1 text-[11px] text-zinc-500">
                     Send commands straight to the running server — no need to alt-tab to its console.
+                    Press <kbd className="rounded bg-zinc-800 px-1">F8</kbd> anytime (even in-game, if
+                    Deadlock is in borderless-windowed) to toggle the floating mod menu.
                   </p>
 
                   <div className="mt-2.5 flex flex-wrap gap-1.5">
-                    {[
-                      {
-                        label: "Fill bots 6v6",
-                        cmds: [
-                          "citadel_spawn_practice_bots true",
-                          "citadel_spawn_practice_bots_count 12",
-                          `changelevel ${map}`,
-                        ],
-                      },
-                      { label: "No bots", cmds: ["citadel_spawn_practice_bots false"] },
-                      { label: "Kick bots", cmds: ["sv_cheats 1", "bot_kick_all"] },
-                      { label: `Restart (${map})`, cmds: [`changelevel ${map}`] },
-                      { label: "Cheats on", cmds: ["sv_cheats 1"] },
-                      { label: "Status", cmds: ["status"] },
-                    ].map((b) => (
+                    {quickActions(map).map((b) => (
                       <button
                         key={b.label}
                         onClick={() => void runRcon(b.cmds)}
