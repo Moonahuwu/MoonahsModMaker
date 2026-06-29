@@ -295,8 +295,9 @@ pub fn launch_host(
     state: tauri::State<'_, HostState>,
     deadlock_root: String,
     map: String,
+    max_players: Option<u32>,
 ) -> Result<crate::host::LaunchInfo, String> {
-    let info = crate::host::launch(std::path::Path::new(&deadlock_root), &map)?;
+    let info = crate::host::launch(std::path::Path::new(&deadlock_root), &map, max_players)?;
     *state.rcon_password.lock().unwrap() = Some(info.rcon_password.clone());
     Ok(info)
 }

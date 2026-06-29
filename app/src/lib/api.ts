@@ -409,9 +409,10 @@ export interface LaunchInfo {
   pid: number;
   rconPassword: string;
 }
-/** Launch the client as a dedicated host on `map`. Returns PID + RCON password. */
-export function launchHost(deadlockRoot: string, map: string): Promise<LaunchInfo> {
-  return invoke("launch_host", { deadlockRoot, map });
+/** Launch the client as a dedicated host on `map`. Returns PID + RCON password.
+ * `maxPlayers` opens extra server slots (for many bots) — experimental above 12. */
+export function launchHost(deadlockRoot: string, map: string, maxPlayers?: number): Promise<LaunchInfo> {
+  return invoke("launch_host", { deadlockRoot, map, maxPlayers });
 }
 /** Send one RCON command to the server launched from this app; returns output.
  * The password is held in the backend (set by launchHost), so any window can call this. */

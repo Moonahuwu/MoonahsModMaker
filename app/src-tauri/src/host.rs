@@ -145,13 +145,16 @@ pub struct LaunchInfo {
 /// Launch the installed client as a dedicated host on `map` (default
 /// `dl_midtown`). Detached. Sets a fresh RCON password and returns it with the
 /// PID so the app's admin panel can drive the server.
-pub fn launch(root: &Path, map: &str) -> Result<LaunchInfo, String> {
+pub fn launch(root: &Path, map: &str, max_players: Option<u32>) -> Result<LaunchInfo, String> {
     let exe = exe_path(root);
     if !exe.exists() {
         return Err(format!("deadlock.exe not found at {}", exe.display()));
     }
     let map = if map.trim().is_empty() { "dl_midtown" } else { map.trim() };
     let rcon_password = gen_rcon_password();
+    // Server slot count. Deadlock is a 6v6 game (12), so going higher to fit more
+    // bots is experimental — the engine may not honor it. Clamp to a sane ceiling.
+    let slots = max_players.filter(|&n| n > 0).map(|n| n.clamp(1, 64).to_string());
 
     // Direct spawn of the dedicated server, given its own console window
     // (CREATE_NEW_CONSOLE). We deliberately do NOT override stdio: in the packaged
@@ -164,11 +167,12 @@ pub fn launch(root: &Path, map: &str) -> Result<LaunchInfo, String> {
     // overlay regardless. (Going through `cmd /c start` to fix the dev cosmetics
     // proved fragile — the server failed to launch from the windowless parent.)
     let mut cmd = std::process::Command::new(&exe);
-    cmd.current_dir(root).args([
-        "-dedicated",
-        "-insecure",
-        "-condebug",
-        "-allow_no_lobby_connect",
+    cmd.current_dir(root)
+        .args(["-dedicated", "-insecure", "-condebug", "-allow_no_lobby_connect"]);
+    if let Some(slots) = &slots {
+        cmd.args(["-maxplayers", slots]);
+    }
+    cmd.args([
         "+tv_citadel_auto_record",
         "0",
         // Enable RCON admin: setting a password makes the server accept

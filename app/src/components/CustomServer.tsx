@@ -826,6 +826,7 @@ function PropCard({
 function HostPanel({ deadlockRoot }: { deadlockRoot: string }) {
   const [status, setStatus] = useState<HostStatus | null>(null);
   const [map, setMap] = useState("dl_midtown");
+  const [maxPlayers, setMaxPlayers] = useState(12);
   const [busy, setBusy] = useState(false);
   const [connectId, setConnectId] = useState<string | null>(null);
   // RCON admin: the password the running server was launched with (this session
@@ -902,7 +903,7 @@ function HostPanel({ deadlockRoot }: { deadlockRoot: string }) {
   async function doLaunch() {
     setBusy(true);
     try {
-      const info = await launchHost(deadlockRoot, map);
+      const info = await launchHost(deadlockRoot, map, maxPlayers);
       push("success", `Server starting on ${map} in a new console window — it runs headless (pid ${info.pid})`);
       setConnectId(null);
       setRconPassword(info.rconPassword);
@@ -978,6 +979,19 @@ function HostPanel({ deadlockRoot }: { deadlockRoot: string }) {
                     value={map}
                     onChange={(e) => setMap(e.target.value)}
                     className="w-32 rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-200 outline-none focus:border-zinc-500"
+                  />
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <label className="text-xs text-zinc-500" title="Server slots. 12 = 6v6. Higher fits more bots but is experimental — Deadlock is built for 12.">
+                    Max players
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={64}
+                    value={maxPlayers}
+                    onChange={(e) => setMaxPlayers(Math.max(1, Math.min(64, Number(e.target.value) || 12)))}
+                    className="w-16 rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-200 outline-none focus:border-zinc-500"
                   />
                 </div>
                 <button
