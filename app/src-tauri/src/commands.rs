@@ -1344,12 +1344,14 @@ pub fn randomize_config(
     temperature: Option<f64>,
     skip_movement: Option<bool>,
     skip_cast: Option<bool>,
+    skip_scale: Option<bool>,
     no_negative: Option<bool>,
 ) -> Result<RandomConfig, String> {
     let t = temperature.unwrap_or(0.5).clamp(0.0, 1.0);
     let k = 0.1 + t * 3.4 + t.powi(5) * 4.0;
     let skip_move = skip_movement.unwrap_or(false);
     let skip_cast = skip_cast.unwrap_or(false);
+    let skip_scale = skip_scale.unwrap_or(true);
     let no_neg = no_negative.unwrap_or(true);
     // Skip a stat by key/field name when the matching category is disabled, so
     // randomize leaves e.g. jump height / cast times alone (they break feel fast).
@@ -1483,9 +1485,9 @@ pub fn randomize_config(
                 continue;
             }
             for (field, val) in fields {
-                // Never randomize model scale on world entities — giant/tiny
+                // Optionally leave model scale on world entities alone — giant/tiny
                 // minions, turrets, guardians and bosses break hitboxes + visuals.
-                if field.to_ascii_lowercase().contains("scale") {
+                if skip_scale && field.to_ascii_lowercase().contains("scale") {
                     continue;
                 }
                 if should_skip(&field) {

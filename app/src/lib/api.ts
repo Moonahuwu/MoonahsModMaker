@@ -462,6 +462,8 @@ export interface RandomizerOpts {
   skipMovement: boolean;
   /** Leave cast / channel / wind-up times alone. */
   skipCast: boolean;
+  /** Leave world-entity model scale (minions/turrets) alone. */
+  skipScale: boolean;
   /** Don't randomize originally-negative values (keeps results ≥ 0). */
   noNegative: boolean;
 }
@@ -479,6 +481,7 @@ export function randomizeConfig(
     temperature,
     skipMovement: opts?.skipMovement ?? false,
     skipCast: opts?.skipCast ?? false,
+    skipScale: opts?.skipScale ?? true,
     noNegative: opts?.noNegative ?? true,
   });
 }

@@ -90,8 +90,8 @@ export function CustomServer({
   onRandomize: (temperature: number) => void;
   onReset: () => void;
   randomizing: boolean;
-  randomizerOpts: { skipMovement: boolean; skipCast: boolean; noNegative: boolean };
-  onSetRandomizerOpts: (patch: Partial<{ skipMovement: boolean; skipCast: boolean; noNegative: boolean }>) => void;
+  randomizerOpts: { skipMovement: boolean; skipCast: boolean; skipScale: boolean; noNegative: boolean };
+  onSetRandomizerOpts: (patch: Partial<{ skipMovement: boolean; skipCast: boolean; skipScale: boolean; noNegative: boolean }>) => void;
 }) {
   const [view, setView] = useState<"server" | "configs">("server");
   const [section, setSection] = useState<Section>("heroes");
@@ -237,6 +237,7 @@ export function CustomServer({
                   {([
                     ["skipMovement", "Movement (jump, stamina, dash, speed)"],
                     ["skipCast", "Cast / channel / wind-up times"],
+                    ["skipScale", "Model scale (minions, turrets)"],
                   ] as const).map(([key, label]) => (
                     <label key={key} className="mb-1.5 flex cursor-pointer items-center gap-2 text-xs text-zinc-300">
                       <input
