@@ -53,6 +53,8 @@ export function CustomServer({
   showExperimental,
   includeGameplay,
   onToggleGameplay,
+  excludedKeys,
+  onSetExcluded,
   overrides,
   onSet,
   onClear,
@@ -72,6 +74,8 @@ export function CustomServer({
   showExperimental: boolean;
   includeGameplay: boolean;
   onToggleGameplay: (on: boolean) => void;
+  excludedKeys: string[];
+  onSetExcluded: (keys: string[], excluded: boolean) => void;
   overrides: VdataOverride[];
   onSet: (abilityKey: string, propKey: string, value: string) => void;
   onClear: (abilityKey: string, propKey: string) => void;
@@ -251,6 +255,8 @@ export function CustomServer({
             overrides={overrides}
             onSet={onSet}
             onClear={onClear}
+            excludedKeys={excludedKeys}
+            onSetExcluded={onSetExcluded}
           />
         )}
         {section === "items" && (
@@ -260,6 +266,8 @@ export function CustomServer({
             overrides={overrides}
             onSet={onSet}
             onClear={onClear}
+            excludedKeys={excludedKeys}
+            onSetExcluded={onSetExcluded}
           />
         )}
         {section === "global" && (
@@ -269,6 +277,8 @@ export function CustomServer({
             overrides={globalOverrides}
             onSet={onSetGlobal}
             onClear={onClearGlobal}
+            excluded={excludedKeys.includes("__global__")}
+            onSetExcluded={onSetExcluded}
           />
         )}
         {(section === "minions" || section === "boxes" || section === "powerups") && (
@@ -280,6 +290,8 @@ export function CustomServer({
             overrides={worldOverrides}
             onSet={onSetWorld}
             onClear={onClearWorld}
+            excludedKeys={excludedKeys}
+            onSetExcluded={onSetExcluded}
           />
         )}
       </section>
@@ -349,6 +361,37 @@ function StatRow({
   );
 }
 
+/** Checkbox controlling whether an entity's edits are baked into the build.
+ *  Default included; unchecking keeps edits saved but leaves it untouched. */
+function IncludeToggle({
+  included,
+  onChange,
+  label = "Included in build",
+}: {
+  included: boolean;
+  onChange: (included: boolean) => void;
+  label?: string;
+}) {
+  return (
+    <label
+      title="Uncheck to keep these edits saved but leave this untouched in the compiled build"
+      className={`flex cursor-pointer select-none items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition ${
+        included
+          ? "border-emerald-600/40 bg-emerald-500/10 text-emerald-300"
+          : "border-amber-600/40 bg-amber-500/10 text-amber-300"
+      }`}
+    >
+      <input
+        type="checkbox"
+        checked={included}
+        onChange={(e) => onChange(e.target.checked)}
+        className="h-3.5 w-3.5 accent-emerald-500"
+      />
+      {included ? label : "Excluded"}
+    </label>
+  );
+}
+
 // --------------------------------------------------------------------------- Heroes
 
 function HeroesSection({
@@ -358,6 +401,8 @@ function HeroesSection({
   overrides,
   onSet,
   onClear,
+  excludedKeys,
+  onSetExcluded,
 }: {
   helperPath: string;
   pakPath: string;
@@ -365,6 +410,8 @@ function HeroesSection({
   overrides: VdataOverride[];
   onSet: (abilityKey: string, propKey: string, value: string) => void;
   onClear: (abilityKey: string, propKey: string) => void;
+  excludedKeys: string[];
+  onSetExcluded: (keys: string[], excluded: boolean) => void;
 }) {
   const [hero, setHero] = useState<HeroPortrait | null>(null);
   const [abilities, setAbilities] = useState<AbilityConfig[] | null>(null);
@@ -418,6 +465,15 @@ function HeroesSection({
           <img src={convertFileSrc(hero.portraitPath)} alt="" className="h-9 w-9 rounded-full object-cover ring-2 ring-zinc-700" />
         )}
         <h4 className="text-base font-bold text-zinc-100">{hero.displayName}</h4>
+        {abilities && abilities.length > 0 && (
+          <div className="ml-auto">
+            <IncludeToggle
+              included={!abilities.every((a) => excludedKeys.includes(a.key))}
+              onChange={(inc) => onSetExcluded(abilities.map((a) => a.key), !inc)}
+              label="Hero included"
+            />
+          </div>
+        )}
       </div>
 
       {loading && <p className="text-sm text-zinc-500">Loading abilities…</p>}
@@ -451,12 +507,16 @@ function ItemsSection({
   overrides,
   onSet,
   onClear,
+  excludedKeys,
+  onSetExcluded,
 }: {
   helperPath: string;
   pakPath: string;
   overrides: VdataOverride[];
   onSet: (abilityKey: string, propKey: string, value: string) => void;
   onClear: (abilityKey: string, propKey: string) => void;
+  excludedKeys: string[];
+  onSetExcluded: (keys: string[], excluded: boolean) => void;
 }) {
   const [items, setItems] = useState<ItemCard[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -510,6 +570,13 @@ function ItemsSection({
             <img src={convertFileSrc(item.iconPath)} alt="" className="h-9 w-9 rounded-lg object-contain" style={{ background: `${accent}22` }} />
           )}
           <h4 className="text-base font-bold text-zinc-100">{item.displayName}</h4>
+          <div className="ml-auto">
+            <IncludeToggle
+              included={!excludedKeys.includes(item.name)}
+              onChange={(inc) => onSetExcluded([item.name], !inc)}
+              label="Item included"
+            />
+          </div>
         </div>
         {loading && <p className="text-sm text-zinc-500">Loading values…</p>}
         {props && props.length === 0 && !loading && (
@@ -589,12 +656,16 @@ function GlobalSection({
   overrides,
   onSet,
   onClear,
+  excluded,
+  onSetExcluded,
 }: {
   helperPath: string;
   pakPath: string;
   overrides: GlobalOverride[];
   onSet: (key: string, value: string) => void;
   onClear: (key: string) => void;
+  excluded: boolean;
+  onSetExcluded: (keys: string[], excluded: boolean) => void;
 }) {
   const [stats, setStats] = useState<GlobalStat[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -616,10 +687,17 @@ function GlobalSection({
 
   return (
     <>
-      <p className="mb-3 text-sm text-zinc-400">
-        Match-wide values from <code className="text-zinc-300">generic_data.vdata</code> — gold
-        rewards, comeback health, timers.
-      </p>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <p className="text-sm text-zinc-400">
+          Match-wide values from <code className="text-zinc-300">generic_data.vdata</code> — gold
+          rewards, comeback health, timers.
+        </p>
+        <IncludeToggle
+          included={!excluded}
+          onChange={(inc) => onSetExcluded(["__global__"], !inc)}
+          label="Global included"
+        />
+      </div>
       {error && <p className="text-sm text-red-400">Couldn't load global stats: {error}</p>}
       {!stats && !error && <p className="text-sm text-zinc-500">Loading global stats…</p>}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -663,6 +741,8 @@ function EntitySection({
   overrides,
   onSet,
   onClear,
+  excludedKeys,
+  onSetExcluded,
 }: {
   kind: WorldKind;
   helperPath: string;
@@ -670,6 +750,8 @@ function EntitySection({
   overrides: WorldOverride[];
   onSet: (file: string, entity: string, field: string, value: string) => void;
   onClear: (file: string, entity: string, field: string) => void;
+  excludedKeys: string[];
+  onSetExcluded: (keys: string[], excluded: boolean) => void;
 }) {
   const [entities, setEntities] = useState<EntityConfig[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -702,6 +784,12 @@ function EntitySection({
           </button>
           <h4 className="text-base font-bold text-zinc-100">{picked.name}</h4>
           <code className="text-[11px] text-zinc-600">{picked.key}</code>
+          <div className="ml-auto">
+            <IncludeToggle
+              included={!excludedKeys.includes(`${picked.file}::${picked.key}`)}
+              onChange={(inc) => onSetExcluded([`${picked.file}::${picked.key}`], !inc)}
+            />
+          </div>
         </div>
         <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-4">
           <div className="flex flex-col divide-y divide-zinc-800/70">

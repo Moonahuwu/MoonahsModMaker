@@ -1871,6 +1871,13 @@ export default function App() {
             showExperimental={settings.showExperimentalHeroes}
             includeGameplay={settings.includeGameplay}
             onToggleGameplay={(on) => updateSettings({ includeGameplay: on })}
+            excludedKeys={settings.excludedConfigKeys}
+            onSetExcluded={(keys, excluded) => {
+              const cur = new Set(settings.excludedConfigKeys);
+              if (excluded) keys.forEach((k) => cur.add(k));
+              else keys.forEach((k) => cur.delete(k));
+              updateSettings({ excludedConfigKeys: [...cur] });
+            }}
             overrides={project?.vdataOverrides ?? []}
             onSet={setVdataOverride}
             onClear={clearVdataOverride}

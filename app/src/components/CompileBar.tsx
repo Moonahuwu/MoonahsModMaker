@@ -108,9 +108,15 @@ export function CompileBar({
     setReport(null);
     try {
       // Gameplay (vdata + global + world) edits are server-only — excluded unless opted in.
-      const gameplay = settings.includeGameplay ? vdataOverrides : [];
-      const global = settings.includeGameplay ? globalOverrides : [];
-      const world = settings.includeGameplay ? worldOverrides : [];
+      // Also drop per-entity exclusions the user unchecked in the config editor.
+      const ex = new Set(settings.excludedConfigKeys);
+      const gameplay = settings.includeGameplay
+        ? vdataOverrides.filter((o) => !ex.has(o.abilityKey))
+        : [];
+      const global = settings.includeGameplay && !ex.has("__global__") ? globalOverrides : [];
+      const world = settings.includeGameplay
+        ? worldOverrides.filter((o) => !ex.has(`${o.file}::${o.entity}`))
+        : [];
       const config = buildCompileConfig(settings, events, false, iconMods, soundOverrides, effectOverrides, gameplay, global, world);
       const r = await compileProject(config);
       setReport(r);

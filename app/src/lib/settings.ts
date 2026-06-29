@@ -40,6 +40,10 @@ export interface Settings {
    *  default — gameplay mods only work on private/dedicated servers, not public
    *  matchmaking, so they're excluded unless you opt in. */
   includeGameplay: boolean;
+  /** Per-entity exclusions from the gameplay build: override keys (hero ability
+   *  keys, item names, `file::entity` for world entities, or `__global__`) the
+   *  user marked "not included". Edits stay saved but are filtered out at compile. */
+  excludedConfigKeys: string[];
   /** Name of the currently-loaded profile (build config). Empty until the first
    *  profile is bootstrapped. The active profile owns `importedMods`. */
   activeProfile: string;
@@ -70,6 +74,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showExperimentalHeroes: false,
   source2ViewerPath: "",
   includeGameplay: false,
+  excludedConfigKeys: [],
   activeProfile: "",
 };
 

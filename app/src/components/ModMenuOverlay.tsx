@@ -72,7 +72,8 @@ export function ModMenuOverlay() {
         </button>
       </div>
 
-      <div className="flex-1 space-y-2 overflow-auto p-3">
+      {/* Fixed top: status + map + submenu tabs */}
+      <div className="space-y-2 px-3 pt-2">
         {!ready && (
           <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-300">
             No server yet — click <b>Host game now</b> in the app, then these controls go live.
@@ -102,7 +103,10 @@ export function ModMenuOverlay() {
             </button>
           ))}
         </div>
+      </div>
 
+      {/* Scrollable middle: the buttons */}
+      <div className="min-h-0 flex-1 space-y-2 overflow-auto px-3 py-2">
         {tab === "actions" && (
           <div className="grid grid-cols-2 gap-1.5">
             {quickActions(map).map((a) => (
@@ -138,7 +142,10 @@ export function ModMenuOverlay() {
               </div>
             </div>
           ))}
+      </div>
 
+      {/* Fixed bottom: free-text command + last output */}
+      <div className="space-y-2 border-t border-zinc-800 px-3 pb-3 pt-2">
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -169,7 +176,7 @@ export function ModMenuOverlay() {
         {out && (
           <div
             ref={logRef}
-            className={`max-h-28 overflow-auto rounded-md border border-zinc-800 bg-zinc-950 p-2 font-mono text-[10px] leading-relaxed whitespace-pre-wrap ${
+            className={`max-h-24 overflow-auto rounded-md border border-zinc-800 bg-zinc-950 p-2 font-mono text-[10px] leading-relaxed whitespace-pre-wrap ${
               out.err ? "text-rose-400" : "text-zinc-400"
             }`}
           >
