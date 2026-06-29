@@ -408,6 +408,10 @@ export function revertHosting(deadlockRoot: string): Promise<HostStatus> {
 export function launchHost(deadlockRoot: string, map: string): Promise<number> {
   return invoke("launch_host", { deadlockRoot, map });
 }
+/** The server's P2P connect id ([A:1:…]) from console.log, or null until up. */
+export function hostConnectId(deadlockRoot: string): Promise<string | null> {
+  return invoke("host_connect_id", { deadlockRoot });
+}
 
 /** A flat-scalar world entity (minion / box / powerup) and its editable fields. */
 export interface EntityConfig {

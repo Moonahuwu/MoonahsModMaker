@@ -4,6 +4,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import {
   globalConfig,
   heroConfig,
+  hostConnectId,
   hostStatus,
   itemConfig,
   itemRoster,
@@ -789,12 +790,29 @@ function HostPanel({ deadlockRoot }: { deadlockRoot: string }) {
   const [status, setStatus] = useState<HostStatus | null>(null);
   const [map, setMap] = useState("dl_midtown");
   const [busy, setBusy] = useState(false);
+  const [connectId, setConnectId] = useState<string | null>(null);
   const { push } = useToast();
 
   useEffect(() => {
     if (!deadlockRoot) return;
     hostStatus(deadlockRoot).then(setStatus).catch(() => setStatus(null));
+    hostConnectId(deadlockRoot).then(setConnectId).catch(() => {});
   }, [deadlockRoot]);
+
+  // After launching, the server logs its connect id a second or two later — poll
+  // the log briefly until it appears.
+  function pollConnectId() {
+    let tries = 0;
+    const tick = () => {
+      hostConnectId(deadlockRoot)
+        .then((id) => {
+          if (id) setConnectId(id);
+          else if (tries++ < 12) setTimeout(tick, 1500);
+        })
+        .catch(() => {});
+    };
+    tick();
+  }
 
   async function doSetup() {
     setBusy(true);
@@ -823,6 +841,8 @@ function HostPanel({ deadlockRoot }: { deadlockRoot: string }) {
     try {
       const pid = await launchHost(deadlockRoot, map);
       push("success", `Server starting on ${map} in a new console window — it runs headless (pid ${pid})`);
+      setConnectId(null);
+      pollConnectId();
     } catch (e) {
       push("error", `Launch failed: ${e}`);
     } finally {
@@ -909,11 +929,33 @@ function HostPanel({ deadlockRoot }: { deadlockRoot: string }) {
                   Hosting guide ↗
                 </button>
               </div>
+              {connectId && (
+                <div className="mt-4 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
+                  <div className="text-xs font-semibold text-emerald-300">Server is up — share this to join:</div>
+                  <div className="mt-1.5 flex items-center gap-2">
+                    <code className="select-all rounded bg-zinc-950 px-2 py-1 text-sm text-emerald-200">
+                      connect {connectId}
+                    </code>
+                    <button
+                      onClick={() => {
+                        void navigator.clipboard.writeText(`connect ${connectId}`);
+                        push("info", "Copied connect command");
+                      }}
+                      className="rounded-md border border-zinc-700 bg-zinc-800/60 px-2 py-1 text-xs text-zinc-300 transition hover:bg-zinc-800"
+                    >
+                      Copy
+                    </button>
+                  </div>
+                  <p className="mt-1.5 text-[11px] text-zinc-500">
+                    You &amp; friends paste that into Deadlock's dev console (~) to join. Enable the
+                    console first via the <code>-console</code> launch option (or the in-game keybind setting).
+                  </p>
+                </div>
+              )}
               <p className="mt-2 text-[11px] text-zinc-600">
                 Tip: build &amp; install your mod first — the server loads it from{" "}
-                <code>citadel/addons</code>. The server console window is interactive; type{" "}
-                <code>status</code> there to see listen info. Check the hosting guide for the
-                exact client connect command.
+                <code>citadel/addons</code>. The connect ID is read from the server log
+                automatically (or type <code>status</code> in the server console to see it).
               </p>
             </>
           )}

@@ -46,6 +46,7 @@ pub fn run() {
             commands::setup_hosting,
             commands::revert_hosting,
             commands::launch_host,
+            commands::host_connect_id,
             commands::hero_roster,
             commands::hero_detail,
             commands::hero_config,

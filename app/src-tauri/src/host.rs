@@ -94,6 +94,24 @@ pub fn revert(root: &Path) -> Result<HostStatus, String> {
     Ok(status(root))
 }
 
+/// Parse the server's P2P connect identity from `console.log` — the most recent
+/// `ServerSteamID=[A:1:…]` line the dedicated server logs once it's up. Players
+/// join with `connect <id>` from their client's dev console. None until logged.
+pub fn connect_id(root: &Path) -> Option<String> {
+    let log = root.join("game").join("citadel").join("console.log");
+    let text = std::fs::read_to_string(&log).ok()?;
+    let mut found = None;
+    for line in text.lines() {
+        if let Some(i) = line.find("ServerSteamID=[") {
+            let rest = &line[i + "ServerSteamID=".len()..];
+            if let Some(end) = rest.find(']') {
+                found = Some(rest[..=end].to_string()); // keep the [brackets]
+            }
+        }
+    }
+    found
+}
+
 /// Launch the installed client as a dedicated host on `map` (default
 /// `dl_midtown`). Detached — returns the child PID.
 pub fn launch(root: &Path, map: &str) -> Result<u32, String> {
@@ -168,6 +186,19 @@ mod tests {
         setup(&root).unwrap();
         let text2 = std::fs::read_to_string(gameinfo_path(&root)).unwrap();
         assert_eq!(text2.matches("CreateListenSocketP2P").count(), 1);
+    }
+
+    #[test]
+    fn connect_id_parses_last_serversteamid() {
+        let root = std::env::temp_dir().join("eim_host_test_connid");
+        let cit = root.join("game").join("citadel");
+        std::fs::create_dir_all(&cit).unwrap();
+        std::fs::write(
+            cit.join("console.log"),
+            "noise\n[Server] SV:  ServerSteamID=[A:1:111:222] (90).\nmore\n[Server] SV:  ServerSteamID=[A:1:2291896339:50255] (90287838420766739).\n",
+        )
+        .unwrap();
+        assert_eq!(connect_id(&root).as_deref(), Some("[A:1:2291896339:50255]"));
     }
 
     #[test]

@@ -285,6 +285,12 @@ pub fn launch_host(deadlock_root: String, map: String) -> Result<u32, String> {
     crate::host::launch(std::path::Path::new(&deadlock_root), &map)
 }
 
+/// The server's P2P connect id ([A:1:…]) from console.log, once it's up.
+#[tauri::command]
+pub fn host_connect_id(deadlock_root: String) -> Option<String> {
+    crate::host::connect_id(std::path::Path::new(&deadlock_root))
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DetectedPaths {
