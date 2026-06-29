@@ -90,8 +90,8 @@ export function CustomServer({
   onRandomize: (temperature: number) => void;
   onReset: () => void;
   randomizing: boolean;
-  randomizerOpts: { skipMovement: boolean; skipCast: boolean; skipScale: boolean; includeGuns: boolean; noNegative: boolean };
-  onSetRandomizerOpts: (patch: Partial<{ skipMovement: boolean; skipCast: boolean; skipScale: boolean; includeGuns: boolean; noNegative: boolean }>) => void;
+  randomizerOpts: { skipMovement: boolean; skipCast: boolean; skipScale: boolean; includeGuns: boolean; noNegative: boolean; randomizeItemTiers: boolean };
+  onSetRandomizerOpts: (patch: Partial<{ skipMovement: boolean; skipCast: boolean; skipScale: boolean; includeGuns: boolean; noNegative: boolean; randomizeItemTiers: boolean }>) => void;
 }) {
   const [view, setView] = useState<"server" | "configs">("server");
   const [section, setSection] = useState<Section>("heroes");
@@ -259,6 +259,18 @@ export function CustomServer({
                       className="h-3.5 w-3.5 accent-fuchsia-500"
                     />
                     Hero guns (bullet dmg, clip, fire rate…)
+                  </label>
+                  <label className="flex cursor-pointer items-start gap-2 text-xs text-zinc-300">
+                    <input
+                      type="checkbox"
+                      checked={randomizerOpts.randomizeItemTiers}
+                      onChange={(e) => onSetRandomizerOpts({ randomizeItemTiers: e.target.checked })}
+                      className="mt-0.5 h-3.5 w-3.5 accent-fuchsia-500"
+                    />
+                    <span>
+                      Item tiers — give every shop item a random tier &amp; scale its
+                      stats to match (re-prices too)
+                    </span>
                   </label>
                   <div className="my-2 border-t border-zinc-800" />
                   <label className="flex cursor-pointer items-center gap-2 text-xs text-zinc-300">

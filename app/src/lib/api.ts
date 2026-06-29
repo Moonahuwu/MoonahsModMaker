@@ -468,6 +468,9 @@ export interface RandomizerOpts {
   includeGuns: boolean;
   /** Don't randomize originally-negative values (keeps results ≥ 0). */
   noNegative: boolean;
+  /** "Gamemode": give each shop item a random tier (1–4) and scale its stats to
+   *  match (cost is tier-derived, so it re-prices too). Off by default. */
+  randomizeItemTiers: boolean;
 }
 
 /** temperature: 0 = tame (±10%), 1 = insane (×0.03–30). */
@@ -486,6 +489,7 @@ export function randomizeConfig(
     skipScale: opts?.skipScale ?? true,
     includeGuns: opts?.includeGuns ?? false,
     noNegative: opts?.noNegative ?? true,
+    randomizeItemTiers: opts?.randomizeItemTiers ?? false,
   });
 }
 

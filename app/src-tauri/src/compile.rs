@@ -819,9 +819,14 @@ fn apply_vdata_overrides(text: &str, overrides: &[VdataCompile]) -> String {
     // `@weapon:<field>` → rewrite a flat numeric field inside the entry's
     // `m_WeaponInfo` block (gun stats: bullet damage, clip size, cycle time…).
     let mut want_weapon: HashMap<&str, HashMap<&str, &str>> = HashMap::new();
+    // `@tier` → rewrite an item's `m_iItemTier` (`EModTier_N`). The game derives
+    // shop cost from the tier, so this re-tiers and re-prices the item.
+    let mut want_tier: HashMap<&str, &str> = HashMap::new();
     for ov in overrides {
         if let Some(field) = ov.prop_key.strip_prefix("@weapon:") {
             want_weapon.entry(ov.ability_key.as_str()).or_default().insert(field, ov.value.as_str());
+        } else if ov.prop_key == "@tier" {
+            want_tier.insert(ov.ability_key.as_str(), ov.value.as_str());
         } else if let Some(idx) = ov.prop_key.strip_prefix("@upgrade:").and_then(|s| s.parse::<usize>().ok()) {
             want_upg.entry(ov.ability_key.as_str()).or_default().insert(idx, ov.value.as_str());
         } else {
@@ -832,6 +837,7 @@ fn apply_vdata_overrides(text: &str, overrides: &[VdataCompile]) -> String {
     let mut in_wanted = false;
     let mut in_wanted_upg = false;
     let mut in_wanted_weapon = false;
+    let mut in_wanted_tier = false;
     let mut weapon_info_depth: Option<usize> = None; // depth of the m_WeaponInfo block
     let mut cur_ability: Option<&str> = None;
     let mut props_depth: Option<usize> = None;
@@ -852,6 +858,7 @@ fn apply_vdata_overrides(text: &str, overrides: &[VdataCompile]) -> String {
                     in_wanted = want.contains_key(k);
                     in_wanted_upg = want_upg.contains_key(k);
                     in_wanted_weapon = want_weapon.contains_key(k);
+                    in_wanted_tier = want_tier.contains_key(k);
                     props_depth = None;
                     weapon_info_depth = None;
                     pending = None;
@@ -931,6 +938,24 @@ fn apply_vdata_overrides(text: &str, overrides: &[VdataCompile]) -> String {
                 }
             } else if t.starts_with("m_WeaponInfo") && t.ends_with('=') {
                 weapon_info_depth = Some(depth);
+            }
+        }
+
+        // Rewrite an item's tier token (`m_iItemTier = "EModTier_N"`) in place,
+        // preserving the quotes. A direct field of the item block (not nested).
+        if in_wanted_tier && t.starts_with("m_iItemTier") {
+            if let (Some(a), Some(b)) = (body.find('"'), body.rfind('"')) {
+                if b > a {
+                    if let Some(v) = cur_ability.and_then(|c| want_tier.get(c)) {
+                        out.push_str(&body[..=a]);
+                        out.push_str(v);
+                        out.push_str(&body[b..]);
+                        if nl {
+                            out.push('\n');
+                        }
+                        continue;
+                    }
+                }
             }
         }
 
@@ -1971,6 +1996,35 @@ mod tests {
         // The same-named field nested in the recoil sub-block is NOT touched.
         assert!(out.contains("m_flBulletDamage = 999"));
         assert!(!out.contains("m_flBulletDamage = 3.6"));
+    }
+
+    #[test]
+    fn vdata_override_rewrites_item_tier() {
+        let src = "\
+\tupgrade_clip_size =
+\t{
+\t\tm_mapAbilityProperties =
+\t\t{
+\t\t\tBonusClipSizePercent =
+\t\t\t{
+\t\t\t\tm_strValue = \"30\"
+\t\t\t}
+\t\t}
+\t\tm_eItemSlotType = \"EItemSlotType_WeaponMod\"
+\t\tm_iItemTier = \"EModTier_1\"
+\t}
+";
+        let ovs = vec![
+            VdataCompile { ability_key: "upgrade_clip_size".into(), prop_key: "@tier".into(), value: "EModTier_4".into() },
+            VdataCompile { ability_key: "upgrade_clip_size".into(), prop_key: "BonusClipSizePercent".into(), value: "120".into() },
+        ];
+        let out = apply_vdata_overrides(src, &ovs);
+        // Tier token swapped, quotes preserved; the slot-type line is untouched.
+        assert!(out.contains("m_iItemTier = \"EModTier_4\""));
+        assert!(!out.contains("EModTier_1"));
+        assert!(out.contains("m_eItemSlotType = \"EItemSlotType_WeaponMod\""));
+        // The item's stat got scaled in the same pass.
+        assert!(out.contains("m_strValue = \"120\""));
     }
 
     #[test]

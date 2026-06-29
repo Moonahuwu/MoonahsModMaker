@@ -1410,6 +1410,7 @@ pub fn randomize_config(
     skip_scale: Option<bool>,
     include_guns: Option<bool>,
     no_negative: Option<bool>,
+    randomize_item_tiers: Option<bool>,
 ) -> Result<RandomConfig, String> {
     let t = temperature.unwrap_or(0.5).clamp(0.0, 1.0);
     let k = 0.1 + t * 3.4 + t.powi(5) * 4.0;
@@ -1418,6 +1419,7 @@ pub fn randomize_config(
     let skip_scale = skip_scale.unwrap_or(true);
     let include_guns = include_guns.unwrap_or(false);
     let no_neg = no_negative.unwrap_or(true);
+    let rand_tiers = randomize_item_tiers.unwrap_or(false);
     // Skip a stat by key/field name when the matching category is disabled, so
     // randomize leaves e.g. jump height / cast times alone (they break feel fast).
     let should_skip = |key: &str| -> bool {
@@ -1476,7 +1478,19 @@ pub fn randomize_config(
     let atext = std::fs::read_to_string(&abilities).map_err(|e| e.to_string())?;
     let map = parse_abilities(&atext);
     let mut vdata = Vec::new();
+    // When tier-shuffle is on, items are handled entirely by the dedicated tier
+    // loop below (tier + proportional stat scale), so keep them out of the random
+    // roll — otherwise their stats would get rolled and then overwritten.
+    let items = parse_items(&atext);
+    let item_names: std::collections::HashSet<&str> = if rand_tiers {
+        items.iter().filter(|i| !i.disabled).map(|i| i.name.as_str()).collect()
+    } else {
+        std::collections::HashSet::new()
+    };
     for (entity, def) in &map {
+        if item_names.contains(entity.as_str()) {
+            continue;
+        }
         for (prop_key, val) in &def.props {
             if should_skip(prop_key) {
                 continue;
@@ -1513,6 +1527,73 @@ pub fn randomize_config(
                     prop_key: format!("@weapon:{field}"),
                     value,
                 });
+            }
+        }
+    }
+
+    // Item tier shuffle (opt-in "gamemode"): give each shop item a random tier
+    // (1..4) and scale its stats to match that tier. The game derives shop cost
+    // from the tier, so a re-tiered item is re-priced too. Scaling is proportional
+    // to the tier's soul value — a T1 item bumped to T4 gets ~12× its stats; one
+    // dropped to T1 gets ~1/12×. Stats are NOT rolled here (deterministic scale),
+    // so the item lands at coherent tier-appropriate strength, not random noise.
+    if rand_tiers {
+        // Approx. souls per tier (cost is tier-derived in-game); T5 is a guess but
+        // new tiers only ever land in 1..4 (the purchasable shop range).
+        const TIER_SOULS: [f64; 6] = [0.0, 500.0, 1250.0, 3000.0, 6200.0, 10000.0];
+        // Scale a stat by `factor`. Positive-only for base props (so 0 / -1 "unset"
+        // sentinels are left intact); sign-preserving for upgrade bonuses (a -12
+        // cooldown bonus scales to a bigger reduction, never flips sign).
+        let scale_prop = |val: &str, factor: f64| -> Option<String> {
+            let (num, unit) = split_value_unit(val);
+            if num <= 0.0 {
+                return None;
+            }
+            Some(fmt_random(num * factor, val.contains('.'), &unit))
+        };
+        let scale_up = |val: &str, factor: f64| -> Option<String> {
+            let (num, unit) = split_value_unit(val);
+            if num == 0.0 {
+                return None;
+            }
+            Some(fmt_random(num * factor, val.contains('.'), &unit))
+        };
+        for it in &items {
+            if it.disabled || it.tier < 1 || it.tier > 5 {
+                continue;
+            }
+            let new_tier = (1 + (xorshift(&mut seed) * 4.0) as u32).clamp(1, 4);
+            vdata.push(crate::project::VdataOverride {
+                ability_key: it.name.clone(),
+                prop_key: "@tier".to_string(),
+                value: format!("EModTier_{new_tier}"),
+            });
+            let factor = TIER_SOULS[new_tier as usize] / TIER_SOULS[it.tier.clamp(1, 5) as usize];
+            if let Some(def) = map.get(&it.name) {
+                for (prop_key, val) in &def.props {
+                    if should_skip(prop_key) {
+                        continue;
+                    }
+                    if let Some(value) = scale_prop(val, factor) {
+                        vdata.push(crate::project::VdataOverride {
+                            ability_key: it.name.clone(),
+                            prop_key: prop_key.clone(),
+                            value,
+                        });
+                    }
+                }
+                for (i, (_, prop, bonus)) in def.upgrades.iter().enumerate() {
+                    if should_skip(prop) {
+                        continue;
+                    }
+                    if let Some(value) = scale_up(bonus, factor) {
+                        vdata.push(crate::project::VdataOverride {
+                            ability_key: it.name.clone(),
+                            prop_key: format!("@upgrade:{i}"),
+                            value,
+                        });
+                    }
+                }
             }
         }
     }
