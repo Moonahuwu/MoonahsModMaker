@@ -4,6 +4,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   compileProject,
   installToGame,
+  itemRoster,
   scanAddonSlots,
   type CompileReport,
   type SlotScan,
@@ -108,14 +109,39 @@ export function CompileBar({
     setReport(null);
     try {
       // Gameplay (vdata + global + world) edits are server-only — excluded unless opted in.
-      // Also drop per-entity exclusions the user unchecked in the config editor.
+      // Drop per-entity exclusions and whole-category exclusions (`__cat:*`).
       const ex = new Set(settings.excludedConfigKeys);
+      // Heroes & items share the vdata override type — classify by the item roster.
+      let itemNames = new Set<string>();
+      if (settings.includeGameplay && (ex.has("__cat:heroes") || ex.has("__cat:items"))) {
+        try {
+          itemNames = new Set((await itemRoster(settings.vpkHelperPath, settings.deadlockPak)).map((i) => i.name));
+        } catch {
+          /* if the roster can't load, fall back to keeping everything */
+        }
+      }
       const gameplay = settings.includeGameplay
-        ? vdataOverrides.filter((o) => !ex.has(o.abilityKey))
+        ? vdataOverrides.filter((o) => {
+            if (ex.has(o.abilityKey)) return false;
+            const isItem = itemNames.has(o.abilityKey);
+            if (isItem && ex.has("__cat:items")) return false;
+            if (!isItem && ex.has("__cat:heroes")) return false;
+            return true;
+          })
         : [];
-      const global = settings.includeGameplay && !ex.has("__global__") ? globalOverrides : [];
+      const global =
+        settings.includeGameplay && !ex.has("__cat:global") && !ex.has("__global__") ? globalOverrides : [];
       const world = settings.includeGameplay
-        ? worldOverrides.filter((o) => !ex.has(`${o.file}::${o.entity}`))
+        ? worldOverrides.filter((o) => {
+            if (ex.has(`${o.file}::${o.entity}`)) return false;
+            const isMinion = o.file.includes("npc_units");
+            const isBox = o.file.includes("misc") && o.entity.includes("breakable");
+            const isPower = o.file.includes("misc") && (o.entity.includes("powerup") || o.entity.includes("pickup"));
+            if (isMinion && ex.has("__cat:minions")) return false;
+            if (isBox && ex.has("__cat:boxes")) return false;
+            if (isPower && ex.has("__cat:powerups")) return false;
+            return true;
+          })
         : [];
       const config = buildCompileConfig(settings, events, false, iconMods, soundOverrides, effectOverrides, gameplay, global, world);
       const r = await compileProject(config);

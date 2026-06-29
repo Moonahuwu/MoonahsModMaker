@@ -295,6 +295,37 @@ export function CustomServer({
           </div>
         </div>
 
+        {/* Per-category include toggles — exclude a whole category from the build */}
+        <div className="mb-4 flex flex-wrap items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2">
+          <span className="mr-1 text-[11px] font-medium text-zinc-500">Include in build:</span>
+          {([
+            ["heroes", "Heroes"],
+            ["items", "Items"],
+            ["global", "Global"],
+            ["minions", "Minions"],
+            ["boxes", "Boxes"],
+            ["powerups", "Powerups"],
+          ] as const).map(([key, label]) => {
+            const catKey = `__cat:${key}`;
+            const included = !excludedKeys.includes(catKey);
+            return (
+              <button
+                key={key}
+                onClick={() => onSetExcluded([catKey], included)}
+                title={included ? "Included — click to exclude this whole category" : "Excluded — click to include"}
+                className={`flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium transition ${
+                  included
+                    ? "border-emerald-600/40 bg-emerald-500/10 text-emerald-300"
+                    : "border-zinc-700 bg-zinc-800/50 text-zinc-500 line-through"
+                }`}
+              >
+                <span>{included ? "✓" : "✕"}</span>
+                {label}
+              </button>
+            );
+          })}
+        </div>
+
         {section === "heroes" && (
           <HeroesSection
             helperPath={helperPath}
@@ -325,7 +356,7 @@ export function CustomServer({
             overrides={globalOverrides}
             onSet={onSetGlobal}
             onClear={onClearGlobal}
-            excluded={excludedKeys.includes("__global__")}
+            excluded={excludedKeys.includes("__cat:global")}
             onSetExcluded={onSetExcluded}
           />
         )}
@@ -742,7 +773,7 @@ function GlobalSection({
         </p>
         <IncludeToggle
           included={!excluded}
-          onChange={(inc) => onSetExcluded(["__global__"], !inc)}
+          onChange={(inc) => onSetExcluded(["__cat:global"], !inc)}
           label="Global included"
         />
       </div>

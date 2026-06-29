@@ -1483,6 +1483,11 @@ pub fn randomize_config(
                 continue;
             }
             for (field, val) in fields {
+                // Never randomize model scale on world entities — giant/tiny
+                // minions, turrets, guardians and bosses break hitboxes + visuals.
+                if field.to_ascii_lowercase().contains("scale") {
+                    continue;
+                }
                 if should_skip(&field) {
                     continue;
                 }
