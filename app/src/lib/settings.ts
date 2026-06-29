@@ -44,6 +44,8 @@ export interface Settings {
    *  keys, item names, `file::entity` for world entities, or `__global__`) the
    *  user marked "not included". Edits stay saved but are filtered out at compile. */
   excludedConfigKeys: string[];
+  /** What the Randomize button is allowed to touch. */
+  randomizer: { skipMovement: boolean; skipCast: boolean; noNegative: boolean };
   /** Name of the currently-loaded profile (build config). Empty until the first
    *  profile is bootstrapped. The active profile owns `importedMods`. */
   activeProfile: string;
@@ -75,6 +77,7 @@ export const DEFAULT_SETTINGS: Settings = {
   source2ViewerPath: "",
   includeGameplay: false,
   excludedConfigKeys: [],
+  randomizer: { skipMovement: false, skipCast: false, noNegative: true },
   activeProfile: "",
 };
 

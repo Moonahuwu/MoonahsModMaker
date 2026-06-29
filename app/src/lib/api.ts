@@ -456,13 +456,31 @@ export interface RandomConfig {
   world: { file: string; entity: string; field: string; value: string }[];
 }
 
+/** Options controlling what randomize touches. */
+export interface RandomizerOpts {
+  /** Leave jump / stamina / dash / sprint / move-speed stats alone. */
+  skipMovement: boolean;
+  /** Leave cast / channel / wind-up times alone. */
+  skipCast: boolean;
+  /** Don't randomize originally-negative values (keeps results ≥ 0). */
+  noNegative: boolean;
+}
+
 /** temperature: 0 = tame (±10%), 1 = insane (×0.03–30). */
 export function randomizeConfig(
   helperPath: string,
   pakPath: string,
   temperature = 0.5,
+  opts?: Partial<RandomizerOpts>,
 ): Promise<RandomConfig> {
-  return invoke("randomize_config", { helperPath, pakPath, temperature });
+  return invoke("randomize_config", {
+    helperPath,
+    pakPath,
+    temperature,
+    skipMovement: opts?.skipMovement ?? false,
+    skipCast: opts?.skipCast ?? false,
+    noNegative: opts?.noNegative ?? true,
+  });
 }
 
 /** One of a hero's voicelines (single-clip soundevent). */

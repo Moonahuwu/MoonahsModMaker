@@ -1342,9 +1342,29 @@ pub fn randomize_config(
     helper_path: String,
     pak_path: String,
     temperature: Option<f64>,
+    skip_movement: Option<bool>,
+    skip_cast: Option<bool>,
+    no_negative: Option<bool>,
 ) -> Result<RandomConfig, String> {
     let t = temperature.unwrap_or(0.5).clamp(0.0, 1.0);
     let k = 0.1 + t * 3.4 + t.powi(5) * 4.0;
+    let skip_move = skip_movement.unwrap_or(false);
+    let skip_cast = skip_cast.unwrap_or(false);
+    let no_neg = no_negative.unwrap_or(true);
+    // Skip a stat by key/field name when the matching category is disabled, so
+    // randomize leaves e.g. jump height / cast times alone (they break feel fast).
+    let should_skip = |key: &str| -> bool {
+        let k = key.to_ascii_lowercase();
+        (skip_move
+            && (k.contains("jump")
+                || k.contains("stamina")
+                || k.contains("dash")
+                || k.contains("sprint")
+                || k.contains("movespeed")
+                || k.contains("move_speed")))
+            || (skip_cast
+                && (k.contains("cast") || k.contains("channel") || k.contains("windup") || k.contains("wind_up")))
+    };
     use tauri::Manager;
     let base = app
         .path()
@@ -1370,10 +1390,11 @@ pub fn randomize_config(
         Some(fmt_random(num * factor, val.contains('.'), &unit))
     };
     // Upgrade bonuses: sign-preserving (negatives like -12 cooldown are real
-    // bonuses, not sentinels). Skip only exact zero.
+    // bonuses, not sentinels). Skip exact zero, and — when "no negatives" is on —
+    // leave originally-negative bonuses untouched so nothing randomizes negative.
     let roll_signed = |seed: &mut u64, val: &str| -> Option<String> {
         let (num, unit) = split_value_unit(val);
-        if num == 0.0 {
+        if num == 0.0 || (no_neg && num < 0.0) {
             return None;
         }
         let factor = ((xorshift(seed) * 2.0 - 1.0) * k).exp();
@@ -1390,6 +1411,9 @@ pub fn randomize_config(
     let mut vdata = Vec::new();
     for (entity, def) in &map {
         for (prop_key, val) in &def.props {
+            if should_skip(prop_key) {
+                continue;
+            }
             if let Some(value) = roll(&mut seed, val) {
                 vdata.push(crate::project::VdataOverride {
                     ability_key: entity.clone(),
@@ -1399,7 +1423,10 @@ pub fn randomize_config(
             }
         }
         // T1/T2/T3 upgrade bonuses, addressed by occurrence index.
-        for (i, (_, _, bonus)) in def.upgrades.iter().enumerate() {
+        for (i, (_, prop, bonus)) in def.upgrades.iter().enumerate() {
+            if should_skip(prop) {
+                continue;
+            }
             if let Some(value) = roll_signed(&mut seed, bonus) {
                 vdata.push(crate::project::VdataOverride {
                     ability_key: entity.clone(),
@@ -1426,6 +1453,9 @@ pub fn randomize_config(
             }
             if GLOBAL_FIELDS.iter().any(|(key, _, _)| *key == k) {
                 seen.insert(k.to_string());
+                if should_skip(k) {
+                    continue;
+                }
                 if let Some(value) = roll(&mut seed, v.trim().trim_matches('"')) {
                     global.push(crate::project::GlobalOverride { key: k.to_string(), value });
                 }
@@ -1453,6 +1483,9 @@ pub fn randomize_config(
                 continue;
             }
             for (field, val) in fields {
+                if should_skip(&field) {
+                    continue;
+                }
                 if let Some(value) = roll(&mut seed, &val) {
                     world.push(crate::project::WorldOverride {
                         file: rel.to_string(),

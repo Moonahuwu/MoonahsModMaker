@@ -67,6 +67,8 @@ export function CustomServer({
   onRandomize,
   onReset,
   randomizing,
+  randomizerOpts,
+  onSetRandomizerOpts,
 }: {
   helperPath: string;
   pakPath: string;
@@ -88,10 +90,13 @@ export function CustomServer({
   onRandomize: (temperature: number) => void;
   onReset: () => void;
   randomizing: boolean;
+  randomizerOpts: { skipMovement: boolean; skipCast: boolean; noNegative: boolean };
+  onSetRandomizerOpts: (patch: Partial<{ skipMovement: boolean; skipCast: boolean; noNegative: boolean }>) => void;
 }) {
   const [view, setView] = useState<"server" | "configs">("server");
   const [section, setSection] = useState<Section>("heroes");
   const [confirmReset, setConfirmReset] = useState(false);
+  const [showRandomOpts, setShowRandomOpts] = useState(false);
   const [temp, setTemp] = useState(0.4);
   const editCount = overrides.length + globalOverrides.length + worldOverrides.length;
 
@@ -208,14 +213,57 @@ export function CustomServer({
                 {tempLabel}
               </span>
             </div>
-            <button
-              onClick={() => onRandomize(temp)}
-              disabled={randomizing}
-              title={`Roll every gameplay number — up to ×${peakLabel}`}
-              className="rounded-lg border border-fuchsia-500/50 bg-fuchsia-500/10 px-3 py-1.5 text-sm font-medium text-fuchsia-300 transition hover:bg-fuchsia-500/20 disabled:opacity-50"
-            >
-              {randomizing ? "Rolling…" : temp > 0.85 ? "💥 Randomize" : "🎲 Randomize"}
-            </button>
+            <div className="relative flex items-center">
+              <button
+                onClick={() => onRandomize(temp)}
+                disabled={randomizing}
+                title={`Roll every gameplay number — up to ×${peakLabel}`}
+                className="rounded-l-lg border border-fuchsia-500/50 bg-fuchsia-500/10 px-3 py-1.5 text-sm font-medium text-fuchsia-300 transition hover:bg-fuchsia-500/20 disabled:opacity-50"
+              >
+                {randomizing ? "Rolling…" : temp > 0.85 ? "💥 Randomize" : "🎲 Randomize"}
+              </button>
+              <button
+                onClick={() => setShowRandomOpts((v) => !v)}
+                title="Randomizer options"
+                className={`rounded-r-lg border border-l-0 border-fuchsia-500/50 px-2 py-1.5 text-sm transition ${
+                  showRandomOpts ? "bg-fuchsia-500/25 text-fuchsia-200" : "bg-fuchsia-500/10 text-fuchsia-300 hover:bg-fuchsia-500/20"
+                }`}
+              >
+                ⚙
+              </button>
+              {showRandomOpts && (
+                <div className="absolute right-0 top-full z-20 mt-2 w-64 rounded-xl border border-zinc-700 bg-zinc-900 p-3 shadow-2xl">
+                  <div className="mb-2 text-xs font-semibold text-zinc-300">Randomizer — leave alone:</div>
+                  {([
+                    ["skipMovement", "Movement (jump, stamina, dash, speed)"],
+                    ["skipCast", "Cast / channel / wind-up times"],
+                  ] as const).map(([key, label]) => (
+                    <label key={key} className="mb-1.5 flex cursor-pointer items-center gap-2 text-xs text-zinc-300">
+                      <input
+                        type="checkbox"
+                        checked={randomizerOpts[key]}
+                        onChange={(e) => onSetRandomizerOpts({ [key]: e.target.checked })}
+                        className="h-3.5 w-3.5 accent-fuchsia-500"
+                      />
+                      {label}
+                    </label>
+                  ))}
+                  <div className="my-2 border-t border-zinc-800" />
+                  <label className="flex cursor-pointer items-center gap-2 text-xs text-zinc-300">
+                    <input
+                      type="checkbox"
+                      checked={randomizerOpts.noNegative}
+                      onChange={(e) => onSetRandomizerOpts({ noNegative: e.target.checked })}
+                      className="h-3.5 w-3.5 accent-emerald-500"
+                    />
+                    Never go negative
+                  </label>
+                  <p className="mt-2 text-[10px] leading-snug text-zinc-500">
+                    Skipped stats keep their vanilla values when you roll.
+                  </p>
+                </div>
+              )}
+            </div>
             {confirmReset ? (
               <div className="flex items-center gap-1">
                 <button

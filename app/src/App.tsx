@@ -1569,7 +1569,7 @@ export default function App() {
     }
     setRandomizing(true);
     try {
-      const rolled = await randomizeConfig(settings.vpkHelperPath, settings.deadlockPak, temperature);
+      const rolled = await randomizeConfig(settings.vpkHelperPath, settings.deadlockPak, temperature, settings.randomizer);
       setProject((prev) =>
         prev ? { ...prev, vdataOverrides: rolled.vdata, globalOverrides: rolled.global, worldOverrides: rolled.world } : prev,
       );
@@ -1890,6 +1890,10 @@ export default function App() {
             onRandomize={randomizeGameplay}
             onReset={resetGameplay}
             randomizing={randomizing}
+            randomizerOpts={settings.randomizer}
+            onSetRandomizerOpts={(patch) =>
+              updateSettings({ randomizer: { ...settings.randomizer, ...patch } })
+            }
           />
         ) : activeTab === EFFECTS ? (
           <EffectsBrowser
