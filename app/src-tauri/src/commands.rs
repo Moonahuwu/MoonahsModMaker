@@ -1407,6 +1407,64 @@ fn parse_submap_stats(vdata: &str, submap: &str) -> Vec<(String, String, String)
     out
 }
 
+/// True if `s` is a bare scalar number (int/float, optional unit suffix like
+/// `m`). Rejects arrays (`[ … ]`), booleans, GUIDs and resource/soundevent
+/// strings — used to gate the catch-all "unsorted" sweep to real numbers.
+fn looks_numeric(s: &str) -> bool {
+    let s = s.trim();
+    match s.chars().next() {
+        Some(c) if c.is_ascii_digit() || c == '-' || c == '.' => !s.contains(',') && !s.contains(' '),
+        _ => false,
+    }
+}
+
+/// Generic numeric harvest for the "unsorted" catch-all: every bare-number field
+/// at depth 2 (direct field of a top-level block) or depth 3 (a leaf inside a
+/// depth-2 sub-map). Returns (entity, field, value) where `field` is the bare
+/// key for depth-2 fields and `submap::leaf` for depth-3 leaves — exactly the two
+/// address forms `apply_world_overrides` understands. Deeper nesting is skipped.
+fn parse_numeric_tree(vdata: &str) -> Vec<(String, String, String)> {
+    let mut out = Vec::new();
+    let mut cur: Option<String> = None;
+    let mut submap: Option<String> = None;
+    for line in vdata.lines() {
+        let depth = line.chars().take_while(|&c| c == '\t').count();
+        let t = line.trim();
+        if depth == 1 {
+            if let Some(k) = t.strip_suffix('=').map(str::trim) {
+                if !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                    cur = Some(k.to_string());
+                    submap = None;
+                    continue;
+                }
+            }
+        }
+        let Some(c) = cur.as_ref() else { continue };
+        if depth == 2 {
+            if t == "}" {
+                submap = None;
+            } else if let Some((k, v)) = t.split_once(" = ") {
+                let raw = v.trim().trim_matches('"');
+                if looks_numeric(raw) {
+                    out.push((c.clone(), k.to_string(), raw.to_string()));
+                }
+            } else if let Some(k) = t.strip_suffix('=').map(str::trim) {
+                if !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                    submap = Some(k.to_string());
+                }
+            }
+        } else if depth == 3 {
+            if let (Some(sm), Some((k, v))) = (submap.as_ref(), t.split_once(" = ")) {
+                let raw = v.trim().trim_matches('"');
+                if looks_numeric(raw) {
+                    out.push((c.clone(), format!("{sm}::{k}"), raw.to_string()));
+                }
+            }
+        }
+    }
+    out
+}
+
 /// xorshift64 — small deterministic RNG so we don't pull in the `rand` crate.
 fn xorshift(state: &mut u64) -> f64 {
     let mut x = *state;
@@ -1455,6 +1513,7 @@ pub fn randomize_config(
     randomize_item_tiers: Option<bool>,
     hero_stats: Option<bool>,
     hero_investment: Option<bool>,
+    unsorted: Option<bool>,
 ) -> Result<RandomConfig, String> {
     let t = temperature.unwrap_or(0.5).clamp(0.0, 1.0);
     let k = 0.1 + t * 3.4 + t.powi(5) * 4.0;
@@ -1466,6 +1525,7 @@ pub fn randomize_config(
     let rand_tiers = randomize_item_tiers.unwrap_or(false);
     let rand_hero_stats = hero_stats.unwrap_or(false);
     let rand_hero_invest = hero_investment.unwrap_or(false);
+    let unsorted = unsorted.unwrap_or(false);
     // Skip a stat by key/field name when the matching category is disabled, so
     // randomize leaves e.g. jump height / cast times alone (they break feel fast).
     let should_skip = |key: &str| -> bool {
@@ -1658,12 +1718,17 @@ pub fn randomize_config(
             if seen.contains(k) {
                 continue;
             }
-            if GLOBAL_FIELDS.iter().any(|(key, _, _)| *key == k) {
+            let raw = v.trim().trim_matches('"');
+            let curated = GLOBAL_FIELDS.iter().any(|(key, _, _)| *key == k);
+            // Curated keys always roll; with "unsorted" on, every other numeric
+            // global rolls too. First occurrence only (apply rewrites first match
+            // per key), so mark the key seen either way.
+            if curated || (unsorted && looks_numeric(raw)) {
                 seen.insert(k.to_string());
                 if should_skip(k) {
                     continue;
                 }
-                if let Some(value) = roll(&mut seed, v.trim().trim_matches('"')) {
+                if let Some(value) = roll(&mut seed, raw) {
                     global.push(crate::project::GlobalOverride { key: k.to_string(), value });
                 }
             }
@@ -1739,6 +1804,53 @@ pub fn randomize_config(
                         field: format!("{submap}::{leaf}"),
                         value,
                     });
+                }
+            }
+        }
+    }
+
+    // Catch-all "unsorted": sweep every remaining bare-number field across the
+    // world-tree files (minions, boxes/powerups, heroes) that no specific
+    // category already owns. Routed through the same per-file world pass — no new
+    // compile step, so no decompile/recompile conflict on a shared file. Abilities
+    // internals (mostly animation/particle noise, already covered where it matters)
+    // are deliberately left for later.
+    if unsorted {
+        use std::collections::HashSet;
+        let mut emitted: HashSet<(String, String)> =
+            world.iter().map(|w| (w.entity.clone(), w.field.clone())).collect();
+        for rel in ["scripts/npc_units.vdata", "scripts/misc.vdata", "scripts/heroes.vdata"] {
+            let stem = rel.rsplit('/').next().unwrap_or(rel);
+            let path = base.join(stem);
+            if !path.exists() {
+                crate::vpk::decompile_from_vpk(&helper_path, &pak_path, &format!("{rel}_c"), &path.to_string_lossy())?;
+            }
+            let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+            let is_heroes = rel.ends_with("heroes.vdata");
+            for (entity, field, val) in parse_numeric_tree(&text) {
+                if is_heroes {
+                    // hero_base is a template; the two stat sub-maps are their own
+                    // categories (skip so this only grabs the leftovers).
+                    if entity == "hero_base"
+                        || field.starts_with("m_mapStartingStats::")
+                        || field.starts_with("m_mapStandardLevelUpUpgrades::")
+                    {
+                        continue;
+                    }
+                }
+                if skip_scale && field.to_ascii_lowercase().contains("scale") {
+                    continue;
+                }
+                if should_skip(&field) {
+                    continue;
+                }
+                let key = (entity.clone(), field.clone());
+                if emitted.contains(&key) {
+                    continue;
+                }
+                if let Some(value) = roll(&mut seed, &val) {
+                    emitted.insert(key);
+                    world.push(crate::project::WorldOverride { file: rel.to_string(), entity, field, value });
                 }
             }
         }

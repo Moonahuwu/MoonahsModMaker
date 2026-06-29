@@ -475,6 +475,9 @@ export interface RandomizerOpts {
   heroStats: boolean;
   /** Also randomize hero per-level scaling / "investment" (health/damage/tech-power per level). Off by default. */
   heroInvestment: boolean;
+  /** Catch-all: also randomize every other uncategorized numeric value across the
+   *  global + world-tree data files (minions, boxes, hero leftovers…). Off by default. */
+  unsorted: boolean;
 }
 
 /** temperature: 0 = tame (±10%), 1 = insane (×0.03–30). */
@@ -496,6 +499,7 @@ export function randomizeConfig(
     randomizeItemTiers: opts?.randomizeItemTiers ?? false,
     heroStats: opts?.heroStats ?? false,
     heroInvestment: opts?.heroInvestment ?? false,
+    unsorted: opts?.unsorted ?? false,
   });
 }
 

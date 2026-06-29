@@ -45,7 +45,7 @@ export interface Settings {
    *  user marked "not included". Edits stay saved but are filtered out at compile. */
   excludedConfigKeys: string[];
   /** What the Randomize button is allowed to touch. */
-  randomizer: { skipMovement: boolean; skipCast: boolean; skipScale: boolean; includeGuns: boolean; noNegative: boolean; randomizeItemTiers: boolean; heroStats: boolean; heroInvestment: boolean };
+  randomizer: { skipMovement: boolean; skipCast: boolean; skipScale: boolean; includeGuns: boolean; noNegative: boolean; randomizeItemTiers: boolean; heroStats: boolean; heroInvestment: boolean; unsorted: boolean };
   /** Name of the currently-loaded profile (build config). Empty until the first
    *  profile is bootstrapped. The active profile owns `importedMods`. */
   activeProfile: string;
@@ -77,7 +77,7 @@ export const DEFAULT_SETTINGS: Settings = {
   source2ViewerPath: "",
   includeGameplay: false,
   excludedConfigKeys: [],
-  randomizer: { skipMovement: false, skipCast: false, skipScale: true, includeGuns: false, noNegative: true, randomizeItemTiers: false, heroStats: false, heroInvestment: false },
+  randomizer: { skipMovement: false, skipCast: false, skipScale: true, includeGuns: false, noNegative: true, randomizeItemTiers: false, heroStats: false, heroInvestment: false, unsorted: false },
   activeProfile: "",
 };
 
