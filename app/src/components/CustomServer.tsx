@@ -90,8 +90,8 @@ export function CustomServer({
   onRandomize: (temperature: number) => void;
   onReset: () => void;
   randomizing: boolean;
-  randomizerOpts: { skipMovement: boolean; skipCast: boolean; skipScale: boolean; includeGuns: boolean; noNegative: boolean; randomizeItemTiers: boolean };
-  onSetRandomizerOpts: (patch: Partial<{ skipMovement: boolean; skipCast: boolean; skipScale: boolean; includeGuns: boolean; noNegative: boolean; randomizeItemTiers: boolean }>) => void;
+  randomizerOpts: { skipMovement: boolean; skipCast: boolean; skipScale: boolean; includeGuns: boolean; noNegative: boolean; randomizeItemTiers: boolean; heroStats: boolean; heroInvestment: boolean };
+  onSetRandomizerOpts: (patch: Partial<{ skipMovement: boolean; skipCast: boolean; skipScale: boolean; includeGuns: boolean; noNegative: boolean; randomizeItemTiers: boolean; heroStats: boolean; heroInvestment: boolean }>) => void;
 }) {
   const [view, setView] = useState<"server" | "configs">("server");
   const [section, setSection] = useState<Section>("heroes");
@@ -271,6 +271,24 @@ export function CustomServer({
                       Item tiers — give every shop item a random tier &amp; scale its
                       stats to match (re-prices too)
                     </span>
+                  </label>
+                  <label className="mt-1.5 flex cursor-pointer items-start gap-2 text-xs text-zinc-300">
+                    <input
+                      type="checkbox"
+                      checked={randomizerOpts.heroStats}
+                      onChange={(e) => onSetRandomizerOpts({ heroStats: e.target.checked })}
+                      className="mt-0.5 h-3.5 w-3.5 accent-fuchsia-500"
+                    />
+                    <span>Hero base stats (health, move speed, melee, stamina, dash…)</span>
+                  </label>
+                  <label className="mt-1.5 flex cursor-pointer items-start gap-2 text-xs text-zinc-300">
+                    <input
+                      type="checkbox"
+                      checked={randomizerOpts.heroInvestment}
+                      onChange={(e) => onSetRandomizerOpts({ heroInvestment: e.target.checked })}
+                      className="mt-0.5 h-3.5 w-3.5 accent-fuchsia-500"
+                    />
+                    <span>Hero investment — per-level scaling (health/damage/tech-power per level)</span>
                   </label>
                   <div className="my-2 border-t border-zinc-800" />
                   <label className="flex cursor-pointer items-center gap-2 text-xs text-zinc-300">

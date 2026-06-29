@@ -1159,6 +1159,30 @@ fn apply_world_overrides(text: &str, overrides: &[WorldCompile]) -> String {
     }
     let mut out = String::with_capacity(text.len() + 64);
     let mut cur_fields: Option<&HashMap<&str, &str>> = None;
+    // Name of the depth-2 sub-map we're currently inside (e.g. `m_mapStartingStats`),
+    // so a field key written as `m_mapStartingStats::EMaxHealth` can be rewritten at
+    // depth 3 without colliding with same-named keys in other sub-maps.
+    let mut cur_submap: Option<&str> = None;
+    // Rewrite the value portion of `body` (after ` = `) with `v`, preserving the
+    // original quote style and trailing newline.
+    let rewrite = |out: &mut String, body: &str, v: &str, nl: bool| -> bool {
+        if let Some(eq) = body.find(" = ") {
+            let quoted = body[eq + 3..].trim_start().starts_with('"');
+            out.push_str(&body[..eq + 3]);
+            if quoted {
+                out.push('"');
+                out.push_str(v);
+                out.push('"');
+            } else {
+                out.push_str(v);
+            }
+            if nl {
+                out.push('\n');
+            }
+            return true;
+        }
+        false
+    };
     for line in text.split_inclusive('\n') {
         let nl = line.ends_with('\n');
         let body = line.strip_suffix('\n').unwrap_or(line);
@@ -1169,29 +1193,36 @@ fn apply_world_overrides(text: &str, overrides: &[WorldCompile]) -> String {
             if let Some(k) = t.strip_suffix('=').map(str::trim) {
                 if !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
                     cur_fields = want.get(k);
+                    cur_submap = None;
                     out.push_str(line);
                     continue;
                 }
             }
         }
-        // Rewrite a direct field (depth 2) of a wanted entity. Field names are
-        // unique at the entity's top level, so this hits each at most once.
         if depth == 2 {
+            // Track entering/leaving a depth-2 sub-map block.
+            if t == "}" {
+                cur_submap = None;
+            } else if let Some(k) = t.strip_suffix('=').map(str::trim) {
+                if !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                    cur_submap = Some(k);
+                }
+            }
+            // Rewrite a direct field (depth 2) of a wanted entity. Field names are
+            // unique at the entity's top level, so this hits each at most once.
             if let (Some(fields), Some((k, _))) = (cur_fields, t.split_once(" = ")) {
                 if let Some(v) = fields.get(k) {
-                    if let Some(eq) = body.find(" = ") {
-                        let quoted = body[eq + 3..].trim_start().starts_with('"');
-                        out.push_str(&body[..eq + 3]);
-                        if quoted {
-                            out.push('"');
-                            out.push_str(v);
-                            out.push('"');
-                        } else {
-                            out.push_str(v);
-                        }
-                        if nl {
-                            out.push('\n');
-                        }
+                    if rewrite(&mut out, body, v, nl) {
+                        continue;
+                    }
+                }
+            }
+        } else if depth == 3 {
+            // Rewrite a sub-map-scoped field (`<submap>::<leaf>`) of a wanted entity.
+            if let (Some(fields), Some(sm), Some((leaf, _))) = (cur_fields, cur_submap, t.split_once(" = ")) {
+                let key = format!("{sm}::{leaf}");
+                if let Some(v) = fields.get(key.as_str()) {
+                    if rewrite(&mut out, body, v, nl) {
                         continue;
                     }
                 }
@@ -1896,6 +1927,43 @@ mod tests {
         assert!(out.contains("\t\tm_flWalkSpeed = 600"));
         // The SAME field on a different entity is untouched.
         assert!(out.contains("\ttrooper_medic =\n\t{\n\t\tm_nMaxHealth = 300"));
+    }
+
+    #[test]
+    fn world_override_rewrites_submap_scoped_field() {
+        // Hero stats live one level deep, inside named sub-maps. Same leaf name
+        // (`EWeaponPower`) appears in two sub-maps; the `submap::leaf` key must
+        // only hit the targeted one.
+        let src = "\
+\thero_inferno =
+\t{
+\t\tm_strUIShoppingMap = \"x.vmap\"
+\t\tm_mapStartingStats =
+\t\t{
+\t\t\tEMaxHealth = 830.0
+\t\t\tEWeaponPower = 0
+\t\t}
+\t\tm_mapStandardLevelUpUpgrades =
+\t\t{
+\t\t\tMODIFIER_VALUE_BASE_HEALTH_FROM_LEVEL = 41.0
+\t\t\tEWeaponPower = 5
+\t\t}
+\t}
+";
+        let ovs = vec![
+            WorldCompile { file: "scripts/heroes.vdata".into(), entity: "hero_inferno".into(), field: "m_mapStartingStats::EMaxHealth".into(), value: "2500".into() },
+            WorldCompile { file: "scripts/heroes.vdata".into(), entity: "hero_inferno".into(), field: "m_mapStandardLevelUpUpgrades::MODIFIER_VALUE_BASE_HEALTH_FROM_LEVEL".into(), value: "120".into() },
+            WorldCompile { file: "scripts/heroes.vdata".into(), entity: "hero_inferno".into(), field: "m_mapStartingStats::EWeaponPower".into(), value: "99".into() },
+        ];
+        let out = apply_world_overrides(src, &ovs);
+        assert!(out.contains("\t\t\tEMaxHealth = 2500"));
+        assert!(out.contains("\t\t\tMODIFIER_VALUE_BASE_HEALTH_FROM_LEVEL = 120"));
+        // Only the StartingStats EWeaponPower is rewritten; the level-up one stays.
+        assert!(out.contains("m_mapStartingStats =\n\t{") || out.contains("EWeaponPower = 99"));
+        assert!(out.contains("\t\t\tEWeaponPower = 99"));
+        assert!(out.contains("\t\t\tEWeaponPower = 5"));
+        // The plain direct field is untouched (no flat override for it).
+        assert!(out.contains("m_strUIShoppingMap = \"x.vmap\""));
     }
 
     #[test]

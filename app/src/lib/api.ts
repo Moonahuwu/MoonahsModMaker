@@ -471,6 +471,10 @@ export interface RandomizerOpts {
   /** "Gamemode": give each shop item a random tier (1–4) and scale its stats to
    *  match (cost is tier-derived, so it re-prices too). Off by default. */
   randomizeItemTiers: boolean;
+  /** Also randomize hero base stats (health, move speed, melee, stamina…). Off by default. */
+  heroStats: boolean;
+  /** Also randomize hero per-level scaling / "investment" (health/damage/tech-power per level). Off by default. */
+  heroInvestment: boolean;
 }
 
 /** temperature: 0 = tame (±10%), 1 = insane (×0.03–30). */
@@ -490,6 +494,8 @@ export function randomizeConfig(
     includeGuns: opts?.includeGuns ?? false,
     noNegative: opts?.noNegative ?? true,
     randomizeItemTiers: opts?.randomizeItemTiers ?? false,
+    heroStats: opts?.heroStats ?? false,
+    heroInvestment: opts?.heroInvestment ?? false,
   });
 }
 

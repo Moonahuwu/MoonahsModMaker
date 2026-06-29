@@ -1365,6 +1365,48 @@ fn parse_weapon_stats(vdata: &str) -> Vec<(String, String, String)> {
     out
 }
 
+/// Harvest flat `leaf = value` fields from a named depth-2 sub-map (e.g.
+/// `m_mapStartingStats`) inside each top-level block. Returns (entity, leaf,
+/// value). Used to randomize hero base stats / per-level "investment" scaling,
+/// which live one level deep in heroes.vdata.
+fn parse_submap_stats(vdata: &str, submap: &str) -> Vec<(String, String, String)> {
+    let mut out = Vec::new();
+    let mut cur: Option<String> = None;
+    let mut in_submap: Option<usize> = None;
+    for line in vdata.lines() {
+        let depth = line.chars().take_while(|&c| c == '\t').count();
+        let t = line.trim();
+        if depth == 1 {
+            if let Some(k) = t.strip_suffix('=').map(str::trim) {
+                if !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                    cur = Some(k.to_string());
+                    in_submap = None;
+                    continue;
+                }
+            }
+        }
+        match in_submap {
+            None => {
+                if depth == 2 && t.strip_suffix('=').map(str::trim) == Some(submap) {
+                    in_submap = Some(2);
+                }
+            }
+            Some(sd) => {
+                if depth <= sd && t == "}" {
+                    in_submap = None;
+                } else if depth == sd + 1 {
+                    if let Some((leaf, val)) = t.split_once(" = ") {
+                        if let Some(c) = &cur {
+                            out.push((c.clone(), leaf.to_string(), val.trim().trim_matches('"').to_string()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 /// xorshift64 — small deterministic RNG so we don't pull in the `rand` crate.
 fn xorshift(state: &mut u64) -> f64 {
     let mut x = *state;
@@ -1411,6 +1453,8 @@ pub fn randomize_config(
     include_guns: Option<bool>,
     no_negative: Option<bool>,
     randomize_item_tiers: Option<bool>,
+    hero_stats: Option<bool>,
+    hero_investment: Option<bool>,
 ) -> Result<RandomConfig, String> {
     let t = temperature.unwrap_or(0.5).clamp(0.0, 1.0);
     let k = 0.1 + t * 3.4 + t.powi(5) * 4.0;
@@ -1420,6 +1464,8 @@ pub fn randomize_config(
     let include_guns = include_guns.unwrap_or(false);
     let no_neg = no_negative.unwrap_or(true);
     let rand_tiers = randomize_item_tiers.unwrap_or(false);
+    let rand_hero_stats = hero_stats.unwrap_or(false);
+    let rand_hero_invest = hero_investment.unwrap_or(false);
     // Skip a stat by key/field name when the matching category is disabled, so
     // randomize leaves e.g. jump height / cast times alone (they break feel fast).
     let should_skip = |key: &str| -> bool {
@@ -1657,6 +1703,40 @@ pub fn randomize_config(
                         file: rel.to_string(),
                         entity: entity.clone(),
                         field,
+                        value,
+                    });
+                }
+            }
+        }
+    }
+
+    // Hero base stats (m_mapStartingStats) + per-level "investment" scaling
+    // (m_mapStandardLevelUpUpgrades) — both opt-in, both in heroes.vdata. Routed
+    // through the world-override pipeline with `submap::leaf` field keys.
+    if rand_hero_stats || rand_hero_invest {
+        let heroes = base.join("heroes.vdata");
+        if !heroes.exists() {
+            crate::vpk::decompile_from_vpk(&helper_path, &pak_path, "scripts/heroes.vdata_c", &heroes.to_string_lossy())?;
+        }
+        let htext = std::fs::read_to_string(&heroes).map_err(|e| e.to_string())?;
+        let mut submaps: Vec<&str> = Vec::new();
+        if rand_hero_stats {
+            submaps.push("m_mapStartingStats");
+        }
+        if rand_hero_invest {
+            submaps.push("m_mapStandardLevelUpUpgrades");
+        }
+        for submap in submaps {
+            for (hero, leaf, val) in parse_submap_stats(&htext, submap) {
+                // hero_base is a template you never play — leave it vanilla.
+                if hero == "hero_base" || should_skip(&leaf) {
+                    continue;
+                }
+                if let Some(value) = roll(&mut seed, &val) {
+                    world.push(crate::project::WorldOverride {
+                        file: "scripts/heroes.vdata".to_string(),
+                        entity: hero,
+                        field: format!("{submap}::{leaf}"),
                         value,
                     });
                 }
