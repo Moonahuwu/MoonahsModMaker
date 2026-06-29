@@ -422,6 +422,10 @@ export function rconExec(command: string): Promise<string> {
 export function rconReady(): Promise<boolean> {
   return invoke("rcon_ready");
 }
+/** Tail the dedicated server's console.log (the in-app server console). */
+export function readServerLog(deadlockRoot: string, maxBytes?: number): Promise<string> {
+  return invoke("read_server_log", { deadlockRoot, maxBytes });
+}
 /** The server's P2P connect id ([A:1:…]) from console.log, or null until up. */
 export function hostConnectId(deadlockRoot: string): Promise<string | null> {
   return invoke("host_connect_id", { deadlockRoot });

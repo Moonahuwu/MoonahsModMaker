@@ -25,6 +25,7 @@ import {
 import type { GlobalOverride, VdataOverride, WorldOverride } from "../types";
 import { quickActions } from "../lib/rconActions";
 import { HeroGrid } from "./HeroGrid";
+import { ServerLogPanel } from "./ServerLogPanel";
 import { useToast } from "./Toaster";
 
 /**
@@ -84,6 +85,7 @@ export function CustomServer({
   onReset: () => void;
   randomizing: boolean;
 }) {
+  const [view, setView] = useState<"server" | "configs">("server");
   const [section, setSection] = useState<Section>("heroes");
   const [confirmReset, setConfirmReset] = useState(false);
   const [temp, setTemp] = useState(0.4);
@@ -97,9 +99,40 @@ export function CustomServer({
 
   return (
     <div className="flex flex-col gap-5">
-      <HostPanel deadlockRoot={deadlockRoot} />
+      {/* Top-level split: Server (host + admin + log) vs Configs (gameplay editor) */}
+      <div className="flex items-center gap-1.5">
+        {([
+          ["server", "🖥️ Server"],
+          ["configs", "⚙️ Configs"],
+        ] as const).map(([key, label]) => (
+          <button
+            key={key}
+            onClick={() => setView(key)}
+            className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${
+              view === key
+                ? "bg-zinc-100 text-zinc-900"
+                : "text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-200"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+        {editCount > 0 && (
+          <span className="ml-2 rounded-full bg-sky-500/15 px-2.5 py-1 text-xs font-semibold text-sky-300">
+            {editCount} config edit{editCount === 1 ? "" : "s"}
+          </span>
+        )}
+      </div>
 
-      {/* Gameplay config editor */}
+      {view === "server" && (
+        <>
+          <HostPanel deadlockRoot={deadlockRoot} />
+          <ServerLogPanel deadlockRoot={deadlockRoot} />
+        </>
+      )}
+
+      {view === "configs" && (
+      /* Gameplay config editor */
       <section className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-5">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
@@ -250,6 +283,7 @@ export function CustomServer({
           />
         )}
       </section>
+      )}
     </div>
   );
 }

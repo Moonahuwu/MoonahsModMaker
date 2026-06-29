@@ -153,7 +153,18 @@ pub fn launch(root: &Path, map: &str) -> Result<LaunchInfo, String> {
     let map = if map.trim().is_empty() { "dl_midtown" } else { map.trim() };
     let rcon_password = gen_rcon_password();
 
-    let game_args = [
+    // Direct spawn of the dedicated server, given its own console window
+    // (CREATE_NEW_CONSOLE). We deliberately do NOT override stdio: in the packaged
+    // app (a windowless GUI process with no stdout) the new console's buffers
+    // become the server's std handles, so its console shows output and accepts
+    // typed commands. Under `npm run tauri dev` the harness pipes the app's
+    // stdout, so the server inherits that pipe and its output goes to the dev log
+    // instead of the console window (window looks blank) — a dev-only cosmetic
+    // quirk; the server still runs and is driven via RCON / console.log / the F8
+    // overlay regardless. (Going through `cmd /c start` to fix the dev cosmetics
+    // proved fragile — the server failed to launch from the windowless parent.)
+    let mut cmd = std::process::Command::new(&exe);
+    cmd.current_dir(root).args([
         "-dedicated",
         "-insecure",
         "-condebug",
@@ -166,40 +177,13 @@ pub fn launch(root: &Path, map: &str) -> Result<LaunchInfo, String> {
         &rcon_password,
         "+map",
         map,
-    ];
-
-    // Why go through `cmd /c start` instead of spawning deadlock.exe directly:
-    // `deadlock.exe` is GUI-subsystem and in `-dedicated` mode the engine wants a
-    // console whose std handles ARE that console (so it can print output + read
-    // typed commands). A direct Rust spawn always sets the child's three stdio
-    // handles — inheriting our piped stdout (engine output goes to the app, not a
-    // console; window blank + floods our log) or NUL (output goes nowhere). Either
-    // way the console is broken and spams `!GetNumberOfConsoleInputEvents`.
-    // `start` (exactly what the community guide's launch_dedicated.bat uses) issues
-    // CreateProcess with a fresh console and lets the std handles default to it —
-    // the one combination that yields a working interactive server console. The
-    // empty "" first token is the (blank) window title, so a quoted exe path with
-    // spaces isn't mistaken for the title.
-    let mut cmd = std::process::Command::new("cmd");
-    cmd.arg("/C")
-        .arg("start")
-        .arg("") // window title (blank)
-        .arg("/D")
-        .arg(root) // server working directory
-        .arg(&exe)
-        .args(game_args)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    // Don't flash a cmd window of our own; `start` still gives the server its own.
+    ]);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
+        const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+        cmd.creation_flags(CREATE_NEW_CONSOLE);
     }
-    // child is the transient `cmd` (it exits once `start` hands off); we track the
-    // server via console.log + RCON, not this PID.
     let child = cmd.spawn().map_err(|e| format!("launching dedicated server: {e}"))?;
     Ok(LaunchInfo { pid: child.id(), rcon_password })
 }

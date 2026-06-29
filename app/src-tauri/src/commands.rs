@@ -321,6 +321,39 @@ pub fn rcon_ready(state: tauri::State<'_, HostState>) -> bool {
     state.rcon_password.lock().unwrap().is_some()
 }
 
+/// Tail the dedicated server's `console.log` (written by `-condebug`). Reads only
+/// the last `max_bytes` (default 96 KiB) so polling stays cheap even as the log
+/// grows, and drops a partial leading line. This is the in-app replacement for
+/// the server console window (which is blank under `tauri dev`).
+#[tauri::command]
+pub fn read_server_log(deadlock_root: String, max_bytes: Option<u64>) -> Result<String, String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let path = std::path::Path::new(&deadlock_root)
+        .join("game")
+        .join("citadel")
+        .join("console.log");
+    let mut f = match std::fs::File::open(&path) {
+        Ok(f) => f,
+        // No log yet (server never started) — empty, not an error.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
+        Err(e) => return Err(format!("opening console.log: {e}")),
+    };
+    let len = f.metadata().map_err(|e| e.to_string())?.len();
+    let cap = max_bytes.unwrap_or(96 * 1024).max(1024);
+    let start = len.saturating_sub(cap);
+    f.seek(SeekFrom::Start(start)).map_err(|e| e.to_string())?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&buf);
+    // If we seeked into the middle of the file, drop the partial first line.
+    let trimmed = if start > 0 {
+        text.find('\n').map(|i| &text[i + 1..]).unwrap_or(&text)
+    } else {
+        &text
+    };
+    Ok(trimmed.to_string())
+}
+
 /// The server's P2P connect id ([A:1:…]) from console.log, once it's up.
 #[tauri::command]
 pub fn host_connect_id(deadlock_root: String) -> Option<String> {

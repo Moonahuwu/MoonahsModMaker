@@ -89,6 +89,7 @@ pub fn run() {
             commands::launch_host,
             commands::rcon_exec,
             commands::rcon_ready,
+            commands::read_server_log,
             commands::host_connect_id,
             commands::hero_roster,
             commands::hero_detail,
