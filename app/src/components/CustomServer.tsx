@@ -822,7 +822,7 @@ function HostPanel({ deadlockRoot }: { deadlockRoot: string }) {
     setBusy(true);
     try {
       const pid = await launchHost(deadlockRoot, map);
-      push("success", `Dedicated server starting on ${map} (pid ${pid})`);
+      push("success", `Server starting on ${map} in a new console window — it runs headless (pid ${pid})`);
     } catch (e) {
       push("error", `Launch failed: ${e}`);
     } finally {
@@ -851,10 +851,10 @@ function HostPanel({ deadlockRoot }: { deadlockRoot: string }) {
             )}
           </div>
           <p className="mt-1 text-sm text-zinc-400">
-            Runs your installed Deadlock as a dedicated host (no separate download). It patches
-            two <code className="text-zinc-300">gameinfo.gi</code> lines (backed up) and launches
-            with the hosting flags. Friends join from their console with{" "}
-            <code className="text-zinc-300">connect &lt;your-ip&gt;</code>.
+            Runs your installed Deadlock as a <b className="text-zinc-300">headless</b> dedicated
+            host (no separate download). It launches in its own console window — that console{" "}
+            <b className="text-zinc-300">is</b> the running server; there's no game window on this
+            PC. To play, join from a Deadlock client's dev console (Deadlock uses Steam P2P).
           </p>
 
           {!deadlockRoot ? (
@@ -910,8 +910,10 @@ function HostPanel({ deadlockRoot }: { deadlockRoot: string }) {
                 </button>
               </div>
               <p className="mt-2 text-[11px] text-zinc-600">
-                Tip: build &amp; install your mod (with gameplay edits) first, then host — the
-                server loads it from <code>citadel/addons</code>.
+                Tip: build &amp; install your mod first — the server loads it from{" "}
+                <code>citadel/addons</code>. The server console window is interactive; type{" "}
+                <code>status</code> there to see listen info. Check the hosting guide for the
+                exact client connect command.
               </p>
             </>
           )}

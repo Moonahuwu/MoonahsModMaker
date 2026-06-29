@@ -102,20 +102,28 @@ pub fn launch(root: &Path, map: &str) -> Result<u32, String> {
         return Err(format!("deadlock.exe not found at {}", exe.display()));
     }
     let map = if map.trim().is_empty() { "dl_midtown" } else { map.trim() };
-    let child = std::process::Command::new(&exe)
-        .current_dir(root)
-        .args([
-            "-dedicated",
-            "-insecure",
-            "-condebug",
-            "-allow_no_lobby_connect",
-            "+tv_citadel_auto_record",
-            "0",
-            "+map",
-            map,
-        ])
-        .spawn()
-        .map_err(|e| format!("launching dedicated server: {e}"))?;
+    let mut cmd = std::process::Command::new(&exe);
+    cmd.current_dir(root).args([
+        "-dedicated",
+        "-insecure",
+        "-condebug",
+        "-allow_no_lobby_connect",
+        "+tv_citadel_auto_record",
+        "0",
+        "+map",
+        map,
+    ]);
+    // The dedicated server runs a text console that reads stdin. Launched from a
+    // windowed app it would inherit a dead stdin handle and spam
+    // `!GetNumberOfConsoleInputEvents`, with no way to type commands. Give it its
+    // own fresh, interactive console window instead.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+        cmd.creation_flags(CREATE_NEW_CONSOLE);
+    }
+    let child = cmd.spawn().map_err(|e| format!("launching dedicated server: {e}"))?;
     Ok(child.id())
 }
 
