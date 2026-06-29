@@ -279,10 +279,18 @@ pub fn revert_hosting(deadlock_root: String) -> Result<crate::host::HostStatus, 
     crate::host::revert(std::path::Path::new(&deadlock_root))
 }
 
-/// Launch the installed client as a dedicated host on `map`. Returns the PID.
+/// Launch the installed client as a dedicated host on `map`. Returns the PID and
+/// the RCON password the admin panel uses to drive the server.
 #[tauri::command]
-pub fn launch_host(deadlock_root: String, map: String) -> Result<u32, String> {
+pub fn launch_host(deadlock_root: String, map: String) -> Result<crate::host::LaunchInfo, String> {
     crate::host::launch(std::path::Path::new(&deadlock_root), &map)
+}
+
+/// Send a single RCON command to the running dedicated server and return its
+/// console output. `password` is the value returned by `launch_host`.
+#[tauri::command]
+pub fn rcon_exec(password: String, command: String) -> Result<String, String> {
+    crate::rcon::exec_auto(&password, &command)
 }
 
 /// The server's P2P connect id ([A:1:…]) from console.log, once it's up.

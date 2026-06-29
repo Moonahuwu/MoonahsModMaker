@@ -112,14 +112,46 @@ pub fn connect_id(root: &Path) -> Option<String> {
     found
 }
 
+/// Generate a throwaway RCON password for this launch. Lowercase + digits only
+/// (no look-alikes) so it's safe to pass on a command line and easy to read.
+fn gen_rcon_password() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let mut x = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0x9E37_79B9_7F4A_7C15)
+        | 1;
+    let alphabet = b"abcdefghijkmnpqrstuvwxyz23456789";
+    let mut s = String::with_capacity(16);
+    for _ in 0..16 {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17; // xorshift64
+        s.push(alphabet[(x % alphabet.len() as u64) as usize] as char);
+    }
+    s
+}
+
+/// Result of launching the dedicated host.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LaunchInfo {
+    pub pid: u32,
+    /// The RCON password this server was started with — the admin panel uses it
+    /// to send commands. Only valid for the lifetime of this server process.
+    pub rcon_password: String,
+}
+
 /// Launch the installed client as a dedicated host on `map` (default
-/// `dl_midtown`). Detached — returns the child PID.
-pub fn launch(root: &Path, map: &str) -> Result<u32, String> {
+/// `dl_midtown`). Detached. Sets a fresh RCON password and returns it with the
+/// PID so the app's admin panel can drive the server.
+pub fn launch(root: &Path, map: &str) -> Result<LaunchInfo, String> {
     let exe = exe_path(root);
     if !exe.exists() {
         return Err(format!("deadlock.exe not found at {}", exe.display()));
     }
     let map = if map.trim().is_empty() { "dl_midtown" } else { map.trim() };
+    let rcon_password = gen_rcon_password();
     let mut cmd = std::process::Command::new(&exe);
     cmd.current_dir(root).args([
         "-dedicated",
@@ -128,21 +160,30 @@ pub fn launch(root: &Path, map: &str) -> Result<u32, String> {
         "-allow_no_lobby_connect",
         "+tv_citadel_auto_record",
         "0",
+        // Enable RCON admin: setting a password makes the server accept
+        // authenticated commands on its TCP socket (port 27015).
+        "+rcon_password",
+        &rcon_password,
         "+map",
         map,
     ]);
-    // The dedicated server runs a text console that reads stdin. Launched from a
-    // windowed app it would inherit a dead stdin handle and spam
-    // `!GetNumberOfConsoleInputEvents`, with no way to type commands. Give it its
-    // own fresh, interactive console window instead.
+    // `deadlock.exe` is a GUI-subsystem binary; in `-dedicated` mode the engine
+    // calls AllocConsole() itself to create the interactive server console (the
+    // one you type `status` into). AllocConsole only works if the process has NO
+    // console yet — so we must NOT hand it one. CREATE_NEW_CONSOLE (an earlier
+    // attempt) gave it a pre-made console, AllocConsole then failed, the engine
+    // skipped wiring console I/O, and the window came up blank. Inheriting the
+    // windowed app's dead console instead spammed `!GetNumberOfConsoleInputEvents`.
+    // DETACHED_PROCESS = no inherited and no new console, exactly like the guide's
+    // `start deadlock.exe` .bat, so the engine builds its own working console.
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
-        cmd.creation_flags(CREATE_NEW_CONSOLE);
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        cmd.creation_flags(DETACHED_PROCESS);
     }
     let child = cmd.spawn().map_err(|e| format!("launching dedicated server: {e}"))?;
-    Ok(child.id())
+    Ok(LaunchInfo { pid: child.id(), rcon_password })
 }
 
 #[cfg(test)]

@@ -9,6 +9,7 @@ import {
   itemConfig,
   itemRoster,
   launchHost,
+  rconExec,
   revertHosting,
   setupHosting,
   worldConfig,
@@ -791,7 +792,33 @@ function HostPanel({ deadlockRoot }: { deadlockRoot: string }) {
   const [map, setMap] = useState("dl_midtown");
   const [busy, setBusy] = useState(false);
   const [connectId, setConnectId] = useState<string | null>(null);
+  // RCON admin: the password the running server was launched with (this session
+  // only), plus a little command console.
+  const [rconPassword, setRconPassword] = useState<string | null>(null);
+  const [cmdInput, setCmdInput] = useState("");
+  const [rconLog, setRconLog] = useState<{ cmd: string; out: string; err?: boolean }[]>([]);
+  const [rconBusy, setRconBusy] = useState(false);
   const { push } = useToast();
+
+  // Run one command, or a short sequence (e.g. set convars then changelevel to
+  // apply them), logging each line's output.
+  async function runRcon(commands: string | string[]) {
+    const list = (Array.isArray(commands) ? commands : [commands]).map((c) => c.trim()).filter(Boolean);
+    if (!rconPassword || list.length === 0) return;
+    setRconBusy(true);
+    try {
+      for (const cmd of list) {
+        try {
+          const out = await rconExec(rconPassword, cmd);
+          setRconLog((l) => [...l, { cmd, out: out.trim() || "(ok)" }].slice(-40));
+        } catch (e) {
+          setRconLog((l) => [...l, { cmd, out: String(e), err: true }].slice(-40));
+        }
+      }
+    } finally {
+      setRconBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (!deadlockRoot) return;
@@ -839,9 +866,11 @@ function HostPanel({ deadlockRoot }: { deadlockRoot: string }) {
   async function doLaunch() {
     setBusy(true);
     try {
-      const pid = await launchHost(deadlockRoot, map);
-      push("success", `Server starting on ${map} in a new console window — it runs headless (pid ${pid})`);
+      const info = await launchHost(deadlockRoot, map);
+      push("success", `Server starting on ${map} in a new console window — it runs headless (pid ${info.pid})`);
       setConnectId(null);
+      setRconPassword(info.rconPassword);
+      setRconLog([]);
       pollConnectId();
     } catch (e) {
       push("error", `Launch failed: ${e}`);
@@ -947,9 +976,98 @@ function HostPanel({ deadlockRoot }: { deadlockRoot: string }) {
                     </button>
                   </div>
                   <p className="mt-1.5 text-[11px] text-zinc-500">
-                    You &amp; friends paste that into Deadlock's dev console (~) to join. Enable the
-                    console first via the <code>-console</code> launch option (or the in-game keybind setting).
+                    <b className="text-zinc-400">Friends</b> paste that into Deadlock's dev console (~).{" "}
+                    <b className="text-zinc-400">You</b> (same PC) should instead use{" "}
+                    <code className="text-emerald-300">connect 127.0.0.1:27015</code> — the relay ID
+                    loops you out and back and tends to stall. Enable the console via the{" "}
+                    <code>-console</code> launch option first.
                   </p>
+                </div>
+              )}
+
+              {rconPassword && (
+                <div className="mt-4 rounded-lg border border-violet-500/30 bg-violet-500/5 p-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm">🛡️</span>
+                    <h4 className="text-sm font-bold text-violet-200">Server Admin (RCON)</h4>
+                    <span className="rounded-full bg-violet-500/15 px-2 py-0.5 text-[10px] font-semibold text-violet-300">
+                      LIVE
+                    </span>
+                  </div>
+                  <p className="mt-1 text-[11px] text-zinc-500">
+                    Send commands straight to the running server — no need to alt-tab to its console.
+                  </p>
+
+                  <div className="mt-2.5 flex flex-wrap gap-1.5">
+                    {[
+                      {
+                        label: "Fill bots 6v6",
+                        cmds: [
+                          "citadel_spawn_practice_bots true",
+                          "citadel_spawn_practice_bots_count 12",
+                          `changelevel ${map}`,
+                        ],
+                      },
+                      { label: "No bots", cmds: ["citadel_spawn_practice_bots false"] },
+                      { label: "Kick bots", cmds: ["sv_cheats 1", "bot_kick_all"] },
+                      { label: `Restart (${map})`, cmds: [`changelevel ${map}`] },
+                      { label: "Cheats on", cmds: ["sv_cheats 1"] },
+                      { label: "Status", cmds: ["status"] },
+                    ].map((b) => (
+                      <button
+                        key={b.label}
+                        onClick={() => void runRcon(b.cmds)}
+                        disabled={rconBusy}
+                        title={b.cmds.join("  ·  ")}
+                        className="rounded-md border border-violet-500/40 bg-violet-500/10 px-2.5 py-1 text-xs font-medium text-violet-200 transition hover:bg-violet-500/20 disabled:opacity-50"
+                      >
+                        {b.label}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="mt-1.5 text-[11px] text-zinc-500">
+                    "Fill bots 6v6" sets the practice-bot convars and restarts the map to apply —
+                    bots populate once a player is in. "Kick bots" needs cheats (auto-enabled).
+                  </p>
+
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      const c = cmdInput;
+                      setCmdInput("");
+                      void runRcon(c);
+                    }}
+                    className="mt-2.5 flex items-center gap-1.5"
+                  >
+                    <span className="text-violet-400">›</span>
+                    <input
+                      value={cmdInput}
+                      onChange={(e) => setCmdInput(e.target.value)}
+                      placeholder="type any console command…"
+                      spellCheck={false}
+                      className="flex-1 rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1.5 font-mono text-xs text-zinc-200 outline-none focus:border-violet-500"
+                    />
+                    <button
+                      type="submit"
+                      disabled={rconBusy || !cmdInput.trim()}
+                      className="rounded-md border border-violet-500/50 bg-violet-500/15 px-3 py-1.5 text-xs font-semibold text-violet-200 transition hover:bg-violet-500/25 disabled:opacity-50"
+                    >
+                      {rconBusy ? "…" : "Send"}
+                    </button>
+                  </form>
+
+                  {rconLog.length > 0 && (
+                    <div className="mt-2.5 max-h-48 overflow-auto rounded-md border border-zinc-800 bg-zinc-950 p-2 font-mono text-[11px] leading-relaxed">
+                      {rconLog.map((entry, i) => (
+                        <div key={i} className="mb-1.5">
+                          <div className="text-violet-300">› {entry.cmd}</div>
+                          <pre className={`whitespace-pre-wrap ${entry.err ? "text-rose-400" : "text-zinc-400"}`}>
+                            {entry.out}
+                          </pre>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
               <p className="mt-2 text-[11px] text-zinc-600">

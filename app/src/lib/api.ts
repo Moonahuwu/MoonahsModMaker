@@ -404,9 +404,18 @@ export function setupHosting(deadlockRoot: string): Promise<HostStatus> {
 export function revertHosting(deadlockRoot: string): Promise<HostStatus> {
   return invoke("revert_hosting", { deadlockRoot });
 }
-/** Launch the client as a dedicated host on `map`. Returns the PID. */
-export function launchHost(deadlockRoot: string, map: string): Promise<number> {
+/** PID + the RCON password a freshly launched host was started with. */
+export interface LaunchInfo {
+  pid: number;
+  rconPassword: string;
+}
+/** Launch the client as a dedicated host on `map`. Returns PID + RCON password. */
+export function launchHost(deadlockRoot: string, map: string): Promise<LaunchInfo> {
   return invoke("launch_host", { deadlockRoot, map });
+}
+/** Send one RCON command to the running server; returns its console output. */
+export function rconExec(password: string, command: string): Promise<string> {
+  return invoke("rcon_exec", { password, command });
 }
 /** The server's P2P connect id ([A:1:…]) from console.log, or null until up. */
 export function hostConnectId(deadlockRoot: string): Promise<string | null> {

@@ -5,6 +5,7 @@ mod host;
 mod install;
 mod paths;
 mod project;
+mod rcon;
 mod vpk;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -46,6 +47,7 @@ pub fn run() {
             commands::setup_hosting,
             commands::revert_hosting,
             commands::launch_host,
+            commands::rcon_exec,
             commands::host_connect_id,
             commands::hero_roster,
             commands::hero_detail,
