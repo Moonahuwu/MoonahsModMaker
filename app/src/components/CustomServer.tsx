@@ -90,8 +90,8 @@ export function CustomServer({
   onRandomize: (temperature: number) => void;
   onReset: () => void;
   randomizing: boolean;
-  randomizerOpts: { skipMovement: boolean; skipCast: boolean; skipScale: boolean; noNegative: boolean };
-  onSetRandomizerOpts: (patch: Partial<{ skipMovement: boolean; skipCast: boolean; skipScale: boolean; noNegative: boolean }>) => void;
+  randomizerOpts: { skipMovement: boolean; skipCast: boolean; skipScale: boolean; includeGuns: boolean; noNegative: boolean };
+  onSetRandomizerOpts: (patch: Partial<{ skipMovement: boolean; skipCast: boolean; skipScale: boolean; includeGuns: boolean; noNegative: boolean }>) => void;
 }) {
   const [view, setView] = useState<"server" | "configs">("server");
   const [section, setSection] = useState<Section>("heroes");
@@ -249,6 +249,17 @@ export function CustomServer({
                       {label}
                     </label>
                   ))}
+                  <div className="my-2 border-t border-zinc-800" />
+                  <div className="mb-1 text-xs font-semibold text-zinc-300">Also randomize:</div>
+                  <label className="mb-1.5 flex cursor-pointer items-center gap-2 text-xs text-zinc-300">
+                    <input
+                      type="checkbox"
+                      checked={randomizerOpts.includeGuns}
+                      onChange={(e) => onSetRandomizerOpts({ includeGuns: e.target.checked })}
+                      className="h-3.5 w-3.5 accent-fuchsia-500"
+                    />
+                    Hero guns (bullet dmg, clip, fire rate…)
+                  </label>
                   <div className="my-2 border-t border-zinc-800" />
                   <label className="flex cursor-pointer items-center gap-2 text-xs text-zinc-300">
                     <input

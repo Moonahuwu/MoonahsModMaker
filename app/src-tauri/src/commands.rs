@@ -1302,6 +1302,69 @@ pub struct RandomConfig {
     pub world: Vec<crate::project::WorldOverride>,
 }
 
+/// Curated gun stats to randomize, harvested from a weapon entry's
+/// `m_WeaponInfo` block. Kept to the meaningful, uniquely-named fields.
+const GUN_FIELDS: &[&str] = &[
+    "m_flBulletDamage",
+    "m_iBullets",
+    "m_flCycleTime",
+    "m_iClipSize",
+    "m_reloadDuration",
+    "m_flRange",
+    "m_flBulletSpeed",
+    "m_flBulletRadius",
+];
+
+/// Harvest gun stats from `citadel_weapon_*` entries: returns
+/// (weaponKey, field, value) for each curated `m_WeaponInfo` field. Scoped to the
+/// direct children of `m_WeaponInfo` (one level), so recoil sub-blocks are ignored.
+fn parse_weapon_stats(vdata: &str) -> Vec<(String, String, String)> {
+    let mut out = Vec::new();
+    let mut cur: Option<String> = None;
+    let mut is_weapon = false;
+    let mut wi_depth: Option<usize> = None;
+    for line in vdata.lines() {
+        let depth = line.chars().take_while(|&c| c == '\t').count();
+        let t = line.trim();
+        if depth == 1 {
+            if let Some(k) = t.strip_suffix('=').map(str::trim) {
+                if !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                    cur = Some(k.to_string());
+                    is_weapon = k.starts_with("citadel_weapon");
+                    wi_depth = None;
+                    continue;
+                }
+            }
+        }
+        if !is_weapon {
+            continue;
+        }
+        match wi_depth {
+            None => {
+                if t.starts_with("m_WeaponInfo") && t.ends_with('=') {
+                    wi_depth = Some(depth);
+                }
+            }
+            Some(wd) => {
+                if depth <= wd && t == "}" {
+                    wi_depth = None;
+                } else if depth == wd + 1 {
+                    if let Some(eq) = t.find(" = ") {
+                        let field = &t[..eq];
+                        if GUN_FIELDS.contains(&field) {
+                            let val = t[eq + 3..].trim().trim_matches('"');
+                            if let Some(c) = &cur {
+                                out.push((c.clone(), field.to_string(), val.to_string()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 /// xorshift64 — small deterministic RNG so we don't pull in the `rand` crate.
 fn xorshift(state: &mut u64) -> f64 {
     let mut x = *state;
@@ -1345,6 +1408,7 @@ pub fn randomize_config(
     skip_movement: Option<bool>,
     skip_cast: Option<bool>,
     skip_scale: Option<bool>,
+    include_guns: Option<bool>,
     no_negative: Option<bool>,
 ) -> Result<RandomConfig, String> {
     let t = temperature.unwrap_or(0.5).clamp(0.0, 1.0);
@@ -1352,6 +1416,7 @@ pub fn randomize_config(
     let skip_move = skip_movement.unwrap_or(false);
     let skip_cast = skip_cast.unwrap_or(false);
     let skip_scale = skip_scale.unwrap_or(true);
+    let include_guns = include_guns.unwrap_or(false);
     let no_neg = no_negative.unwrap_or(true);
     // Skip a stat by key/field name when the matching category is disabled, so
     // randomize leaves e.g. jump height / cast times alone (they break feel fast).
@@ -1433,6 +1498,19 @@ pub fn randomize_config(
                 vdata.push(crate::project::VdataOverride {
                     ability_key: entity.clone(),
                     prop_key: format!("@upgrade:{i}"),
+                    value,
+                });
+            }
+        }
+    }
+
+    // Hero guns (m_WeaponInfo of citadel_weapon_* entries) — opt-in.
+    if include_guns {
+        for (weapon, field, val) in parse_weapon_stats(&atext) {
+            if let Some(value) = roll(&mut seed, &val) {
+                vdata.push(crate::project::VdataOverride {
+                    ability_key: weapon,
+                    prop_key: format!("@weapon:{field}"),
                     value,
                 });
             }

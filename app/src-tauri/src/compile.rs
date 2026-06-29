@@ -816,19 +816,23 @@ fn apply_vdata_overrides(text: &str, overrides: &[VdataCompile]) -> String {
     use std::collections::HashMap;
     let mut want: HashMap<&str, HashMap<&str, &str>> = HashMap::new();
     let mut want_upg: HashMap<&str, HashMap<usize, &str>> = HashMap::new();
+    // `@weapon:<field>` → rewrite a flat numeric field inside the entry's
+    // `m_WeaponInfo` block (gun stats: bullet damage, clip size, cycle time…).
+    let mut want_weapon: HashMap<&str, HashMap<&str, &str>> = HashMap::new();
     for ov in overrides {
-        match ov.prop_key.strip_prefix("@upgrade:").and_then(|s| s.parse::<usize>().ok()) {
-            Some(idx) => {
-                want_upg.entry(ov.ability_key.as_str()).or_default().insert(idx, ov.value.as_str());
-            }
-            None => {
-                want.entry(ov.ability_key.as_str()).or_default().insert(ov.prop_key.as_str(), ov.value.as_str());
-            }
+        if let Some(field) = ov.prop_key.strip_prefix("@weapon:") {
+            want_weapon.entry(ov.ability_key.as_str()).or_default().insert(field, ov.value.as_str());
+        } else if let Some(idx) = ov.prop_key.strip_prefix("@upgrade:").and_then(|s| s.parse::<usize>().ok()) {
+            want_upg.entry(ov.ability_key.as_str()).or_default().insert(idx, ov.value.as_str());
+        } else {
+            want.entry(ov.ability_key.as_str()).or_default().insert(ov.prop_key.as_str(), ov.value.as_str());
         }
     }
     let mut out = String::with_capacity(text.len() + 64);
     let mut in_wanted = false;
     let mut in_wanted_upg = false;
+    let mut in_wanted_weapon = false;
+    let mut weapon_info_depth: Option<usize> = None; // depth of the m_WeaponInfo block
     let mut cur_ability: Option<&str> = None;
     let mut props_depth: Option<usize> = None;
     let mut pending: Option<&str> = None; // value to write at the next m_strValue
@@ -847,7 +851,9 @@ fn apply_vdata_overrides(text: &str, overrides: &[VdataCompile]) -> String {
                     cur_ability = Some(k);
                     in_wanted = want.contains_key(k);
                     in_wanted_upg = want_upg.contains_key(k);
+                    in_wanted_weapon = want_weapon.contains_key(k);
                     props_depth = None;
+                    weapon_info_depth = None;
                     pending = None;
                     bonus_idx = 0;
                     out.push_str(line);
@@ -892,6 +898,39 @@ fn apply_vdata_overrides(text: &str, overrides: &[VdataCompile]) -> String {
                     }
                     continue;
                 }
+            }
+        }
+
+        // Rewrite a weapon-info field (gun stats) — flat `field = value` at one
+        // level inside the entry's m_WeaponInfo block, preserving quote style.
+        if in_wanted_weapon {
+            if let Some(wd) = weapon_info_depth {
+                if depth <= wd && t == "}" {
+                    weapon_info_depth = None;
+                } else if depth == wd + 1 {
+                    if let Some(eq) = t.find(" = ") {
+                        let field = &t[..eq];
+                        if let Some(v) = cur_ability.and_then(|a| want_weapon.get(a)).and_then(|m| m.get(field)) {
+                            if let Some(beq) = body.find(" = ") {
+                                let quoted = body[beq + 3..].trim_start().starts_with('"');
+                                out.push_str(&body[..beq + 3]);
+                                if quoted {
+                                    out.push('"');
+                                    out.push_str(v);
+                                    out.push('"');
+                                } else {
+                                    out.push_str(v);
+                                }
+                                if nl {
+                                    out.push('\n');
+                                }
+                                continue;
+                            }
+                        }
+                    }
+                }
+            } else if t.starts_with("m_WeaponInfo") && t.ends_with('=') {
+                weapon_info_depth = Some(depth);
             }
         }
 
@@ -1899,6 +1938,39 @@ mod tests {
         // Originals gone.
         assert!(!out.contains("-12.0"));
         assert!(!out.contains("m_strBonus = \"2\""));
+    }
+
+    #[test]
+    fn vdata_override_rewrites_weapon_info_field() {
+        let src = "\
+\tcitadel_weapon_bull_set =
+\t{
+\t\tm_WeaponInfo =
+\t\t{
+\t\t\tm_flBulletSpeed = 24000.0
+\t\t\tm_VerticallRecoil =
+\t\t\t{
+\t\t\t\tm_flBulletDamage = 999
+\t\t\t}
+\t\t\tm_iClipSize = 9
+\t\t\tm_flBulletDamage = 3.6
+\t\t\tm_flReloadMoveSpeed = \"10000\"
+\t\t}
+\t}
+";
+        let ovs = vec![
+            VdataCompile { ability_key: "citadel_weapon_bull_set".into(), prop_key: "@weapon:m_flBulletDamage".into(), value: "50".into() },
+            VdataCompile { ability_key: "citadel_weapon_bull_set".into(), prop_key: "@weapon:m_iClipSize".into(), value: "30".into() },
+            VdataCompile { ability_key: "citadel_weapon_bull_set".into(), prop_key: "@weapon:m_flReloadMoveSpeed".into(), value: "5000".into() },
+        ];
+        let out = apply_vdata_overrides(src, &ovs);
+        // Direct m_WeaponInfo child is rewritten; the value style is preserved.
+        assert!(out.contains("\t\t\tm_flBulletDamage = 50"));
+        assert!(out.contains("\t\t\tm_iClipSize = 30"));
+        assert!(out.contains("m_flReloadMoveSpeed = \"5000\"")); // quoted stays quoted
+        // The same-named field nested in the recoil sub-block is NOT touched.
+        assert!(out.contains("m_flBulletDamage = 999"));
+        assert!(!out.contains("m_flBulletDamage = 3.6"));
     }
 
     #[test]

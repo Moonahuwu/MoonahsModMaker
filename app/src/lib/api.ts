@@ -464,6 +464,8 @@ export interface RandomizerOpts {
   skipCast: boolean;
   /** Leave world-entity model scale (minions/turrets) alone. */
   skipScale: boolean;
+  /** Also randomize hero gun stats (bullet damage, clip, fire rate…). Off by default. */
+  includeGuns: boolean;
   /** Don't randomize originally-negative values (keeps results ≥ 0). */
   noNegative: boolean;
 }
@@ -482,6 +484,7 @@ export function randomizeConfig(
     skipMovement: opts?.skipMovement ?? false,
     skipCast: opts?.skipCast ?? false,
     skipScale: opts?.skipScale ?? true,
+    includeGuns: opts?.includeGuns ?? false,
     noNegative: opts?.noNegative ?? true,
   });
 }
