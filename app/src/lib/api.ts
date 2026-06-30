@@ -414,6 +414,11 @@ export interface LaunchInfo {
 export function launchHost(deadlockRoot: string, map: string, maxPlayers?: number): Promise<LaunchInfo> {
   return invoke("launch_host", { deadlockRoot, map, maxPlayers });
 }
+/** Launch Deadlock (normal client, via Steam) to test an installed mod in a real
+ * match. `deadlockRoot` is only an exe fallback if Steam can't start. */
+export function launchGame(deadlockRoot?: string): Promise<void> {
+  return invoke("launch_game", { deadlockRoot });
+}
 /** Send one RCON command to the server launched from this app; returns output.
  * The password is held in the backend (set by launchHost), so any window can call this. */
 export function rconExec(command: string): Promise<string> {

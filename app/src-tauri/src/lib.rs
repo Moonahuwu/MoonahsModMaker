@@ -87,6 +87,7 @@ pub fn run() {
             commands::setup_hosting,
             commands::revert_hosting,
             commands::launch_host,
+            commands::launch_game,
             commands::rcon_exec,
             commands::rcon_ready,
             commands::read_server_log,

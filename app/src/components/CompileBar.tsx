@@ -5,6 +5,7 @@ import {
   compileProject,
   installToGame,
   itemRoster,
+  launchGame,
   scanAddonSlots,
   type CompileReport,
   type SlotScan,
@@ -41,6 +42,7 @@ export function CompileBar({
 }) {
   const [running, setRunning] = useState(false);
   const [installing, setInstalling] = useState(false);
+  const [launching, setLaunching] = useState(false);
   const [report, setReport] = useState<CompileReport | null>(null);
   const [slots, setSlots] = useState<SlotScan | null>(null);
   const { push } = useToast();
@@ -104,7 +106,7 @@ export function CompileBar({
     }
   }
 
-  async function compile() {
+  async function compile(): Promise<boolean> {
     setRunning(true);
     setReport(null);
     try {
@@ -150,12 +152,38 @@ export function CompileBar({
         onCompiled();
         push("success", `Compiled → ${r.outputPath ?? "done"}`);
         if (settings.installAfterCompile) await install();
-      } else push("error", "Compile failed — see the step report");
+        return true;
+      }
+      push("error", "Compile failed — see the step report");
+      return false;
     } catch (e) {
       setReport({ ok: false, steps: [{ name: "invoke", ok: false, detail: String(e) }] });
       push("error", String(e));
+      return false;
     } finally {
       setRunning(false);
+    }
+  }
+
+  /** Full one-shot: compile → install → launch Deadlock to test the mod. */
+  async function compileAndLaunch() {
+    if (!(await compile())) return;
+    // compile() already installs when "install after compile" is on; otherwise
+    // install now so the launched game picks up the new build.
+    if (!settings.installAfterCompile && !(await install())) return;
+    setLaunching(true);
+    try {
+      // Derive the Deadlock root from the pak path (…/game/citadel/pak01_dir.vpk)
+      // as an exe fallback if Steam can't start.
+      const root = settings.deadlockPak
+        ? settings.deadlockPak.replace(/[\\/]/g, "/").split("/").slice(0, -3).join("/")
+        : undefined;
+      await launchGame(root);
+      push("success", "Launching Deadlock…");
+    } catch (e) {
+      push("error", `Launch failed: ${e}`);
+    } finally {
+      setLaunching(false);
     }
   }
 
@@ -172,7 +200,7 @@ export function CompileBar({
   const auto = settings.installSlot === null;
   const fixedTaken =
     !auto && slots?.used.includes(settings.installSlot as number) === true;
-  const busy = running || installing;
+  const busy = running || installing || launching;
 
   return (
     <div className="sticky bottom-0 z-30 -mx-6 mt-2 border-t border-zinc-800 bg-zinc-950/85 px-6 py-3 backdrop-blur">
@@ -351,18 +379,35 @@ export function CompileBar({
           {settings.outputDir}
         </span>
 
-        <motion.button
-          whileTap={{ scale: 0.97 }}
-          onClick={() => void compile()}
-          disabled={busy || !canCompile}
-          className="ml-auto rounded-lg bg-emerald-600 px-6 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-900/30 transition hover:bg-emerald-500 disabled:opacity-40 disabled:shadow-none"
-        >
-          {running
-            ? "Compiling…"
-            : settings.installAfterCompile
-              ? "Compile & Install"
-              : "Compile"}
-        </motion.button>
+        <div className="ml-auto flex flex-col items-stretch gap-2">
+          <motion.button
+            whileTap={{ scale: 0.97 }}
+            onClick={() => void compileAndLaunch()}
+            disabled={busy || !canCompile}
+            title="Compile, install into the game, then launch Deadlock to test it"
+            className="rounded-lg border border-violet-500/50 bg-violet-600/90 px-6 py-2 text-sm font-semibold text-white shadow-lg shadow-violet-900/30 transition hover:bg-violet-500 disabled:opacity-40 disabled:shadow-none"
+          >
+            {launching
+              ? "Launching…"
+              : running
+                ? "Compiling…"
+                : installing
+                  ? "Installing…"
+                  : "Compile, Install & Launch"}
+          </motion.button>
+          <motion.button
+            whileTap={{ scale: 0.97 }}
+            onClick={() => void compile()}
+            disabled={busy || !canCompile}
+            className="rounded-lg bg-emerald-600 px-6 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-900/30 transition hover:bg-emerald-500 disabled:opacity-40 disabled:shadow-none"
+          >
+            {running
+              ? "Compiling…"
+              : settings.installAfterCompile
+                ? "Compile & Install"
+                : "Compile"}
+          </motion.button>
+        </div>
       </div>
     </div>
   );

@@ -302,6 +302,14 @@ pub fn launch_host(
     Ok(info)
 }
 
+/// Launch Deadlock (normal client, via Steam) to test an installed mod in a real
+/// match. `deadlock_root` is only used as an exe fallback if Steam can't start.
+#[tauri::command]
+pub fn launch_game(deadlock_root: Option<String>) -> Result<(), String> {
+    let root = deadlock_root.filter(|s| !s.is_empty());
+    crate::host::launch_game(root.as_deref().map(std::path::Path::new))
+}
+
 /// Send a single RCON command to the server launched from this app and return
 /// its console output. Uses the password stashed by `launch_host`.
 #[tauri::command]

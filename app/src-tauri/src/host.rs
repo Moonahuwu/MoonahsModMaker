@@ -192,6 +192,32 @@ pub fn launch(root: &Path, map: &str, max_players: Option<u32>) -> Result<Launch
     Ok(LaunchInfo { pid: child.id(), rcon_password })
 }
 
+/// Deadlock's Steam AppID — used to launch the normal client to test a mod.
+const STEAM_APP_ID: &str = "1422450";
+
+/// Launch Deadlock normally (NOT as a dedicated host) so a freshly installed
+/// mod can be tested in a real match. Prefers the Steam protocol handler — it
+/// starts Steam if needed, applies the user's launch options, and reloads
+/// addons from disk. Falls back to the client exe directly if a Deadlock root
+/// is provided and the Steam handoff can't be started.
+pub fn launch_game(root: Option<&Path>) -> Result<(), String> {
+    let url = format!("steam://rungameid/{STEAM_APP_ID}");
+    // `explorer <url>` hands the URL to the registered protocol handler without
+    // flashing a console window, then exits once Steam takes over.
+    if std::process::Command::new("explorer").arg(&url).spawn().is_ok() {
+        return Ok(());
+    }
+    // Fallback: launch the client exe directly (needs Steam already running).
+    let exe = root.map(exe_path).filter(|e| e.exists()).ok_or_else(|| {
+        "Couldn't start Steam, and no installed deadlock.exe to fall back to".to_string()
+    })?;
+    std::process::Command::new(&exe)
+        .current_dir(exe.parent().unwrap())
+        .spawn()
+        .map_err(|e| format!("launching deadlock.exe: {e}"))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
