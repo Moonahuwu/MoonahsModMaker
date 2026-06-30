@@ -2,7 +2,6 @@ import { AnimatePresence, motion, Reorder, useDragControls } from "motion/react"
 import { useMemo, useRef, useState, type ReactNode } from "react";
 import type { EventProject, EventView, Song } from "../types";
 import { SongCard } from "./SongCard";
-import { StockWaveform } from "./StockWaveform";
 
 /** One reorderable song row: drags only via the handle passed to its children. */
 function DraggableSong({
@@ -161,6 +160,7 @@ export function SidePanel({
   soundFolder,
   ffmpegPath,
   accent,
+  compareByDefault,
   dropActive,
   panelRef,
   expandedSongs,
@@ -182,6 +182,7 @@ export function SidePanel({
   soundFolder: string;
   ffmpegPath?: string;
   accent: string;
+  compareByDefault: boolean;
   dropActive: boolean;
   panelRef: (el: HTMLElement | null) => void;
   expandedSongs: Record<string, boolean>;
@@ -317,23 +318,6 @@ export function SidePanel({
         </div>
       )}
 
-      {/* Compare to the original game track (length / beats) */}
-      <details
-        className="mb-3 rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2"
-        onToggle={(e) => loadStock((e.currentTarget as HTMLDetailsElement).open)}
-      >
-        <summary className="cursor-pointer text-xs text-zinc-500">
-          ♪ Compare to original ({shortName(ev.stockEntry)})
-        </summary>
-        <div className="mt-2">
-          {stockLoading && (
-            <span className="text-xs text-zinc-600">decoding original…</span>
-          )}
-          {stockErr && <span className="text-xs text-red-400">{stockErr}</span>}
-          {stockUrl && <StockWaveform url={stockUrl} accent={accent} />}
-        </div>
-      </details>
-
       {/* Other mods — toggleable + removable, collapsed by default */}
       {foreign.length > 0 && (
         <details className="mb-3 rounded-lg border border-zinc-800 bg-zinc-800/20 px-3 py-2">
@@ -429,6 +413,13 @@ export function SidePanel({
                   onRename={(raw) => onSongRename(s.id, raw)}
                   onRemove={() => onSongRemove(s.id)}
                   onDownload={() => onDownloadSong(s.sourceMp3)}
+                  accent={accent}
+                  stockName={shortName(ev.stockEntry)}
+                  stockUrl={stockUrl}
+                  stockLoading={stockLoading}
+                  stockErr={stockErr}
+                  onLoadStock={() => void loadStock(true)}
+                  compareDefault={compareByDefault}
                 />
               )}
             </DraggableSong>

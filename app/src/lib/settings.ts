@@ -34,6 +34,8 @@ export interface Settings {
   firstRunDone: boolean;
   /** Show disabled / in-development ("experimental") heroes in the Heroes grid. */
   showExperimentalHeroes: boolean;
+  /** Open the per-track "Compare to original" panel by default on each song. */
+  compareByDefault: boolean;
   /** Path to VRF's Source2Viewer.exe — enables "Open in real viewer" for effects. */
   source2ViewerPath: string;
   /** Bake Custom Server gameplay edits (abilities.vdata) into the build. OFF by
@@ -74,6 +76,7 @@ export const DEFAULT_SETTINGS: Settings = {
   installSlot: null,
   firstRunDone: false,
   showExperimentalHeroes: false,
+  compareByDefault: false,
   source2ViewerPath: "",
   includeGameplay: false,
   excludedConfigKeys: [],

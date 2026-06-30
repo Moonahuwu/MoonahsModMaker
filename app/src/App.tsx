@@ -1617,6 +1617,7 @@ export default function App() {
       soundFolder={project!.soundFolder}
       ffmpegPath={settings.ffmpegPath || undefined}
       accent={accentFor(ev)}
+      compareByDefault={settings.compareByDefault}
       dropActive={dropTarget === ev.id}
       expandedSongs={expandedSongs}
       onToggleSongExpanded={toggleSongExpanded}
@@ -1761,12 +1762,12 @@ export default function App() {
         <div className="mt-auto flex items-center justify-between pt-2">
           <button
             onClick={() => setSettingsOpen(true)}
-            aria-label="Setup"
-            title="Setup"
+            aria-label="Settings"
+            title="Settings"
             className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-zinc-400 transition hover:bg-zinc-900 hover:text-zinc-200"
           >
             <span className="text-base">⚙</span>
-            <span>Setup</span>
+            <span>Settings</span>
           </button>
           <span className="text-[10px] text-zinc-700">
             {songCount} track{songCount === 1 ? "" : "s"}

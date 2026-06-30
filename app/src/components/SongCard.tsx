@@ -5,6 +5,7 @@ import { processAudio } from "../lib/api";
 import { songStatus } from "../lib/songHash";
 import type { Song } from "../types";
 import { Waveform } from "./Waveform";
+import { StockWaveform } from "./StockWaveform";
 
 const STATUS_BADGE: Record<string, { label: string; cls: string }> = {
   new: { label: "New", cls: "bg-emerald-500/10 text-emerald-300" },
@@ -26,6 +27,17 @@ interface SongCardProps {
   onRename: (raw: string) => void;
   onRemove: () => void;
   onDownload: () => void;
+  /** Accent color + the event's stock track, so the card can optionally show
+   *  the original waveform stacked above yours for comparison. */
+  accent: string;
+  stockName: string;
+  stockUrl: string | null;
+  stockLoading: boolean;
+  stockErr: string | null;
+  /** Lazily decode the original track (called when compare is first opened). */
+  onLoadStock: () => void;
+  /** Open the compare panel by default (from settings). */
+  compareDefault: boolean;
 }
 
 function fmtTime(s: number): string {
@@ -45,10 +57,36 @@ export function SongCard({
   onRename,
   onRemove,
   onDownload,
+  accent,
+  stockName,
+  stockUrl,
+  stockLoading,
+  stockErr,
+  onLoadStock,
+  compareDefault,
 }: SongCardProps) {
   const [state, setState] = useState<PlayState>("idle");
   const [error, setError] = useState<string | null>(null);
+  const [compareOpen, setCompareOpen] = useState(compareDefault);
+  // Decoded lengths of both tracks, so they can share one px/second scale.
+  const [stockDur, setStockDur] = useState<number | null>(null);
+  const [mineDur, setMineDur] = useState<number | null>(null);
+  // Live playhead positions while each waveform plays.
+  const [stockTime, setStockTime] = useState(0);
+  const [mineTime, setMineTime] = useState(0);
   const [nameDraft, setNameDraft] = useState(song.soundName);
+
+  // If compare defaults open, decode the original up front (idempotent).
+  useEffect(() => {
+    if (compareDefault) onLoadStock();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Scale each waveform to a shared timeline: the longer track fills the width,
+  // the shorter one ends proportionally early.
+  const maxDur = Math.max(stockDur ?? 0, mineDur ?? 0);
+  const pct = (d: number | null) =>
+    maxDur > 0 && d != null ? (d / maxDur) * 100 : 100;
   const audioRef = useRef<HTMLAudioElement | null>(null);
   // Key the rendered audio was produced for; re-render when trim/gain change.
   const renderedKey = useRef<string>("");
@@ -230,18 +268,118 @@ export function SongCard({
                 <span className="text-zinc-600">.vsnd</span>
               </div>
 
-              <Waveform
-                url={url}
-                trimStart={song.trimStart}
-                trimEnd={song.trimEnd}
-                onTrimChange={(start, end) => onChange({ trimStart: start, trimEnd: end })}
-              />
+              {/* Optional: stack the original game track above yours to
+                  compare length / beats against what you're replacing. */}
+              <div className="mb-2 flex items-center justify-between">
+                <button
+                  onClick={() => {
+                    const next = !compareOpen;
+                    setCompareOpen(next);
+                    if (next) onLoadStock();
+                  }}
+                  className="text-[11px] text-zinc-500 transition hover:text-zinc-300"
+                  title="Show the original in-game track above yours to compare"
+                >
+                  {compareOpen ? "▾" : "▸"} Compare to original
+                </button>
+                {compareOpen && (
+                  <span className="truncate pl-2 text-[10px] text-zinc-600">
+                    {stockName}
+                  </span>
+                )}
+              </div>
+
+              <AnimatePresence initial={false}>
+                {compareOpen && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: "auto", opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.15 }}
+                    className="overflow-hidden"
+                  >
+                    <div className="mb-2 rounded-lg border border-amber-500/20 bg-amber-500/[0.03] px-2.5 py-2">
+                      <div className="mb-1 flex items-baseline justify-between">
+                        <span className="text-[10px] uppercase tracking-wide text-amber-300/70">
+                          Original
+                        </span>
+                        {stockDur != null && (
+                          <span className="text-[10px] tabular-nums text-zinc-600">
+                            {stockTime > 0 && (
+                              <span className="text-amber-300/80">
+                                {stockTime.toFixed(1)} /{" "}
+                              </span>
+                            )}
+                            {stockDur.toFixed(1)}s
+                          </span>
+                        )}
+                      </div>
+                      {stockLoading && (
+                        <span className="text-xs text-zinc-600">decoding original…</span>
+                      )}
+                      {stockErr && <span className="text-xs text-red-400">{stockErr}</span>}
+                      {stockUrl && (
+                        <StockWaveform
+                          url={stockUrl}
+                          accent={accent}
+                          widthPct={pct(stockDur)}
+                          onDuration={setStockDur}
+                          onTime={setStockTime}
+                          timeline
+                        />
+                      )}
+                    </div>
+                    <div className="mb-1 flex items-baseline justify-between pl-1">
+                      <span className="text-[10px] uppercase tracking-wide text-emerald-300/70">
+                        Yours
+                      </span>
+                      {mineDur != null && (
+                        <span className="text-[10px] tabular-nums text-zinc-600">
+                          {mineTime > 0 && (
+                            <span className="text-emerald-300/80">
+                              {mineTime.toFixed(1)} /{" "}
+                            </span>
+                          )}
+                          {mineDur.toFixed(1)}s
+                        </span>
+                      )}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* When comparing, gutter matches the original's play-button column
+                  (w-7 + gap-2) so both timelines share a left origin. */}
+              <div className={compareOpen ? "flex items-start gap-2" : undefined}>
+                {compareOpen && <div className="w-7 shrink-0" />}
+                <div className="min-w-0 flex-1">
+                  <Waveform
+                    url={url}
+                    trimStart={song.trimStart}
+                    trimEnd={song.trimEnd}
+                    onTrimChange={(start, end) => onChange({ trimStart: start, trimEnd: end })}
+                    widthPct={compareOpen ? pct(mineDur) : undefined}
+                    onDuration={setMineDur}
+                    onTime={setMineTime}
+                    timeline
+                  />
+                </div>
+              </div>
 
               <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
                 <span className="rounded bg-zinc-800/80 px-2 py-1 text-[11px] tabular-nums text-zinc-400">
                   {fmtTime(song.trimStart)}–{fmtTime(song.trimEnd)}
                   <span className="ml-1 text-zinc-600">({fmtTime(length)})</span>
                 </span>
+
+                {mineTime > 0 && (
+                  <span
+                    className="rounded bg-emerald-500/10 px-2 py-1 text-[11px] tabular-nums text-emerald-300"
+                    title="Playhead position — click the waveform to play from there"
+                  >
+                    ▶ {fmtTime(mineTime)}
+                  </span>
+                )}
 
                 <label
                   className="flex items-center gap-1.5 text-xs text-zinc-400"

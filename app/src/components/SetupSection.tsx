@@ -101,14 +101,7 @@ export function SetupSection({
   return (
     <div className="w-full max-w-2xl rounded-2xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl">
       <header className="mb-4 flex items-start justify-between gap-4">
-        <div>
-          <h2 className="text-lg font-semibold text-zinc-100">Setup</h2>
-          <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            {probe.map(([label]) => (
-              <Chip key={label} label={label} ok={checks[label] ?? null} />
-            ))}
-          </div>
-        </div>
+        <h2 className="text-lg font-semibold text-zinc-100">Settings</h2>
         <button
           onClick={onClose}
           aria-label="Close settings"
@@ -117,6 +110,50 @@ export function SetupSection({
           ✕
         </button>
       </header>
+
+      {/* Preferences */}
+      <div className="mb-5 flex flex-col gap-2">
+        <label className="flex cursor-pointer items-center gap-2.5">
+          <input
+            type="checkbox"
+            checked={settings.compareByDefault}
+            onChange={(e) => update({ compareByDefault: e.target.checked })}
+            className="accent-emerald-500"
+          />
+          <span className="text-xs font-medium text-zinc-300">
+            Compare to original by default
+          </span>
+        </label>
+        <p className="-mt-1 pl-6 text-[10px] text-zinc-600">
+          Open the per-track original-vs-yours waveform panel automatically on each
+          song.
+        </p>
+        <label className="flex cursor-pointer items-center gap-2.5">
+          <input
+            type="checkbox"
+            checked={settings.showExperimentalHeroes}
+            onChange={(e) => update({ showExperimentalHeroes: e.target.checked })}
+            className="accent-amber-500"
+          />
+          <span className="text-xs font-medium text-zinc-300">
+            Show experimental heroes
+          </span>
+        </label>
+        <p className="-mt-1 pl-6 text-[10px] text-zinc-600">
+          Reveal disabled / in-development heroes (unreleased, may lack data) in the
+          Heroes tab.
+        </p>
+      </div>
+
+      {/* Setup — tool & game paths */}
+      <div className="mb-3 border-t border-zinc-800 pt-4">
+        <h3 className="text-sm font-semibold text-zinc-200">Setup</h3>
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          {probe.map(([label]) => (
+            <Chip key={label} label={label} ok={checks[label] ?? null} />
+          ))}
+        </div>
+      </div>
 
       {/* One-click helpers */}
       <div className="mb-4 flex flex-wrap gap-2">
@@ -135,25 +172,6 @@ export function SetupSection({
         >
           {busy === "refresh" ? "Refreshing…" : "⟳ Refresh game data"}
         </button>
-      </div>
-
-      {/* Experimental */}
-      <div className="mb-4 rounded-lg border border-zinc-800 bg-zinc-950/50 p-3">
-        <label className="flex cursor-pointer items-center gap-2.5">
-          <input
-            type="checkbox"
-            checked={settings.showExperimentalHeroes}
-            onChange={(e) => update({ showExperimentalHeroes: e.target.checked })}
-            className="accent-amber-500"
-          />
-          <span className="text-xs font-medium text-zinc-300">
-            Show experimental heroes
-          </span>
-        </label>
-        <p className="mt-1 pl-6 text-[10px] text-zinc-600">
-          Reveal disabled / in-development heroes (unreleased, may lack data) in the
-          Heroes tab.
-        </p>
       </div>
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
