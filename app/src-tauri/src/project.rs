@@ -685,6 +685,37 @@ impl Project {
                     "sounds/music/music_menu_lp.vsnd",
                     "soundevents/music.vsndevts",
                 ),
+                // Loading / connecting screen music (the long 60bpm track that
+                // plays while the match map loads).
+                slot(
+                    "ui_loading_screen",
+                    "ui",
+                    "Loading screen",
+                    "Music.MatchIntro.Connecting",
+                    "vsnd_files",
+                    "sounds/music/match_intro/music_match_intro_connecting_60bpm.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                // Matchmaking SFX (single-sound events in ui.vsndevts — the merger
+                // promotes the scalar to an array when our entries are added).
+                slot(
+                    "ui_match_found",
+                    "ui",
+                    "Match found",
+                    "UI.Matchmake.Made",
+                    "vsnd_files",
+                    "sounds/ui/ui_game_matchmake_made.vsnd",
+                    "soundevents/ui.vsndevts",
+                ),
+                slot(
+                    "ui_match_searching",
+                    "ui",
+                    "Searching for match",
+                    "UI.Matchmake.Find",
+                    "vsnd_files",
+                    "sounds/ui/ui_game_matchmake_find.vsnd",
+                    "soundevents/ui.vsndevts",
+                ),
             ],
             icon_mods: vec![],
             sound_overrides: vec![],
@@ -716,7 +747,7 @@ mod tests {
         let p = Project::default_for_match_intro();
         let json = serde_json::to_string_pretty(&p).unwrap();
         let back: Project = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.events.len(), 31);
+        assert_eq!(back.events.len(), 34);
         assert_eq!(back.events[0].id, "intro_king");
         assert_eq!(back.events[0].event_name, "Music.MatchIntro.MatchStart.King");
         // The enemy-contest slot targets the opponent-control array.

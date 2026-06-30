@@ -145,9 +145,10 @@ pub fn read_event_array(text: &str, event_name: &str, array_key: &str) -> Result
     })
 }
 
-/// Enumerate every event's `vsnd_files*` array in the document. Used to learn
-/// what another mod added (for combining). Scalar `vsnd_files = "x"` (non-array)
-/// values are skipped.
+/// Enumerate every event's `vsnd_files*` value in the document. Used to learn
+/// what another mod added (for combining). Both the array form and the scalar
+/// `vsnd_files = "x"` form are returned (the scalar as a single-entry list), so
+/// importers union one-sound events consistently with multi-sound ones.
 pub fn list_arrays(text: &str) -> Result<Vec<ArrayInfo>> {
     validate_header(text)?;
     let b = text.as_bytes();
@@ -194,6 +195,29 @@ pub fn list_arrays(text: &str) -> Result<Vec<ArrayInfo>> {
                         from = rb + 1;
                         continue;
                     }
+                } else if v < bc && b[v] == b'"' {
+                    // Scalar one-sound value — surface it as a single-entry list.
+                    let start = v + 1;
+                    let mut q = start;
+                    while q < bc {
+                        if b[q] == b'\\' {
+                            q += 2;
+                            continue;
+                        }
+                        if b[q] == b'"' {
+                            break;
+                        }
+                        q += 1;
+                    }
+                    if q < bc {
+                        out.push(ArrayInfo {
+                            event_name: name.clone(),
+                            array_key: key.to_string(),
+                            entries: vec![text[start..q].to_string()],
+                        });
+                        from = q + 1;
+                        continue;
+                    }
                 }
             }
             from = j;
@@ -213,8 +237,16 @@ pub fn add_entries(
 ) -> Result<String> {
     validate_header(text)?;
     let block = event_block(text, event_name)?;
-    let (lb, rb) = find_array(text, block, array_key, event_name)?;
-    let existing = parse_array_entries(text, lb, rb);
+    // Support both the array form and the scalar `vsnd_files = "x"` form. The
+    // scalar is promoted to an array only if there's actually something new to
+    // add, so a no-op union stays byte-identical (MERGE, NEVER REPLACE).
+    let (existing, rstart, rend, indent) =
+        match find_value(text, block, array_key, event_name)? {
+            ValueSpan::Array(lb, rb) => {
+                (parse_array_entries(text, lb, rb), lb, rb, bracket_indent(text, lb).to_string())
+            }
+            ValueSpan::Scalar(qs, qe, v) => (vec![v], qs, qe, line_indent(text, qs).to_string()),
+        };
 
     let mut result = existing.clone();
     let mut seen: HashSet<String> = existing.iter().cloned().collect();
@@ -228,10 +260,9 @@ pub fn add_entries(
         return Ok(text.to_string()); // nothing new to add
     }
     let le = detect_line_ending(text);
-    let indent = bracket_indent(text, lb).to_string();
     let new_array = render_array(&result, &indent, le);
     let mut out = text.to_string();
-    out.replace_range(lb..=rb, &new_array);
+    out.replace_range(rstart..=rend, &new_array);
     Ok(out)
 }
 
@@ -513,23 +544,6 @@ fn find_value(
             Ok(ValueSpan::Scalar(j, k, text[start..k].to_string()))
         }
         _ => Err(Kv3Error::ArrayNotFound(format!("{event_name}.{array_key}"))),
-    }
-}
-
-/// Locate a named array (`array_key`) within an event block. Returns the byte
-/// offsets of the opening `[` and closing `]`. Errors on a scalar value (callers
-/// that only union arrays — e.g. `add_entries` — skip those).
-fn find_array(
-    text: &str,
-    block: (usize, usize),
-    array_key: &str,
-    event_name: &str,
-) -> Result<(usize, usize)> {
-    match find_value(text, block, array_key, event_name)? {
-        ValueSpan::Array(lb, rb) => Ok((lb, rb)),
-        ValueSpan::Scalar(..) => {
-            Err(Kv3Error::ArrayNotFound(format!("{event_name}.{array_key}")))
-        }
     }
 }
 
@@ -833,6 +847,31 @@ mod unit {
         let again = apply_merge(&out, &edit(&["a/new.vsnd"], &[], None)).unwrap();
         let v2 = read_event(&again, "Evt").unwrap();
         assert_eq!(v2.entries, vec!["a/stock.vsnd", "a/new.vsnd"]);
+    }
+
+    #[test]
+    fn list_arrays_includes_scalar_vsnd_files() {
+        // A scalar one-sound event (like UI.Matchmake.Made) is surfaced as a
+        // single-entry list so importers union it like any array.
+        let arrays = list_arrays(SYNTH_SCALAR).unwrap();
+        assert_eq!(arrays.len(), 1);
+        assert_eq!(arrays[0].event_name, "Evt");
+        assert_eq!(arrays[0].array_key, "vsnd_files");
+        assert_eq!(arrays[0].entries, vec!["a/stock.vsnd"]);
+    }
+
+    #[test]
+    fn add_entries_promotes_scalar_and_is_noop_when_nothing_new() {
+        // Unioning a new sound into a scalar event promotes it to an array.
+        let out = add_entries(SYNTH_SCALAR, "Evt", "vsnd_files", &["a/other.vsnd".into()]).unwrap();
+        let v = read_event(&out, "Evt").unwrap();
+        assert_eq!(v.entries, vec!["a/stock.vsnd", "a/other.vsnd"]);
+        assert!(out.contains("vsnd_files = ["));
+        assert!(out.contains("base = \"Base.Ability\""));
+        // Unioning only the already-present entry changes nothing (stays scalar,
+        // byte-identical).
+        let noop = add_entries(SYNTH_SCALAR, "Evt", "vsnd_files", &["a/stock.vsnd".into()]).unwrap();
+        assert_eq!(noop, SYNTH_SCALAR);
     }
 
     #[test]
