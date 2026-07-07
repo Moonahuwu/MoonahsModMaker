@@ -1,6 +1,7 @@
 mod audio;
 mod commands;
 mod compile;
+mod digimod;
 mod host;
 mod install;
 mod paths;
@@ -120,6 +121,7 @@ pub fn run() {
             commands::pack_icons,
             commands::hero_images,
             commands::running_processes,
+            commands::digimod_detected,
             commands::check_app_update,
             commands::open_in_viewer,
             commands::item_particles,

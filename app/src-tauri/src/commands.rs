@@ -4580,6 +4580,35 @@ pub fn pack_icons(
     Ok(out)
 }
 
+/// True when any installed addon pak ships the DigiMaster jumpscare engine
+/// (signature: a compiled digi_master script). Gates the Jumpscares tab.
+#[tauri::command]
+pub fn digimod_detected(addons_dir: String) -> bool {
+    let Ok(entries) = std::fs::read_dir(&addons_dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = path.file_name().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default();
+        if !name.ends_with("_dir.vpk") {
+            continue;
+        }
+        // helper-free sniff: the vpk directory index (plain path strings)
+        // lives at the head of the file — 4MB covers any addon's index
+        // without reading multi-GB paks into memory.
+        use std::io::Read;
+        let Ok(f) = std::fs::File::open(&path) else { continue };
+        let mut head = Vec::with_capacity(4 << 20);
+        if f.take(4 << 20).read_to_end(&mut head).is_err() {
+            continue;
+        }
+        if head.windows(b"digi_master.vjs".len()).any(|w| w == b"digi_master.vjs") {
+            return true;
+        }
+    }
+    false
+}
+
 /// Which of `names` (case-insensitive exe names) are currently running.
 /// Powers the compile bar's "Deadlock / Source 2 Viewer is open" warning —
 /// both hold locks on the pak/addons that make compiles and installs fail

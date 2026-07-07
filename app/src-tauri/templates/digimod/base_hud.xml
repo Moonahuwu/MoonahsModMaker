@@ -1,0 +1,25 @@
+<!-- DigiMaster v2 — STATIC hud hook. Panels are created at runtime by
+     digi_master.js ($.CreatePanel), so this file never needs editing when
+     media is added/removed: the JS LIBRARY is the single source of truth. -->
+<root>
+    <styles>
+        <include src="s2r://panorama/styles/base.vcss_c" />
+        <include src="s2r://panorama/styles/citadel_base_styles.vcss_c" />
+        <include src="file://panorama/styles/jumpscare_overlay.css" />
+        <include src="s2r://panorama/styles/anita_ui.vcss_c" />
+    </styles>
+
+    <scripts>
+        <include src="file://panorama/scripts/digi_master.js" />
+        <include src="s2r://panorama/scripts/anita_ui_core.vjs_c" />
+    </scripts>
+
+    <Panel class="WindowRoot" hittest="false" disallowedstyleflags="hover,descendantfocus">
+        <CitadelHud id="Hud" hittest="false" />
+
+        <!-- Runtime media panels land in here. -->
+        <Panel id="MediaOverlayContainer" hittest="false" />
+
+        <Panel id="AnitaUI_Anchor" hittest="false" style="width: 100%; height: 100%; z-index: 10000;" />
+    </Panel>
+</root>

@@ -1,0 +1,384 @@
+/* Prettified by Source 2 Viewer 16.0.0.0 - https://valveresourceformat.github.io */
+
+.AnitaBackdrop
+{
+	width: 0px;
+	height: 0px;
+	z-index: 9998;
+	opacity: 0;
+	transition-property: opacity;
+	transition-duration: 0.2s;
+}
+
+.AnitaBackdrop.Open
+{
+	width: 100%;
+	height: 100%;
+	opacity: 1;
+}
+
+.AnitaWindow
+{
+	min-height: 320px;
+	height: fit-children;
+	border: 1px solid rgba(255, 255, 255, 0.025);
+	align: center center;
+	border-radius: 8px;
+	background-color: #181716;
+	background-color: gradient( radial, 50% 50%, -5% -5%, 60% 60%, from( #2c2a28 ), to( #181716 ) );
+	box-shadow: rgba(0, 0, 0, 0.5) 0px 0px 32px 0px;
+	flow-children: down;
+	z-index: 9999;
+	opacity: 0;
+	transform: scale3d(0.95, 0.95, 1);
+	transition-property: opacity, transform;
+	transition-duration: 0.2s;
+}
+
+.AnitaWindow.Open
+{
+	opacity: 1;
+	transform: scale3d(1, 1, 1);
+}
+
+.AnitaContentArea
+{
+	width: fit-children;
+	padding: 26px;
+	overflow: squish scroll;
+}
+
+.ModContainer
+{
+	width: fit-children;
+	flow-children: down;
+}
+
+.AnitaNavBar
+{
+	width: 100%;
+	height: 40px;
+	background-color: #00000077;
+	flow-children: right;
+}
+
+.AnitaCloseBtn
+{
+	width: 32px;
+	height: 32px;
+	background-image: url("s2r://panorama/images/control_icons/gear_return_png.vtex");
+	background-size: contain;
+	background-position: 50% 50%;
+	background-repeat: no-repeat;
+	horizontal-align: right;
+	vertical-align: center;
+	margin-left: 14px;
+	margin-right: 8px;
+	wash-color: #575d5f;
+	transition-property: wash-color;
+	transition-duration: 0.1s;
+}
+
+.AnitaCloseBtn:hover
+{
+	wash-color: #960e0e;
+}
+
+.AnitaCloseBtn:active
+{
+	wash-color: #5e0d0d;
+}
+
+.AnitaTabSeparator
+{
+	margin-left: 14px;
+	margin-right: 14px;
+	font-size: 20px;
+	color: #939da022;
+	vertical-align: center;
+}
+
+.AnitaTabBtn
+{
+	height: 40px;
+	margin-right: 8px;
+	padding: 0px 8px;
+	background-color: transparent;
+	transition-property: transform;
+	transition-duration: 0.1s;
+}
+
+.AnitaTabBtn Label
+{
+	color: #939da044;
+	font-size: 20px;
+	vertical-align: middle;
+	text-transform: uppercase;
+	letter-spacing: 2px;
+	text-align: center;
+}
+
+.AnitaTabBtn:hover Label
+{
+	color: #CCCCCC;
+}
+
+.AnitaTabBtn.Active Label
+{
+	color: white;
+	text-shadow: 0px 0px 10px #ffffff44;
+}
+
+.AnitaTabBtn:active
+{
+	transform: translateY(2px);
+}
+
+.SectionHeader
+{
+	font-size: 24px;
+	font-weight: bold;
+	color: #449966;
+	text-transform: uppercase;
+	letter-spacing: 1px;
+}
+
+.SectionHeaderLine
+{
+	height: 2px;
+	width: 100%;
+	margin-top: 2px;
+	margin-bottom: 12px;
+	background-color: #3b3f40;
+}
+
+.ModDescription
+{
+	color: #7d8688;
+	font-size: 16px;
+	margin-bottom: 30px;
+	max-width: 580px;
+}
+
+.AnitaRow
+{
+	width: fit-children;
+	flow-children: right;
+	margin-bottom: 12px;
+	padding: 5px;
+}
+
+.AnitaLabel
+{
+	font-size: 18px;
+	color: #7d8688;
+	vertical-align: center;
+	letter-spacing: 1px;
+	font-weight: thin;
+	width: 300px;
+}
+
+.AnitaToggleRow
+{
+	width: fit-children;
+	flow-children: right;
+	margin-bottom: 12px;
+	padding: 5px;
+}
+
+.AnitaToggleBtn
+{
+	width: 100%;
+	height: 100%;
+	ignore-parent-flow: true;
+}
+
+.AnitaCheckBox
+{
+	width: 24px;
+	height: 24px;
+	border: 1px solid #555;
+	background-color: #111;
+	border-radius: 3px;
+	align: left center;
+	margin: 0 5px;
+}
+
+.AnitaCheckMark
+{
+	width: 14px;
+	height: 14px;
+	align: center center;
+	background-color: deeplyOminousGreen;
+	opacity: 0;
+	transform: scale3d(0.5, 0.5, 1);
+	border-radius: 1px;
+	transition-property: opacity, transform;
+	transition-duration: 0.1s;
+}
+
+.AnitaToggleRow.Checked .AnitaCheckBox
+{
+	border: 1px solid deeplyOminousGreen;
+	background-color: #222;
+}
+
+.AnitaToggleRow.Checked .AnitaCheckMark
+{
+	opacity: 1;
+	transform: scale3d(1, 1, 1);
+	box-shadow: 0px 0px 5px deeplyOminousGreen;
+}
+
+.AnitaStepperControls
+{
+	flow-children: right;
+	vertical-align: center;
+}
+
+.AnitaStepBtn
+{
+	width: 30px;
+	height: 30px;
+	background-color: #333;
+	border: 1px solid #555;
+	margin: 0 5px;
+}
+
+.AnitaStepBtn:hover
+{
+	background-color: #555;
+}
+
+.AnitaStepBtn Label
+{
+	color: white;
+	font-size: 20px;
+	align: center center;
+	text-align: center;
+	height: 60%;
+	margin-bottom: 2.5px;
+}
+
+#less
+{
+	font-size: 23px;
+	margin-bottom: 6px;
+}
+
+.AnitaStepInput
+{
+	width: height-percentage(300%);
+	height: 30px;
+	background-color: #111;
+	border: 1px solid #444;
+	color: white;
+	text-align: center;
+	font-size: 18px;
+	padding: 3px 0px 0px 2px;
+	horizontal-align: center;
+	white-space: normal;
+	text-overflow: ellipsis;
+}
+
+.AnitaActionBtn
+{
+	padding: 8px 20px;
+	background-color: #333;
+	border: 1px solid #555;
+	margin-bottom: 12px;
+}
+
+.AnitaActionBtn:hover
+{
+	background-color: #444;
+	border-color: white;
+}
+
+.AnitaActionBtn Label
+{
+	color: #e1e1e1;
+	text-transform: uppercase;
+	letter-spacing: 1px;
+}
+
+.AnitaActionBtn:active
+{
+	background-color: #555;
+	transform: translateY(1px);
+	border-color: #777;
+	wash-color: #ffffffaa;
+}
+
+.AnitaActionBtn.Activated
+{
+	brightness: 2;
+	transition-duration: 0.05s;
+}
+
+.AnitaCyclerBtn
+{
+	margin-left: 5px;
+	padding: 5px 35px;
+	background-color: #111;
+	border: 1px solid #444;
+}
+
+.AnitaCyclerBtn:hover
+{
+	background-color: #222;
+	border-color: #666;
+}
+
+.AnitaCyclerBtn:active
+{
+	background-color: #333;
+}
+
+.AnitaCyclerBtn Label
+{
+	align: center center;
+	text-align: center;
+	color: #e1e1e1;
+	font-size: 18px;
+}
+
+.AnitaOverlayBtn
+{
+	width: 28px;
+	height: 28px;
+	background-image: url("s2r://panorama/images/control_icons/gear_return_png.vtex");
+	background-size: contain;
+	background-position: 50% 50%;
+	background-repeat: no-repeat;
+	align: right top;
+	margin-top: 34px;
+	margin-right: 425px;
+	z-index: 10000;
+	wash-color: #575d5f;
+	opacity: 0;
+	tooltip-position: bottom;
+	pre-transform-rotate2d: 0deg;
+	transition-property: wash-color, opacity, transform, pre-transform-rotate2d;
+	transition-duration: 0.15s, 0.15s, 0.15s, 0.45s;
+	transition-timing-function: cubic-bezier( 0.785, 0.385, 0.555, 1.505 );
+}
+
+.AnitaOverlayBtn:hover
+{
+	pre-transform-rotate2d: -90deg;
+	wash-color: deeplyOminousGreen;
+	opacity: 0.35;
+}
+
+.AnitaOverlayBtn.Visible
+{
+	opacity: 0.28;
+	transform: scale3d(1.2, 1.2, 1);
+}
+
+.AnitaOverlayBtn:active
+{
+	wash-color: #284a2f;
+}
+

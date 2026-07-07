@@ -155,6 +155,10 @@ pub struct CompileConfig {
     /// npc_units.vdata / misc.vdata, recompile, and stage.
     #[serde(default)]
     pub world_overrides: Vec<WorldCompile>,
+    /// Jumpscares/Deaths HUD mod (DigiMaster): generated from templates +
+    /// this config; media converted/compiled and staged into the vpk.
+    #[serde(default)]
+    pub digimod: Option<DigimodCompile>,
     /// Poster art replacements: decompile the atlas material from the pak,
     /// composite user art into pixel rects, recompile the `.vmat`, and stage
     /// the `.vmat_c` + `.vtex_c` at the vanilla paths (whole-material override).
@@ -294,6 +298,43 @@ impl EffectCompile {
             && self.current_hash == self.last_compiled_hash
             && compiled_exists
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DigimodCompile {
+    pub rng_interval: u32,
+    pub scare_chance: u32,
+    pub death_chance: u32,
+    pub scares: Vec<DigiEntry>,
+    pub deaths: Vec<DigiEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DigiEntry {
+    /// Stable id (sanitized into file stems + Digi.* event names).
+    pub id: String,
+    /// Display name (report steps + in-game test buttons).
+    pub name: String,
+    /// "video" | "image".
+    pub kind: String,
+    /// User's source file (any video format, or a PNG for images).
+    pub source_media: String,
+    /// Seconds on screen.
+    pub show: f64,
+    /// "fullscreen" | "banner".
+    pub preset: String,
+    /// Optional sound played alongside (any audio format).
+    #[serde(default)]
+    pub source_audio: Option<String>,
+    /// Soundevent volume (Base.UI scale; the mod used 2-5).
+    #[serde(default = "default_digi_volume")]
+    pub volume: f64,
+}
+
+fn default_digi_volume() -> f64 {
+    3.0
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -460,7 +501,7 @@ impl CompileReport {
             let _ = tx.send(step.clone());
         }
     }
-    fn ok_step(&mut self, name: impl Into<String>, detail: impl Into<String>) {
+    pub(crate) fn ok_step(&mut self, name: impl Into<String>, detail: impl Into<String>) {
         self.steps.push(StepResult { name: name.into(), ok: true, detail: detail.into() });
         self.emit_last();
     }
@@ -475,7 +516,7 @@ impl CompileReport {
     /// effect shouldn't hold everything else up. The report ends not-ok (so
     /// nothing gets hash-stamped as compiled), but an artifact is still
     /// produced and a summary of failures is appended at the end.
-    fn soft_fail(&mut self, name: impl Into<String>, detail: impl Into<String>) {
+    pub(crate) fn soft_fail(&mut self, name: impl Into<String>, detail: impl Into<String>) {
         self.ok = false;
         self.steps.push(StepResult { name: name.into(), ok: false, detail: detail.into() });
         self.emit_last();
@@ -555,14 +596,14 @@ fn event_merge(ev: &EventCompile, sound_folder: &str, current_duration: Option<f
     }
 }
 
-fn run_resource_compiler(cfg: &CompileConfig, input_abs: &str) -> Result<String, String> {
+pub(crate) fn run_resource_compiler(cfg: &CompileConfig, input_abs: &str) -> Result<String, String> {
     run_resource_compiler_multi(cfg, std::slice::from_ref(&input_abs.to_string()))
 }
 
 /// One resourcecompiler invocation over several inputs (repeated `-i`). Process
 /// startup dominates audio compiles, so batching N files into one call is far
 /// faster than N calls — verified against the real CSDK ("OK: 2 compiled").
-fn run_resource_compiler_multi(cfg: &CompileConfig, inputs: &[String]) -> Result<String, String> {
+pub(crate) fn run_resource_compiler_multi(cfg: &CompileConfig, inputs: &[String]) -> Result<String, String> {
     let exe = Path::new(&cfg.resource_compiler);
     let mut cmd = crate::procutil::quiet(exe);
     if let Some(dir) = exe.parent() {
@@ -615,7 +656,7 @@ fn timestamp() -> u64 {
 /// Stable content fingerprint (FNV-1a 64) for the compile-skip stamps. Written
 /// only AFTER a step succeeds, so a stamp mismatch (or absence) means the last
 /// run didn't finish that step from this exact input — never skip then.
-fn fingerprint(text: &str) -> String {
+pub(crate) fn fingerprint(text: &str) -> String {
     let mut h: u64 = 0xcbf29ce484222325;
     for b in text.as_bytes() {
         h ^= u64::from(*b);
@@ -639,7 +680,7 @@ fn pak_identity(cfg: &CompileConfig) -> String {
 }
 
 /// True when `stamp_path` holds exactly `want` (the success stamp matches).
-fn stamp_matches(stamp_path: &Path, want: &str) -> bool {
+pub(crate) fn stamp_matches(stamp_path: &Path, want: &str) -> bool {
     std::fs::read_to_string(stamp_path)
         .map(|s| s.trim() == want)
         .unwrap_or(false)
@@ -2515,11 +2556,20 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
     // Custom icon overrides: scale + compile once (staged into every variant).
     let (icon_outputs, icons_dirty) = compile_icon_mods(cfg, content_root, compiled_root, report)?;
 
+    // Jumpscares/Deaths HUD mod: generate + compile once (staged everywhere).
+    let (digimod_outputs, digimod_dirty) =
+        crate::digimod::compile_digimod(cfg, content_root, compiled_root, report)?;
+
     // "Did any override subsystem actually produce new output this run?" —
     // when everything hit its up-to-date skip, the per-variant stage/pack can
     // skip too (the build stamp guards config changes like removals/toggles).
-    let overrides_dirty =
-        effects_dirty || posters_dirty || vdata_dirty || global_dirty || world_dirty || icons_dirty;
+    let overrides_dirty = effects_dirty
+        || posters_dirty
+        || vdata_dirty
+        || global_dirty
+        || world_dirty
+        || icons_dirty
+        || digimod_dirty;
 
     // Group our slots by their events file.
     use std::collections::{BTreeMap, BTreeSet};
@@ -3000,6 +3050,17 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
             match copy_into(&src, &stage, &rel) {
                 Ok(_) => staged += 1,
                 Err(e) => report.soft_fail(format!("stage effect: {rel}"), e.to_string()),
+            }
+        }
+        // Stage the jumpscares/deaths mod outputs (panorama + sounds + webms).
+        for rel in &digimod_outputs {
+            let src = compiled_root.join(rel);
+            if cfg.skip_compile && !src.exists() {
+                continue;
+            }
+            match copy_into(&src, &stage, rel) {
+                Ok(_) => staged += 1,
+                Err(e) => report.soft_fail(format!("stage jumpscares: {rel}"), e.to_string()),
             }
         }
         // Stage poster overrides (recompiled .vmat_c + .vtex_c at the game's paths).
@@ -3545,6 +3606,7 @@ mod tests {
             global_overrides: vec![],
             world_overrides: vec![],
             poster_overrides: vec![],
+            digimod: None,
         };
 
         let report = run(&cfg);
@@ -3627,6 +3689,7 @@ mod tests {
             global_overrides: vec![],
             world_overrides: vec![],
             poster_overrides: vec![],
+            digimod: None,
         };
 
         let report = run(&cfg);
@@ -3735,6 +3798,7 @@ mod tests {
             vdata_overrides: vec![],
             global_overrides: vec![],
             world_overrides: vec![],
+            digimod: None,
             poster_overrides: vec![PosterCompile {
                 sheet_id: "posters_bodega_comp1".into(),
                 materials: vec!["materials/overlays/posters_bodega_comp1.vmat".into()],

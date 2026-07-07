@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { CompileConfig, EffectCompile, EventCompile, GlobalCompile, IconCompile, PosterCompile, SoundOverrideCompile, VdataCompile, WorldCompile } from "./api";
 import { loadSettings, saveSettings } from "./api";
-import type { EffectOverride, EventProject, PosterOverride, SoundOverride } from "../types";
+import type { DigimodConfig, EffectOverride, EventProject, PosterOverride, SoundOverride } from "../types";
 import { songHash, overrideHash, effectHash, posterHash } from "./songHash";
 
 // User-facing settings. We derive the verbose CompileConfig paths from a CSDK
@@ -228,6 +228,7 @@ export function buildCompileConfig(
   globalOverrides: GlobalCompile[] = [],
   worldOverrides: WorldCompile[] = [],
   posterOverrides: PosterOverride[] = [],
+  digimod: DigimodConfig | null = null,
 ): CompileConfig {
   const posterCompiles: PosterCompile[] = posterOverrides.map((p) => ({
     sheetId: p.sheetId,
@@ -328,6 +329,14 @@ export function buildCompileConfig(
     globalOverrides,
     worldOverrides,
     posterOverrides: posterCompiles,
+    // Entries without media can't compile — drop them rather than failing.
+    digimod: digimod
+      ? {
+          ...digimod,
+          scares: digimod.scares.filter((e) => e.sourceMedia),
+          deaths: digimod.deaths.filter((e) => e.sourceMedia),
+        }
+      : null,
   };
 }
 

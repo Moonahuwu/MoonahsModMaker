@@ -1,0 +1,53 @@
+/* ========================================================
+   DIGI MASTER v2 — class-based styles for runtime panels.
+   No per-video #id selectors: every panel the engine spawns
+   gets .digi-media + a preset class, so new media never
+   needs a CSS edit.
+   ======================================================== */
+#MediaOverlayContainer
+{
+    width: 100%;
+    height: 100%;
+    z-index: -1;
+    visibility: visible;
+}
+
+/* Every spawned panel starts invisible; .digi-show runs the entrance. */
+.digi-media
+{
+    opacity: 0;
+    transition-property: opacity, transform;
+    transition-duration: 0.1s;
+}
+
+/* ---- Preset: fullscreen (jumpscares) ------------------- */
+.digi-fullscreen
+{
+    width: 100%;
+    height: 100%;
+    horizontal-align: center;
+    vertical-align: center;
+}
+.digi-fullscreen.digi-show
+{
+    opacity: 1.0;
+}
+
+/* ---- Preset: banner (deaths — slides in from the left) -- */
+.digi-banner
+{
+    width: 25%;
+    height: 25%;
+    z-index: 10;
+    vertical-align: center;
+    horizontal-align: left;
+    transform: translateX(-500px);
+    transition-property: opacity, transform;
+    transition-duration: 2.0s;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}
+.digi-banner.digi-show
+{
+    transform: translateX(0px);
+    opacity: 1.0;
+}

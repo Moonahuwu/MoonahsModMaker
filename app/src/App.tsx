@@ -33,6 +33,7 @@ import {
   packIcons,
   heroImages,
   checkAppUpdate,
+  digimodDetected,
   type AppUpdate,
   type HeroImage,
   type ImportEvent,
@@ -71,6 +72,7 @@ import { SoundBrowser } from "./components/SoundBrowser";
 import { OverrideEditor } from "./components/OverrideEditor";
 import { EffectsBrowser } from "./components/EffectsBrowser";
 import { PostersTab } from "./components/PostersTab";
+import { DigimodTab, DEFAULT_DIGIMOD } from "./components/DigimodTab";
 import { CustomServer } from "./components/CustomServer";
 import { ProfileSwitcher } from "./components/ProfileSwitcher";
 import { useToast } from "./components/Toaster";
@@ -94,6 +96,8 @@ const EFFECTS = "effects";
 const CUSTOM_SERVER = "customserver";
 /** Special always-present tab for replacing in-world posters/signs/graffiti. */
 const POSTERS = "posters";
+/** Jumpscares/Deaths (DigiMaster) — only when the engine is detected installed. */
+const JUMPSCARES = "jumpscares";
 /** Catch-all tab for events auto-discovered from a new patch. */
 const UNSORTED = "unsorted";
 
@@ -170,6 +174,7 @@ const TAB_LABELS: Record<string, string> = {
   [REPLACE_SOUNDS]: "Replace Sounds",
   [EFFECTS]: "Effects",
   [POSTERS]: "Wall Art",
+  [JUMPSCARES]: "Jumpscares",
   [CUSTOM_SERVER]: "Custom Server",
   [MOD_COMBINER]: "Mod combiner",
 };
@@ -511,6 +516,7 @@ function accentFor(ev: { group: string; side: string }): string {
   if (ev.group === ITEMS) return "#f59e0b"; // amber (items)
   if (ev.group === EFFECTS) return "#c084fc"; // violet (VFX)
   if (ev.group === POSTERS) return "#8b5cf6"; // deep violet (posters)
+  if (ev.group === JUMPSCARES) return "#ef4444"; // red (spooky)
   if (ev.group === CUSTOM_SERVER) return "#38bdf8"; // sky (server)
   return "#e0564f"; // heroes
 }
@@ -699,6 +705,15 @@ export default function App() {
     return out;
   }, [project?.iconMods]);
 
+  // Jumpscares tab gate: does any installed pak ship the DigiMaster engine?
+  const [digimodOn, setDigimodOn] = useState(false);
+  useEffect(() => {
+    if (!settings.addonsDir) return;
+    digimodDetected(settings.addonsDir)
+      .then(setDigimodOn)
+      .catch(() => {});
+  }, [settings.addonsDir]);
+
   const tabs = useMemo(() => {
     const seen: string[] = [];
     for (const e of project?.events ?? []) {
@@ -715,9 +730,14 @@ export default function App() {
     // must be able to see and remove them.
     if (settings.experimentalEffects || (project?.effectOverrides?.length ?? 0) > 0)
       out.push(EFFECTS);
-    out.push(POSTERS, CUSTOM_SERVER, MOD_COMBINER, REPLACE_SOUNDS);
+    out.push(POSTERS);
+    // Jumpscares only when the DigiMaster engine is in the user's mods (or
+    // this project already configures it).
+    if (digimodOn || (project?.digimod && (project.digimod.scares.length > 0 || project.digimod.deaths.length > 0)))
+      out.push(JUMPSCARES);
+    out.push(CUSTOM_SERVER, MOD_COMBINER, REPLACE_SOUNDS);
     return out;
-  }, [project, settings.experimentalEffects]);
+  }, [project, settings.experimentalEffects, digimodOn]);
 
   // If the active tab vanishes (e.g. turning off an experimental feature while
   // viewing it), fall back to the first tab.
@@ -3254,7 +3274,9 @@ export default function App() {
                     ? "Recolor any particle effect — hero abilities, item effects, and more. Preview the recolor live, then compile to apply."
                     : activeTab === POSTERS
                       ? "Replace the world's posters, signs, ghost signs, and graffiti with your own images — drop a PNG onto a region and compile."
-                      : "Your entries merge in — every other mod stays untouched."}
+                      : activeTab === JUMPSCARES
+                        ? "Random jumpscares while you play + videos when you die — your DigiMaster mod, configured here and rebuilt on compile."
+                        : "Your entries merge in — every other mod stays untouched."}
             </p>
           </div>
           {profiles.length > 0 && (
@@ -3394,6 +3416,12 @@ export default function App() {
             onUpdate={updateEffectOverride}
             onRemove={removeEffectOverride}
             onOpenViewer={(ref) => void openEffectInViewer(ref)}
+          />
+        ) : activeTab === JUMPSCARES ? (
+          <DigimodTab
+            config={project?.digimod ?? DEFAULT_DIGIMOD}
+            accent="#ef4444"
+            onChange={(next) => setProject((prev) => (prev ? { ...prev, digimod: next } : prev))}
           />
         ) : activeTab === POSTERS ? (
           <PostersTab
@@ -3558,6 +3586,7 @@ export default function App() {
             globalOverrides={project.globalOverrides ?? []}
             worldOverrides={project.worldOverrides ?? []}
             posterOverrides={project.posterOverrides ?? []}
+            digimod={project.digimod ?? null}
             onCompiled={markAllCompiled}
             onBulkGain={bulkGain}
             onFixForNewPatch={refreshVanilla}

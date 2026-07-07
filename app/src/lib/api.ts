@@ -116,6 +116,31 @@ export interface CompileConfig {
   globalOverrides?: GlobalCompile[];
   worldOverrides?: WorldCompile[];
   posterOverrides?: PosterCompile[];
+  digimod?: DigimodCompile | null;
+}
+
+export interface DigimodCompile {
+  rngInterval: number;
+  scareChance: number;
+  deathChance: number;
+  scares: DigiEntryCompile[];
+  deaths: DigiEntryCompile[];
+}
+
+export interface DigiEntryCompile {
+  id: string;
+  name: string;
+  kind: string;
+  sourceMedia: string;
+  show: number;
+  preset: string;
+  sourceAudio?: string | null;
+  volume: number;
+}
+
+/** True when an installed addon pak ships the DigiMaster jumpscare engine. */
+export function digimodDetected(addonsDir: string): Promise<boolean> {
+  return invoke("digimod_detected", { addonsDir });
 }
 
 export interface PosterCompile {

@@ -162,6 +162,32 @@ export interface Project {
   globalOverrides?: GlobalOverride[];
   worldOverrides?: WorldOverride[];
   posterOverrides?: PosterOverride[];
+  digimod?: DigimodConfig | null;
+}
+
+/** One jumpscare/death media entry (DigiMaster HUD mod). */
+export interface DigiEntry {
+  id: string;
+  name: string;
+  kind: "video" | "image";
+  /** Source file: any video format (converted to VP9 webm) or a PNG. */
+  sourceMedia: string;
+  /** Seconds on screen. */
+  show: number;
+  preset: "fullscreen" | "banner";
+  /** Optional sound played alongside (any audio format). */
+  sourceAudio?: string | null;
+  /** Soundevent volume (Base.UI scale; the original mod used 2–5). */
+  volume: number;
+}
+
+/** Jumpscares/Deaths tab config — generates the whole HUD mod on compile. */
+export interface DigimodConfig {
+  rngInterval: number;
+  scareChance: number;
+  deathChance: number;
+  scares: DigiEntry[];
+  deaths: DigiEntry[];
 }
 
 /** A replaced in-world poster: user art composited into a pixel rect of a
