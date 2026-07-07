@@ -129,6 +129,7 @@ export interface PosterCompile {
   alphaCoverage: number;
   sourceImage: string;
   fit: string;
+  rotation: number;
   currentHash: string;
   lastCompiledHash?: string | null;
 }

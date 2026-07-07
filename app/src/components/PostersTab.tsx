@@ -56,6 +56,34 @@ const WHOLE = "whole_sheet";
 
 type DragMode = "move" | "n" | "s" | "e" | "w" | "nw" | "ne" | "sw" | "se";
 
+/** In-rect preview of override art, honoring fit + rotation. For 90°/270° the
+ *  element's dimensions swap (as fractions of the parent rect) so cover/
+ *  contain fit the rotated footprint like the compile does. */
+function artStyle(
+  ov: { fit: string; rotation?: number },
+  r: { w: number; h: number },
+): React.CSSProperties {
+  const rot = (ov.rotation ?? 0) % 360;
+  const fitCss = (ov.fit === "stretch" ? "fill" : ov.fit) as React.CSSProperties["objectFit"];
+  if (rot === 90 || rot === 270) {
+    return {
+      position: "absolute",
+      left: "50%",
+      top: "50%",
+      width: `${(r.h / r.w) * 100}%`,
+      height: `${(r.w / r.h) * 100}%`,
+      transform: `translate(-50%, -50%) rotate(${rot}deg)`,
+      objectFit: fitCss,
+    };
+  }
+  return {
+    width: "100%",
+    height: "100%",
+    objectFit: fitCss,
+    transform: rot ? `rotate(${rot}deg)` : undefined,
+  };
+}
+
 function pretty(id: string): string {
   return id
     .replace(/^(labels_posters_|posters_|poster_|overlay_|signage_|signs_|graffiti_|item_)/, "")
@@ -987,11 +1015,7 @@ export function PostersTab({
                 {ov && !isHidden && (
                   <img
                     src={convertFileSrc(ov.sourceImage)}
-                    className="h-full w-full"
-                    style={{
-                      objectFit:
-                        ov.fit === "stretch" ? "fill" : (ov.fit as "cover" | "contain"),
-                    }}
+                    style={artStyle(ov, r)}
                     alt=""
                     draggable={false}
                   />
@@ -1123,7 +1147,7 @@ export function PostersTab({
                     className="mb-3 max-h-40 rounded-lg border border-zinc-800 object-contain"
                     alt=""
                   />
-                  <div className="mb-3 flex items-center gap-2">
+                  <div className="mb-3 flex flex-wrap items-center gap-2">
                     <span className="text-[11px] text-zinc-500">Fill mode</span>
                     {(["cover", "contain", "stretch"] as const).map((f) => (
                       <button
@@ -1138,6 +1162,17 @@ export function PostersTab({
                         {f}
                       </button>
                     ))}
+                    <button
+                      onClick={() =>
+                        onUpdate(selectedOv.id, {
+                          rotation: ((selectedOv.rotation ?? 0) + 90) % 360,
+                        })
+                      }
+                      className="rounded bg-zinc-800 px-2 py-0.5 text-[11px] text-zinc-300 hover:text-zinc-100"
+                      title="Rotate the art 90° clockwise (some atlas posters are stored sideways)"
+                    >
+                      ⟳ {selectedOv.rotation ?? 0}°
+                    </button>
                   </div>
                   <div className="flex gap-2">
                     <button

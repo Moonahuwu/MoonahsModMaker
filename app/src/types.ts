@@ -183,6 +183,9 @@ export interface PosterOverride {
   /** Absolute path to the user's source image. */
   sourceImage: string;
   fit: "cover" | "contain" | "stretch";
+  /** Clockwise rotation applied to the art before fitting (some atlas posters
+   *  are stored sideways). 0 | 90 | 180 | 270. */
+  rotation?: number;
   lastCompiledHash?: string | null;
 }
 

@@ -87,6 +87,10 @@ pub struct PosterOverride {
     /// (letterbox over original art) | "stretch".
     #[serde(default = "cover_fit")]
     pub fit: String,
+    /// Clockwise rotation applied to the art before fitting (0/90/180/270 —
+    /// some atlas posters are stored sideways).
+    #[serde(default)]
+    pub rotation: u32,
     /// Hash recorded after the last successful compile (null = never compiled).
     #[serde(default)]
     pub last_compiled_hash: Option<String>,

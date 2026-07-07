@@ -1232,6 +1232,28 @@ export default function App() {
     }
   }
 
+  // Batch-download stock sounds into Downloads (sequential; one toast at the end).
+  async function downloadManyEntries(refs: string[]) {
+    const s = settingsRef.current;
+    if (refs.length > 1) push("info", `Downloading ${refs.length} sound(s)…`);
+    let ok = 0;
+    let fail = 0;
+    let dest = "";
+    for (const r of refs) {
+      try {
+        dest = await downloadEntry(s.vpkHelperPath, s.deadlockPak, r);
+        ok++;
+      } catch {
+        fail++;
+      }
+    }
+    const folder = dest.replace(/[\\/][^\\/]*$/, "");
+    push(
+      fail > 0 ? "error" : "success",
+      `Downloaded ${ok} sound(s)${fail > 0 ? `, ${fail} failed` : ""}${folder ? ` → ${folder}` : ""}`,
+    );
+  }
+
   // Copy one of your source mp3s into Downloads.
   async function downloadSong(sourceMp3: string) {
     try {
@@ -3153,6 +3175,7 @@ export default function App() {
             onPreview={(ref) => decodeStock(ref)}
             onReplace={(ref, label) => void replaceSound(ref, label)}
             onRemoveOverride={removeOverrideByRef}
+            onDownloadMany={downloadManyEntries}
             renderEditor={(o) => (
               <OverrideEditor
                 override={o}

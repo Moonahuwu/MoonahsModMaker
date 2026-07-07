@@ -29,6 +29,7 @@ export function SoundBrowser({
   onPreview,
   onReplace,
   onRemoveOverride,
+  onDownloadMany,
   renderEditor,
   modifiedOnly,
 }: {
@@ -42,6 +43,8 @@ export function SoundBrowser({
   /** Begin a replacement for this sound (pick audio + create the override). */
   onReplace: (reference: string, label: string) => void;
   onRemoveOverride: (reference: string) => void;
+  /** Decode + save stock sounds into Downloads (one or many). */
+  onDownloadMany: (refs: string[]) => Promise<void>;
   /** Render the editor for an existing override (trim/gain/fade/loop). */
   renderEditor: (override: SoundOverride) => React.ReactNode;
   /** "Modified only": show just categories/folders/files with a replacement. */
@@ -56,6 +59,9 @@ export function SoundBrowser({
   const [error, setError] = useState<string | null>(null);
   const [playing, setPlaying] = useState<string | null>(null);
   const [openRow, setOpenRow] = useState<string | null>(null);
+  // Multi-select for batch downloads (persists while drilling across folders).
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [downloading, setDownloading] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   // Media elements keep playing after DOM removal — stop on unmount.
   useEffect(() => () => audioRef.current?.pause(), []);
@@ -244,6 +250,42 @@ export function SoundBrowser({
             </div>
           )}
 
+          {/* Batch download bar (shows once anything is ticked) */}
+          {sel.size > 0 && (
+            <div className="mb-2 flex items-center gap-3 rounded-lg border border-zinc-700 bg-zinc-900/70 px-3 py-1.5">
+              <span className="text-xs font-semibold text-zinc-200">
+                {sel.size} selected
+              </span>
+              <button
+                disabled={downloading}
+                onClick={() => {
+                  setDownloading(true);
+                  void onDownloadMany(Array.from(sel))
+                    .then(() => setSel(new Set()))
+                    .finally(() => setDownloading(false));
+                }}
+                className="rounded-md bg-zinc-100 px-2.5 py-0.5 text-xs font-semibold text-zinc-900 hover:bg-white disabled:opacity-50"
+              >
+                {downloading ? "Downloading…" : "⬇ Download selected"}
+              </button>
+              <button
+                onClick={() =>
+                  setSel((prev) => {
+                    const next = new Set(prev);
+                    for (const f of data.files) next.add(f.reference);
+                    return next;
+                  })
+                }
+                className="text-xs text-zinc-400 hover:text-zinc-200"
+              >
+                Select shown
+              </button>
+              <button onClick={() => setSel(new Set())} className="text-xs text-zinc-400 hover:text-zinc-200">
+                Clear
+              </button>
+            </div>
+          )}
+
           {/* Files (with "modified only" on, just the replaced ones) */}
           <div className="flex flex-col gap-1.5">
             {data.files
@@ -258,6 +300,20 @@ export function SoundBrowser({
                   style={ov ? { borderColor: `${accent}66` } : undefined}
                 >
                   <div className="flex items-center gap-2 px-3 py-1.5">
+                    <input
+                      type="checkbox"
+                      checked={sel.has(file.reference)}
+                      onChange={(e) =>
+                        setSel((prev) => {
+                          const next = new Set(prev);
+                          if (e.target.checked) next.add(file.reference);
+                          else next.delete(file.reference);
+                          return next;
+                        })
+                      }
+                      title="Select for batch download"
+                      className="shrink-0 accent-emerald-500"
+                    />
                     <button
                       onClick={() => void preview(file.reference)}
                       title="Preview stock clip"
@@ -304,6 +360,13 @@ export function SoundBrowser({
                         Replace
                       </button>
                     )}
+                    <button
+                      onClick={() => void onDownloadMany([file.reference])}
+                      title="Download a copy to your Downloads folder"
+                      className="shrink-0 rounded-md border border-zinc-700 px-2 py-0.5 text-xs text-zinc-400 transition hover:border-zinc-500 hover:text-white"
+                    >
+                      ⬇
+                    </button>
                   </div>
                   {ov && isOpen && (
                     <motion.div

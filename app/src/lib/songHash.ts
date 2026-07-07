@@ -65,10 +65,19 @@ export function effectHash(e: {
  * adding/removing a sibling must invalidate the others or a removed poster's
  * art would linger in the previously-compiled atlas. */
 export function posterHash(
-  p: { id: string; sourceImage: string; x: number; y: number; w: number; h: number; fit: string },
+  p: {
+    id: string;
+    sourceImage: string;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    fit: string;
+    rotation?: number;
+  },
   sheetSiblings: string,
 ): string {
-  return [p.id, p.sourceImage, p.x, p.y, p.w, p.h, p.fit, sheetSiblings].join("|");
+  return [p.id, p.sourceImage, p.x, p.y, p.w, p.h, p.fit, p.rotation ?? 0, sheetSiblings].join("|");
 }
 
 /** Compile status of a song relative to its last successful compile. */

@@ -322,6 +322,9 @@ pub struct PosterCompile {
     /// "cover" | "contain" | "stretch".
     #[serde(default = "default_cover")]
     pub fit: String,
+    /// Clockwise rotation applied before fitting: 0 | 90 | 180 | 270.
+    #[serde(default)]
+    pub rotation: u32,
     #[serde(default)]
     pub current_hash: Option<String>,
     #[serde(default)]
@@ -1029,6 +1032,7 @@ fn strip_compiled_textures(text: &str) -> String {
 /// Composite `src` into the `(x,y,w,h)` rect of `sheet_png` (in place) via
 /// ffmpeg. `fit`: "cover" scale+crop (default) | "contain" letterbox over the
 /// original art | "stretch".
+#[allow(clippy::too_many_arguments)]
 fn composite_poster(
     ffmpeg: Option<&str>,
     sheet_png: &Path,
@@ -1038,15 +1042,23 @@ fn composite_poster(
     w: u32,
     h: u32,
     fit: &str,
+    rotation: u32,
 ) -> Result<(), String> {
     let exe = ffmpeg.unwrap_or("ffmpeg");
+    // Clockwise rotation of the source art before fitting (sideways posters).
+    let rot = match rotation % 360 {
+        90 => "transpose=1,",
+        180 => "hflip,vflip,",
+        270 => "transpose=2,",
+        _ => "",
+    };
     let filter = match fit {
-        "stretch" => format!("[1:v]scale={w}:{h}:flags=lanczos[a];[0:v][a]overlay={x}:{y}"),
+        "stretch" => format!("[1:v]{rot}scale={w}:{h}:flags=lanczos[a];[0:v][a]overlay={x}:{y}"),
         "contain" => format!(
-            "[1:v]scale={w}:{h}:force_original_aspect_ratio=decrease:flags=lanczos[a];[0:v][a]overlay={x}+({w}-w)/2:{y}+({h}-h)/2"
+            "[1:v]{rot}scale={w}:{h}:force_original_aspect_ratio=decrease:flags=lanczos[a];[0:v][a]overlay={x}+({w}-w)/2:{y}+({h}-h)/2"
         ),
         _ => format!(
-            "[1:v]scale={w}:{h}:force_original_aspect_ratio=increase:flags=lanczos,crop={w}:{h}[a];[0:v][a]overlay={x}:{y}"
+            "[1:v]{rot}scale={w}:{h}:force_original_aspect_ratio=increase:flags=lanczos,crop={w}:{h}[a];[0:v][a]overlay={x}:{y}"
         ),
     };
     let tmp = sheet_png.with_extension("eim_tmp.png");
@@ -1250,7 +1262,7 @@ fn compile_posters(
         let color_abs = content_root.join(&color_rel);
         for ov in ovs.iter() {
             if let Err(e) = composite_poster(
-                ffmpeg, &color_abs, &ov.source_image, ov.x, ov.y, ov.w, ov.h, &ov.fit,
+                ffmpeg, &color_abs, &ov.source_image, ov.x, ov.y, ov.w, ov.h, &ov.fit, ov.rotation,
             ) {
                 report.soft_fail(format!("poster art: {}", ov.label), e);
                 continue 'sheets;
@@ -3608,6 +3620,7 @@ mod tests {
                 alpha_coverage: 1.0,
                 source_image: art.to_string_lossy().into_owned(),
                 fit: "cover".into(),
+                rotation: 0,
                 current_hash: Some("p1".into()),
                 last_compiled_hash: None,
             }],
