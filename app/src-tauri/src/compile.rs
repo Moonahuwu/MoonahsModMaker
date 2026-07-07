@@ -1043,6 +1043,7 @@ fn composite_poster(
     h: u32,
     fit: &str,
     rotation: u32,
+    clear_first: bool,
 ) -> Result<(), String> {
     let exe = ffmpeg.unwrap_or("ffmpeg");
     // Clockwise rotation of the source art before fitting (sideways posters).
@@ -1052,13 +1053,25 @@ fn composite_poster(
         270 => "transpose=2,",
         _ => "",
     };
+    // Shape-cut regions (graffiti etc.) blank the rect first: the trans mask
+    // becomes the user art's alpha, so nothing of the original may survive in
+    // the color layer — otherwise transparent/soft-edge areas of the new art
+    // would blend with the old decal's pixels.
+    let base = if clear_first {
+        format!("[0:v]drawbox=x={x}:y={y}:w={w}:h={h}:color=black@1:t=fill[bg];")
+    } else {
+        String::new()
+    };
+    let bg = if clear_first { "[bg]" } else { "[0:v]" };
     let filter = match fit {
-        "stretch" => format!("[1:v]{rot}scale={w}:{h}:flags=lanczos[a];[0:v][a]overlay={x}:{y}"),
+        "stretch" => {
+            format!("{base}[1:v]{rot}scale={w}:{h}:flags=lanczos[a];{bg}[a]overlay={x}:{y}")
+        }
         "contain" => format!(
-            "[1:v]{rot}scale={w}:{h}:force_original_aspect_ratio=decrease:flags=lanczos[a];[0:v][a]overlay={x}+({w}-w)/2:{y}+({h}-h)/2"
+            "{base}[1:v]{rot}scale={w}:{h}:force_original_aspect_ratio=decrease:flags=lanczos[a];{bg}[a]overlay={x}+({w}-w)/2:{y}+({h}-h)/2"
         ),
         _ => format!(
-            "[1:v]{rot}scale={w}:{h}:force_original_aspect_ratio=increase:flags=lanczos,crop={w}:{h}[a];[0:v][a]overlay={x}:{y}"
+            "{base}[1:v]{rot}scale={w}:{h}:force_original_aspect_ratio=increase:flags=lanczos,crop={w}:{h}[a];{bg}[a]overlay={x}:{y}"
         ),
     };
     let tmp = sheet_png.with_extension("eim_tmp.png");
@@ -1292,7 +1305,16 @@ fn compile_posters(
         let color_abs = content_root.join(&color_rel);
         for ov in ovs.iter() {
             if let Err(e) = composite_poster(
-                ffmpeg, &color_abs, &ov.source_image, ov.x, ov.y, ov.w, ov.h, &ov.fit, ov.rotation,
+                ffmpeg,
+                &color_abs,
+                &ov.source_image,
+                ov.x,
+                ov.y,
+                ov.w,
+                ov.h,
+                &ov.fit,
+                ov.rotation,
+                ov.alpha_coverage < 0.98,
             ) {
                 report.soft_fail(format!("poster art: {}", ov.label), e);
                 continue 'sheets;

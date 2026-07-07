@@ -77,6 +77,8 @@ function artStyle(
     };
   }
   return {
+    // relative so the art paints above the shape-cut backdrop layer
+    position: "relative",
     width: "100%",
     height: "100%",
     objectFit: fitCss,
@@ -1019,12 +1021,20 @@ export function PostersTab({
                   {pretty(p.id)}
                 </span>
                 {ov && !isHidden && (
-                  <img
-                    src={convertFileSrc(ov.sourceImage)}
-                    style={artStyle(ov, r)}
-                    alt=""
-                    draggable={false}
-                  />
+                  <>
+                    {/* Shape-cut regions compile with the rect blanked (the
+                        art's alpha becomes the decal shape), so hide the
+                        original behind the preview too. */}
+                    {(p.alphaCoverage ?? 1) < 0.98 && (
+                      <div className="absolute inset-0 bg-zinc-950" />
+                    )}
+                    <img
+                      src={convertFileSrc(ov.sourceImage)}
+                      style={artStyle(ov, r)}
+                      alt=""
+                      draggable={false}
+                    />
+                  </>
                 )}
                 {isHidden && (
                   <span className="absolute left-0 top-0 bg-amber-400/90 px-1 text-[9px] font-bold text-zinc-900">
