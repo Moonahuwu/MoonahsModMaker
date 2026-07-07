@@ -73,6 +73,13 @@ export interface Settings {
    *  load after the includeUiSounds gate shipped, projects that already carry
    *  UI content get the gate enabled so existing mods keep building. */
   uiSoundsMigrated: boolean;
+  /** Posters tab: user corrections to manifest region rects (keyed
+   *  `sheetId::posterId`). Applied over posterManifest.json everywhere a rect
+   *  is used, and copied into existing overrides when edited. */
+  posterRectEdits: Record<string, { x: number; y: number; w: number; h: number }>;
+  /** Posters tab: regions the user marked "unused" (atlas junk not visible in
+   *  the map). Hidden from normal browsing; shown dimmed in edit mode. */
+  posterHidden: string[];
 }
 
 const REPO = "C:/Users/ethob/Desktop/DeadlockModding/EasyIntroModder";
@@ -117,6 +124,8 @@ export const DEFAULT_SETTINGS: Settings = {
   knownSoundEvents: [],
   knownSweepFiles: [],
   uiSoundsMigrated: false,
+  posterRectEdits: {},
+  posterHidden: [],
 };
 
 const STORAGE_KEY = "eim.settings.v1";

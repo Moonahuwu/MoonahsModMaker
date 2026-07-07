@@ -3100,9 +3100,23 @@ export default function App() {
             pakPath={settings.deadlockPak}
             overrides={project?.posterOverrides ?? []}
             accent="#8b5cf6"
+            rectEdits={settings.posterRectEdits}
+            hidden={settings.posterHidden}
             onAdd={addPosterOverride}
             onUpdate={updatePosterOverride}
             onRemove={removePosterOverride}
+            onRectEdit={(id, rect) => {
+              const edits = { ...settingsRef.current.posterRectEdits };
+              if (rect) edits[id] = rect;
+              else delete edits[id];
+              updateSettings({ posterRectEdits: edits });
+            }}
+            onToggleHidden={(id) => {
+              const cur = settingsRef.current.posterHidden;
+              updateSettings({
+                posterHidden: cur.includes(id) ? cur.filter((h) => h !== id) : [...cur, id],
+              });
+            }}
             registerDropHandler={(fn) => {
               posterDropRef.current = fn;
             }}
