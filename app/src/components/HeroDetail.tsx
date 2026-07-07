@@ -1,7 +1,18 @@
 import { AnimatePresence, motion } from "motion/react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import type { HeroAbility, HeroSound } from "../lib/api";
+import type { HeroAbility, HeroImage, HeroSound } from "../lib/api";
 import { HeroSoundsSection } from "./HeroSoundsSection";
+
+const IMAGE_KIND_LABELS: Record<string, string> = {
+  card: "Portrait card",
+  card_critical: "Card (low health)",
+  card_gloat: "Card (gloat)",
+  vertical: "Vertical portrait",
+  sm: "Small icon",
+  mm: "Minimap icon",
+  background: "Menu background",
+  logo: "Name logo",
+};
 
 /**
  * Per-hero menu: a background banner (the hero's card art) with the hero name,
@@ -27,6 +38,10 @@ export function HeroDetail({
   onOpenSound,
   hasContent,
   modifiedOnly,
+  images,
+  customImages,
+  onPickImage,
+  onRemoveImage,
 }: {
   heroName: string;
   backgroundSrc: string | null;
@@ -48,6 +63,12 @@ export function HeroDetail({
   hasContent?: (eventName: string) => boolean;
   /** "Modified only": filter every sound list down to events with your content. */
   modifiedOnly?: boolean;
+  /** The hero's replaceable panorama images (null = loading). */
+  images: HeroImage[] | null;
+  /** kind → your replacement (from icon mods). */
+  customImages: Record<string, { src: string; enabled: boolean }>;
+  onPickImage: (img: HeroImage) => void;
+  onRemoveImage: (img: HeroImage) => void;
 }) {
   const active = abilities?.find((a) => a.ability === selectedAbility) ?? null;
   const contentOf = (name: string) => (hasContent ? hasContent(name) : false);
@@ -103,9 +124,23 @@ export function HeroDetail({
             >
               ← All heroes
             </button>
-            <h2 className="text-2xl font-bold tracking-tight text-white drop-shadow">
-              {heroName}
-            </h2>
+            {/* The in-game name logo when we have it, else the plain name. */}
+            {(() => {
+              const logo = images?.find((i) => i.kind === "logo");
+              return logo ? (
+                <img
+                  src={convertFileSrc(logo.preview)}
+                  alt={heroName}
+                  title={heroName}
+                  className="h-9 max-w-[16rem] object-contain drop-shadow"
+                  style={{ filter: "drop-shadow(0 1px 6px rgba(0,0,0,0.7))" }}
+                />
+              ) : (
+                <h2 className="text-2xl font-bold tracking-tight text-white drop-shadow">
+                  {heroName}
+                </h2>
+              );
+            })()}
             <button
               onClick={onShowVoicelines}
               style={{ borderColor: `${accent}99` }}
@@ -161,6 +196,92 @@ export function HeroDetail({
           </div>
         </div>
       </div>
+
+      {/* Replaceable hero images: portrait cards, icons, minimap, background,
+          logo. Each vtex slot works exactly like a custom item icon. */}
+      {images && images.length > 0 && (
+        <details className="mt-5 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
+          <summary className="cursor-pointer text-sm font-semibold text-zinc-200">
+            🖼 Hero images
+            <span className="ml-2 text-xs font-normal text-zinc-500">
+              portraits, icons, minimap, menu background
+            </span>
+            {Object.values(customImages).length > 0 && (
+              <span className="ml-2 rounded bg-emerald-500/15 px-1.5 text-[10px] font-semibold text-emerald-300">
+                {Object.values(customImages).length} replaced
+              </span>
+            )}
+          </summary>
+          <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+            {images.map((img) => {
+              const custom = customImages[img.kind];
+              return (
+                <div
+                  key={img.kind}
+                  className="flex flex-col gap-1.5 rounded-lg border border-zinc-800 bg-zinc-950/60 p-2"
+                  style={custom ? { borderColor: "#34d39966" } : undefined}
+                >
+                  <div className="relative h-24 overflow-hidden rounded bg-zinc-900">
+                    <img
+                      src={convertFileSrc(img.preview)}
+                      className="absolute inset-0 h-full w-full object-contain p-1"
+                      style={custom?.enabled ? { opacity: 0.25 } : undefined}
+                      alt=""
+                    />
+                    {custom?.enabled && (
+                      <img
+                        src={convertFileSrc(custom.src)}
+                        className="absolute inset-0 h-full w-full object-contain p-1"
+                        alt=""
+                      />
+                    )}
+                  </div>
+                  <div className="flex items-center justify-between gap-1">
+                    <span className="truncate text-[11px] text-zinc-300">
+                      {IMAGE_KIND_LABELS[img.kind] ?? img.kind}
+                      {img.width > 0 && (
+                        <span className="ml-1 text-[9px] text-zinc-600">
+                          {img.width}×{img.height}
+                        </span>
+                      )}
+                    </span>
+                    {img.svg ? (
+                      <span
+                        className="shrink-0 text-[9px] text-zinc-600"
+                        title="The name logo is an SVG — replacement coming later"
+                      >
+                        svg
+                      </span>
+                    ) : custom ? (
+                      <span className="flex shrink-0 gap-1">
+                        <button
+                          onClick={() => onPickImage(img)}
+                          className="rounded border border-zinc-700 px-1.5 text-[10px] text-zinc-300 hover:border-zinc-500"
+                        >
+                          Swap
+                        </button>
+                        <button
+                          onClick={() => onRemoveImage(img)}
+                          className="rounded px-1 text-[10px] text-red-400/80 hover:text-red-300"
+                        >
+                          ✕
+                        </button>
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => onPickImage(img)}
+                        className="shrink-0 rounded border border-zinc-700 px-1.5 text-[10px] text-zinc-300 hover:border-zinc-500"
+                      >
+                        Replace…
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </details>
+      )}
 
       {/* Selected ability's sounds (inline) */}
       <AnimatePresence mode="wait">

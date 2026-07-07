@@ -4580,6 +4580,111 @@ pub fn pack_icons(
     Ok(out)
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeroImage {
+    /// Slot kind: card | card_critical | card_gloat | vertical | sm | mm | background | logo.
+    pub kind: String,
+    /// The compiled path the game references (IconMod override target).
+    pub target: String,
+    /// Decoded preview in the app-data cache (PNG, or SVG for the logo).
+    pub preview: String,
+    pub width: u32,
+    pub height: u32,
+    /// SVG assets (the hero-name logo) can't be replaced by the PNG icon
+    /// pipeline yet — display only.
+    pub svg: bool,
+}
+
+/// Decode a hero's replaceable panorama images (portrait cards, vertical,
+/// small + minimap icons, menu background, name logo) into the app-data cache.
+/// `display_stem` is the display-name file stem (abrams, grey_talon, ...) used
+/// by backgrounds + hero_names; `codename` is the internal one (atlas, ...).
+#[tauri::command]
+pub fn hero_images(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+    codename: String,
+    display_stem: String,
+) -> Result<Vec<HeroImage>, String> {
+    use tauri::Manager;
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("hero_portraits")
+        .join("hero_images")
+        .join(&codename);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+
+    let kinds: Vec<(&str, String)> = vec![
+        ("card", format!("panorama/images/heroes/{codename}_card_psd.vtex_c")),
+        ("card_critical", format!("panorama/images/heroes/{codename}_card_critical_psd.vtex_c")),
+        ("card_gloat", format!("panorama/images/heroes/{codename}_card_gloat_psd.vtex_c")),
+        ("vertical", format!("panorama/images/heroes/{codename}_vertical_psd.vtex_c")),
+        ("sm", format!("panorama/images/heroes/{codename}_sm_psd.vtex_c")),
+        ("mm", format!("panorama/images/heroes/{codename}_mm_psd.vtex_c")),
+        ("background", format!("panorama/images/heroes/backgrounds/{display_stem}_bg_psd.vtex_c")),
+    ];
+    // Decode any not-yet-cached textures in one helper pass.
+    let missing: Vec<String> = kinds
+        .iter()
+        .filter(|(kind, _)| !dir.join(format!("{kind}.png")).exists())
+        .map(|(_, t)| t.clone())
+        .collect();
+    if !missing.is_empty() {
+        if let Ok(pairs) = crate::vpk::texture_batch(&helper_path, &pak_path, &dir.to_string_lossy(), &missing) {
+            for (stem, png) in pairs {
+                // stem is the vtex file stem — map it back to its kind slot.
+                if let Some((kind, _)) = kinds.iter().find(|(_, t)| {
+                    t.rsplit('/').next().unwrap_or("").trim_end_matches(".vtex_c") == stem
+                }) {
+                    let _ = std::fs::rename(&png, dir.join(format!("{kind}.png")));
+                }
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    for (kind, target) in &kinds {
+        let png = dir.join(format!("{kind}.png"));
+        if !png.exists() {
+            continue; // hero lacks this asset (e.g. no gloat card yet)
+        }
+        let (width, height) = png_dimensions(&png).unwrap_or((0, 0));
+        out.push(HeroImage {
+            kind: (*kind).to_string(),
+            target: target.clone(),
+            preview: png.to_string_lossy().to_string(),
+            width,
+            height,
+            svg: false,
+        });
+    }
+    // The hero-name logo is a compiled SVG: decompile for display.
+    let svg_path = dir.join("logo.svg");
+    if !svg_path.exists() {
+        let _ = crate::vpk::decompile_from_vpk(
+            &helper_path,
+            &pak_path,
+            &format!("panorama/images/heroes/hero_names/{display_stem}.vsvg_c"),
+            &svg_path.to_string_lossy(),
+        );
+    }
+    if svg_path.exists() {
+        out.push(HeroImage {
+            kind: "logo".into(),
+            target: format!("panorama/images/heroes/hero_names/{display_stem}.vsvg_c"),
+            preview: svg_path.to_string_lossy().to_string(),
+            width: 0,
+            height: 0,
+            svg: true,
+        });
+    }
+    Ok(out)
+}
+
 /// Decompile a poster atlas material from the game pak into the app-data cache
 /// (once) and return its color texture as a viewable PNG. Powers the Posters
 /// tab sheet display.

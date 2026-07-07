@@ -30,6 +30,8 @@ import {
   eventsForRefs,
   cachePack,
   packIcons,
+  heroImages,
+  type HeroImage,
   type ImportEvent,
   listSoundeventFiles,
   downloadTools,
@@ -547,6 +549,80 @@ export default function App() {
   // hero detail under the ability bar.
   const [heroSounds, setHeroSounds] = useState<HeroSound[] | null>(null);
   const [heroSoundsLoading, setHeroSoundsLoading] = useState(false);
+  // The selected hero's replaceable panorama images (cards/icons/minimap/bg/logo).
+  const [heroImgs, setHeroImgs] = useState<HeroImage[] | null>(null);
+  useEffect(() => {
+    setHeroImgs(null);
+    if (!selectedHero) return;
+    const s = settingsRef.current;
+    // backgrounds + hero_names use the display-name stem (abrams, grey_talon…);
+    // cards/icons use the internal codename (selectedHero).
+    const stem = (selectedHeroInfo?.displayName ?? selectedHero)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "");
+    let cancelled = false;
+    heroImages(s.vpkHelperPath, s.deadlockPak, selectedHero, stem)
+      .then((r) => !cancelled && setHeroImgs(r))
+      .catch(() => !cancelled && setHeroImgs([]));
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedHero, selectedHeroInfo]);
+
+  // Replace / clear one hero image slot (rides the icon-mod pipeline).
+  async function pickHeroImage(img: HeroImage) {
+    if (!selectedHero) return;
+    const picked = await openDialog({
+      multiple: false,
+      filters: [{ name: "Image", extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }],
+    });
+    if (typeof picked !== "string") return;
+    const id = `heroimg_${selectedHero}_${img.kind}`;
+    setProject((prev) =>
+      prev
+        ? {
+            ...prev,
+            iconMods: [
+              ...(prev.iconMods ?? []).filter((m) => m.id !== id),
+              {
+                id,
+                name: `${selectedHeroInfo?.displayName ?? selectedHero} — ${img.kind}`,
+                targetVtexc: img.target,
+                sourceImage: picked,
+                width: img.width || 512,
+                height: img.height || 512,
+                hue: 0,
+                enabled: true,
+              },
+            ],
+          }
+        : prev,
+    );
+    push("success", "Hero image set — compile to apply");
+  }
+
+  function removeHeroImage(img: HeroImage) {
+    if (!selectedHero) return;
+    const id = `heroimg_${selectedHero}_${img.kind}`;
+    setProject((prev) =>
+      prev ? { ...prev, iconMods: (prev.iconMods ?? []).filter((m) => m.id !== id) } : prev,
+    );
+  }
+
+  const heroCustomImages = useMemo(() => {
+    const out: Record<string, { src: string; enabled: boolean }> = {};
+    if (selectedHero) {
+      const p = `heroimg_${selectedHero}_`;
+      for (const m of project?.iconMods ?? []) {
+        if (m.id.startsWith(p)) {
+          out[m.id.slice(p.length)] = { src: m.sourceImage, enabled: m.enabled !== false };
+        }
+      }
+    }
+    return out;
+  }, [project?.iconMods, selectedHero]);
   // Selected shop item (Items tab) -> drill-in to its sound events.
   const [selectedItem, setSelectedItem] = useState<ItemCard | null>(null);
   const [itemSounds, setItemSounds] = useState<HeroAbilitySound[] | null>(null);
@@ -3358,6 +3434,10 @@ export default function App() {
               renderSound={renderSound}
               sounds={heroSounds}
               soundsLoading={heroSoundsLoading}
+              images={heroImgs}
+              customImages={heroCustomImages}
+              onPickImage={(img) => void pickHeroImage(img)}
+              onRemoveImage={removeHeroImage}
               onPreviewSound={(ref) => decodeStock(ref)}
               onOpenSound={(s) => void openVoiceline(s)}
               hasContent={(eventName) => {

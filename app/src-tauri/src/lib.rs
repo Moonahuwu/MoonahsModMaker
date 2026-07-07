@@ -118,6 +118,7 @@ pub fn run() {
             commands::effect_preview,
             commands::poster_sheet,
             commands::pack_icons,
+            commands::hero_images,
             commands::open_in_viewer,
             commands::item_particles,
             commands::item_roster,

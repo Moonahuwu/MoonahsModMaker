@@ -783,6 +783,30 @@ export function packIcons(helperPath: string, source: string): Promise<PackIcon[
   return invoke("pack_icons", { helperPath, source });
 }
 
+export interface HeroImage {
+  /** card | card_critical | card_gloat | vertical | sm | mm | background | logo */
+  kind: string;
+  /** Compiled path the game references (IconMod override target). */
+  target: string;
+  /** Decoded preview in the app-data cache (PNG; SVG for the logo). */
+  preview: string;
+  width: number;
+  height: number;
+  /** SVG assets (the name logo) are display-only for now. */
+  svg: boolean;
+}
+
+/** Decode a hero's replaceable panorama images (cards, icons, minimap,
+ *  background, logo) into the app-data cache. */
+export function heroImages(
+  helperPath: string,
+  pakPath: string,
+  codename: string,
+  displayStem: string,
+): Promise<HeroImage[]> {
+  return invoke("hero_images", { helperPath, pakPath, codename, displayStem });
+}
+
 export interface PosterSheet {
   /** Absolute path of the decoded sheet color texture (PNG). */
   colorPng: string;
