@@ -2954,17 +2954,30 @@ export default function App() {
               .filter((e) => e.group === g)
               .reduce((n, e) => n + e.songs.length, 0);
 
+  // Boot animation: on a fresh launch the sidebar slides open and its entries
+  // cascade in. `booted` flips once the show is over so later re-renders
+  // (new tabs, count changes) don't replay it.
+  const [booted, setBooted] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setBooted(true), 1800);
+    return () => clearTimeout(t);
+  }, []);
+  const bootCls = booted ? "" : " eim-boot-item";
+  const bootStyle = (i: number): React.CSSProperties | undefined =>
+    booted ? undefined : { animationDelay: `${0.35 + i * 0.05}s` };
+
   // One sidebar tab button (indented when nested under a parent category).
-  const renderTabButton = (g: string, indented: boolean) => {
+  const renderTabButton = (g: string, indented: boolean, bootIdx?: number) => {
     const count = tabCount(g);
     const active = g === activeTab;
     return (
       <button
         key={g}
         onClick={() => setActiveTab(g)}
+        style={bootIdx !== undefined ? bootStyle(bootIdx) : undefined}
         className={`flex items-center justify-between rounded-lg py-2 pr-3 text-left text-sm transition ${
-          indented ? "pl-3" : "px-3"
-        } ${
+          bootIdx !== undefined ? bootCls : ""
+        } ${indented ? "pl-3" : "px-3"} ${
           active
             ? "bg-zinc-800 text-zinc-100"
             : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200"
@@ -2996,8 +3009,12 @@ export default function App() {
       <Backdrop />
       {/* Left sidebar: brand + tabs — fixed, never scrolls. Opaque so the
           backdrop animation only shows through the main content area. */}
-      <aside className="relative flex h-screen w-52 shrink-0 flex-col gap-1 border-r border-zinc-800 bg-zinc-950 p-4">
-        <div className="mb-2">
+      <aside
+        className={`relative flex h-screen w-52 shrink-0 flex-col gap-1 border-r border-zinc-800 bg-zinc-950 p-4${
+          booted ? "" : " eim-boot-aside"
+        }`}
+      >
+        <div className={`mb-2${bootCls}`} style={bootStyle(0)}>
           <h1 className="text-sm font-bold uppercase tracking-wider text-zinc-300">
             Moonah's
           </h1>
@@ -3007,7 +3024,8 @@ export default function App() {
         <button
           onClick={() => setModifiedOnly((v) => !v)}
           title="Show only the tabs, heroes, items and slots that carry your changes"
-          className={`mb-2 flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
+          style={bootStyle(1)}
+          className={`mb-2 flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium transition${bootCls} ${
             modifiedOnly
               ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-300"
               : "border-zinc-800 text-zinc-500 hover:border-zinc-600 hover:text-zinc-300"
@@ -3017,10 +3035,10 @@ export default function App() {
           Modified only
         </button>
         <nav className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
-          {navItems.map((item) => {
+          {navItems.map((item, navIdx) => {
             if (item.type === "tab") {
               if (modifiedOnly && !groupModified(item.key) && item.key !== activeTab) return null;
-              return renderTabButton(item.key, false);
+              return renderTabButton(item.key, false, navIdx + 2);
             }
             // Category: a collapsible parent header over its member tabs.
             const memberTabs = modifiedOnly
@@ -3031,7 +3049,11 @@ export default function App() {
             const catCount = memberTabs.reduce((n, t) => n + tabCount(t), 0);
             const hasActive = item.tabs.includes(activeTab);
             return (
-              <div key={item.label} className="flex flex-col gap-1">
+              <div
+                key={item.label}
+                className={`flex flex-col gap-1${bootCls}`}
+                style={bootStyle(navIdx + 2)}
+              >
                 <button
                   onClick={() =>
                     setCollapsedCats((prev) => {
@@ -3066,7 +3088,10 @@ export default function App() {
             );
           })}
         </nav>
-        <div className="mt-auto flex items-center justify-between pt-2">
+        <div
+          className={`mt-auto flex items-center justify-between pt-2${bootCls}`}
+          style={bootStyle(navItems.length + 2)}
+        >
           <button
             onClick={() => setSettingsOpen(true)}
             aria-label="Settings"
