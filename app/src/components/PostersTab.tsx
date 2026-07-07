@@ -51,6 +51,14 @@ const CATEGORIES: { key: string; label: string; hint: string; icon: string }[] =
 
 const IMAGE_FILTERS = [{ name: "Image", extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }];
 
+/** Checkerboard = "this part is transparent in-game" (the usual convention),
+ *  so shaped decals read as working instead of showing a black box. */
+const CHECKER: React.CSSProperties = {
+  backgroundImage:
+    "conic-gradient(#3f3f46 90deg, #27272a 90deg 180deg, #3f3f46 180deg 270deg, #27272a 270deg)",
+  backgroundSize: "12px 12px",
+};
+
 /** Pseudo region id for full-sheet replacements ("modify the original" flow). */
 const WHOLE = "whole_sheet";
 
@@ -1023,10 +1031,10 @@ export function PostersTab({
                 {ov && !isHidden && (
                   <>
                     {/* Shape-cut regions compile with the rect blanked (the
-                        art's alpha becomes the decal shape), so hide the
-                        original behind the preview too. */}
+                        art's alpha becomes the decal shape) — checkerboard
+                        behind the preview = "transparent in-game here". */}
                     {(p.alphaCoverage ?? 1) < 0.98 && (
-                      <div className="absolute inset-0 bg-zinc-950" />
+                      <div className="absolute inset-0" style={CHECKER} />
                     )}
                     <img
                       src={convertFileSrc(ov.sourceImage)}
@@ -1162,6 +1170,7 @@ export function PostersTab({
                   <img
                     src={convertFileSrc(selectedOv.sourceImage)}
                     className="mb-3 max-h-40 rounded-lg border border-zinc-800 object-contain"
+                    style={CHECKER}
                     alt=""
                   />
                   <div className="mb-3 flex flex-wrap items-center gap-2">
