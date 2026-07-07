@@ -1947,6 +1947,38 @@ export default function App() {
     );
   }
 
+  // Loudness leveling: nudge EVERY track's + sound replacement's gain by delta
+  // dB (clamped ±24). Changed items lose their compile stamp so they re-render.
+  function bulkGain(delta: number) {
+    const cur = projectRef.current;
+    const touched =
+      (cur?.events.reduce((n, e) => n + e.songs.length, 0) ?? 0) +
+      (cur?.soundOverrides?.length ?? 0);
+    if (touched === 0) return push("info", "No tracks or replacements to adjust");
+    const clamp = (v: number) => Math.max(-24, Math.min(24, v + delta));
+    setProject((prev) =>
+      prev
+        ? {
+            ...prev,
+            events: prev.events.map((e) => ({
+              ...e,
+              songs: e.songs.map((s) => ({
+                ...s,
+                gainDb: clamp(s.gainDb),
+                lastCompiledHash: null,
+              })),
+            })),
+            soundOverrides: (prev.soundOverrides ?? []).map((o) => ({
+              ...o,
+              gainDb: clamp(o.gainDb),
+              lastCompiledHash: null,
+            })),
+          }
+        : prev,
+    );
+    push("success", `Adjusted gain ${delta > 0 ? "+" : ""}${delta} dB on ${touched} item(s)`);
+  }
+
   // Slot-targeted toggles (slots can share an event name, so key by slot id).
   function patchSlot(slotId: string, fn: (e: EventProject) => EventProject) {
     setProject((prev) =>
@@ -3505,6 +3537,7 @@ export default function App() {
             worldOverrides={project.worldOverrides ?? []}
             posterOverrides={project.posterOverrides ?? []}
             onCompiled={markAllCompiled}
+            onBulkGain={bulkGain}
             onFixForNewPatch={refreshVanilla}
             tabLabels={TAB_LABELS}
           />

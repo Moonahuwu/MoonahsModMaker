@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -16,8 +16,8 @@ import {
 import { cItemRoster } from "../lib/dataCache";
 import { BuildPreview, type PreviewMod, type YoursFile } from "./BuildPreview";
 import { ExportModal, type ExportExtra, type ExportSlot } from "./ExportModal";
-import { buildCompileConfig, installSrcVpk, slotSoundFolder, type Settings } from "../lib/settings";
-import { songStatus, overrideHash, effectHash } from "../lib/songHash";
+import { buildCompileConfig, installSrcVpk, sheetSiblingsKey, slotSoundFolder, type Settings } from "../lib/settings";
+import { songStatus, overrideHash, effectHash, posterHash } from "../lib/songHash";
 import { useToast } from "./Toaster";
 import type { EffectOverride, EventProject, GlobalOverride, IconMod, PosterOverride, SoundOverride, VdataOverride, WorldOverride } from "../types";
 
@@ -36,6 +36,7 @@ export function CompileBar({
   posterOverrides,
   onCompiled,
   onFixForNewPatch,
+  onBulkGain,
   tabLabels,
 }: {
   settings: Settings;
@@ -50,6 +51,8 @@ export function CompileBar({
   posterOverrides: PosterOverride[];
   /** Called after a successful compile so the project can record compiled hashes. */
   onCompiled: () => void;
+  /** Nudge every track's + replacement's gain by `delta` dB (loudness leveling). */
+  onBulkGain: (delta: number) => void;
   /** Re-pull the live game's soundevents (pak01) into the merge base and fix
    *  drifted stock refs; resolves to the corrected events + the refreshed
    *  vanillaRoot (or null on failure). */
@@ -84,6 +87,42 @@ export function CompileBar({
 
   const songCount = events.reduce((n, e) => n + e.songs.length, 0);
   const modCount = settings.importedMods.length;
+  // "Compiled and installed just now" — drives the success banner.
+  const [success, setSuccess] = useState<{ path?: string } | null>(null);
+
+  // How many items changed since their last successful compile — the pulse +
+  // chip on the Compile button, so a needed recompile is never a guess.
+  const changedN = useMemo(() => {
+    let n = 0;
+    for (const e of events) for (const s of e.songs) if (songStatus(s) !== "compiled") n++;
+    for (const o of soundOverrides)
+      if (!o.lastCompiledHash || overrideHash(o) !== o.lastCompiledHash) n++;
+    for (const e of effectOverrides)
+      if (!e.lastCompiledHash || effectHash(e) !== e.lastCompiledHash) n++;
+    for (const p of posterOverrides)
+      if (
+        !p.lastCompiledHash ||
+        posterHash(p, sheetSiblingsKey(posterOverrides, p.sheetId)) !== p.lastCompiledHash
+      )
+        n++;
+    return n;
+  }, [events, soundOverrides, effectOverrides, posterOverrides]);
+
+  /** Launch Deadlock (used by the one-shot button and the success banner). */
+  async function launchOnly() {
+    setLaunching(true);
+    try {
+      const root = settings.deadlockPak
+        ? settings.deadlockPak.replace(/[\\/]/g, "/").split("/").slice(0, -3).join("/")
+        : undefined;
+      await launchGame(root);
+      push("success", "Launching Deadlock…");
+    } catch (e) {
+      push("error", `Launch failed: ${e}`);
+    } finally {
+      setLaunching(false);
+    }
+  }
   const canCompile =
     songCount > 0 ||
     modCount > 0 ||
@@ -152,6 +191,7 @@ export function CompileBar({
     setRunning(true);
     setReport(null);
     setFeed([]);
+    setSuccess(null);
     try {
       // UI soundevent changes make broad, breakage-prone menu edits — excluded
       // from the build unless explicitly enabled (toggle on the UI tab).
@@ -200,6 +240,7 @@ export function CompileBar({
         onCompiled();
         push("success", `Compiled → ${r.outputPath ?? "done"}`);
         if (s.installAfterCompile) await install();
+        setSuccess({ path: r.outputPath ?? undefined });
         return true;
       }
       // Partial success: soft failures didn't stop the build — an artifact
@@ -229,20 +270,7 @@ export function CompileBar({
     // compile() already installs when "install after compile" is on; otherwise
     // install now so the launched game picks up the new build.
     if (!settings.installAfterCompile && !(await install())) return;
-    setLaunching(true);
-    try {
-      // Derive the Deadlock root from the pak path (…/game/citadel/pak01_dir.vpk)
-      // as an exe fallback if Steam can't start.
-      const root = settings.deadlockPak
-        ? settings.deadlockPak.replace(/[\\/]/g, "/").split("/").slice(0, -3).join("/")
-        : undefined;
-      await launchGame(root);
-      push("success", "Launching Deadlock…");
-    } catch (e) {
-      push("error", `Launch failed: ${e}`);
-    } finally {
-      setLaunching(false);
-    }
+    await launchOnly();
   }
 
   /** One-stop patch fix: re-pull the live game's soundevents (pak01) into the
@@ -578,6 +606,38 @@ export function CompileBar({
             exit={{ opacity: 0, height: 0 }}
             className="overflow-hidden"
           >
+            {/* Pack summary: everything this profile ships, at a glance. */}
+            <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-1.5 text-xs text-zinc-400">
+              <span className="font-semibold text-zinc-300">Your pack:</span>
+              <span>{songCount} track{songCount === 1 ? "" : "s"}</span>
+              {soundOverrides.length > 0 && <span>{soundOverrides.length} sound repl.</span>}
+              {posterOverrides.filter((p) => !p.erase).length > 0 && (
+                <span>{posterOverrides.filter((p) => !p.erase).length} wall art</span>
+              )}
+              {posterOverrides.filter((p) => p.erase).length > 0 && (
+                <span>{posterOverrides.filter((p) => p.erase).length} hidden decal(s)</span>
+              )}
+              {iconMods.length > 0 && <span>{iconMods.length} image(s)</span>}
+              {effectOverrides.length > 0 && <span>{effectOverrides.length} effect(s)</span>}
+              {modCount > 0 && <span>{modCount} merged mod(s)</span>}
+              <span className="ml-auto flex items-center gap-1.5 text-zinc-500">
+                Bulk gain
+                <button
+                  onClick={() => onBulkGain(-1)}
+                  title="Lower every track's and replacement's gain by 1 dB"
+                  className="rounded border border-zinc-700 px-1.5 py-0.5 text-zinc-300 hover:border-zinc-500"
+                >
+                  −1 dB
+                </button>
+                <button
+                  onClick={() => onBulkGain(1)}
+                  title="Raise every track's and replacement's gain by 1 dB"
+                  className="rounded border border-zinc-700 px-1.5 py-0.5 text-zinc-300 hover:border-zinc-500"
+                >
+                  +1 dB
+                </button>
+              </span>
+            </div>
             <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
               <span className="w-12 font-medium text-zinc-400">Install</span>
               <div className="inline-flex overflow-hidden rounded-lg border border-zinc-700">
@@ -714,6 +774,49 @@ export function CompileBar({
         )}
       </AnimatePresence>
 
+      {/* Post-compile success moment: close the loop right here. */}
+      <AnimatePresence>
+        {success && !running && (
+          <motion.div
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 6 }}
+            className="mb-2 flex flex-wrap items-center gap-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2"
+          >
+            <span className="text-sm font-semibold text-emerald-300">✓ Compiled</span>
+            {success.path && (
+              <span className="min-w-0 truncate text-xs text-zinc-500" title={success.path}>
+                {success.path}
+              </span>
+            )}
+            <span className="ml-auto flex gap-2">
+              {!settings.installAfterCompile && (
+                <button
+                  onClick={() => void install()}
+                  disabled={installing}
+                  className="rounded-md border border-emerald-500/50 px-3 py-1 text-xs font-semibold text-emerald-200 transition hover:bg-emerald-500/15 disabled:opacity-50"
+                >
+                  {installing ? "Installing…" : "Install"}
+                </button>
+              )}
+              <button
+                onClick={() => void launchOnly()}
+                disabled={launching}
+                className="rounded-md bg-emerald-500 px-3 py-1 text-xs font-semibold text-zinc-950 transition hover:bg-emerald-400 disabled:opacity-50"
+              >
+                {launching ? "Launching…" : "▶ Launch game"}
+              </button>
+              <button
+                onClick={() => setSuccess(null)}
+                className="rounded-md px-1.5 text-xs text-zinc-500 hover:text-zinc-300"
+              >
+                ✕
+              </button>
+            </span>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Control row — the only row visible by default */}
       <div className="flex flex-wrap items-center gap-3">
         <motion.button
@@ -753,13 +856,21 @@ export function CompileBar({
             whileTap={{ scale: 0.97 }}
             onClick={() => void compile()}
             disabled={busy || !canCompile}
-            className="rounded-lg bg-emerald-600 px-5 py-2 text-sm font-semibold text-white shadow-lg shadow-emerald-900/30 transition hover:bg-emerald-500 disabled:opacity-40 disabled:shadow-none"
+            className={`rounded-lg bg-emerald-600 px-5 py-2 text-sm font-semibold text-white shadow-lg shadow-emerald-900/30 transition hover:bg-emerald-500 disabled:opacity-40 disabled:shadow-none${
+              changedN > 0 && !busy ? " eim-pulse" : ""
+            }`}
+            title={changedN > 0 ? `${changedN} item(s) changed since the last compile` : undefined}
           >
             {running
               ? "Compiling…"
               : settings.installAfterCompile
                 ? "Compile & Install"
                 : "Compile"}
+            {changedN > 0 && !running && (
+              <span className="ml-2 rounded bg-white/20 px-1.5 text-[11px] tabular-nums">
+                {changedN}
+              </span>
+            )}
           </motion.button>
           <motion.button
             whileTap={{ scale: 0.97 }}

@@ -63,9 +63,21 @@ export function HeroGrid({
   }
 
   if (loading || !heroes) {
+    // Skeleton shimmer in the grid's real shape while portraits decode.
     return (
-      <div className="p-10 text-center text-sm text-zinc-500">
-        Decoding hero portraits from the game… (first time only)
+      <div>
+        <p className="mb-3 text-center text-xs text-zinc-600">
+          Decoding hero portraits from the game… (first time only)
+        </p>
+        <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6">
+          {Array.from({ length: 18 }, (_, i) => (
+            <div
+              key={i}
+              className="aspect-[3/4] animate-pulse rounded-xl border border-zinc-800/60 bg-zinc-900"
+              style={{ animationDelay: `${(i % 6) * 0.1}s` }}
+            />
+          ))}
+        </div>
       </div>
     );
   }

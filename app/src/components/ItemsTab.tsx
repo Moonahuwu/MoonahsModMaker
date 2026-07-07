@@ -326,7 +326,31 @@ export function ItemsTab({
     );
   }
   if (busy || !items) {
-    return <div className="p-10 text-center text-sm text-zinc-500">Loading the shop from the game…</div>;
+    // Skeleton shimmer in the shop's three-column shape while icons decode.
+    return (
+      <div>
+        <p className="mb-3 text-center text-xs text-zinc-600">Loading the shop from the game…</p>
+        <div className="grid grid-cols-3 gap-4">
+          {CATS.map((c) => (
+            <div key={c.key} className="flex flex-col gap-2">
+              <div
+                className="h-6 animate-pulse rounded"
+                style={{ backgroundColor: `${c.color}33` }}
+              />
+              <div className="grid grid-cols-4 gap-1.5">
+                {Array.from({ length: 16 }, (_, i) => (
+                  <div
+                    key={i}
+                    className="aspect-square animate-pulse rounded-lg border border-zinc-800/60 bg-zinc-900"
+                    style={{ animationDelay: `${(i % 4) * 0.12}s` }}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
   }
 
   const shownItems = modifiedFilter ? items.filter((i) => modifiedFilter(i.name)) : items;
