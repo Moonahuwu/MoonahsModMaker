@@ -455,20 +455,27 @@ export function PostersTab({
     return sh.width / el.getBoundingClientRect().width;
   }
 
-  /** Wheel-zoom toward the cursor, clamped 1x..8x. At 1x the pan resets. */
-  function onWheelZoom(e: React.WheelEvent) {
+  // Wheel-zoom toward the cursor, clamped 1x..8x (1x resets the pan). A NATIVE
+  // non-passive listener: React's synthetic onWheel can't preventDefault (the
+  // browser registers it passive), so zooming would also scroll the page.
+  useEffect(() => {
     const el = containerRef.current;
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
-    const cx = e.clientX - rect.left;
-    const cy = e.clientY - rect.top;
-    setView((v) => {
-      const zoom = Math.min(8, Math.max(1, v.zoom * (e.deltaY < 0 ? 1.2 : 1 / 1.2)));
-      if (zoom === 1) return { zoom: 1, x: 0, y: 0 };
-      const k = zoom / v.zoom;
-      return { zoom, x: cx - (cx - v.x) * k, y: cy - (cy - v.y) * k };
-    });
-  }
+    if (!el || !sheet) return;
+    const handler = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const cx = e.clientX - rect.left;
+      const cy = e.clientY - rect.top;
+      setView((v) => {
+        const zoom = Math.min(8, Math.max(1, v.zoom * (e.deltaY < 0 ? 1.2 : 1 / 1.2)));
+        if (zoom === 1) return { zoom: 1, x: 0, y: 0 };
+        const k = zoom / v.zoom;
+        return { zoom, x: cx - (cx - v.x) * k, y: cy - (cy - v.y) * k };
+      });
+    };
+    el.addEventListener("wheel", handler, { passive: false });
+    return () => el.removeEventListener("wheel", handler);
+  }, [sheet]);
 
   /** Pan with middle-drag anywhere, or left-drag on the sheet background. */
   function startPan(e: React.PointerEvent) {
@@ -917,7 +924,6 @@ export function PostersTab({
       <div className="flex flex-col gap-4 xl:flex-row">
         <div
           ref={containerRef}
-          onWheel={onWheelZoom}
           onPointerDown={startPan}
           className="relative w-full max-w-3xl shrink-0 select-none overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950"
           style={{ aspectRatio: `${sheet.width} / ${sheet.height}` }}
@@ -1086,7 +1092,8 @@ export function PostersTab({
                 {selectedRect.w}×{selectedRect.h} at ({selectedRect.x},{selectedRect.y})
                 {(selectedDef.alphaCoverage ?? 1) < 0.98 && (
                   <span className="ml-1 text-amber-400">
-                    · shape-cut in vanilla — your art will fill the full rectangle
+                    · shape-cut in vanilla — a PNG with transparency keeps its shape in-game;
+                    opaque art fills the whole rectangle
                   </span>
                 )}
               </div>

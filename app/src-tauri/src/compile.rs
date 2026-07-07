@@ -1084,26 +1084,56 @@ fn composite_poster(
     std::fs::rename(&tmp, sheet_png).map_err(|e| e.to_string())
 }
 
-/// Paint the rect solid white in the trans mask (in place) so full-frame
-/// replacement art isn't clipped to the vanilla cut-out silhouette.
-fn fill_trans_rect(
+/// Write the USER ART'S OWN alpha channel into the rect of the trans mask
+/// (in place), fitted/rotated exactly like the color composite. A shaped PNG
+/// (transparent background) becomes a shaped decal in-game — graffiti stays
+/// graffiti; a fully-opaque image fills the rect solid (alphaextract of an
+/// opaque source is plain white), which un-clips the vanilla cut-out.
+#[allow(clippy::too_many_arguments)]
+fn composite_trans_alpha(
     ffmpeg: Option<&str>,
     trans_png: &Path,
+    src: &str,
     x: u32,
     y: u32,
     w: u32,
     h: u32,
+    fit: &str,
+    rotation: u32,
 ) -> Result<(), String> {
     let exe = ffmpeg.unwrap_or("ffmpeg");
+    let rot = match rotation % 360 {
+        90 => "transpose=1,",
+        180 => "hflip,vflip,",
+        270 => "transpose=2,",
+        _ => "",
+    };
+    // Same fit chain as the color pass, applied to the art's alpha plane.
+    let fit_chain = match fit {
+        "stretch" => format!("scale={w}:{h}:flags=lanczos"),
+        "contain" => format!("scale={w}:{h}:force_original_aspect_ratio=decrease:flags=lanczos"),
+        _ => format!(
+            "scale={w}:{h}:force_original_aspect_ratio=increase:flags=lanczos,crop={w}:{h}"
+        ),
+    };
+    let pos = if fit == "contain" {
+        format!("{x}+({w}-w)/2:{y}+({h}-h)/2")
+    } else {
+        format!("{x}:{y}")
+    };
+    let filter = format!(
+        "[0:v]format=rgb24[b];[1:v]{rot}format=rgba,alphaextract,{fit_chain}[a];[b][a]overlay={pos}"
+    );
     let tmp = trans_png.with_extension("eim_tmp.png");
-    let vf = format!("drawbox=x={x}:y={y}:w={w}:h={h}:color=white@1:t=fill");
     let out = crate::procutil::quiet(exe)
         .args([
             "-y",
             "-i",
             &trans_png.to_string_lossy(),
-            "-vf",
-            &vf,
+            "-i",
+            src,
+            "-filter_complex",
+            &filter,
             "-frames:v",
             "1",
             &tmp.to_string_lossy(),
@@ -1271,7 +1301,17 @@ fn compile_posters(
                 if let Some(trans) = &trans_rel {
                     let trans_abs = content_root.join(trans);
                     if trans_abs.exists() {
-                        if let Err(e) = fill_trans_rect(ffmpeg, &trans_abs, ov.x, ov.y, ov.w, ov.h) {
+                        if let Err(e) = composite_trans_alpha(
+                            ffmpeg,
+                            &trans_abs,
+                            &ov.source_image,
+                            ov.x,
+                            ov.y,
+                            ov.w,
+                            ov.h,
+                            &ov.fit,
+                            ov.rotation,
+                        ) {
                             report.soft_fail(format!("poster trans: {}", ov.label), e);
                             continue 'sheets;
                         }
