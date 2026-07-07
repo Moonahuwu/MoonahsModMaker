@@ -31,9 +31,11 @@ static int Dispatch(string[] args)
             "pack" => Pack(args),
             "extract" => Extract(args),
             "list" => List(args),
+            "crcs" => Crcs(args),
             "decode" => Decode(args),
             "decompile" => Decompile(args),
             "extractall" => ExtractAll(args),
+            "decompileall" => DecompileAll(args),
             "texture" => TextureCmd(args),
             "texturebatch" => TextureBatch(args),
             "heroes" => Heroes(args),
@@ -477,6 +479,88 @@ static PackageEntry? FindFuzzy(Package package, string internalPath)
 // extractall <vpk> <destDir> [pathPrefix]
 // Extracts every file (optionally only those under pathPrefix) into destDir,
 // preserving the content-relative folder layout. Prints the count.
+// decompileall <vpk> <destDir> [pathPrefix]
+// Decompile EVERYTHING in a vpk into source form, preserving the folder
+// structure: sounds → mp3/wav/aac, textures → png, other compiled resources →
+// decompiled text (KV3 etc.); anything that can't be decompiled is copied raw.
+static int DecompileAll(string[] args)
+{
+    if (args.Length < 3)
+    {
+        Console.Error.WriteLine("usage: decompileall <vpk> <destDir> [pathPrefix]");
+        return 2;
+    }
+    var vpk = Path.GetFullPath(args[1]);
+    var destDir = Path.GetFullPath(args[2]);
+    var prefix = args.Length >= 4 ? args[3].Replace('\\', '/').TrimStart('/') : "";
+
+    using var package = new Package();
+    package.Read(vpk);
+    int decompiled = 0, raw = 0, fellBack = 0;
+
+    string Prepare(string rel)
+    {
+        var dest = Path.Combine(destDir, rel.Replace('/', Path.DirectorySeparatorChar));
+        var dir = Path.GetDirectoryName(dest);
+        if (!string.IsNullOrEmpty(dir))
+            Directory.CreateDirectory(dir);
+        return dest;
+    }
+
+    foreach (var byExt in package.Entries)
+    {
+        foreach (var entry in byExt.Value)
+        {
+            var full = entry.GetFullPath();
+            if (prefix.Length > 0 && !full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                continue;
+            package.ReadEntry(entry, out var bytes);
+
+            if (full.EndsWith("_c", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    using var resource = new Resource();
+                    resource.Read(new MemoryStream(bytes));
+                    var noC = full[..^2]; // drop the trailing "_c"
+                    if (resource.DataBlock is Sound snd)
+                    {
+                        var ext = snd.SoundType switch
+                        {
+                            Sound.AudioFileType.MP3 => "mp3",
+                            Sound.AudioFileType.AAC => "aac",
+                            _ => "wav",
+                        };
+                        var dest = Prepare(Path.ChangeExtension(noC, ext));
+                        using var s = snd.GetSoundStream();
+                        using var fs = File.Create(dest);
+                        s.CopyTo(fs);
+                    }
+                    else if (resource.DataBlock is Texture tex)
+                    {
+                        WritePng(tex, Prepare(Path.ChangeExtension(noC, "png")));
+                    }
+                    else
+                    {
+                        using var content = FileExtract.Extract(resource, null, null);
+                        File.WriteAllBytes(Prepare(noC), content.Data);
+                    }
+                    decompiled++;
+                    continue;
+                }
+                catch
+                {
+                    fellBack++; // fall through to a raw copy
+                }
+            }
+            File.WriteAllBytes(Prepare(full), bytes);
+            raw++;
+        }
+    }
+    Console.WriteLine($"decompiled {decompiled}, copied {raw} raw ({fellBack} fell back) -> {destDir}");
+    return 0;
+}
+
 static int ExtractAll(string[] args)
 {
     if (args.Length < 3)
@@ -512,6 +596,37 @@ static int ExtractAll(string[] args)
 }
 
 // list <vpk> [substring]
+// crcs <vpk> [substring]
+// Dump each entry's CRC32 (from the vpk index — no data is read) as
+// "crc32hex<TAB>path", one per line. Used to detect pack files that are
+// byte-identical to the game's originals.
+static int Crcs(string[] args)
+{
+    if (args.Length < 2)
+    {
+        Console.Error.WriteLine("usage: crcs <vpk> [substring]");
+        return 2;
+    }
+    var vpk = Path.GetFullPath(args[1]);
+    string? filter = args.Length >= 3 ? args[2] : null;
+
+    using var package = new Package();
+    package.Read(vpk);
+
+    var sb = new System.Text.StringBuilder();
+    foreach (var byExt in package.Entries)
+    {
+        foreach (var entry in byExt.Value)
+        {
+            var full = entry.GetFullPath();
+            if (filter is null || full.Contains(filter, StringComparison.OrdinalIgnoreCase))
+                sb.Append(entry.CRC32.ToString("x8")).Append('\t').Append(full).Append('\n');
+        }
+    }
+    Console.Out.Write(sb.ToString());
+    return 0;
+}
+
 static int List(string[] args)
 {
     if (args.Length < 2)
