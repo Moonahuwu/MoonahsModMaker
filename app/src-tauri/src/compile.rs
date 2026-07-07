@@ -155,6 +155,11 @@ pub struct CompileConfig {
     /// npc_units.vdata / misc.vdata, recompile, and stage.
     #[serde(default)]
     pub world_overrides: Vec<WorldCompile>,
+    /// Poster art replacements: decompile the atlas material from the pak,
+    /// composite user art into pixel rects, recompile the `.vmat`, and stage
+    /// the `.vmat_c` + `.vtex_c` at the vanilla paths (whole-material override).
+    #[serde(default)]
+    pub poster_overrides: Vec<PosterCompile>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -283,6 +288,51 @@ impl EffectCompile {
         let r = self.vpcf_rel();
         r.rsplit('/').next().unwrap_or(&r).trim_end_matches(".vpcf").to_string()
     }
+    fn up_to_date(&self, skip_compile: bool, compiled_exists: bool) -> bool {
+        !skip_compile
+            && self.current_hash.is_some()
+            && self.current_hash == self.last_compiled_hash
+            && compiled_exists
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PosterCompile {
+    /// Manifest sheet id (unique per color texture), e.g. `posters_bodega_comp1`.
+    pub sheet_id: String,
+    /// Every `.vmat` sampling this sheet (all are decompiled + recompiled so no
+    /// surface keeps the vanilla art), e.g.
+    /// `["materials/overlays/posters_bodega_comp1.vmat"]`.
+    pub materials: Vec<String>,
+    /// Friendly label for report steps.
+    pub label: String,
+    /// Pixel rect inside the sheet's color texture.
+    pub x: u32,
+    pub y: u32,
+    pub w: u32,
+    pub h: u32,
+    /// Opaque fraction of the vanilla trans mask inside the rect; below ~0.98
+    /// the trans texture gets the rect painted white so full-frame art isn't
+    /// clipped to the old cut-out silhouette.
+    #[serde(default = "default_one")]
+    pub alpha_coverage: f32,
+    /// Absolute path to the user's source image.
+    pub source_image: String,
+    /// "cover" | "contain" | "stretch".
+    #[serde(default = "default_cover")]
+    pub fit: String,
+    #[serde(default)]
+    pub current_hash: Option<String>,
+    #[serde(default)]
+    pub last_compiled_hash: Option<String>,
+}
+
+fn default_cover() -> String {
+    "cover".to_string()
+}
+
+impl PosterCompile {
     fn up_to_date(&self, skip_compile: bool, compiled_exists: bool) -> bool {
         !skip_compile
             && self.current_hash.is_some()
@@ -861,6 +911,316 @@ fn compile_effect_overrides(
         }
     }
     Ok(())
+}
+
+// ---- Poster art replacement -------------------------------------------------
+
+/// Parse `"Texture<Param>" "materials/....png|tga"` references out of a
+/// decompiled `.vmat` (layered params like `TextureColor1` included). Returns
+/// (param, content-relative path) pairs in file order.
+fn vmat_texture_refs(text: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let t = line.trim();
+        let Some(rest) = t.strip_prefix("\"Texture") else { continue };
+        let Some(q) = rest.find('"') else { continue };
+        let param = format!("Texture{}", &rest[..q]);
+        let Some(vstart) = rest[q + 1..].find('"') else { continue };
+        let vrest = &rest[q + 1 + vstart + 1..];
+        let Some(vend) = vrest.find('"') else { continue };
+        let val = &vrest[..vend];
+        if val.starts_with("materials/") {
+            out.push((param, val.to_string()));
+        }
+    }
+    out
+}
+
+/// Strip the VRF-emitted `"Compiled Textures" { ... }` block from a decompiled
+/// vmat so resourcecompiler only sees source parameters.
+fn strip_compiled_textures(text: &str) -> String {
+    let Some(start) = text.find("\"Compiled Textures\"") else {
+        return text.to_string();
+    };
+    let Some(open_off) = text[start..].find('{') else {
+        return text.to_string();
+    };
+    let open = start + open_off;
+    let mut depth = 0usize;
+    for (i, ch) in text[open..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    let end = open + i + 1;
+                    let mut s = String::with_capacity(text.len());
+                    s.push_str(text[..start].trim_end_matches([' ', '\t']));
+                    s.push_str(text[end..].trim_start_matches(['\r', '\n']));
+                    return s;
+                }
+            }
+            _ => {}
+        }
+    }
+    text.to_string()
+}
+
+/// Composite `src` into the `(x,y,w,h)` rect of `sheet_png` (in place) via
+/// ffmpeg. `fit`: "cover" scale+crop (default) | "contain" letterbox over the
+/// original art | "stretch".
+fn composite_poster(
+    ffmpeg: Option<&str>,
+    sheet_png: &Path,
+    src: &str,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+    fit: &str,
+) -> Result<(), String> {
+    let exe = ffmpeg.unwrap_or("ffmpeg");
+    let filter = match fit {
+        "stretch" => format!("[1:v]scale={w}:{h}:flags=lanczos[a];[0:v][a]overlay={x}:{y}"),
+        "contain" => format!(
+            "[1:v]scale={w}:{h}:force_original_aspect_ratio=decrease:flags=lanczos[a];[0:v][a]overlay={x}+({w}-w)/2:{y}+({h}-h)/2"
+        ),
+        _ => format!(
+            "[1:v]scale={w}:{h}:force_original_aspect_ratio=increase:flags=lanczos,crop={w}:{h}[a];[0:v][a]overlay={x}:{y}"
+        ),
+    };
+    let tmp = sheet_png.with_extension("eim_tmp.png");
+    let out = crate::procutil::quiet(exe)
+        .args([
+            "-y",
+            "-i",
+            &sheet_png.to_string_lossy(),
+            "-i",
+            src,
+            "-filter_complex",
+            &filter,
+            "-frames:v",
+            "1",
+            &tmp.to_string_lossy(),
+        ])
+        .output()
+        .map_err(|e| format!("launching ffmpeg: {e}"))?;
+    if !out.status.success() {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(String::from_utf8_lossy(&out.stderr).lines().rev().take(2).collect::<Vec<_>>().join(" | "));
+    }
+    std::fs::rename(&tmp, sheet_png).map_err(|e| e.to_string())
+}
+
+/// Paint the rect solid white in the trans mask (in place) so full-frame
+/// replacement art isn't clipped to the vanilla cut-out silhouette.
+fn fill_trans_rect(
+    ffmpeg: Option<&str>,
+    trans_png: &Path,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+) -> Result<(), String> {
+    let exe = ffmpeg.unwrap_or("ffmpeg");
+    let tmp = trans_png.with_extension("eim_tmp.png");
+    let vf = format!("drawbox=x={x}:y={y}:w={w}:h={h}:color=white@1:t=fill");
+    let out = crate::procutil::quiet(exe)
+        .args([
+            "-y",
+            "-i",
+            &trans_png.to_string_lossy(),
+            "-vf",
+            &vf,
+            "-frames:v",
+            "1",
+            &tmp.to_string_lossy(),
+        ])
+        .output()
+        .map_err(|e| format!("launching ffmpeg: {e}"))?;
+    if !out.status.success() {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(String::from_utf8_lossy(&out.stderr).lines().rev().take(2).collect::<Vec<_>>().join(" | "));
+    }
+    std::fs::rename(&tmp, trans_png).map_err(|e| e.to_string())
+}
+
+/// Compiled-root-relative `_c` files produced for one poster material: the
+/// `.vmat_c` plus, for every source texture the vmat references, the
+/// `<stem>_<ext>_<hash>.vtex_c` files the compiler emitted next to it.
+fn poster_staged_rels(compiled_root: &Path, vmat_rel: &str, texture_refs: &[(String, String)]) -> Vec<String> {
+    let mut rels = Vec::new();
+    let vmat_c = format!("{vmat_rel}_c");
+    if compiled_root.join(&vmat_c).exists() {
+        rels.push(vmat_c);
+    }
+    for (_, tex_rel) in texture_refs {
+        let (dir, file) = match tex_rel.rsplit_once('/') {
+            Some((d, f)) => (d, f),
+            None => ("", tex_rel.as_str()),
+        };
+        let (stem, ext) = match file.rsplit_once('.') {
+            Some((s, e)) => (s, e),
+            None => (file, ""),
+        };
+        let prefix = format!("{stem}_{ext}_");
+        let abs_dir = compiled_root.join(dir);
+        let Ok(entries) = std::fs::read_dir(&abs_dir) else { continue };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with(&prefix) && name.ends_with(".vtex_c") {
+                let rel = if dir.is_empty() { name } else { format!("{dir}/{name}") };
+                if !rels.contains(&rel) {
+                    rels.push(rel);
+                }
+            }
+        }
+    }
+    rels
+}
+
+/// Composite every poster override into its atlas sheet and recompile the
+/// sheet's material(s). Returns compiled-root-relative `_c` paths to stage.
+fn compile_posters(
+    cfg: &CompileConfig,
+    content_root: &Path,
+    compiled_root: &Path,
+    report: &mut CompileReport,
+) -> Result<Vec<String>, ()> {
+    let mut staged: Vec<String> = Vec::new();
+    if cfg.poster_overrides.is_empty() {
+        return Ok(staged);
+    }
+    let helper = match cfg.vpk_helper_path.as_deref() {
+        Some(h) => h,
+        None => {
+            let _ = report.fail("posters", "vpkHelperPath not set");
+            return Err(());
+        }
+    };
+    let pak = match cfg.pak_path.as_deref() {
+        Some(p) => p,
+        None => {
+            let _ = report.fail("posters", "pakPath not set (needed to read the vanilla atlas)");
+            return Err(());
+        }
+    };
+    let ffmpeg = cfg.ffmpeg_path.as_deref();
+
+    let mut by_sheet: std::collections::BTreeMap<&str, Vec<&PosterCompile>> = Default::default();
+    for ov in &cfg.poster_overrides {
+        by_sheet.entry(ov.sheet_id.as_str()).or_default().push(ov);
+    }
+
+    for (sheet_id, ovs) in by_sheet {
+        let materials: Vec<String> = ovs[0]
+            .materials
+            .iter()
+            .map(|m| m.trim_matches('/').to_string())
+            .collect();
+        if materials.is_empty() {
+            let _ = report.fail(format!("posters: {sheet_id}"), "no materials listed");
+            return Err(());
+        }
+        let primary_rel = &materials[0];
+        let primary_vmat = content_root.join(primary_rel);
+        let compiled_ok = compiled_root.join(format!("{primary_rel}_c")).exists();
+        // The content vmat is the staging source of truth for texture stems, so
+        // its absence forces a fresh decompile even when hashes match.
+        if primary_vmat.exists()
+            && ovs.iter().all(|o| o.up_to_date(cfg.skip_compile, compiled_ok))
+        {
+            if let Ok(text) = std::fs::read_to_string(&primary_vmat) {
+                for mat in &materials {
+                    let refs = vmat_texture_refs(&text);
+                    staged.extend(poster_staged_rels(compiled_root, mat, &refs));
+                }
+                report.ok_step(format!("posters up to date: {sheet_id}"), "unchanged — skipped");
+                continue;
+            }
+        }
+
+        // Fresh vanilla decompile of every material sampling this sheet (also
+        // resets the sheet textures so removed overrides don't linger).
+        for mat in &materials {
+            let mat_c = format!("{mat}_c");
+            if let Err(e) =
+                crate::vpk::material_from_vpk(helper, pak, &mat_c, &content_root.to_string_lossy())
+            {
+                let _ = report.fail(format!("decompile material: {mat}"), e);
+                return Err(());
+            }
+        }
+        let text = match std::fs::read_to_string(&primary_vmat) {
+            Ok(t) => t,
+            Err(e) => {
+                let _ = report.fail(format!("read material: {primary_rel}"), e.to_string());
+                return Err(());
+            }
+        };
+        let refs = vmat_texture_refs(&text);
+        let color_rel = refs
+            .iter()
+            .find(|(p, _)| p.starts_with("TextureColor"))
+            .map(|(_, v)| v.clone());
+        let trans_rel = refs
+            .iter()
+            .find(|(p, _)| p.starts_with("TextureTranslucency"))
+            .map(|(_, v)| v.clone());
+        let Some(color_rel) = color_rel else {
+            let _ = report.fail(format!("posters: {sheet_id}"), "material has no color texture");
+            return Err(());
+        };
+        // resourcecompiler must only see source params.
+        for mat in &materials {
+            let p = content_root.join(mat);
+            if let Ok(t) = std::fs::read_to_string(&p) {
+                let _ = std::fs::write(&p, strip_compiled_textures(&t));
+            }
+        }
+
+        let color_abs = content_root.join(&color_rel);
+        for ov in ovs.iter() {
+            if let Err(e) = composite_poster(
+                ffmpeg, &color_abs, &ov.source_image, ov.x, ov.y, ov.w, ov.h, &ov.fit,
+            ) {
+                let _ = report.fail(format!("poster art: {}", ov.label), e);
+                return Err(());
+            }
+            if ov.alpha_coverage < 0.98 {
+                if let Some(trans) = &trans_rel {
+                    let trans_abs = content_root.join(trans);
+                    if trans_abs.exists() {
+                        if let Err(e) = fill_trans_rect(ffmpeg, &trans_abs, ov.x, ov.y, ov.w, ov.h) {
+                            let _ = report.fail(format!("poster trans: {}", ov.label), e);
+                            return Err(());
+                        }
+                    }
+                }
+            }
+            report.ok_step(
+                format!("poster: {}", ov.label),
+                format!("{}x{} at ({},{}) {}", ov.w, ov.h, ov.x, ov.y, ov.fit),
+            );
+        }
+        if cfg.skip_compile {
+            continue;
+        }
+        for mat in &materials {
+            let p = content_root.join(mat);
+            match run_resource_compiler(cfg, &p.to_string_lossy()) {
+                Ok(detail) => report.ok_step(format!("compile (poster): {mat}"), detail),
+                Err(e) => {
+                    let _ = report.fail(format!("compile (poster): {mat}"), e);
+                    return Err(());
+                }
+            }
+            staged.extend(poster_staged_rels(compiled_root, mat, &refs));
+        }
+    }
+    staged.sort();
+    staged.dedup();
+    Ok(staged)
 }
 
 /// Path inside the game tree that `abilities.vdata` compiles/stages to.
@@ -1732,6 +2092,10 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
     // every variant, like icons).
     compile_effect_overrides(cfg, content_root, compiled_root, report)?;
 
+    // Poster art replacements: decompile atlas materials, composite user art,
+    // recompile once (staged into every variant, like icons).
+    let poster_outputs = compile_posters(cfg, content_root, compiled_root, report)?;
+
     // Gameplay config edits: rewrite abilities.vdata once (staged into every
     // variant). Custom Server tab.
     compile_vdata_overrides(cfg, content_root, compiled_root, report)?;
@@ -1821,7 +2185,8 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
         || !cfg.effect_overrides.is_empty()
         || !cfg.vdata_overrides.is_empty()
         || !cfg.global_overrides.is_empty()
-        || !cfg.world_overrides.is_empty();
+        || !cfg.world_overrides.is_empty()
+        || !cfg.poster_overrides.is_empty();
 
     for v in &variants {
         let stage = output_dir.join(v.name).join("_staging");
@@ -2146,6 +2511,17 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
             match copy_into(&src, &stage, &rel) {
                 Ok(_) => staged += 1,
                 Err(e) => return report.fail(format!("stage effect: {rel}"), e.to_string()),
+            }
+        }
+        // Stage poster overrides (recompiled .vmat_c + .vtex_c at the game's paths).
+        for rel in &poster_outputs {
+            let src = compiled_root.join(rel);
+            if cfg.skip_compile && !src.exists() {
+                continue;
+            }
+            match copy_into(&src, &stage, rel) {
+                Ok(_) => staged += 1,
+                Err(e) => return report.fail(format!("stage poster: {rel}"), e.to_string()),
             }
         }
         // Stage the gameplay-config override (recompiled abilities.vdata_c).
@@ -2679,6 +3055,7 @@ mod tests {
             vdata_overrides: vec![],
             global_overrides: vec![],
             world_overrides: vec![],
+            poster_overrides: vec![],
         };
 
         let report = run(&cfg);
@@ -2760,6 +3137,7 @@ mod tests {
             vdata_overrides: vec![],
             global_overrides: vec![],
             world_overrides: vec![],
+            poster_overrides: vec![],
         };
 
         let report = run(&cfg);
@@ -2788,6 +3166,139 @@ mod tests {
         let _ = std::fs::remove_dir_all(&content_root);
         let _ = std::fs::remove_dir_all(&compiled_root);
         let _ = std::fs::remove_dir_all(&out);
+    }
+
+    #[test]
+    fn vmat_texture_refs_parses_layered_and_plain() {
+        let text = "\"Layer0\"\n{\n\t\"shader\"\t\"citadel_overlay.vfx\"\n\t\"TextureColor\"\t\"materials/overlays/a_color.png\"\n\t\"TextureColor1\"\t\"materials/overlays/b_color.png\"\n\t\"TextureTranslucency\"\t\"materials/overlays/a_trans.png\"\n\t\"TextureTintMask\"\t\"[1.000000 1.000000 1.000000 0.000000]\"\n}\n";
+        let refs = vmat_texture_refs(text);
+        assert_eq!(
+            refs,
+            vec![
+                ("TextureColor".to_string(), "materials/overlays/a_color.png".to_string()),
+                ("TextureColor1".to_string(), "materials/overlays/b_color.png".to_string()),
+                ("TextureTranslucency".to_string(), "materials/overlays/a_trans.png".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn strip_compiled_textures_removes_block_only() {
+        let text = "\"Layer0\"\n{\n\t\"TextureColor\"\t\"materials/x.png\"\n\t\"Compiled Textures\"\n\t{\n\t\t\"g_tColor\"\t\"materials/x_psd_1234.vtex\"\n\t}\n}\n";
+        let out = strip_compiled_textures(text);
+        assert!(!out.contains("Compiled Textures"));
+        assert!(!out.contains("g_tColor"));
+        assert!(out.contains("\"TextureColor\"\t\"materials/x.png\""));
+        assert!(out.trim_end().ends_with('}'));
+    }
+
+    /// Real poster-replacement pipeline: decompile the bodega atlas material
+    /// from the pak, composite a generated test image into the Black Cauldron
+    /// rect, recompile, pack. Run with:
+    ///   cargo test -p app --lib -- --ignored e2e_poster_replace --nocapture
+    #[test]
+    #[ignore]
+    fn e2e_poster_replace() {
+        let csdk = r"C:\Users\ethob\Desktop\DeadlockModding\Reduced_CSDK_12";
+        let addon = "eim_poster_e2e_addon";
+        let content_root = format!(r"{csdk}\content\citadel_addons\{addon}");
+        let compiled_root = format!(r"{csdk}\game\citadel_addons\{addon}");
+        let out = std::env::temp_dir().join("eim_poster_e2e_out");
+        let _ = std::fs::remove_dir_all(&out);
+        let _ = std::fs::remove_dir_all(&content_root);
+        let _ = std::fs::remove_dir_all(&compiled_root);
+
+        // Generate a small test source image with ffmpeg.
+        let art = std::env::temp_dir().join("eim_poster_e2e_art.png");
+        let ok = crate::procutil::quiet("ffmpeg")
+            .args(["-y", "-f", "lavfi", "-i", "color=red:size=400x300", "-frames:v", "1"])
+            .arg(&art)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        assert!(ok, "ffmpeg not available to generate test art");
+
+        let mut cfg = CompileConfig {
+            content_root: content_root.clone(),
+            compiled_root: compiled_root.clone(),
+            game_info_dir: format!(r"{csdk}\game\citadel"),
+            sound_folder: "sounds/music/match_intro".into(),
+            resource_compiler: format!(r"{csdk}\game\bin_tools\win64\resourcecompiler.exe"),
+            ffmpeg_path: None,
+            vpk_helper_path: Some(
+                r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\tools\vpk-helper\bin\Release\net10.0\vpk-helper.dll".into(),
+            ),
+            vanilla_root: r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\ModFiles".into(),
+            pak_path: Some(
+                r"D:\SteamLibrary\steamapps\common\Deadlock\game\citadel\pak01_dir.vpk".into(),
+            ),
+            output_dir: out.to_string_lossy().into_owned(),
+            output_mode: "vpk".into(),
+            vpk_name: "pak01_dir.vpk".into(),
+            write_encoding_txt: true,
+            skip_compile: false,
+            imported_mods: vec![],
+            imported_mod_excludes: Default::default(),
+            events: vec![],
+            icon_mods: vec![],
+            sound_overrides: vec![],
+            effect_overrides: vec![],
+            vdata_overrides: vec![],
+            global_overrides: vec![],
+            world_overrides: vec![],
+            poster_overrides: vec![PosterCompile {
+                sheet_id: "posters_bodega_comp1".into(),
+                materials: vec!["materials/overlays/posters_bodega_comp1.vmat".into()],
+                label: "black cauldron (e2e)".into(),
+                x: 1081,
+                y: 1555,
+                w: 967,
+                h: 493,
+                alpha_coverage: 1.0,
+                source_image: art.to_string_lossy().into_owned(),
+                fit: "cover".into(),
+                current_hash: Some("p1".into()),
+                last_compiled_hash: None,
+            }],
+        };
+
+        let report = run(&cfg);
+        for s in &report.steps {
+            println!("[{}] {} :: {}", if s.ok { "OK" } else { "FAIL" }, s.name, s.detail);
+        }
+        assert!(report.ok, "poster pipeline failed");
+
+        let vmat_c = Path::new(&compiled_root).join("materials/overlays/posters_bodega_comp1.vmat_c");
+        assert!(vmat_c.exists(), "vmat_c not produced");
+        let overlays = Path::new(&compiled_root).join("materials/overlays");
+        let has_vtex = std::fs::read_dir(&overlays).unwrap().flatten().any(|e| {
+            let n = e.file_name().to_string_lossy().to_string();
+            n.starts_with("posters_bodega_comp1") && n.ends_with(".vtex_c")
+        });
+        assert!(has_vtex, "sheet vtex_c not produced");
+        // The stripped source vmat must have no Compiled Textures block left.
+        let src = std::fs::read_to_string(
+            Path::new(&content_root).join("materials/overlays/posters_bodega_comp1.vmat"),
+        )
+        .unwrap();
+        assert!(!src.contains("Compiled Textures"));
+        let vpk = out.join("mine").join("pak01_dir.vpk");
+        assert!(vpk.exists(), "vpk not produced");
+
+        // Second run with matching hashes should skip (up-to-date) but still
+        // stage the previously produced files.
+        cfg.poster_overrides[0].last_compiled_hash = Some("p1".into());
+        let report2 = run(&cfg);
+        assert!(report2.ok, "second run failed");
+        assert!(report2
+            .steps
+            .iter()
+            .any(|s| s.name.contains("posters up to date")));
+
+        let _ = std::fs::remove_dir_all(&content_root);
+        let _ = std::fs::remove_dir_all(&compiled_root);
+        let _ = std::fs::remove_dir_all(&out);
+        let _ = std::fs::remove_file(&art);
     }
 
     fn song_with(current: Option<&str>, last: Option<&str>) -> SongCompile {

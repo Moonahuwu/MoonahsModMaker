@@ -116,6 +116,7 @@ pub fn run() {
             commands::decompile_vpk_all,
             commands::browse_particles,
             commands::effect_preview,
+            commands::poster_sheet,
             commands::open_in_viewer,
             commands::item_particles,
             commands::item_roster,

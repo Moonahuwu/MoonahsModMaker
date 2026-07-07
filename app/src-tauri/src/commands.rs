@@ -4487,3 +4487,70 @@ pub fn effect_preview(
     }
     Ok(EffectPreview { particle_path, sprites, colors })
 }
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PosterSheet {
+    /// Absolute path of the decoded sheet color texture (PNG) for display.
+    pub color_png: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Read a PNG's pixel dimensions from its IHDR chunk.
+fn png_dimensions(path: &std::path::Path) -> Result<(u32, u32), String> {
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    if bytes.len() < 24 || &bytes[..8] != b"\x89PNG\r\n\x1a\n" {
+        return Err("not a png".into());
+    }
+    let w = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+    let h = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+    Ok((w, h))
+}
+
+/// Decompile a poster atlas material from the game pak into the app-data cache
+/// (once) and return its color texture as a viewable PNG. Powers the Posters
+/// tab sheet display.
+#[tauri::command]
+pub fn poster_sheet(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+    material: String,
+    refresh: Option<bool>,
+) -> Result<PosterSheet, String> {
+    use tauri::Manager;
+    let material = material.trim_matches('/').to_string();
+    if !material.starts_with("materials/") || !material.ends_with(".vmat") {
+        return Err(format!("not a material path: {material}"));
+    }
+    let root = app.path().app_data_dir().map_err(|e| e.to_string())?.join("posters").join("sheets");
+    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+
+    let vmat = root.join(&material);
+    if refresh.unwrap_or(false) || !vmat.exists() {
+        crate::vpk::material_from_vpk(
+            &helper_path,
+            &pak_path,
+            &format!("{material}_c"),
+            &root.to_string_lossy(),
+        )?;
+    }
+    let text = std::fs::read_to_string(&vmat).map_err(|e| e.to_string())?;
+    let color_rel = text
+        .lines()
+        .filter_map(|l| {
+            let t = l.trim();
+            let rest = t.strip_prefix("\"TextureColor")?;
+            let v = rest.split('"').nth(2)?;
+            v.starts_with("materials/").then(|| v.to_string())
+        })
+        .next()
+        .ok_or_else(|| format!("no color texture in {material}"))?;
+    let color_abs = root.join(&color_rel);
+    if !color_abs.exists() {
+        return Err(format!("decoded color texture missing: {color_rel}"));
+    }
+    let (width, height) = png_dimensions(&color_abs)?;
+    Ok(PosterSheet { color_png: color_abs.to_string_lossy().to_string(), width, height })
+}

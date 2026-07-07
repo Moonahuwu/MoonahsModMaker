@@ -34,6 +34,7 @@ static int Dispatch(string[] args)
             "crcs" => Crcs(args),
             "decode" => Decode(args),
             "decompile" => Decompile(args),
+            "material" => MaterialCmd(args),
             "extractall" => ExtractAll(args),
             "decompileall" => DecompileAll(args),
             "texture" => TextureCmd(args),
@@ -231,6 +232,80 @@ static int Decompile(string[] args)
         Directory.CreateDirectory(dir);
     File.WriteAllBytes(outFile, content.Data);
     Console.WriteLine(outFile);
+    return 0;
+}
+
+// material <vpk> <internalVmatC> <outRoot>
+// Decompiles a compiled Source 2 material to source form under outRoot,
+// preserving internal paths: the .vmat KV3 text at its own path plus every
+// reconstructed source texture (AdditionalFiles: color png, trans, masks,
+// ...) at the paths the vmat references. Prints one written path per line.
+static int MaterialCmd(string[] args)
+{
+    if (args.Length < 4)
+    {
+        Console.Error.WriteLine("usage: material <vpk> <internalVmatC> <outRoot>");
+        return 2;
+    }
+    var vpk = Path.GetFullPath(args[1]);
+    var internalPath = args[2].Replace('\\', '/').TrimStart('/');
+    var outRoot = Path.GetFullPath(args[3]);
+    using var package = new Package();
+    package.Read(vpk);
+    var entry = package.FindEntry(internalPath);
+    if (entry is null)
+    {
+        Console.Error.WriteLine($"entry not found: {internalPath}");
+        return 1;
+    }
+    package.ReadEntry(entry, out var bytes);
+    var vmatRel = internalPath.EndsWith("_c", StringComparison.OrdinalIgnoreCase)
+        ? internalPath[..^2] : internalPath;
+
+    string Prepare(string rel)
+    {
+        var dest = Path.Combine(outRoot, rel.Replace('/', Path.DirectorySeparatorChar));
+        var dir = Path.GetDirectoryName(dest);
+        if (!string.IsNullOrEmpty(dir))
+            Directory.CreateDirectory(dir);
+        return dest;
+    }
+
+    using var resource = new Resource();
+    resource.Read(new MemoryStream(bytes));
+    // The loader lets FileExtract resolve the material's texture references
+    // back into the pak so the source textures can be reconstructed.
+    using var loader = new GameFileLoader(package, vpk);
+    using var content = FileExtract.Extract(resource, loader, null);
+    var vmatPath = Prepare(vmatRel);
+    File.WriteAllBytes(vmatPath, content.Data);
+    Console.WriteLine(vmatPath);
+
+    void WriteExtra(ContentFile extra)
+    {
+        if (extra.Data is { Length: > 0 } && !string.IsNullOrEmpty(extra.FileName))
+        {
+            var p = Prepare(extra.FileName.Replace('\\', '/').TrimStart('/'));
+            File.WriteAllBytes(p, extra.Data);
+            Console.WriteLine(p);
+        }
+        foreach (var sub in extra.SubFiles)
+        {
+            var dir = Path.GetDirectoryName(extra.FileName ?? "") ?? "";
+            var rel = string.IsNullOrEmpty(dir) ? sub.FileName : dir + "/" + sub.FileName;
+            var p = Prepare(rel.Replace('\\', '/').TrimStart('/'));
+            File.WriteAllBytes(p, sub.Extract.Invoke());
+            Console.WriteLine(p);
+        }
+    }
+    foreach (var extra in content.AdditionalFiles)
+        WriteExtra(extra);
+    foreach (var sub in content.SubFiles)
+    {
+        var p = Prepare(sub.FileName.Replace('\\', '/').TrimStart('/'));
+        File.WriteAllBytes(p, sub.Extract.Invoke());
+        Console.WriteLine(p);
+    }
     return 0;
 }
 

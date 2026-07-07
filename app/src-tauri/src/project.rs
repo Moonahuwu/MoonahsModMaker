@@ -46,6 +46,54 @@ pub struct Project {
     /// fields in `scripts/npc_units.vdata` / `scripts/misc.vdata`.
     #[serde(default)]
     pub world_overrides: Vec<WorldOverride>,
+    /// In-world poster/sign/graffiti art replacements: composite user art into a
+    /// pixel rect of a `materials/overlays/` atlas texture and stage the
+    /// recompiled `.vmat_c` + `.vtex_c` at the vanilla material path.
+    #[serde(default)]
+    pub poster_overrides: Vec<PosterOverride>,
+}
+
+/// One replaced poster: user art composited into `rect` of the atlas sheet that
+/// `material` samples. Rect data comes from the frontend's posterManifest.json
+/// (the backend stays manifest-free). Multiple overrides may target the same
+/// sheet; the compile groups them and composites all before one recompile.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PosterOverride {
+    /// Stable id, `"{sheet_id}::{poster_id}"`.
+    pub id: String,
+    /// Manifest sheet id, e.g. `posters_bodega_comp1` (may contain `/`).
+    pub sheet_id: String,
+    /// Every material that samples this sheet (compiled + staged together),
+    /// e.g. `["materials/overlays/posters_bodega_comp1.vmat"]`.
+    pub materials: Vec<String>,
+    /// Poster rect id within the sheet, e.g. `black_cauldron`.
+    pub poster_id: String,
+    /// Friendly label for reports/UI.
+    pub label: String,
+    /// Pixel rect inside the sheet's color texture.
+    pub x: u32,
+    pub y: u32,
+    pub w: u32,
+    pub h: u32,
+    /// Fraction of the rect that is opaque in the vanilla trans mask. Below
+    /// ~0.98 the compile also paints the rect white in the trans texture so
+    /// full-frame art isn't clipped to the old cut-out silhouette.
+    #[serde(default = "one")]
+    pub alpha_coverage: f32,
+    /// Absolute path to the user's source image (png/jpg/webp).
+    pub source_image: String,
+    /// How the art fills the rect: "cover" (scale+crop, default) | "contain"
+    /// (letterbox over original art) | "stretch".
+    #[serde(default = "cover_fit")]
+    pub fit: String,
+    /// Hash recorded after the last successful compile (null = never compiled).
+    #[serde(default)]
+    pub last_compiled_hash: Option<String>,
+}
+
+fn cover_fit() -> String {
+    "cover".into()
 }
 
 /// One edited field on a flat-scalar world entity (minion / box / powerup),
@@ -1171,6 +1219,7 @@ impl Project {
             vdata_overrides: vec![],
             global_overrides: vec![],
             world_overrides: vec![],
+            poster_overrides: vec![],
         }
     }
 

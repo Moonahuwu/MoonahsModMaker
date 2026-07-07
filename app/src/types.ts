@@ -159,6 +159,29 @@ export interface Project {
   vdataOverrides?: VdataOverride[];
   globalOverrides?: GlobalOverride[];
   worldOverrides?: WorldOverride[];
+  posterOverrides?: PosterOverride[];
+}
+
+/** A replaced in-world poster: user art composited into a pixel rect of a
+ * materials/overlays atlas sheet; the recompiled material shadows vanilla. */
+export interface PosterOverride {
+  /** `${sheetId}::${posterId}` */
+  id: string;
+  sheetId: string;
+  /** Every .vmat sampling this sheet (from posterManifest.json). */
+  materials: string[];
+  posterId: string;
+  label: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** Opaque fraction of the vanilla trans mask inside the rect (manifest). */
+  alphaCoverage: number;
+  /** Absolute path to the user's source image. */
+  sourceImage: string;
+  fit: "cover" | "contain" | "stretch";
+  lastCompiledHash?: string | null;
 }
 
 /// Classification of one array entry relative to a side's project state.

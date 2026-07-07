@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import type { CompileConfig, EffectCompile, EventCompile, GlobalCompile, IconCompile, SoundOverrideCompile, VdataCompile, WorldCompile } from "./api";
+import type { CompileConfig, EffectCompile, EventCompile, GlobalCompile, IconCompile, PosterCompile, SoundOverrideCompile, VdataCompile, WorldCompile } from "./api";
 import { loadSettings, saveSettings } from "./api";
-import type { EffectOverride, EventProject, SoundOverride } from "../types";
-import { songHash, overrideHash, effectHash } from "./songHash";
+import type { EffectOverride, EventProject, PosterOverride, SoundOverride } from "../types";
+import { songHash, overrideHash, effectHash, posterHash } from "./songHash";
 
 // User-facing settings. We derive the verbose CompileConfig paths from a CSDK
 // root + addon name so the user only manages a few friendly fields.
@@ -201,7 +201,22 @@ export function buildCompileConfig(
   vdataOverrides: VdataCompile[] = [],
   globalOverrides: GlobalCompile[] = [],
   worldOverrides: WorldCompile[] = [],
+  posterOverrides: PosterOverride[] = [],
 ): CompileConfig {
+  const posterCompiles: PosterCompile[] = posterOverrides.map((p) => ({
+    sheetId: p.sheetId,
+    materials: p.materials,
+    label: p.label,
+    x: p.x,
+    y: p.y,
+    w: p.w,
+    h: p.h,
+    alphaCoverage: p.alphaCoverage,
+    sourceImage: p.sourceImage,
+    fit: p.fit,
+    currentHash: posterHash(p, sheetSiblingsKey(posterOverrides, p.sheetId)),
+    lastCompiledHash: p.lastCompiledHash ?? null,
+  }));
   const iconCompiles: IconCompile[] = iconMods.map((m) => ({
     sourceImage: m.sourceImage,
     targetVtexc: m.targetVtexc,
@@ -282,5 +297,15 @@ export function buildCompileConfig(
     vdataOverrides,
     globalOverrides,
     worldOverrides,
+    posterOverrides: posterCompiles,
   };
+}
+
+/** Sorted fingerprint of all overrides on a sheet (see posterHash). */
+export function sheetSiblingsKey(all: PosterOverride[], sheetId: string): string {
+  return all
+    .filter((p) => p.sheetId === sheetId)
+    .map((p) => `${p.id}=${p.sourceImage}`)
+    .sort()
+    .join(",");
 }

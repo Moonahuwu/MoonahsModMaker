@@ -60,6 +60,17 @@ export function effectHash(e: {
   return [e.targetRef, e.hue, e.saturation, e.mode].join("|");
 }
 
+/** Fingerprint of one poster override. `sheetSiblings` is the sorted id+image
+ * list of EVERY override on the same sheet: the compile works per sheet, so
+ * adding/removing a sibling must invalidate the others or a removed poster's
+ * art would linger in the previously-compiled atlas. */
+export function posterHash(
+  p: { id: string; sourceImage: string; x: number; y: number; w: number; h: number; fit: string },
+  sheetSiblings: string,
+): string {
+  return [p.id, p.sourceImage, p.x, p.y, p.w, p.h, p.fit, sheetSiblings].join("|");
+}
+
 /** Compile status of a song relative to its last successful compile. */
 export type SongStatus = "new" | "compiled" | "stale";
 

@@ -62,12 +62,13 @@ import { ItemsTab } from "./components/ItemsTab";
 import { SoundBrowser } from "./components/SoundBrowser";
 import { OverrideEditor } from "./components/OverrideEditor";
 import { EffectsBrowser } from "./components/EffectsBrowser";
+import { PostersTab } from "./components/PostersTab";
 import { CustomServer } from "./components/CustomServer";
 import { ProfileSwitcher } from "./components/ProfileSwitcher";
 import { useToast } from "./components/Toaster";
-import { useSettings, slotSoundFolder, TOOLS_BUNDLE_URL } from "./lib/settings";
-import { songHash, overrideHash, effectHash } from "./lib/songHash";
-import type { EffectOverride, EventProject, EventView, Project, Song, SoundOverride } from "./types";
+import { useSettings, slotSoundFolder, sheetSiblingsKey, TOOLS_BUNDLE_URL } from "./lib/settings";
+import { songHash, overrideHash, effectHash, posterHash } from "./lib/songHash";
+import type { EffectOverride, EventProject, EventView, PosterOverride, Project, Song, SoundOverride } from "./types";
 import "./index.css";
 
 const AUDIO_EXT = /\.(mp3|wav|flac|ogg|m4a|aac)$/i;
@@ -83,6 +84,8 @@ const REPLACE_SOUNDS = "replacesounds";
 const EFFECTS = "effects";
 /** Special always-present tab for dedicated-server hosting + config editor. */
 const CUSTOM_SERVER = "customserver";
+/** Special always-present tab for replacing in-world posters/signs/graffiti. */
+const POSTERS = "posters";
 /** Catch-all tab for events auto-discovered from a new patch. */
 const UNSORTED = "unsorted";
 
@@ -158,6 +161,7 @@ const TAB_LABELS: Record<string, string> = {
   [ITEMS]: "Items",
   [REPLACE_SOUNDS]: "Replace Sounds",
   [EFFECTS]: "Effects",
+  [POSTERS]: "Posters",
   [CUSTOM_SERVER]: "Custom Server",
   [MOD_COMBINER]: "Mod combiner",
 };
@@ -498,6 +502,7 @@ function accentFor(ev: { group: string; side: string }): string {
   if (ev.group === UNSORTED) return "#fbbf24"; // amber (new/unsorted)
   if (ev.group === ITEMS) return "#f59e0b"; // amber (items)
   if (ev.group === EFFECTS) return "#c084fc"; // violet (VFX)
+  if (ev.group === POSTERS) return "#8b5cf6"; // deep violet (posters)
   if (ev.group === CUSTOM_SERVER) return "#38bdf8"; // sky (server)
   return "#e0564f"; // heroes
 }
@@ -566,6 +571,10 @@ export default function App() {
   selectedItemRef.current = selectedItem;
   const activeTabRef = useRef(activeTab);
   activeTabRef.current = activeTab;
+  // Set by the Posters tab so OS-level image drops can land on a poster rect.
+  const posterDropRef = useRef<((paths: string[], cssX: number, cssY: number) => boolean) | null>(
+    null,
+  );
 
   // ---- Startup game-data preload ----------------------------------------
   // Warm every tab's data (rosters, the sound index, then each hero's detail
@@ -609,7 +618,7 @@ export default function App() {
     // must be able to see and remove them.
     if (settings.experimentalEffects || (project?.effectOverrides?.length ?? 0) > 0)
       out.push(EFFECTS);
-    out.push(CUSTOM_SERVER, MOD_COMBINER, REPLACE_SOUNDS);
+    out.push(POSTERS, CUSTOM_SERVER, MOD_COMBINER, REPLACE_SOUNDS);
     return out;
   }, [project, settings.experimentalEffects]);
 
@@ -920,9 +929,18 @@ export default function App() {
         const audio = p.paths.filter((pp) => AUDIO_EXT.test(pp));
         const images = p.paths.filter((pp) => IMAGE_EXT.test(pp));
 
-        // Dropped image while viewing an item → set it as that item's icon.
+        // Dropped image → poster rect under the cursor (Posters tab) or the
+        // open item's icon (Items tab).
         if (images.length > 0) {
-          if (activeTabRef.current === ITEMS && selectedItemRef.current) {
+          const dpr = window.devicePixelRatio || 1;
+          if (
+            activeTabRef.current === POSTERS &&
+            posterDropRef.current?.(images, p.position.x / dpr, p.position.y / dpr)
+          ) {
+            // handled by the Posters tab
+          } else if (activeTabRef.current === POSTERS) {
+            push("info", "Drop the image onto a poster region on the sheet");
+          } else if (activeTabRef.current === ITEMS && selectedItemRef.current) {
             void setItemIcon(selectedItemRef.current, images[0]);
           } else {
             push("info", "Open an item in the Items tab, then drop a PNG/JPG to set its icon");
@@ -1735,6 +1753,10 @@ export default function App() {
               ...e,
               lastCompiledHash: effectHash(e),
             })),
+            posterOverrides: (prev.posterOverrides ?? []).map((p, _, all) => ({
+              ...p,
+              lastCompiledHash: posterHash(p, sheetSiblingsKey(all, p.sheetId)),
+            })),
           }
         : prev,
     );
@@ -2537,6 +2559,39 @@ export default function App() {
     );
   }
 
+  // Posters tab: upsert / patch / remove one poster-art replacement.
+  function addPosterOverride(ov: PosterOverride) {
+    setProject((prev) =>
+      prev
+        ? {
+            ...prev,
+            posterOverrides: [...(prev.posterOverrides ?? []).filter((p) => p.id !== ov.id), ov],
+          }
+        : prev,
+    );
+  }
+
+  function updatePosterOverride(id: string, patch: Partial<PosterOverride>) {
+    setProject((prev) =>
+      prev
+        ? {
+            ...prev,
+            posterOverrides: (prev.posterOverrides ?? []).map((p) =>
+              p.id === id ? { ...p, ...patch, lastCompiledHash: null } : p,
+            ),
+          }
+        : prev,
+    );
+  }
+
+  function removePosterOverride(id: string) {
+    setProject((prev) =>
+      prev
+        ? { ...prev, posterOverrides: (prev.posterOverrides ?? []).filter((p) => p.id !== id) }
+        : prev,
+    );
+  }
+
   // Gameplay config (Custom Server tab): upsert/clear one ability-property edit.
   function setVdataOverride(abilityKey: string, propKey: string, value: string) {
     setProject((prev) => {
@@ -2907,7 +2962,9 @@ export default function App() {
                   ? "Replace any game sound directly by its file — no soundevents touched. Browse a category, preview, then drop in your audio."
                   : activeTab === EFFECTS
                     ? "Recolor any particle effect — hero abilities, item effects, and more. Preview the recolor live, then compile to apply."
-                    : "Your entries merge in — every other mod stays untouched."}
+                    : activeTab === POSTERS
+                      ? "Replace in-world posters, signs, and graffiti with your own images — drop a PNG onto a region and compile."
+                      : "Your entries merge in — every other mod stays untouched."}
             </p>
           </div>
           {profiles.length > 0 && (
@@ -3037,6 +3094,19 @@ export default function App() {
             onRemove={removeEffectOverride}
             onOpenViewer={(ref) => void openEffectInViewer(ref)}
           />
+        ) : activeTab === POSTERS ? (
+          <PostersTab
+            helperPath={settings.vpkHelperPath}
+            pakPath={settings.deadlockPak}
+            overrides={project?.posterOverrides ?? []}
+            accent="#8b5cf6"
+            onAdd={addPosterOverride}
+            onUpdate={updatePosterOverride}
+            onRemove={removePosterOverride}
+            registerDropHandler={(fn) => {
+              posterDropRef.current = fn;
+            }}
+          />
         ) : activeTab === "heroes" ? (
           selectedHero && showVoicelines ? (
             <VoicelinesPanel
@@ -3149,6 +3219,7 @@ export default function App() {
             vdataOverrides={project.vdataOverrides ?? []}
             globalOverrides={project.globalOverrides ?? []}
             worldOverrides={project.worldOverrides ?? []}
+            posterOverrides={project.posterOverrides ?? []}
             onCompiled={markAllCompiled}
             onFixForNewPatch={refreshVanilla}
             tabLabels={TAB_LABELS}

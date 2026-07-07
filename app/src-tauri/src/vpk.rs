@@ -216,6 +216,37 @@ pub fn decompile_from_vpk(
     run(cmd, "decompile")
 }
 
+/// Decompile a compiled material (`.vmat_c`) inside `vpk` to source form under
+/// `out_root`: the `.vmat` KV3 text at its own internal path plus every
+/// reconstructed source texture (color/trans/mask PNGs) at the paths the vmat
+/// references. Returns the written paths, `out_root`-relative with forward
+/// slashes. (VRF's GameFileLoader chats on stdout, so only lines that resolve
+/// under `out_root` are kept.)
+pub fn material_from_vpk(
+    helper_path: &str,
+    vpk: &str,
+    internal_vmat_c: &str,
+    out_root: &str,
+) -> Result<Vec<String>, String> {
+    let mut cmd = helper_command(helper_path);
+    cmd.args(["material", vpk, internal_vmat_c, out_root]);
+    let out = run(cmd, "material")?;
+    let root = Path::new(out_root);
+    let written: Vec<String> = out
+        .lines()
+        .filter_map(|l| {
+            let p = Path::new(l.trim());
+            p.strip_prefix(root)
+                .ok()
+                .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+        })
+        .collect();
+    if written.is_empty() {
+        return Err(format!("material produced no files for {internal_vmat_c}"));
+    }
+    Ok(written)
+}
+
 /// Decode a compiled `.vsnd_c` (inside `vpk`, or a loose file in a cached-pack
 /// dir) to playable audio. Returns the written file path (the helper picks the
 /// correct extension).

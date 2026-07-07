@@ -115,6 +115,22 @@ export interface CompileConfig {
   vdataOverrides?: VdataCompile[];
   globalOverrides?: GlobalCompile[];
   worldOverrides?: WorldCompile[];
+  posterOverrides?: PosterCompile[];
+}
+
+export interface PosterCompile {
+  sheetId: string;
+  materials: string[];
+  label: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  alphaCoverage: number;
+  sourceImage: string;
+  fit: string;
+  currentHash: string;
+  lastCompiledHash?: string | null;
 }
 
 export interface VdataCompile {
@@ -748,6 +764,23 @@ export function effectPreview(
   refresh = false,
 ): Promise<EffectPreview> {
   return invoke("effect_preview", { helperPath, pakPath, particlePath, refresh });
+}
+
+export interface PosterSheet {
+  /** Absolute path of the decoded sheet color texture (PNG). */
+  colorPng: string;
+  width: number;
+  height: number;
+}
+
+/** Decompile a poster atlas material (cached) and return its color PNG for display. */
+export function posterSheet(
+  helperPath: string,
+  pakPath: string,
+  material: string,
+  refresh = false,
+): Promise<PosterSheet> {
+  return invoke("poster_sheet", { helperPath, pakPath, material, refresh });
 }
 
 /** Open a particle in an external viewer (VRF's Source2Viewer). */

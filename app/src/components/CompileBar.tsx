@@ -19,7 +19,7 @@ import { ExportModal, type ExportExtra, type ExportSlot } from "./ExportModal";
 import { buildCompileConfig, installSrcVpk, slotSoundFolder, type Settings } from "../lib/settings";
 import { songStatus, overrideHash, effectHash } from "../lib/songHash";
 import { useToast } from "./Toaster";
-import type { EffectOverride, EventProject, GlobalOverride, IconMod, SoundOverride, VdataOverride, WorldOverride } from "../types";
+import type { EffectOverride, EventProject, GlobalOverride, IconMod, PosterOverride, SoundOverride, VdataOverride, WorldOverride } from "../types";
 
 const pakName = (n: number) => `pak${String(n).padStart(2, "0")}_dir.vpk`;
 
@@ -33,6 +33,7 @@ export function CompileBar({
   vdataOverrides,
   globalOverrides,
   worldOverrides,
+  posterOverrides,
   onCompiled,
   onFixForNewPatch,
   tabLabels,
@@ -46,6 +47,7 @@ export function CompileBar({
   vdataOverrides: VdataOverride[];
   globalOverrides: GlobalOverride[];
   worldOverrides: WorldOverride[];
+  posterOverrides: PosterOverride[];
   /** Called after a successful compile so the project can record compiled hashes. */
   onCompiled: () => void;
   /** Re-pull the live game's soundevents (pak01) into the merge base and fix
@@ -88,6 +90,7 @@ export function CompileBar({
     iconMods.length > 0 ||
     soundOverrides.length > 0 ||
     effectOverrides.length > 0 ||
+    posterOverrides.length > 0 ||
     (settings.includeGameplay &&
       (vdataOverrides.length > 0 || globalOverrides.length > 0 || worldOverrides.length > 0));
 
@@ -190,7 +193,7 @@ export function CompileBar({
             return true;
           })
         : [];
-      const config = buildCompileConfig(s, evts, false, iconMods, soundOverrides, effectOverrides, gameplay, global, world);
+      const config = buildCompileConfig(s, evts, false, iconMods, soundOverrides, effectOverrides, gameplay, global, world, posterOverrides);
       const r = await compileProject(config);
       setReport(r);
       if (r.ok) {
