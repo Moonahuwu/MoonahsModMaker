@@ -161,7 +161,7 @@ const TAB_LABELS: Record<string, string> = {
   [ITEMS]: "Items",
   [REPLACE_SOUNDS]: "Replace Sounds",
   [EFFECTS]: "Effects",
-  [POSTERS]: "Posters",
+  [POSTERS]: "Wall Art",
   [CUSTOM_SERVER]: "Custom Server",
   [MOD_COMBINER]: "Mod combiner",
 };
@@ -2963,7 +2963,7 @@ export default function App() {
                   : activeTab === EFFECTS
                     ? "Recolor any particle effect — hero abilities, item effects, and more. Preview the recolor live, then compile to apply."
                     : activeTab === POSTERS
-                      ? "Replace in-world posters, signs, and graffiti with your own images — drop a PNG onto a region and compile."
+                      ? "Replace the world's posters, signs, ghost signs, and graffiti with your own images — drop a PNG onto a region and compile."
                       : "Your entries merge in — every other mod stays untouched."}
             </p>
           </div>

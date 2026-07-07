@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { posterSheet } from "../lib/api";
+import { copyToDownloads, posterSheet } from "../lib/api";
 import { useToast } from "./Toaster";
 import type { PosterOverride } from "../types";
 import manifestJson from "../data/posterManifest.json";
@@ -41,15 +41,18 @@ export interface Rect {
 
 const SHEETS = (manifestJson as { sheets: ManifestSheet[] }).sheets;
 
-const CATEGORIES: { key: string; label: string; hint: string }[] = [
-  { key: "posters", label: "Posters", hint: "Street posters, newspapers, stickers" },
-  { key: "signage", label: "Signs & Billboards", hint: "Shop signs, street & subway signage" },
-  { key: "ghostsigns", label: "Ghost Signs", hint: "Faded painted wall ads" },
-  { key: "graffiti", label: "Graffiti", hint: "Tags and murals" },
-  { key: "sigils", label: "Sigils", hint: "Occult wall markings" },
+const CATEGORIES: { key: string; label: string; hint: string; icon: string }[] = [
+  { key: "posters", label: "Posters", hint: "Street posters, newspapers, stickers", icon: "🖼️" },
+  { key: "signage", label: "Signs & Billboards", hint: "Shop signs, street & subway signage", icon: "🪧" },
+  { key: "ghostsigns", label: "Ghost Signs", hint: "Faded painted wall ads", icon: "🧱" },
+  { key: "graffiti", label: "Graffiti", hint: "Tags and murals", icon: "🎨" },
+  { key: "sigils", label: "Sigils", hint: "Occult wall markings", icon: "🕯️" },
 ];
 
 const IMAGE_FILTERS = [{ name: "Image", extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }];
+
+/** Pseudo region id for full-sheet replacements ("modify the original" flow). */
+const WHOLE = "whole_sheet";
 
 type DragMode = "move" | "n" | "s" | "e" | "w" | "nw" | "ne" | "sw" | "se";
 
@@ -58,6 +61,81 @@ function pretty(id: string): string {
     .replace(/^(labels_posters_|posters_|poster_|overlay_|signage_|signs_|graffiti_|item_)/, "")
     .replace(/[/_]+/g, " ")
     .trim();
+}
+
+// ---- Sheet thumbnail decoding -----------------------------------------------
+// Decoding a sheet spawns the vpk helper (~1s each), so thumbnails decode
+// through a sequential queue and cache for the session; the backend caches the
+// PNG on disk so later sessions are instant.
+const thumbCache = new Map<string, string>();
+let thumbChain: Promise<void> = Promise.resolve();
+
+function queueSheetPng(
+  helperPath: string,
+  pakPath: string,
+  sheet: ManifestSheet,
+  cb: (pngPath: string) => void,
+): void {
+  const cached = thumbCache.get(sheet.id);
+  if (cached) return cb(cached);
+  thumbChain = thumbChain.then(async () => {
+    const hit = thumbCache.get(sheet.id);
+    if (hit) return cb(hit);
+    try {
+      const s = await posterSheet(helperPath, pakPath, sheet.materials[0]);
+      thumbCache.set(sheet.id, s.colorPng);
+      cb(s.colorPng);
+    } catch {
+      /* thumbnail decode is best-effort */
+    }
+  });
+}
+
+function SheetThumb({
+  helperPath,
+  pakPath,
+  sheet,
+  dimmed,
+}: {
+  helperPath: string;
+  pakPath: string;
+  sheet: ManifestSheet;
+  dimmed?: boolean;
+}) {
+  const [src, setSrc] = useState<string | null>(() => {
+    const c = thumbCache.get(sheet.id);
+    return c ? convertFileSrc(c) : null;
+  });
+  useEffect(() => {
+    let cancelled = false;
+    if (!src) {
+      queueSheetPng(helperPath, pakPath, sheet, (p) => {
+        if (!cancelled) setSrc(convertFileSrc(p));
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sheet.id]);
+  return (
+    <div
+      className="relative w-full overflow-hidden rounded-lg bg-zinc-950"
+      style={{ aspectRatio: "1 / 1", opacity: dimmed ? 0.5 : 1 }}
+    >
+      {src ? (
+        <img
+          src={src}
+          loading="lazy"
+          className="absolute inset-0 h-full w-full object-contain"
+          alt=""
+          draggable={false}
+        />
+      ) : (
+        <div className="absolute inset-0 animate-pulse bg-zinc-900" />
+      )}
+    </div>
+  );
 }
 
 export function PostersTab({
@@ -104,9 +182,12 @@ export function PostersTab({
   const [category, setCategory] = useState<string | null>(null);
   const [sheet, setSheet] = useState<ManifestSheet | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
-  const [sheetImg, setSheetImg] = useState<{ src: string; forSheet: string } | null>(null);
+  const [sheetImg, setSheetImg] = useState<{ src: string; path: string; forSheet: string } | null>(
+    null,
+  );
   const [sheetErr, setSheetErr] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   // Rect being live-dragged (rendered instead of the committed rect).
   const [live, setLive] = useState<{ id: string; rect: Rect } | null>(null);
   const liveRef = useRef<{ id: string; rect: Rect } | null>(null);
@@ -146,7 +227,11 @@ export function PostersTab({
     setSheetErr(null);
     setSheetImg(null);
     posterSheet(helperPath, pakPath, sheet.materials[0])
-      .then((s) => !cancelled && setSheetImg({ src: convertFileSrc(s.colorPng), forSheet: sheet.id }))
+      .then((s) => {
+        thumbCache.set(sheet.id, s.colorPng);
+        if (!cancelled)
+          setSheetImg({ src: convertFileSrc(s.colorPng), path: s.colorPng, forSheet: sheet.id });
+      })
       .catch((e) => !cancelled && setSheetErr(String(e)));
     return () => {
       cancelled = true;
@@ -177,12 +262,57 @@ export function PostersTab({
       });
     }
     setSelected(id);
-    push("success", `Poster art set — ${pretty(poster.id)} (${r.w}×${r.h})`);
+    push("success", `Art set — ${pretty(poster.id)} (${r.w}×${r.h})`);
   }
 
   async function pickImage(sh: ManifestSheet, poster: ManifestPoster) {
     const picked = await openDialog({ multiple: false, filters: IMAGE_FILTERS });
     if (typeof picked === "string") assign(sh, poster, picked);
+  }
+
+  /** Full-sheet replacement: same-size art (usually a downloaded + edited
+   *  original) stretched over the whole texture. Keeps the vanilla trans mask
+   *  so cut-out shapes stay cut out. */
+  async function pickWholeSheet(sh: ManifestSheet) {
+    const picked = await openDialog({ multiple: false, filters: IMAGE_FILTERS });
+    if (typeof picked !== "string") return;
+    const id = `${sh.id}::${WHOLE}`;
+    if (byId.has(id)) {
+      onUpdate(id, { sourceImage: picked });
+    } else {
+      onAdd({
+        id,
+        sheetId: sh.id,
+        materials: sh.materials,
+        posterId: WHOLE,
+        label: `${pretty(sh.id)} · whole sheet`,
+        x: 0,
+        y: 0,
+        w: sh.width,
+        h: sh.height,
+        alphaCoverage: 1,
+        sourceImage: picked,
+        fit: "stretch",
+        lastCompiledHash: null,
+      });
+    }
+    push("success", `Whole sheet replaced — ${pretty(sh.id)}`);
+  }
+
+  async function downloadSheet(sh: ManifestSheet) {
+    setDownloading(true);
+    try {
+      const path =
+        sheetImg?.forSheet === sh.id
+          ? sheetImg.path
+          : (await posterSheet(helperPath, pakPath, sh.materials[0])).colorPng;
+      const dest = await copyToDownloads(path);
+      push("success", `Saved to ${dest}`);
+    } catch (e) {
+      push("error", `Download failed: ${e}`);
+    } finally {
+      setDownloading(false);
+    }
   }
 
   // OS-level drops: the app forwards dropped image paths + cursor position.
@@ -215,7 +345,8 @@ export function PostersTab({
     setSelected(id);
     const orig = eff(sh, p);
     dragRef.current = { id, mode, startX: e.clientX, startY: e.clientY, orig };
-    setLive({ id, rect: orig });
+    liveRef.current = { id, rect: orig };
+    setLive(liveRef.current);
     const scale = sheetScale(sh);
 
     function onMove(ev: PointerEvent) {
@@ -296,7 +427,7 @@ export function PostersTab({
           atlas.
           {overrides.length > 0 && (
             <span className="ml-1 text-emerald-400">
-              {overrides.length} poster{overrides.length === 1 ? "" : "s"} queued.
+              {overrides.length} replacement{overrides.length === 1 ? "" : "s"} queued.
             </span>
           )}
         </p>
@@ -315,7 +446,8 @@ export function PostersTab({
                 onClick={() => setCategory(c.key)}
                 className="group relative flex flex-col rounded-xl border border-zinc-800 bg-zinc-900/40 p-4 text-left transition hover:border-zinc-600 hover:bg-zinc-900"
               >
-                <span className="text-sm font-semibold text-zinc-100">{c.label}</span>
+                <span className="text-xl">{c.icon}</span>
+                <span className="mt-2 text-sm font-semibold text-zinc-100">{c.label}</span>
                 <span className="mt-1 text-[11px] text-zinc-500">{c.hint}</span>
                 <span className="mt-2 text-[10px] text-zinc-600">
                   {sheets.length} sheets · {regions} regions
@@ -332,7 +464,7 @@ export function PostersTab({
         {overrides.length > 0 && (
           <div className="mt-6">
             <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-              Your poster mods
+              Your replacements
             </h3>
             <div className="flex flex-col gap-1">
               {overrides.map((o) => (
@@ -390,7 +522,7 @@ export function PostersTab({
         >
           ← All categories
         </button>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
           {sheets.map((s) => {
             const n = overrides.filter((o) => o.sheetId === s.id).length;
             const hid = s.posters.filter((p) => hiddenSet.has(`${s.id}::${p.id}`)).length;
@@ -402,26 +534,30 @@ export function PostersTab({
                   setSheet(s);
                   setSelected(null);
                 }}
-                className={`group relative flex flex-col rounded-xl border p-4 text-left transition ${
+                className={`group relative flex flex-col gap-2 rounded-xl border p-2.5 text-left transition ${
                   sheetHidden
-                    ? "border-dashed border-amber-500/40 bg-zinc-900/20 opacity-60 hover:opacity-90"
-                    : "border-zinc-800 bg-zinc-900/40 hover:border-zinc-600 hover:bg-zinc-900"
+                    ? "border-dashed border-amber-500/40 bg-zinc-900/20 hover:border-amber-500/70"
+                    : "border-zinc-800 bg-zinc-900/40 hover:border-zinc-500 hover:bg-zinc-900"
                 }`}
               >
-                <span className="truncate text-sm font-semibold text-zinc-100">{pretty(s.id)}</span>
-                <span className="mt-1 text-[11px] text-zinc-500">
-                  {s.posters.length - hid} region{s.posters.length - hid === 1 ? "" : "s"} · {s.width}×
-                  {s.height}
-                  {!s.curated && " · auto-mapped"}
-                  {hid > 0 && ` · ${hid} unused`}
-                </span>
+                <SheetThumb helperPath={helperPath} pakPath={pakPath} sheet={s} dimmed={sheetHidden} />
+                <div className="px-0.5 pb-0.5">
+                  <span className="block truncate text-xs font-semibold text-zinc-100">
+                    {pretty(s.id)}
+                  </span>
+                  <span className="mt-0.5 block text-[10px] text-zinc-500">
+                    {s.posters.length - hid} region{s.posters.length - hid === 1 ? "" : "s"}
+                    {!s.curated && " · auto"}
+                    {hid > 0 && ` · ${hid} unused`}
+                  </span>
+                </div>
                 {sheetHidden && (
-                  <span className="absolute left-2 top-2 rounded bg-amber-400/90 px-1.5 text-[10px] font-bold text-zinc-900">
+                  <span className="absolute left-4 top-4 rounded bg-amber-400/90 px-1.5 text-[10px] font-bold text-zinc-900">
                     unused
                   </span>
                 )}
                 {n > 0 && (
-                  <span className="absolute right-2 top-2 rounded bg-emerald-500/15 px-1.5 text-[10px] font-semibold text-emerald-300">
+                  <span className="absolute right-4 top-4 rounded bg-emerald-500/90 px-1.5 text-[10px] font-bold text-zinc-900">
                     {n}
                   </span>
                 )}
@@ -441,6 +577,8 @@ export function PostersTab({
   const selectedRect = selectedDef ? eff(sheet, selectedDef) : undefined;
   const selectedEdited = selected ? !!rectEdits[selected] : false;
   const selectedHidden = selected ? hiddenSet.has(selected) : false;
+  const wholeOv = byId.get(`${sheet.id}::${WHOLE}`);
+  const sheetOverrideCount = overrides.filter((o) => o.sheetId === sheet.id).length;
 
   const handleCursor: Record<DragMode, string> = {
     move: "move",
@@ -456,7 +594,7 @@ export function PostersTab({
 
   return (
     <div>
-      <div className="mb-3 flex items-center gap-2">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
         <button
           onClick={() => {
             setSheet(null);
@@ -479,6 +617,23 @@ export function PostersTab({
           </span>
         )}
         <div className="flex-1" />
+        <button
+          onClick={() => void downloadSheet(sheet)}
+          disabled={downloading}
+          className="rounded-lg bg-zinc-800 px-2.5 py-1 text-[11px] font-semibold text-zinc-300 transition hover:bg-zinc-700 disabled:opacity-50"
+          title="Save the original sheet texture (PNG) to Downloads — edit it, then use Replace whole sheet"
+        >
+          {downloading ? "Saving…" : "⬇ Download sheet"}
+        </button>
+        {!editMode && !wholeOv && (
+          <button
+            onClick={() => void pickWholeSheet(sheet)}
+            className="rounded-lg bg-zinc-800 px-2.5 py-1 text-[11px] font-semibold text-zinc-300 transition hover:bg-zinc-700"
+            title="Replace the entire sheet texture with a same-size image (e.g. the downloaded original after editing)"
+          >
+            Replace whole sheet…
+          </button>
+        )}
         {editMode && (
           <button
             onClick={() => onToggleSheetHidden(sheet.id)}
@@ -500,10 +655,37 @@ export function PostersTab({
           {editMode ? "Done editing" : "Edit regions"}
         </button>
       </div>
+      {wholeOv && (
+        <div className="mb-3 flex items-center gap-3 rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-3 py-2">
+          <img
+            src={convertFileSrc(wholeOv.sourceImage)}
+            className="h-9 w-9 rounded object-cover"
+            alt=""
+          />
+          <div className="min-w-0 flex-1">
+            <div className="text-xs font-semibold text-emerald-300">Whole sheet replaced</div>
+            <div className="truncate text-[10px] text-zinc-500">
+              Your image compiles over the entire texture; the vanilla cut-out shapes are kept.
+            </div>
+          </div>
+          <button
+            onClick={() => void pickWholeSheet(sheet)}
+            className="rounded px-2 py-0.5 text-[11px] text-zinc-300 hover:bg-zinc-800"
+          >
+            Change image…
+          </button>
+          <button
+            onClick={() => onRemove(wholeOv.id)}
+            className="rounded px-2 py-0.5 text-[11px] text-red-400/80 hover:bg-red-500/10 hover:text-red-300"
+          >
+            Remove
+          </button>
+        </div>
+      )}
       <p className="mb-3 text-xs text-zinc-500">
         {editMode
           ? "Drag a region to move it, drag its handles to resize. Mark atlas junk as unused to hide it."
-          : "Drop an image onto a region (or click one) to replace that poster in-game."}
+          : "Drop an image onto a region (or click one) to replace that art in-game."}
       </p>
       {sheetErr && (
         <div className="mb-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
@@ -524,6 +706,15 @@ export function PostersTab({
                 Decoding sheet texture…
               </div>
             )
+          )}
+          {wholeOv && (
+            <img
+              src={convertFileSrc(wholeOv.sourceImage)}
+              className="absolute inset-0 h-full w-full"
+              style={{ objectFit: "fill", opacity: 0.9 }}
+              alt=""
+              draggable={false}
+            />
           )}
           {sheet.posters.map((p) => {
             const id = `${sheet.id}::${p.id}`;
@@ -554,7 +745,7 @@ export function PostersTab({
                     if (!ov) void pickImage(sheet, p);
                   }
                 }}
-                className="absolute overflow-visible transition-colors"
+                className="group absolute overflow-visible transition-colors"
                 style={{
                   ...pct,
                   cursor: editMode ? "move" : "pointer",
@@ -565,10 +756,18 @@ export function PostersTab({
                       ? "2px solid #34d399"
                       : isSel
                         ? `2px solid ${accent}`
-                        : "1px solid rgba(255,255,255,0.25)",
+                        : "1px solid rgba(255,255,255,0.3)",
                   boxShadow: isSel ? `0 0 0 2px ${accent}55` : undefined,
                 }}
               >
+                {/* hover tint + name chip */}
+                <div
+                  className="pointer-events-none absolute inset-0 opacity-0 transition-opacity group-hover:opacity-100"
+                  style={{ background: `${accent}1f` }}
+                />
+                <span className="pointer-events-none absolute bottom-0 left-0 max-w-full truncate rounded-tr bg-zinc-950/80 px-1 py-0.5 text-[9px] text-zinc-200 opacity-0 transition-opacity group-hover:opacity-100">
+                  {pretty(p.id)}
+                </span>
                 {ov && !isHidden && (
                   <img
                     src={convertFileSrc(ov.sourceImage)}
@@ -727,11 +926,10 @@ export function PostersTab({
                 : "Click a region on the sheet to replace it. Regions outlined green already have your art."}
             </div>
           )}
-          {overrides.filter((o) => o.sheetId === sheet.id).length > 0 && (
+          {sheetOverrideCount > 0 && (
             <div className="mt-3 text-[11px] text-zinc-500">
-              {overrides.filter((o) => o.sheetId === sheet.id).length} replacement
-              {overrides.filter((o) => o.sheetId === sheet.id).length === 1 ? "" : "s"} on this
-              sheet — all compile together.
+              {sheetOverrideCount} replacement{sheetOverrideCount === 1 ? "" : "s"} on this sheet —
+              all compile together.
             </div>
           )}
         </div>

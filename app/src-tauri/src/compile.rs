@@ -1111,6 +1111,11 @@ fn compile_posters(
     for ov in &cfg.poster_overrides {
         by_sheet.entry(ov.sheet_id.as_str()).or_default().push(ov);
     }
+    // Composite biggest-first so a whole-sheet replacement goes under any
+    // per-region art on the same sheet (matches the UI preview's layering).
+    for ovs in by_sheet.values_mut() {
+        ovs.sort_by_key(|o| std::cmp::Reverse(u64::from(o.w) * u64::from(o.h)));
+    }
 
     for (sheet_id, ovs) in by_sheet {
         let materials: Vec<String> = ovs[0]
