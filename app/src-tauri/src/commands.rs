@@ -31,9 +31,34 @@ pub fn pack_vpk(helper_path: String, folder: String, out_vpk: String) -> Result<
 
 /// Run the full compile pipeline. Returns a per-step report (never throws for
 /// pipeline failures — inspect `report.ok` and the steps).
+///
+/// `async` + `spawn_blocking` is load-bearing: a *sync* Tauri command runs on the
+/// main/UI thread, so the whole window freezes ("Not Responding") for the several
+/// seconds a real compile takes (ffmpeg + resourcecompiler launches + VPK packing).
+/// Moving the blocking work onto a worker thread keeps the UI responsive.
 #[tauri::command]
-pub fn compile_project(config: CompileConfig) -> CompileReport {
-    compile::run(&config)
+pub async fn compile_project(app: tauri::AppHandle, config: CompileConfig) -> CompileReport {
+    // Forward pipeline steps to the UI live. The channel indirection keeps
+    // tauri's event system out of compile.rs (see CompileReport::progress).
+    let (tx, rx) = std::sync::mpsc::channel::<compile::StepResult>();
+    std::thread::spawn(move || {
+        use tauri::Emitter;
+        for step in rx {
+            let _ = app.emit("compile://progress", &step);
+        }
+    });
+    tauri::async_runtime::spawn_blocking(move || compile::run_with_progress(&config, Some(tx)))
+        .await
+        .unwrap_or_else(|e| CompileReport {
+            ok: false,
+            steps: vec![compile::StepResult {
+                name: "compile task".into(),
+                ok: false,
+                detail: format!("compile worker panicked: {e}"),
+            }],
+            output_path: None,
+            progress: None,
+        })
 }
 
 fn downloads_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -131,6 +156,412 @@ pub fn read_mod_arrays(
     Ok(out)
 }
 
+/// One event's worth of entries to import from a mod pack: the entries that
+/// reference audio actually shipped *inside* the pack (i.e. the author's own
+/// sounds), so they can be adopted into a project.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportEvent {
+    pub events_relpath: String,
+    pub event_name: String,
+    pub array_key: String,
+    pub refs: Vec<String>,
+}
+
+/// Canonicalize a packed soundevents path to `soundevents/<rel>` regardless of
+/// the pack's wrapper folder (`MYSoundevents/`, `.../soundevents/`, …) and strip
+/// a trailing `_c`.
+fn canon_events_relpath(path: &str) -> String {
+    let p = path.strip_suffix("_c").unwrap_or(path);
+    let rel = if let Some(idx) = p.rfind("soundevents/") {
+        &p[idx + "soundevents/".len()..]
+    } else {
+        // e.g. "MYSoundevents/hero/abrams.vsndevts" -> drop the first segment.
+        p.splitn(2, '/').nth(1).unwrap_or(p)
+    };
+    format!("soundevents/{rel}")
+}
+
+/// Scan a mod pack vpk and return, per event, the entries that point at audio
+/// shipped inside the pack (the author's own sounds) — i.e. what to adopt when
+/// importing the pack. `exclude_prefixes` drops references under those internal
+/// paths (e.g. `sounds/gordon/`). Authored soundevents only: vanilla snapshots /
+/// backups / merged copies the pack happens to bundle are skipped, and remaining
+/// duplicates are merged by (relpath, event, array).
+#[tauri::command]
+pub fn import_pack_events(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+    pack_vpk: String,
+    exclude_prefixes: Vec<String>,
+) -> Result<Vec<ImportEvent>, String> {
+    use std::collections::{BTreeSet, HashMap, HashSet};
+    let files = crate::vpk::list(&helper_path, &pack_vpk, None)?;
+    let excluded = |r: &str| exclude_prefixes.iter().any(|p| r.starts_with(p.as_str()));
+    // A pack file at a STOCK game path is a bundled copy of a vanilla sound or
+    // a rename-to-original replacement — NOT the author's own track. Adopting
+    // those would list vanilla sounds as "from the mod" (they ride along via
+    // the bundle instead). Best-effort: an empty/unavailable index skips the
+    // filter rather than failing the scan.
+    let stock: HashSet<String> = if pak_path.is_empty() {
+        HashSet::new()
+    } else {
+        game_sound_index(&app, &helper_path, &pak_path, false)
+            .map(|v| v.into_iter().collect())
+            .unwrap_or_default()
+    };
+    // Audio the pack ships (sounds/x.vsnd, derived from x.vsnd_c), minus
+    // exclusions and stock-path files.
+    let audio: HashSet<String> = files
+        .iter()
+        .filter(|f| f.starts_with("sounds/") && f.ends_with(".vsnd_c"))
+        .map(|f| f.trim_end_matches("_c").to_string())
+        .filter(|r| !excluded(r) && !stock.contains(r))
+        .collect();
+    let tmp = std::env::temp_dir()
+        .join("deadlock-intro-tool")
+        .join("packimport");
+    let _ = std::fs::create_dir_all(&tmp);
+    // Old packs bundle TEXT .vsndevts; properly-built mods ship only the
+    // compiled .vsndevts_c — read both (decompiling the compiled ones), but
+    // prefer the text twin when a pack ships both.
+    let text_files: HashSet<&str> = files
+        .iter()
+        .filter(|f| f.ends_with(".vsndevts"))
+        .map(|s| s.as_str())
+        .collect();
+    let mut map: HashMap<(String, String, String), BTreeSet<String>> = HashMap::new();
+    for f in &files {
+        let is_text = f.ends_with(".vsndevts");
+        let is_compiled = f.ends_with(".vsndevts_c");
+        if !is_text && !is_compiled {
+            continue;
+        }
+        if is_compiled && text_files.contains(f.trim_end_matches("_c")) {
+            continue; // the text twin covers it
+        }
+        let lower = f.to_lowercase();
+        // Skip the pack's bundled vanilla snapshots / backups / merged copies —
+        // we only want the author's edited soundevents.
+        if lower.contains("backup") || lower.contains("newsoundevents") || lower.contains("merged") {
+            continue;
+        }
+        let dest = tmp.join(format!("{}.vsndevts", f.replace('/', "_").trim_end_matches("_c")));
+        let extracted = if is_text {
+            crate::vpk::extract(&helper_path, &pack_vpk, f, &dest.to_string_lossy()).is_ok()
+        } else {
+            crate::vpk::decompile_from_vpk(&helper_path, &pack_vpk, f, &dest.to_string_lossy()).is_ok()
+        };
+        if !extracted {
+            continue;
+        }
+        let text = match std::fs::read_to_string(&dest) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let arrays = match kv3_core::list_arrays(&text) {
+            Ok(a) => a,
+            Err(_) => continue,
+        };
+        let relpath = canon_events_relpath(f);
+        for a in arrays {
+            let refs: Vec<String> = a
+                .entries
+                .into_iter()
+                .filter(|e| audio.contains(e) && !excluded(e))
+                .collect();
+            if refs.is_empty() {
+                continue;
+            }
+            map.entry((relpath.clone(), a.event_name, a.array_key))
+                .or_default()
+                .extend(refs);
+        }
+    }
+    let mut out: Vec<ImportEvent> = map
+        .into_iter()
+        .map(|((events_relpath, event_name, array_key), refs)| ImportEvent {
+            events_relpath,
+            event_name,
+            array_key,
+            refs: refs.into_iter().collect(),
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        (
+            a.events_relpath.as_str(),
+            a.event_name.as_str(),
+            a.array_key.as_str(),
+        )
+            .cmp(&(
+                b.events_relpath.as_str(),
+                b.event_name.as_str(),
+                b.array_key.as_str(),
+            ))
+    });
+    Ok(out)
+}
+
+/// What's inside a mod pack, classified for the import review UI. Every list
+/// holds the pack's raw internal paths (compiled `_c` names), so a deselected
+/// entry can be excluded from staging verbatim.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackContents {
+    /// Pack sound files whose path matches a REAL stock game sound — the
+    /// "rename your file to the original's name" replacement trick. These
+    /// override the original purely by being bundled.
+    pub overwrites: Vec<String>,
+    /// Pack sounds that are the author's own files (new paths, referenced by
+    /// the pack's sound events).
+    pub own_sounds: Vec<String>,
+    pub models: Vec<String>,
+    pub particles: Vec<String>,
+    pub materials: Vec<String>,
+    pub panorama: Vec<String>,
+    pub other: Vec<String>,
+}
+
+/// Classify a mod pack's contents against the live game: which of its sound
+/// files shadow stock files by name (silent overwrites), plus every other file
+/// it bundles by category. Cheap — one pack listing + the cached game sound
+/// index.
+#[tauri::command]
+pub fn scan_pack_contents(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+    pack_vpk: String,
+) -> Result<PackContents, String> {
+    use std::collections::HashSet;
+    let files = crate::vpk::list(&helper_path, &pack_vpk, None)?;
+    let index: HashSet<String> =
+        game_sound_index(&app, &helper_path, &pak_path, false)?.into_iter().collect();
+    let mut out = PackContents {
+        overwrites: vec![],
+        own_sounds: vec![],
+        models: vec![],
+        particles: vec![],
+        materials: vec![],
+        panorama: vec![],
+        other: vec![],
+    };
+    for f in files {
+        if f.starts_with("sounds/") && f.ends_with(".vsnd_c") {
+            if index.contains(f.trim_end_matches("_c")) {
+                out.overwrites.push(f);
+            } else {
+                out.own_sounds.push(f);
+            }
+        } else if f.starts_with("models/") {
+            out.models.push(f);
+        } else if f.starts_with("particles/") {
+            out.particles.push(f);
+        } else if f.starts_with("materials/") {
+            out.materials.push(f);
+        } else if f.starts_with("panorama/") {
+            out.panorama.push(f);
+        } else if !f.starts_with("soundevents/") {
+            out.other.push(f);
+        }
+    }
+    for list in [
+        &mut out.overwrites,
+        &mut out.own_sounds,
+        &mut out.models,
+        &mut out.particles,
+        &mut out.materials,
+        &mut out.panorama,
+        &mut out.other,
+    ] {
+        list.sort();
+    }
+    Ok(out)
+}
+
+/// Extract an imported pack ONCE into an app-managed cache dir, so compiles,
+/// previews and adopted-track staging never need the original `.vpk` again
+/// (the whole vpk layer accepts the cache dir as a source). Asset trees are
+/// copied verbatim; soundevents are stored as decompiled TEXT. Returns the
+/// cache dir (already-cached dir inputs are returned as-is).
+#[tauri::command]
+pub fn cache_pack(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pack_vpk: String,
+) -> Result<String, String> {
+    use tauri::Manager;
+    if std::path::Path::new(&pack_vpk).is_dir() {
+        return Ok(pack_vpk); // re-import of an already-cached pack
+    }
+    // Friendly name (the vpk stem, or its folder for generic pakNN_dir.vpk)
+    // plus a short hash of the full path for uniqueness.
+    let norm = pack_vpk.replace('\\', "/");
+    let mut parts: Vec<&str> = norm.split('/').filter(|s| !s.is_empty()).collect();
+    let file = parts.pop().unwrap_or("pack");
+    let stem = file.trim_end_matches(".vpk");
+    let is_generic = stem.starts_with("pak")
+        && stem.ends_with("_dir")
+        && stem[3..stem.len() - 4].chars().all(|c| c.is_ascii_digit());
+    let raw_name = if is_generic { parts.pop().unwrap_or(stem) } else { stem };
+    let name: String = raw_name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in norm.as_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("packs")
+        .join(format!("{name}_{:08x}", h as u32));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+
+    for d in ["sounds/", "models/", "particles/", "materials/", "panorama/"] {
+        let _ = crate::vpk::extract_all(&helper_path, &pack_vpk, &dir.to_string_lossy(), Some(d));
+    }
+    // Soundevents land as decompiled text (what the import + combine steps
+    // read). True top-level files only — the listing is a substring match, so
+    // working copies (NEWSoundevents/, MERGEDsoundevents/, backups) would
+    // otherwise be cached as junk.
+    for f in crate::vpk::list(&helper_path, &pack_vpk, Some("soundevents/"))? {
+        let lower = f.to_lowercase();
+        if !lower.starts_with("soundevents/")
+            || lower.contains("backup")
+            || lower.contains("newsoundevents")
+            || lower.contains("merged")
+        {
+            continue;
+        }
+        let out = dir.join(f.trim_end_matches("_c"));
+        if let Some(p) = out.parent() {
+            let _ = std::fs::create_dir_all(p);
+        }
+        if f.ends_with(".vsndevts") {
+            let _ = crate::vpk::extract(&helper_path, &pack_vpk, &f, &out.to_string_lossy());
+        } else if f.ends_with(".vsndevts_c") {
+            let _ = crate::vpk::decompile_from_vpk(&helper_path, &pack_vpk, &f, &out.to_string_lossy());
+        }
+    }
+    // Record where this cache came from (for the curious / future tooling).
+    let _ = std::fs::write(dir.join("eim_source.txt"), &pack_vpk);
+    Ok(dir.to_string_lossy().replace('\\', "/"))
+}
+
+/// Which of a pack's files are byte-identical (CRC32, from the vpk indexes) to
+/// the game's file at the same path — i.e. bundled-but-UNCHANGED vanilla
+/// copies old packs ship. Drives the build preview's changed-only filter.
+#[tauri::command]
+pub fn pack_unchanged_files(
+    helper_path: String,
+    pak_path: String,
+    source: String,
+) -> Result<Vec<String>, String> {
+    use std::collections::{HashMap, HashSet};
+    let game: HashMap<String, u32> = crate::vpk::crcs(&helper_path, &pak_path, None)?
+        .into_iter()
+        .map(|(c, p)| (p, c))
+        .collect();
+    // Only pack paths that shadow a game path can be "unchanged" — restrict
+    // hashing (relevant for cached-pack dirs) to those.
+    let candidates: HashSet<String> = crate::vpk::list(&helper_path, &source, None)?
+        .into_iter()
+        .filter(|p| game.contains_key(p))
+        .collect();
+    if candidates.is_empty() {
+        return Ok(vec![]);
+    }
+    let mut out: Vec<String> = crate::vpk::crcs(&helper_path, &source, Some(&candidates))?
+        .into_iter()
+        .filter(|(c, p)| candidates.contains(p) && game.get(p) == Some(c))
+        .map(|(_, p)| p)
+        .collect();
+    out.sort();
+    Ok(out)
+}
+
+/// Decompile a whole vpk into source form at `dest_dir` (structure preserved):
+/// sounds → audio, textures → png, other resources → text, the rest copied
+/// raw. Async + spawn_blocking — big paks take a while and the UI must stay
+/// responsive.
+#[tauri::command]
+pub async fn decompile_vpk_all(
+    helper_path: String,
+    vpk: String,
+    dest_dir: String,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::vpk::decompile_all(&helper_path, &vpk, &dest_dir)
+    })
+    .await
+    .map_err(|e| format!("decompile task panicked: {e}"))?
+}
+
+/// Which sound event(s) reference a given `.vsnd`: one hit per (file, event,
+/// array) that contains the ref in its entries.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefEventHit {
+    pub reference: String,
+    pub events_relpath: String,
+    pub event_name: String,
+    pub array_key: String,
+}
+
+/// Reverse-lookup: which events (in the local vanilla merge base) reference
+/// each of `refs`. Used by the import review to turn a pack's stock-path
+/// replacement files into proper array entries on their owning events instead
+/// of raw file overwrites. Best-effort: only soundevents files already
+/// decompiled under `vanilla_root` are scanned.
+#[tauri::command]
+pub fn events_for_refs(vanilla_root: String, refs: Vec<String>) -> Result<Vec<RefEventHit>, String> {
+    use std::collections::HashSet;
+    let want: HashSet<&str> = refs.iter().map(|s| s.as_str()).collect();
+    if want.is_empty() {
+        return Ok(vec![]);
+    }
+    let root = std::path::Path::new(&vanilla_root).join("soundevents");
+    let mut out = Vec::new();
+    let mut stack = vec![root.clone()];
+    while let Some(dir) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+                continue;
+            }
+            if p.extension().and_then(|x| x.to_str()) != Some("vsndevts") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&p) else { continue };
+            let Ok(arrays) = kv3_core::list_arrays(&text) else { continue };
+            let rel = match p.strip_prefix(&root) {
+                Ok(r) => format!("soundevents/{}", r.to_string_lossy().replace('\\', "/")),
+                Err(_) => continue,
+            };
+            for a in arrays {
+                for r in &a.entries {
+                    if want.contains(r.as_str()) {
+                        out.push(RefEventHit {
+                            reference: r.clone(),
+                            events_relpath: rel.clone(),
+                            event_name: a.event_name.clone(),
+                            array_key: a.array_key.clone(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Decode a stock track's compiled `.vsnd_c` (from the game's pak) to playable
 /// audio for the waveform comparison. `stock_ref` is the `.vsnd` reference; the
 /// result is cached in the staging dir and the audio file path is returned.
@@ -201,28 +632,40 @@ pub fn refresh_vanilla(
         .app_data_dir()
         .map_err(|e| e.to_string())?
         .join("vanilla");
-    let mut refreshed = Vec::new();
-    let mut failed = Vec::new();
-    for rel in &relpaths {
-        let rel_trim = rel.trim_matches('/');
-        let internal = format!("{rel_trim}_c");
-        let dest = dest_root.join(rel_trim);
-        if let Some(parent) = dest.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                failed.push(format!("{rel}: {e}"));
-                continue;
-            }
+    // Decompile in parallel: the full-pak sweep refreshes ~50 files and every
+    // decompile is a helper-process spawn costing a few hundred ms, so serial
+    // would make a "Fix for new patch" run take tens of seconds.
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let refreshed_m = std::sync::Mutex::new(Vec::new());
+    let failed_m = std::sync::Mutex::new(Vec::new());
+    std::thread::scope(|s| {
+        for _ in 0..relpaths.len().clamp(1, 8) {
+            s.spawn(|| loop {
+                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some(rel) = relpaths.get(i) else { break };
+                let rel_trim = rel.trim_matches('/');
+                let internal = format!("{rel_trim}_c");
+                let dest = dest_root.join(rel_trim);
+                if let Some(parent) = dest.parent() {
+                    if let Err(e) = std::fs::create_dir_all(parent) {
+                        failed_m.lock().unwrap().push(format!("{rel}: {e}"));
+                        continue;
+                    }
+                }
+                match crate::vpk::decompile_from_vpk(
+                    &helper_path,
+                    &pak_path,
+                    &internal,
+                    &dest.to_string_lossy(),
+                ) {
+                    Ok(_) => refreshed_m.lock().unwrap().push(rel.clone()),
+                    Err(e) => failed_m.lock().unwrap().push(format!("{rel}: {e}")),
+                }
+            });
         }
-        match crate::vpk::decompile_from_vpk(
-            &helper_path,
-            &pak_path,
-            &internal,
-            &dest.to_string_lossy(),
-        ) {
-            Ok(_) => refreshed.push(rel.clone()),
-            Err(e) => failed.push(format!("{rel}: {e}")),
-        }
-    }
+    });
+    let refreshed = refreshed_m.into_inner().unwrap();
+    let failed = failed_m.into_inner().unwrap();
     if refreshed.is_empty() && !failed.is_empty() {
         return Err(failed.join("; "));
     }
@@ -231,6 +674,111 @@ pub fn refresh_vanilla(
         refreshed,
         failed,
     })
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolsPaths {
+    pub csdk_root: String,
+    pub ffmpeg_path: String,
+}
+
+/// One-stop tools setup: download the prebuilt tools bundle (trimmed CSDK
+/// compiler + static ffmpeg, ~434 MB zipped / ~1.1 GB on disk) and unpack it
+/// into app-data `tools/`, returning the resulting paths for settings. Uses
+/// Windows' bundled `curl.exe` + `tar.exe` (bsdtar reads zip) so no extra
+/// crates are needed. Blocking work runs on a background thread.
+#[tauri::command]
+pub async fn download_tools(app: tauri::AppHandle, url: String) -> Result<ToolsPaths, String> {
+    use tauri::Manager;
+    let tools_root = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("tools");
+    tauri::async_runtime::spawn_blocking(move || {
+        // Prefer the Windows-native curl/tar in System32: a bare name could
+        // resolve to MSYS/GNU builds on PATH, and GNU tar treats `C:` in a
+        // path as a remote host ("Cannot connect to C: resolve failed").
+        let sys32 = std::env::var("WINDIR")
+            .map(|w| std::path::PathBuf::from(w).join("System32"))
+            .unwrap_or_else(|_| std::path::PathBuf::from(r"C:\Windows\System32"));
+        let pick = |name: &str| -> String {
+            let native = sys32.join(format!("{name}.exe"));
+            if native.exists() {
+                native.to_string_lossy().into_owned()
+            } else {
+                name.to_string()
+            }
+        };
+        std::fs::create_dir_all(&tools_root).map_err(|e| e.to_string())?;
+        let zip = tools_root.join("eim_tools_download.zip");
+        let out = crate::procutil::quiet(pick("curl"))
+            .args(["-L", "--fail", "-sS", "-o", &zip.to_string_lossy(), &url])
+            .output()
+            .map_err(|e| format!("launching curl: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "download failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+        let out = crate::procutil::quiet(pick("tar"))
+            .args(["-xf", &zip.to_string_lossy(), "-C", &tools_root.to_string_lossy()])
+            .output()
+            .map_err(|e| format!("launching tar: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "extract failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+        let _ = std::fs::remove_file(&zip);
+        // The bundle unpacks to <tools>/EIM_Tools/{csdk,ffmpeg}.
+        let root = tools_root.join("EIM_Tools");
+        let csdk = root.join("csdk");
+        let compiler = csdk
+            .join("game")
+            .join("bin_tools")
+            .join("win64")
+            .join("resourcecompiler.exe");
+        if !compiler.exists() {
+            return Err(format!(
+                "bundle unpacked but resourcecompiler.exe not found at {}",
+                compiler.display()
+            ));
+        }
+        let ffmpeg = root.join("ffmpeg").join("ffmpeg.exe");
+        Ok(ToolsPaths {
+            csdk_root: csdk.to_string_lossy().into_owned(),
+            ffmpeg_path: if ffmpeg.exists() {
+                ffmpeg.to_string_lossy().into_owned()
+            } else {
+                String::new()
+            },
+        })
+    })
+    .await
+    .map_err(|e| format!("download task panicked: {e}"))?
+}
+
+/// Enumerate every `.vsndevts` file in the game pak (relpaths with the compiled
+/// `_c` suffix stripped), so the "Fix for new patch" sweep can account for every
+/// sound-event file instead of a hardcoded few. The frontend filters out hero
+/// files (browsed live by the Heroes tab) and voiceline/vo files.
+#[tauri::command]
+pub fn list_soundevent_files(
+    helper_path: String,
+    pak_path: String,
+) -> Result<Vec<String>, String> {
+    let mut out: Vec<String> = crate::vpk::list(&helper_path, &pak_path, Some("soundevents/"))?
+        .into_iter()
+        .filter(|e| e.ends_with(".vsndevts_c"))
+        .map(|e| e[..e.len() - 2].to_string())
+        .collect();
+    out.sort();
+    out.dedup();
+    Ok(out)
 }
 
 /// Scan the Deadlock addons folder for occupied `pakNN_dir.vpk` slots + the next
@@ -386,7 +934,7 @@ fn exists(p: &std::path::Path) -> bool {
 
 /// Read Steam's install path from the registry (`HKCU\Software\Valve\Steam`).
 fn steam_path() -> Option<std::path::PathBuf> {
-    let out = std::process::Command::new("reg")
+    let out = crate::procutil::quiet("reg")
         .args(["query", r"HKCU\SOFTWARE\Valve\Steam", "/v", "SteamPath"])
         .output()
         .ok()?;
@@ -515,7 +1063,7 @@ fn find_vpk_helper(exe_dir: Option<&std::path::Path>, resource_dir: Option<&std:
 
 /// True if a bare `ffmpeg` runs (i.e. it's on PATH).
 fn ffmpeg_on_path() -> bool {
-    std::process::Command::new("ffmpeg")
+    crate::procutil::quiet("ffmpeg")
         .arg("-version")
         .output()
         .map(|o| o.status.success())
@@ -2179,9 +2727,10 @@ pub fn hero_detail(
         .join("hero_portraits");
     std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
 
-    // Serve the cached per-hero detail unless a refresh was requested. The `v3`
-    // marker invalidates caches built before event→file index resolution.
-    let detail_cache = base.join(format!("detail_v3_{codename}.json"));
+    // Serve the cached per-hero detail unless a refresh was requested. The `v6`
+    // marker invalidates caches built before ability folding + own-file
+    // ownership filtering.
+    let detail_cache = base.join(format!("detail_v6_{codename}.json"));
     if !refresh.unwrap_or(false) {
         if let Ok(text) = std::fs::read_to_string(&detail_cache) {
             if let Ok(cached) = serde_json::from_str::<Vec<HeroAbility>>(&text) {
@@ -2239,7 +2788,16 @@ pub fn hero_detail(
         let _ = crate::vpk::texture_batch(&helper_path, &pak_path, &icon_dir.to_string_lossy(), &need);
     }
 
-    let mut out = Vec::new();
+    // Pass 1: resolve every ability's vdata sounds to their owning file stem.
+    // (Distinct events per ability, first label wins; events no file defines —
+    // shared/global or stale refs — are dropped.)
+    struct RawSound {
+        label: String,
+        event: String,
+        stem: String,
+    }
+    let mut raw: Vec<(u32, String, Option<String>, Vec<RawSound>)> = Vec::new();
+    let mut stem_freq: std::collections::BTreeMap<String, usize> = Default::default();
     for (slot, ability) in bound {
         let def = ability_map.get(&ability);
         let icon_path = def
@@ -2247,31 +2805,210 @@ pub fn hero_detail(
             .map(|i| icon_dir.join(format!("{}.png", stem_of(i))))
             .filter(|p| p.exists())
             .map(|p| p.to_string_lossy().into_owned());
-
-        // Distinct sound events (keep first label per event). Resolve each event
-        // to the file that actually defines it via the index; events not in any
-        // hero file (shared/global like `Player.Barrier.Activate`, or stale
-        // references the file no longer defines) are dropped — they'd otherwise be
-        // broken/empty slots.
         let mut seen = std::collections::HashSet::new();
         let mut sounds = Vec::new();
         if let Some(d) = def {
             for (label, event) in &d.sounds {
-                let stem = match event_index.get(event) {
-                    Some(s) => s,
-                    None => continue,
-                };
+                let Some(stem) = event_index.get(event) else { continue };
                 if seen.insert(event.clone()) {
-                    sounds.push(HeroAbilitySound {
-                        event_name: event.clone(),
-                        array_key: "vsnd_files".to_string(),
-                        events_relpath: format!("soundevents/hero/{stem}.vsndevts"),
+                    *stem_freq.entry(stem.clone()).or_insert(0) += 1;
+                    sounds.push(RawSound {
                         label: label.clone(),
+                        event: event.clone(),
+                        stem: stem.clone(),
                     });
                 }
             }
         }
+        raw.push((slot, ability, icon_path, sounds));
+    }
+
+    // Ownership: the hero's own file(s) = the codename's file plus the stem
+    // the MAJORITY of their vdata sounds resolve to (codename and file differ
+    // for older heroes). Valve's vdata sometimes borrows ANOTHER hero's events
+    // (Drifter's shadow mark plays Synth/Pocket cloak sounds) — those don't
+    // belong on this hero's cards and stay editable under their real owner.
+    let mut own_stems: std::collections::BTreeSet<String> = Default::default();
+    if hero_stems.contains(&codename) {
+        own_stems.insert(codename.clone());
+    }
+    if let Some((s, _)) = stem_freq.iter().max_by_key(|(_, n)| **n) {
+        own_stems.insert(s.clone());
+    }
+
+    let mut out = Vec::new();
+    for (slot, ability, icon_path, sounds) in raw {
+        let sounds = sounds
+            .into_iter()
+            .filter(|s| own_stems.contains(&s.stem))
+            .map(|s| HeroAbilitySound {
+                event_name: s.event,
+                array_key: "vsnd_files".to_string(),
+                events_relpath: format!("soundevents/hero/{}.vsndevts", s.stem),
+                label: s.label,
+            })
+            .collect();
         out.push(HeroAbility { slot, ability, icon_path, sounds });
+    }
+
+    // The vdata only references a handful of events per ability (cast, hit
+    // confirm…) — the hero's soundevents FILE carries the full set (projectile
+    // loops, teleports, impacts…). Fold every remaining event into its ability
+    // card. The game encodes the ability slot in three conventions, tried in
+    // order per event:
+    //   1. ref folder `sounds/abilities/<stem>/a<N>/…` or `…/a<N>_name/…`
+    //   2. an `A<N>` segment in the event name (`Abrams.A1.SiphonLife.Cast`)
+    //   3. the ability's name as a prefix of the event name (hero prefix and
+    //      generic "Ability" segments stripped from both sides first)
+    let norm = |s: &str| -> String {
+        s.chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .map(|c| c.to_ascii_lowercase())
+            .collect()
+    };
+    let code_n = norm(&codename);
+    // Fold ONLY over the hero's own file(s) — scanning a borrowed hero's file
+    // would drag foreign events (e.g. Synth.A2.*) onto these cards.
+    let stems = own_stems.clone();
+    // Per-ability normalized name candidates (full core + core minus its
+    // leading dev-name segment), longest first so specific abilities win.
+    let mut keys: Vec<(usize, String)> = Vec::new();
+    for (i, ha) in out.iter().enumerate() {
+        let mut k = ha.ability.to_ascii_lowercase();
+        for p in ["citadel_ability_", "ability_"] {
+            if let Some(s) = k.strip_prefix(p) {
+                k = s.to_string();
+            }
+        }
+        let full = norm(&k);
+        if full.len() >= 4 {
+            keys.push((i, full.clone()));
+        }
+        if let Some(stripped) = full.strip_prefix(code_n.as_str()) {
+            if stripped.len() >= 4 {
+                keys.push((i, stripped.to_string()));
+            }
+        }
+        // Drop the first underscore segment (usually the hero's dev name,
+        // which may differ from the codename: `ability_bull_charge` → charge).
+        if let Some((_, rest)) = k.split_once('_') {
+            let r = norm(rest);
+            if r.len() >= 4 {
+                keys.push((i, r));
+            }
+        }
+    }
+    keys.sort_by_key(|(_, k)| std::cmp::Reverse(k.len()));
+    // Event-name FAMILIES from the vdata-known events: an ability whose cast
+    // sound is `Necro.Skull.Cast` owns every other `Necro.Skull.*` event —
+    // this bridges vocabulary gaps the name heuristic can't (gravestone ↔
+    // Gravedigging). Requires ≥2 segments so a bare hero prefix never claims.
+    let mut fams: Vec<(usize, String)> = Vec::new();
+    for (i, ha) in out.iter().enumerate() {
+        for s in &ha.sounds {
+            if let Some(pos) = s.event_name.rfind('.') {
+                let fam = &s.event_name[..pos];
+                if fam.contains('.') && !fams.iter().any(|(fi, f)| *fi == i && f == fam) {
+                    fams.push((i, fam.to_string()));
+                }
+            }
+        }
+    }
+    fams.sort_by_key(|(_, f)| std::cmp::Reverse(f.len()));
+    let mut claimed: std::collections::HashSet<String> = out
+        .iter()
+        .flat_map(|a| a.sounds.iter().map(|s| s.event_name.clone()))
+        .collect();
+    let snd_dir = base.join("heroevents");
+    let _ = std::fs::create_dir_all(&snd_dir);
+    for stem in &stems {
+        let snd_file = snd_dir.join(format!("{stem}.vsndevts"));
+        if !snd_file.exists() {
+            let _ = crate::vpk::decompile_from_vpk(
+                &helper_path,
+                &pak_path,
+                &format!("soundevents/hero/{stem}.vsndevts_c"),
+                &snd_file.to_string_lossy(),
+            );
+        }
+        let Ok(text) = std::fs::read_to_string(&snd_file) else { continue };
+        let Ok(arrays) = kv3_core::list_arrays(&text) else { continue };
+        let relpath = format!("soundevents/hero/{stem}.vsndevts");
+        let slot_prefix = format!("sounds/abilities/{stem}/a");
+        for a in arrays {
+            if a.array_key != "vsnd_files" || claimed.contains(&a.event_name) {
+                continue;
+            }
+            // Signal 1: any entry under the hero's aN / aN_name ability folder.
+            let mut target: Option<usize> = None;
+            for r in &a.entries {
+                if let Some(rest) = r.strip_prefix(&slot_prefix) {
+                    let mut ch = rest.chars();
+                    if let (Some(n), Some(sep)) = (
+                        ch.next().and_then(|c| c.to_digit(10)),
+                        ch.next(),
+                    ) {
+                        if sep == '/' || sep == '_' {
+                            target = out.iter().position(|ha| ha.slot == n);
+                            if target.is_some() {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            // Signal 2: an `A<N>` dot-segment in the event name.
+            let segments: Vec<&str> = a.event_name.split('.').collect();
+            if target.is_none() {
+                for seg in &segments {
+                    let s = seg.to_ascii_lowercase();
+                    if s.len() == 2 && s.starts_with('a') {
+                        if let Some(n) = s[1..].chars().next().and_then(|c| c.to_digit(10)) {
+                            target = out.iter().position(|ha| ha.slot == n);
+                            if target.is_some() {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            // Signal 3: the event belongs to a family established by one of
+            // the ability's vdata-known events.
+            if target.is_none() {
+                for (i, fam) in &fams {
+                    if a.event_name.len() > fam.len()
+                        && a.event_name.starts_with(fam.as_str())
+                        && a.event_name.as_bytes()[fam.len()] == b'.'
+                    {
+                        target = Some(*i);
+                        break;
+                    }
+                }
+            }
+            // Signal 4: an ability name prefixes the event (hero dev-name
+            // first segment + generic "Ability" segments dropped).
+            if target.is_none() && segments.len() >= 2 {
+                let mut idx = 1; // segment 0 is the hero/dev name
+                while idx < segments.len() && segments[idx].eq_ignore_ascii_case("ability") {
+                    idx += 1;
+                }
+                let ev_core = norm(&segments[idx..].join(""));
+                for (i, core) in &keys {
+                    if ev_core.starts_with(core.as_str()) {
+                        target = Some(*i);
+                        break;
+                    }
+                }
+            }
+            let Some(i) = target else { continue };
+            claimed.insert(a.event_name.clone());
+            out[i].sounds.push(HeroAbilitySound {
+                label: prettify_hero_sound(&a.event_name, &codename),
+                event_name: a.event_name,
+                array_key: "vsnd_files".to_string(),
+                events_relpath: relpath.clone(),
+            });
+        }
     }
 
     // Cache the static detail for instant subsequent opens.
@@ -2956,6 +3693,56 @@ pub fn item_detail(
     Ok(sounds)
 }
 
+/// One shop item's reference to a sound event (from abilities.vdata).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemSoundRef {
+    pub item_name: String,
+    pub event_name: String,
+    pub label: String,
+}
+
+/// Flat index of every enabled shop item's sound events, so the importer can
+/// route an imported `mods/*` sound event to the item(s) that use it.
+#[tauri::command]
+pub fn item_sound_index(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+) -> Result<Vec<ItemSoundRef>, String> {
+    use tauri::Manager;
+    let hp = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("hero_portraits");
+    std::fs::create_dir_all(&hp).map_err(|e| e.to_string())?;
+    let abilities = hp.join("abilities.vdata");
+    if !abilities.exists() {
+        crate::vpk::decompile_from_vpk(
+            &helper_path,
+            &pak_path,
+            "scripts/abilities.vdata_c",
+            &abilities.to_string_lossy(),
+        )?;
+    }
+    let text = std::fs::read_to_string(&abilities).map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for d in parse_items(&text) {
+        if d.disabled {
+            continue;
+        }
+        for (label, event) in d.sounds {
+            out.push(ItemSoundRef {
+                item_name: d.name.clone(),
+                event_name: event,
+                label,
+            });
+        }
+    }
+    Ok(out)
+}
+
 /// Extract one entry from a VPK via the bundled ValvePak helper.
 #[tauri::command]
 pub fn extract_vpk(
@@ -3007,6 +3794,53 @@ pub fn read_event_pools(slots: Vec<SlotRef>) -> Result<Vec<Option<EventView>>, S
             .get(&slot.events_path)
             .and_then(|text| kv3_core::read_event_array(text, &slot.event_name, key).ok());
         out.push(view);
+    }
+    Ok(out)
+}
+
+/// A moddable sound event discovered in the live (refreshed) soundevents tree.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscoveredEvent {
+    pub events_relpath: String,
+    pub event_name: String,
+    pub array_key: String,
+    pub stock_entry: String,
+}
+
+/// Enumerate every primary-`vsnd_files` event across the given soundevents files
+/// (read from the app's refreshed `vanilla_root`). Secondary arrays
+/// (`vsnd_files_opponent_control`, `vsnd_files_distance_xfade`, …) are skipped so
+/// discovery yields one slot per event. Missing files are silently skipped — one
+/// absent file must not fail the sweep. Drives auto-discovery of events a new
+/// patch added (the frontend diffs this against a stored baseline).
+#[tauri::command]
+pub fn list_editable_events(
+    vanilla_root: String,
+    relpaths: Vec<String>,
+) -> Result<Vec<DiscoveredEvent>, String> {
+    let root = std::path::Path::new(&vanilla_root);
+    let mut out = Vec::new();
+    for rel in &relpaths {
+        let rel_trim = rel.trim_matches('/');
+        let path = root.join(rel_trim);
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        if let Ok(arrays) = kv3_core::list_arrays(&text) {
+            for a in arrays {
+                if a.array_key != "vsnd_files" {
+                    continue;
+                }
+                out.push(DiscoveredEvent {
+                    events_relpath: rel.clone(),
+                    event_name: a.event_name,
+                    array_key: a.array_key,
+                    stock_entry: a.entries.into_iter().next().unwrap_or_default(),
+                });
+            }
+        }
     }
     Ok(out)
 }
@@ -3348,6 +4182,42 @@ pub fn browse_game_sounds(
     let truncated = files.len() > CAP;
     files.truncate(CAP);
     Ok(SoundBrowse { folders, files, truncated, total })
+}
+
+/// Which of `refs` do NOT exist as real sound files in the pak. Used to gray
+/// out stock entries whose preview would otherwise play a wrong/beep sound —
+/// vanilla data contains both placeholder refs (`sounds/common/null.vsnd`) and
+/// legacy refs to files Deadlock never shipped (`sounds/ui/beep07.vsnd`…).
+/// If anything looks missing against the cached index, the index is rebuilt
+/// once and rechecked, so a stale cache never reports a freshly-patched-in
+/// file as missing.
+#[tauri::command]
+pub fn check_sound_refs(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+    refs: Vec<String>,
+) -> Result<Vec<String>, String> {
+    use std::collections::HashSet;
+    let missing_against = |index: &[String]| -> Vec<String> {
+        let set: HashSet<&str> = index.iter().map(|s| s.as_str()).collect();
+        refs.iter().filter(|r| !set.contains(r.as_str())).cloned().collect()
+    };
+    let index = game_sound_index(&app, &helper_path, &pak_path, false)?;
+    let missing = missing_against(&index);
+    if missing.is_empty() {
+        return Ok(missing);
+    }
+    // Could be a stale cache (a patch added the file) — rebuild and recheck,
+    // but only once per app run: vanilla data has refs that are GENUINELY
+    // missing (legacy files Deadlock never shipped), so without this guard
+    // every pool load would re-list the whole pak.
+    static REBUILT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if REBUILT.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return Ok(missing);
+    }
+    let index = game_sound_index(&app, &helper_path, &pak_path, true)?;
+    Ok(missing_against(&index))
 }
 
 /// `sounds/vo/atlas/atlas_ally_x.vsnd` -> `atlas_ally_x`.

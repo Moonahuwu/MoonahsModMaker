@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
-use std::process::Command;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -81,7 +80,7 @@ fn ffprobe_from(ffmpeg: &str) -> String {
 pub fn probe_duration(ffmpeg_path: Option<&str>, path: &str) -> Result<f64, String> {
     let ffmpeg = ffmpeg_path.unwrap_or("ffmpeg");
     let ffprobe = ffprobe_from(ffmpeg);
-    let out = Command::new(&ffprobe)
+    let out = crate::procutil::quiet(&ffprobe)
         .args([
             "-v",
             "error",
@@ -116,13 +115,17 @@ pub fn render_to(
 ) -> Result<(), String> {
     let ffmpeg = ffmpeg_path.unwrap_or("ffmpeg");
     let duration = (trim_end - trim_start).max(0.01);
-    let result = Command::new(ffmpeg)
+    // `-ss` MUST come before `-i` (input seeking): it resets timestamps to 0 so
+    // the fade filters see the TRIMMED timeline. As an output option the fades
+    // land on the original timeline instead — a trimmed track's fade-out fires
+    // before/at the segment start (silent or fading from the beginning).
+    let result = crate::procutil::quiet(ffmpeg)
         .args([
             "-y",
-            "-i",
-            source,
             "-ss",
             &fmt(trim_start),
+            "-i",
+            source,
             "-t",
             &fmt(duration),
             "-af",
@@ -142,8 +145,10 @@ pub fn render_to(
 /// Identical requests reuse the cached file (same hash → skip re-render).
 pub fn process(req: &ProcessReq) -> Result<String, String> {
     let ffmpeg = req.ffmpeg_path.as_deref().unwrap_or("ffmpeg");
+    // "v2" salts the cache past the -ss placement fix (fades on the trimmed
+    // timeline) so previews rendered with the old broken order aren't reused.
     let key = format!(
-        "{}|{}|{}|{}|{}|{}",
+        "v2|{}|{}|{}|{}|{}|{}",
         req.source_path, req.trim_start, req.trim_end, req.gain_db, req.fade_in, req.fade_out
     );
     let out = staging_dir().join(format!("preview_{}.wav", hash_key(&key)));
@@ -153,13 +158,14 @@ pub fn process(req: &ProcessReq) -> Result<String, String> {
 
     let duration = (req.trim_end - req.trim_start).max(0.01);
     let out_str = out.to_string_lossy().into_owned();
-    let result = Command::new(ffmpeg)
+    // `-ss` before `-i` — see render_to: fades must run on the trimmed timeline.
+    let result = crate::procutil::quiet(ffmpeg)
         .args([
             "-y",
-            "-i",
-            &req.source_path,
             "-ss",
             &fmt(req.trim_start),
+            "-i",
+            &req.source_path,
             "-t",
             &fmt(duration),
             "-af",

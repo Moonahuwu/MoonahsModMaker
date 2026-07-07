@@ -350,6 +350,11 @@ pub struct Song {
     /// Hash of `{trim, gain, sourceMp3}`; null until first compile.
     #[serde(default)]
     pub last_compiled_hash: Option<String>,
+    /// When this track was converted from a mod pack ("absorb" / edit-adopted):
+    /// the original `.vsnd` reference. Lets a re-import of the same pack skip
+    /// tracks that were already converted instead of doubling them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub imported_ref: Option<String>,
 }
 
 /// Build an empty slot (no songs) with sensible defaults.
@@ -418,7 +423,22 @@ impl Project {
                     "Carrying urn",
                     "Music.Idol.Pickup.Lp",
                     "vsnd_files",
-                    "sounds/music/music_idol_carry_lp.vsnd",
+                    // Reworked patch: the carry loop is now the 141bpm track (the
+                    // old music_idol_carry_lp.vsnd was retired). Refresh self-heals
+                    // a drifted pin, but this keeps fresh projects accurate.
+                    "sounds/music/music_idol_carry_lp_141bpm.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                // The rework added a separate distant-distance crossfade layer of
+                // the carry loop (plays when far from the carrier). Same event, a
+                // different array key — mod it to match your carry track up close.
+                slot(
+                    "urn_carry_distant",
+                    "urn",
+                    "Carrying urn (distant mix)",
+                    "Music.Idol.Pickup.Lp",
+                    "vsnd_files_distance_xfade",
+                    "sounds/music/music_idol_carry_distant_lp_141bpm.vsnd",
                     "soundevents/music.vsndevts",
                 ),
                 slot(
@@ -467,6 +487,49 @@ impl Project {
                     "Stinger.Idol.AnnounceDrop",
                     "vsnd_files",
                     "sounds/music/music_idol_announce.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                // --- Tab (Map): Rift (the new King-of-the-Hill objective; the
+                //     game names these events "Koth"). These are the musical
+                //     stingers from music.vsndevts. NOTE: the capture LOOP music
+                //     (Music.Koth.Capture.Lp) is driven by a soundstack
+                //     (soundstack_citadel_music_koth_capture) with no vsnd_files
+                //     array, so it can't be merged with the current tooling and is
+                //     intentionally not a slot here. ---
+                slot(
+                    "rift_announce",
+                    "rift",
+                    "Rift announced",
+                    "Stinger.Koth.Announce",
+                    "vsnd_files",
+                    "sounds/music/music_koth_announce.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "rift_win",
+                    "rift",
+                    "Rift captured (your team)",
+                    "Stinger.Koth.Win",
+                    "vsnd_files",
+                    "sounds/music/music_koth_win.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "rift_lose",
+                    "rift",
+                    "Rift captured (enemy)",
+                    "Stinger.Koth.Lose",
+                    "vsnd_files",
+                    "sounds/music/music_koth_lose.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "rift_expire",
+                    "rift",
+                    "Rift expired",
+                    "Stinger.Koth.Expire",
+                    "vsnd_files",
+                    "sounds/music/music_koth_expire.vsnd",
                     "soundevents/music.vsndevts",
                 ),
                 // --- Tab (Map): Midboss (arrival stinger + the Rejuvenator drop) ---
@@ -523,6 +586,35 @@ impl Project {
                     "vsnd_files",
                     "sounds/music/music_stinger_rejuv_lost.vsnd",
                     "soundevents/music.vsndevts",
+                ),
+                // The midboss's own in-world SFX (the horn etc.) live in
+                // gameplay.vsndevts, separate from the music stingers above.
+                slot(
+                    "midboss_horn",
+                    "midboss",
+                    "Arrival horn (in-world)",
+                    "MidBoss.Arrive",
+                    "vsnd_files",
+                    "sounds/gameplay/midboss_arrive.vsnd",
+                    "soundevents/gameplay.vsndevts",
+                ),
+                slot(
+                    "midboss_lowhealth",
+                    "midboss",
+                    "Low health",
+                    "MidBoss.LowHealth",
+                    "vsnd_files",
+                    "sounds/gameplay/midboss_lowhealth.vsnd",
+                    "soundevents/gameplay.vsndevts",
+                ),
+                slot(
+                    "midboss_death",
+                    "midboss",
+                    "Death",
+                    "MidBoss.Death",
+                    "vsnd_files",
+                    "sounds/gameplay/midboss_death.vsnd",
+                    "soundevents/gameplay.vsndevts",
                 ),
                 // --- Tab (Map): Powerups (world powerup category loops, in
                 //     soundevents/world.vsndevts). The game ships 4 looping
@@ -716,6 +808,362 @@ impl Project {
                     "sounds/ui/ui_game_matchmake_find.vsnd",
                     "soundevents/ui.vsndevts",
                 ),
+                // --- Tab (Match): Match Music (match-flow music outside the intro) ---
+                slot(
+                    "match_title",
+                    "match",
+                    "Title screen",
+                    "Music.Title",
+                    "vsnd_files",
+                    "sounds/music/music_title_155bpm.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "match_formed",
+                    "match",
+                    "Match formed",
+                    "Music.Match.Formed",
+                    "vsnd_files",
+                    "sounds/common/null.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "match_gamestart",
+                    "match",
+                    "Game start announce",
+                    "Map.Broadcast.GameStart",
+                    "vsnd_files",
+                    "sounds/ui/match_start_01.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "match_win",
+                    "match",
+                    "Match won",
+                    "Music.Match.Win",
+                    "vsnd_files",
+                    "sounds/music/music_stinger_game_over_win.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "match_lose",
+                    "match",
+                    "Match lost",
+                    "Music.Match.Lose",
+                    "vsnd_files",
+                    "sounds/music/music_stinger_game_over_lose.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "match_postgame",
+                    "match",
+                    "Post-game",
+                    "Music.PostGame",
+                    "vsnd_files",
+                    "sounds/music/music_postgame_155bpm.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "match_base_attack",
+                    "match",
+                    "Base under attack",
+                    "Music.Base.Attack",
+                    "vsnd_files",
+                    "sounds/music/music_core_exposed_lp.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "match_zipline",
+                    "match",
+                    "Riding zipline",
+                    "Music.Zipline.Lp",
+                    "vsnd_files",
+                    "sounds/music/music_silence_1s_loop.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                // --- Tab (Match): Stingers (death/respawn + the kill-streak ladder) ---
+                slot(
+                    "stinger_death",
+                    "stingers",
+                    "Your death",
+                    "Stinger.Death",
+                    "vsnd_files",
+                    "sounds/music/music_stinger_player_death.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "stinger_respawn",
+                    "stingers",
+                    "Respawn",
+                    "Stinger.Respawn",
+                    "vsnd_files",
+                    "sounds/music/music_stinger_player_respawn.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "stinger_respawn_countdown",
+                    "stingers",
+                    "Respawn countdown",
+                    "Stinger.Respawn.Countdown",
+                    "vsnd_files",
+                    "sounds/music/music_stinger_player_respawn_countdown.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "stinger_core_exposed",
+                    "stingers",
+                    "Core exposed",
+                    "Stinger.CoreExposed",
+                    "vsnd_files",
+                    "sounds/common/null.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "stinger_first_blood",
+                    "stingers",
+                    "First blood",
+                    "Stinger.KillStreak.FirstBlood",
+                    "vsnd_files",
+                    "sounds/music/music_stinger_first_blood.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                // NOTE: "stringer" typo below is Valve's, in the live game data.
+                slot(
+                    "stinger_killstreak",
+                    "stingers",
+                    "Kill streak (generic)",
+                    "Stinger.KillStreak",
+                    "vsnd_files",
+                    "sounds/music/music_stringer_kill_streak.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "stinger_ks_01",
+                    "stingers",
+                    "Kill streak 1",
+                    "Stinger.KillStreak_01",
+                    "vsnd_files",
+                    "sounds/music/music_stinger_ks_01.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "stinger_ks_02",
+                    "stingers",
+                    "Kill streak 2",
+                    "Stinger.KillStreak_02",
+                    "vsnd_files",
+                    "sounds/music/music_stinger_ks_02.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "stinger_ks_03",
+                    "stingers",
+                    "Kill streak 3",
+                    "Stinger.KillStreak_03",
+                    "vsnd_files",
+                    "sounds/music/music_stinger_ks_03.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "stinger_ks_04",
+                    "stingers",
+                    "Kill streak 4",
+                    "Stinger.KillStreak_04",
+                    "vsnd_files",
+                    "sounds/music/music_stinger_ks_04.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "stinger_ks_05",
+                    "stingers",
+                    "Kill streak 5",
+                    "Stinger.KillStreak_05",
+                    "vsnd_files",
+                    "sounds/music/music_stinger_ks_05.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "stinger_ks_06",
+                    "stingers",
+                    "Kill streak 6",
+                    "Stinger.KillStreak_06",
+                    "vsnd_files",
+                    "sounds/music/music_stinger_ks_06.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "stinger_ks_07",
+                    "stingers",
+                    "Kill streak 7",
+                    "Stinger.KillStreak_07",
+                    "vsnd_files",
+                    "sounds/music/music_stinger_ks_07.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "stinger_ks_08",
+                    "stingers",
+                    "Kill streak 8",
+                    "Stinger.KillStreak_08",
+                    "vsnd_files",
+                    "sounds/music/music_stinger_ks_08.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "stinger_ks_09",
+                    "stingers",
+                    "Kill streak 9",
+                    "Stinger.KillStreak_09",
+                    "vsnd_files",
+                    "sounds/music/music_stinger_ks_09.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "stinger_ks_10",
+                    "stingers",
+                    "Kill streak 10",
+                    "Stinger.KillStreak_10",
+                    "vsnd_files",
+                    "sounds/music/music_stinger_ks_10.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                // --- Tab (Match): Brawl mode music ---
+                slot(
+                    "brawl_titles",
+                    "brawl",
+                    "Titles",
+                    "Music.Brawl.Titles",
+                    "vsnd_files",
+                    "sounds/music/brawl/music_brawl_titles_117bpm-95bpm.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "brawl_round1",
+                    "brawl",
+                    "Round 1 start",
+                    "Music.Brawl.RoundStart1",
+                    "vsnd_files",
+                    "sounds/music/brawl/music_brawl_round_1_start_95bpm.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "brawl_round2",
+                    "brawl",
+                    "Round 2 start",
+                    "Music.Brawl.RoundStart2",
+                    "vsnd_files",
+                    "sounds/music/brawl/music_brawl_round_2_start_95bpm.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "brawl_round3",
+                    "brawl",
+                    "Round 3 start",
+                    "Music.Brawl.RoundStart3",
+                    "vsnd_files",
+                    "sounds/music/brawl/music_brawl_round_3_start_95bpm.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "brawl_round4",
+                    "brawl",
+                    "Round 4 start",
+                    "Music.Brawl.RoundStart4",
+                    "vsnd_files",
+                    "sounds/music/brawl/music_brawl_round_4_start_95bpm.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "brawl_round5",
+                    "brawl",
+                    "Round 5 start",
+                    "Music.Brawl.RoundStart5",
+                    "vsnd_files",
+                    "sounds/music/brawl/music_brawl_round_5_start_95bpm.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "brawl_round_won",
+                    "brawl",
+                    "Round won",
+                    "Music.Brawl.Round.Won",
+                    "vsnd_files",
+                    "sounds/music/brawl/music_brawl_round_won_95bpm.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "brawl_round_lost",
+                    "brawl",
+                    "Round lost",
+                    "Music.Brawl.Round.Lost",
+                    "vsnd_files",
+                    "sounds/music/brawl/music_brawl_round_lost_95bpm.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "brawl_match_won",
+                    "brawl",
+                    "Match won",
+                    "Music.Brawl.Match.Won",
+                    "vsnd_files",
+                    "sounds/music/brawl/music_brawl_match_won_95bpm.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "brawl_match_lost",
+                    "brawl",
+                    "Match lost",
+                    "Music.Brawl.Match.Lost",
+                    "vsnd_files",
+                    "sounds/music/brawl/music_brawl_match_lost_95bpm.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "brawl_overtime",
+                    "brawl",
+                    "Overtime announce",
+                    "Stinger.Brawl.Overtime.Announce",
+                    "vsnd_files",
+                    "sounds/music/brawl/music_brawl_overtime_95bpm.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                // --- Tab (Game SFX): Gameplay (hit feedback: crits, last hits) ---
+                slot(
+                    "gameplay_crit_send",
+                    "gameplay",
+                    "Crit (you deal)",
+                    "Damage.Send.Crit",
+                    "vsnd_files",
+                    "sounds/hit_indicators/damage_send_crit_01.vsnd",
+                    "soundevents/damage.vsndevts",
+                ),
+                slot(
+                    "gameplay_crit_receive",
+                    "gameplay",
+                    "Crit (you receive)",
+                    "Damage.Receive.Crit",
+                    "vsnd_files",
+                    "sounds/hit_indicators/damage_send_crit_01.vsnd",
+                    "soundevents/damage.vsndevts",
+                ),
+                slot(
+                    "gameplay_lasthit",
+                    "gameplay",
+                    "Last hit",
+                    "LastHit.Default",
+                    "vsnd_files",
+                    "sounds/hit_indicators/damage_send_lethal_01.vsnd",
+                    "soundevents/gameplay.vsndevts",
+                ),
+                slot(
+                    "gameplay_deny",
+                    "gameplay",
+                    "Deny",
+                    "Player.Deny",
+                    "vsnd_files",
+                    "sounds/gameplay/orbs/xp_orbs_local_player_deny_01.vsnd",
+                    "soundevents/gameplay.vsndevts",
+                ),
             ],
             icon_mods: vec![],
             sound_overrides: vec![],
@@ -747,8 +1195,22 @@ mod tests {
         let p = Project::default_for_match_intro();
         let json = serde_json::to_string_pretty(&p).unwrap();
         let back: Project = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.events.len(), 34);
+        assert_eq!(back.events.len(), 81);
         assert_eq!(back.events[0].id, "intro_king");
+        // The match-flow / stinger / brawl groups are present.
+        assert!(back.events.iter().any(|e| e.id == "match_win"
+            && e.event_name == "Music.Match.Win"
+            && e.group == "match"));
+        assert!(back.events.iter().any(|e| e.id == "stinger_ks_10"
+            && e.event_name == "Stinger.KillStreak_10"
+            && e.group == "stingers"));
+        assert!(back.events.iter().any(|e| e.id == "brawl_overtime"
+            && e.event_name == "Stinger.Brawl.Overtime.Announce"
+            && e.group == "brawl"));
+        // The new Rift (KotH) objective slots are present.
+        assert!(back.events.iter().any(|e| e.id == "rift_win"
+            && e.event_name == "Stinger.Koth.Win"
+            && e.group == "rift"));
         assert_eq!(back.events[0].event_name, "Music.MatchIntro.MatchStart.King");
         // The enemy-contest slot targets the opponent-control array.
         let enemy = back.events.iter().find(|e| e.id == "urn_contest_enemy").unwrap();

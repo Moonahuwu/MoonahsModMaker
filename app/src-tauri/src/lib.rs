@@ -4,6 +4,7 @@ mod compile;
 mod host;
 mod install;
 mod paths;
+mod procutil;
 mod project;
 mod rcon;
 mod vpk;
@@ -80,6 +81,11 @@ pub fn run() {
             commands::extract_vpk,
             commands::decode_stock,
             commands::refresh_vanilla,
+            commands::list_editable_events,
+            commands::list_soundevent_files,
+            commands::download_tools,
+            commands::import_pack_events,
+            commands::item_sound_index,
             commands::autodetect_paths,
             commands::scan_addon_slots,
             commands::install_to_game,
@@ -102,6 +108,12 @@ pub fn run() {
             commands::hero_voicelines,
             commands::hero_sounds,
             commands::browse_game_sounds,
+            commands::check_sound_refs,
+            commands::scan_pack_contents,
+            commands::events_for_refs,
+            commands::cache_pack,
+            commands::pack_unchanged_files,
+            commands::decompile_vpk_all,
             commands::browse_particles,
             commands::effect_preview,
             commands::open_in_viewer,

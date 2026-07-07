@@ -14,7 +14,6 @@ use crate::vpk;
 use kv3_core::EventMerge;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Deserialize)]
@@ -48,6 +47,11 @@ pub struct EventCompile {
     #[serde(default = "default_array_key")]
     pub array_key: String,
     pub stock_entry: String,
+    /// Where this event's tracks live in the content tree (and thus what their
+    /// `.vsnd` refs start with) — each event's "respective" directory, usually
+    /// derived from its stock sound. None/empty = the global `sound_folder`.
+    #[serde(default)]
+    pub sound_folder: Option<String>,
     /// "auto" or "manual"
     pub duration_mode: String,
     #[serde(default)]
@@ -120,6 +124,11 @@ pub struct CompileConfig {
     /// are unioned with ours; nothing of ours is removed).
     #[serde(default)]
     pub imported_mods: Vec<String>,
+    /// Per-mod files the user DESELECTED in the import review: mod vpk path →
+    /// raw internal paths (e.g. `sounds/x.vsnd_c`) to drop from the combined
+    /// stage after the pack's asset dirs are extracted.
+    #[serde(default)]
+    pub imported_mod_excludes: std::collections::HashMap<String, Vec<String>>,
     pub events: Vec<EventCompile>,
     /// Custom icon overrides: scaled + compiled to `.vtex_c` and staged so they
     /// override the game's icons.
@@ -303,22 +312,21 @@ fn default_true() -> bool {
 
 const ENCODING_HEADER: &str = "<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} format:generic:version{7412167c-06e9-4698-aff2-e63eb59037e7} -->\n";
 
-/// Build `encoding.txt`: an mp3 `compress` block plus a `loop` block per song
-/// that should loop (required for `_lp` tracks to actually loop in-game).
-fn build_encoding_txt(events: &[EventCompile]) -> String {
+/// Build one folder's `encoding.txt`: an mp3 `compress` block plus a `loop`
+/// block per song that should loop (required for `_lp` tracks to loop in-game).
+/// `songs` are the songs whose wavs land in that folder.
+fn build_encoding_txt(songs: &[&SongCompile]) -> String {
     let mut s = String::from(ENCODING_HEADER);
     s.push_str("{\n\tcompress = \n\t{\n\t\tformat = \"mp3\"\n\t\tminbitrate = 128\n\t\tmaxbitrate = 320\n\t\tvbr = 1\n\t}\n");
 
     let mut files = String::new();
-    for ev in events {
-        for song in &ev.songs {
-            if song.looping {
-                let dur = (song.trim_end - song.trim_start).max(0.01);
-                files.push_str(&format!(
-                    "\t\t{{ fileName = \"{}.wav\" loop = {{ loop_start_time = 0.0 loop_end_time = {:.6} }} }},\n",
-                    song.sound_name, dur,
-                ));
-            }
+    for song in songs {
+        if song.looping {
+            let dur = (song.trim_end - song.trim_start).max(0.01);
+            files.push_str(&format!(
+                "\t\t{{ fileName = \"{}.wav\" loop = {{ loop_start_time = 0.0 loop_end_time = {:.6} }} }},\n",
+                song.sound_name, dur,
+            ));
         }
     }
     if !files.is_empty() {
@@ -377,19 +385,34 @@ pub struct CompileReport {
     pub steps: Vec<StepResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_path: Option<String>,
+    /// Live-progress sink: every recorded step is also sent here as it happens
+    /// (the command layer forwards them to the UI as `compile://progress`
+    /// events). Deliberately a plain channel, NOT a tauri::AppHandle — pulling
+    /// tauri's event system into this module links the whole windowing stack
+    /// (comctl32 v6's TaskDialogIndirect) into the cargo TEST binary, which has
+    /// no v6 manifest and then fails to even load (STATUS_ENTRYPOINT_NOT_FOUND).
+    #[serde(skip)]
+    pub(crate) progress: Option<std::sync::mpsc::Sender<StepResult>>,
 }
 
 impl CompileReport {
     fn new() -> Self {
-        CompileReport { ok: true, steps: vec![], output_path: None }
+        CompileReport { ok: true, steps: vec![], output_path: None, progress: None }
+    }
+    fn emit_last(&self) {
+        if let (Some(tx), Some(step)) = (&self.progress, self.steps.last()) {
+            let _ = tx.send(step.clone());
+        }
     }
     fn ok_step(&mut self, name: impl Into<String>, detail: impl Into<String>) {
         self.steps.push(StepResult { name: name.into(), ok: true, detail: detail.into() });
+        self.emit_last();
     }
     /// Record a failure and return Err to short-circuit the pipeline.
     fn fail(&mut self, name: impl Into<String>, detail: impl Into<String>) -> Result<(), ()> {
         self.ok = false;
         self.steps.push(StepResult { name: name.into(), ok: false, detail: detail.into() });
+        self.emit_last();
         Err(())
     }
 }
@@ -413,6 +436,15 @@ fn vsnd_c_relpath(sound_folder: &str, sound_name: &str) -> String {
 /// The `.vsnd` reference string written into the array.
 fn vsnd_ref(sound_folder: &str, sound_name: &str) -> String {
     format!("{}/{}.vsnd", sound_folder.trim_matches('/'), sound_name)
+}
+
+/// The folder an event's tracks compile into: its own `sound_folder` when set
+/// (the event's "respective" directory), else the global one.
+fn folder_for<'a>(cfg: &'a CompileConfig, ev: &'a EventCompile) -> &'a str {
+    ev.sound_folder
+        .as_deref()
+        .filter(|s| !s.trim_matches('/').is_empty())
+        .unwrap_or(&cfg.sound_folder)
 }
 
 fn events_c_relpath(events_game_relpath: &str) -> String {
@@ -459,8 +491,15 @@ fn event_merge(ev: &EventCompile, sound_folder: &str, current_duration: Option<f
 }
 
 fn run_resource_compiler(cfg: &CompileConfig, input_abs: &str) -> Result<String, String> {
+    run_resource_compiler_multi(cfg, std::slice::from_ref(&input_abs.to_string()))
+}
+
+/// One resourcecompiler invocation over several inputs (repeated `-i`). Process
+/// startup dominates audio compiles, so batching N files into one call is far
+/// faster than N calls — verified against the real CSDK ("OK: 2 compiled").
+fn run_resource_compiler_multi(cfg: &CompileConfig, inputs: &[String]) -> Result<String, String> {
     let exe = Path::new(&cfg.resource_compiler);
-    let mut cmd = Command::new(exe);
+    let mut cmd = crate::procutil::quiet(exe);
     if let Some(dir) = exe.parent() {
         if !dir.as_os_str().is_empty() {
             cmd.current_dir(dir); // binlaunch needs to run from the bin dir
@@ -470,9 +509,10 @@ fn run_resource_compiler(cfg: &CompileConfig, input_abs: &str) -> Result<String,
     // against a CSDK whose tool DLLs differ from the live game build (a benign
     // particle-schema mismatch that otherwise aborts). This is how the community
     // tools (e.g. DeadPacker) drive resourcecompiler.
+    for input in inputs {
+        cmd.args(["-i", input]);
+    }
     cmd.args([
-        "-i",
-        input_abs,
         "-game",
         &cfg.game_info_dir,
         "-f",
@@ -505,6 +545,25 @@ fn timestamp() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+/// Stable content fingerprint (FNV-1a 64) for the compile-skip stamps. Written
+/// only AFTER a step succeeds, so a stamp mismatch (or absence) means the last
+/// run didn't finish that step from this exact input — never skip then.
+fn fingerprint(text: &str) -> String {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in text.as_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    format!("{h:016x}")
+}
+
+/// True when `stamp_path` holds exactly `want` (the success stamp matches).
+fn stamp_matches(stamp_path: &Path, want: &str) -> bool {
+    std::fs::read_to_string(stamp_path)
+        .map(|s| s.trim() == want)
+        .unwrap_or(false)
 }
 
 fn copy_into(src: &Path, dest_root: &Path, relpath: &str) -> std::io::Result<PathBuf> {
@@ -545,7 +604,7 @@ fn render_icon(ffmpeg: Option<&str>, src: &str, w: u32, h: u32, hue: f32, out_pn
         vf.push(',');
         vf.push_str(&hue_rotate_mixer(hue));
     }
-    let out = Command::new(exe)
+    let out = crate::procutil::quiet(exe)
         .args([
             "-y",
             "-i",
@@ -808,10 +867,26 @@ fn compile_effect_overrides(
 const ABILITIES_VDATA_REL: &str = "scripts/abilities.vdata";
 const ABILITIES_VDATA_C_REL: &str = "scripts/abilities.vdata_c";
 
+/// A value safe to emit UNQUOTED in vdata: a plain number. Anything with a unit
+/// or other characters (e.g. `34m`, `1.5s`, `50%`) MUST be quoted or the
+/// resourcecompiler rejects it ("Invalid value"). Vanilla stores unit-bearing
+/// bonuses quoted already (`m_strBonus = "10m"`), so quoting matches its style.
+fn is_bare_number(v: &str) -> bool {
+    let v = v.trim();
+    !v.is_empty()
+        && v.chars().any(|c| c.is_ascii_digit())
+        && v
+            .chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, '.' | '-' | '+' | 'e' | 'E'))
+}
+
 /// Rewrite each override in the decompiled `abilities.vdata`, leaving every other
 /// byte intact. A normal `prop_key` rewrites the matching `m_mapAbilityProperties`
 /// `m_strValue`; a `@upgrade:N` key rewrites the Nth `m_strBonus` (T1/T2/T3 ability
-/// upgrade) within that ability, preserving its quote style.
+/// upgrade) within that ability. Quote style is preserved for numeric values, but
+/// a non-numeric value (a unit like `34m`) is always quoted so the compile
+/// doesn't choke when it lands on a bare-number field (e.g. after a patch shifts
+/// the layout the randomizer cached).
 fn apply_vdata_overrides(text: &str, overrides: &[VdataCompile]) -> String {
     use std::collections::HashMap;
     let mut want: HashMap<&str, HashMap<&str, &str>> = HashMap::new();
@@ -891,7 +966,9 @@ fn apply_vdata_overrides(text: &str, overrides: &[VdataCompile]) -> String {
             bonus_idx += 1;
             if let Some(v) = cur_ability.and_then(|a| want_upg.get(a)).and_then(|m| m.get(&this)) {
                 if let Some(eq) = body.find(" = ") {
-                    let quoted = body[eq + 3..].trim_start().starts_with('"');
+                    // Quote if the original was quoted OR the value isn't a plain
+                    // number (a unit like `34m` must be quoted to be valid).
+                    let quoted = body[eq + 3..].trim_start().starts_with('"') || !is_bare_number(v);
                     out.push_str(&body[..eq + 3]);
                     if quoted {
                         out.push('"');
@@ -919,7 +996,7 @@ fn apply_vdata_overrides(text: &str, overrides: &[VdataCompile]) -> String {
                         let field = &t[..eq];
                         if let Some(v) = cur_ability.and_then(|a| want_weapon.get(a)).and_then(|m| m.get(field)) {
                             if let Some(beq) = body.find(" = ") {
-                                let quoted = body[beq + 3..].trim_start().starts_with('"');
+                                let quoted = body[beq + 3..].trim_start().starts_with('"') || !is_bare_number(v);
                                 out.push_str(&body[..beq + 3]);
                                 if quoted {
                                     out.push('"');
@@ -1346,9 +1423,21 @@ fn compile_icon_mods(
 }
 
 /// Run the full pipeline. Returns a per-step report (never panics; failures are
-/// recorded and stop subsequent steps).
+/// recorded and stop subsequent steps). Kept for tests/headless use — the app
+/// itself goes through [`run_with_progress`].
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn run(cfg: &CompileConfig) -> CompileReport {
+    run_with_progress(cfg, None)
+}
+
+/// Like [`run`], but each step is also sent to `progress` as it happens
+/// (drives the UI's live compile feed via the command layer).
+pub fn run_with_progress(
+    cfg: &CompileConfig,
+    progress: Option<std::sync::mpsc::Sender<StepResult>>,
+) -> CompileReport {
     let mut report = CompileReport::new();
+    report.progress = progress;
     if internal_run(cfg, &mut report).is_err() {
         report.ok = false;
     }
@@ -1360,71 +1449,109 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
     let compiled_root = Path::new(&cfg.compiled_root);
     let ffmpeg = cfg.ffmpeg_path.as_deref();
 
-    // 0. Write encoding.txt alongside the source wavs (same folder) so the
-    //    compiler picks up mp3 compression AND per-file loop points (_lp tracks).
-    if cfg.write_encoding_txt {
-        let enc = content_root
-            .join(cfg.sound_folder.trim_matches('/'))
-            .join("encoding.txt");
-        if let Some(parent) = enc.parent() {
-            let _ = std::fs::create_dir_all(parent);
+    // Names become game file paths + soundevent refs — enforce the rule up
+    // front with a clear error instead of a cryptic compiler/in-game failure.
+    // (The UI sanitizes on entry and migrates old data; this is the backstop.)
+    for ev in &cfg.events {
+        for song in &ev.songs {
+            let valid = !song.sound_name.is_empty()
+                && song
+                    .sound_name
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+            if !valid {
+                return report.fail(
+                    "validate track names",
+                    format!(
+                        "'{}' — track names must be lowercase letters, numbers or _ only; rename the track and recompile",
+                        song.sound_name
+                    ),
+                );
+            }
         }
-        if let Err(e) = std::fs::write(&enc, build_encoding_txt(&cfg.events)) {
-            return report.fail("write encoding.txt", e.to_string());
-        }
-        report.ok_step("write encoding.txt", enc.to_string_lossy().into_owned());
     }
 
-    // 1+2. Per song: ffmpeg -> content/<folder>/<name>.wav, then compile -> vsnd_c.
+    // 0. Write an encoding.txt alongside the source wavs of EVERY folder songs
+    //    compile into, so the compiler picks up mp3 compression AND per-file
+    //    loop points (_lp tracks) everywhere.
+    if cfg.write_encoding_txt {
+        use std::collections::BTreeMap;
+        let mut songs_by_folder: BTreeMap<&str, Vec<&SongCompile>> = BTreeMap::new();
+        for ev in &cfg.events {
+            for song in &ev.songs {
+                songs_by_folder.entry(folder_for(cfg, ev)).or_default().push(song);
+            }
+        }
+        for (folder, songs) in &songs_by_folder {
+            let enc = content_root.join(folder.trim_matches('/')).join("encoding.txt");
+            if let Some(parent) = enc.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Err(e) = std::fs::write(&enc, build_encoding_txt(songs)) {
+                return report.fail("write encoding.txt", e.to_string());
+            }
+        }
+        report.ok_step(
+            "write encoding.txt",
+            format!("{} folder(s)", songs_by_folder.len()),
+        );
+    }
+
+    // Tracks whether any real compile work happened this run (a song or override
+    // was (re)rendered/compiled, or an events file was recompiled). Drives the
+    // per-variant "nothing changed → skip stage+pack" short-circuit below.
+    let mut compiled_any = false;
+
+    // 1+2. Audio pipeline (songs + loose-file overrides): render every pending
+    // clip with ffmpeg IN PARALLEL, then compile them all with a few batched
+    // resourcecompiler invocations — process startup dominates per-file audio
+    // compiles, so batching is the big win. Every expected output is verified;
+    // stragglers are retried one-by-one so a bad clip gets a precise error.
+    struct AudioJob {
+        label: String,
+        /// Step-name suffix: "" for songs, " (override)" for loose overrides.
+        kind: &'static str,
+        source: String,
+        trim_start: f64,
+        trim_end: f64,
+        gain_db: f64,
+        fade_in: f64,
+        fade_out: f64,
+        wav: PathBuf,
+        compiled: PathBuf,
+    }
+    let mut jobs: Vec<AudioJob> = Vec::new();
     for ev in &cfg.events {
         for song in &ev.songs {
             // Skip-unchanged: if the song's params match its last successful
             // compile AND the compiled `.vsnd_c` is still on disk, reuse it
             // (avoids the expensive ffmpeg + resourcecompiler round-trip).
-            let compiled = compiled_root.join(vsnd_c_relpath(&cfg.sound_folder, &song.sound_name));
+            let folder = folder_for(cfg, ev);
+            let compiled = compiled_root.join(vsnd_c_relpath(folder, &song.sound_name));
             if is_up_to_date(song, cfg.skip_compile, compiled.exists()) {
                 report.ok_step(format!("up to date: {}", song.sound_name), "unchanged — skipped");
                 continue;
             }
-
-            let content_audio = content_root
-                .join(cfg.sound_folder.trim_matches('/'))
-                .join(format!("{}.wav", song.sound_name));
-            if let Some(parent) = content_audio.parent() {
-                if let Err(e) = std::fs::create_dir_all(parent) {
-                    return report.fail("prepare content dir", e.to_string());
-                }
-            }
-            let audio_path = content_audio.to_string_lossy().into_owned();
-
-            if let Err(e) = crate::audio::render_to(
-                ffmpeg,
-                &song.source_audio,
-                song.trim_start,
-                song.trim_end,
-                song.gain_db,
-                song.fade_in,
-                song.fade_out,
-                &audio_path,
-            ) {
-                return report.fail(format!("ffmpeg: {}", song.sound_name), e);
-            }
-            report.ok_step(format!("ffmpeg: {}", song.sound_name), audio_path.clone());
-
-            if cfg.skip_compile {
-                report.ok_step(format!("compile (skipped): {}", song.sound_name), "skipCompile");
-                continue;
-            }
-            match run_resource_compiler(cfg, &audio_path) {
-                Ok(detail) => report.ok_step(format!("compile: {}", song.sound_name), detail),
-                Err(e) => return report.fail(format!("compile: {}", song.sound_name), e),
-            }
+            jobs.push(AudioJob {
+                label: song.sound_name.clone(),
+                kind: "",
+                source: song.source_audio.clone(),
+                trim_start: song.trim_start,
+                trim_end: song.trim_end,
+                gain_db: song.gain_db,
+                fade_in: song.fade_in,
+                fade_out: song.fade_out,
+                wav: content_root
+                    .join(folder.trim_matches('/'))
+                    .join(format!("{}.wav", song.sound_name)),
+                compiled,
+            });
         }
     }
 
-    // Loose-file sound overrides: render the user's audio into the content tree
-    // at the game's OWN path, write a per-folder encoding.txt (mp3 + loop), and
-    // compile to a `.vsnd_c` that will shadow the vanilla file. No soundevents.
+    // Loose-file sound overrides join the same pipeline: rendered at the game's
+    // OWN path (their compiled .vsnd_c shadows the vanilla file — no
+    // soundevents), with a per-folder encoding.txt (mp3 + loop) written first.
     if !cfg.sound_overrides.is_empty() {
         use std::collections::BTreeMap;
         // Group by folder so each folder gets one encoding.txt covering its files.
@@ -1450,32 +1577,153 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                 report.ok_step(format!("up to date: {stem}"), "unchanged — skipped");
                 continue;
             }
-            let content_audio = content_root.join(folder.trim_matches('/')).join(format!("{stem}.wav"));
-            if let Some(parent) = content_audio.parent() {
+            jobs.push(AudioJob {
+                label: stem.clone(),
+                kind: " (override)",
+                source: ov.source_audio.clone(),
+                trim_start: ov.trim_start,
+                trim_end: ov.trim_end,
+                gain_db: ov.gain_db,
+                fade_in: ov.fade_in,
+                fade_out: ov.fade_out,
+                wav: content_root
+                    .join(folder.trim_matches('/'))
+                    .join(format!("{stem}.wav")),
+                compiled,
+            });
+        }
+    }
+
+    if !jobs.is_empty() {
+        for j in &jobs {
+            if let Some(parent) = j.wav.parent() {
                 if let Err(e) = std::fs::create_dir_all(parent) {
-                    return report.fail("prepare override dir", e.to_string());
+                    return report.fail("prepare content dir", e.to_string());
                 }
             }
-            let audio_path = content_audio.to_string_lossy().into_owned();
-            if let Err(e) = crate::audio::render_to(
-                ffmpeg,
-                &ov.source_audio,
-                ov.trim_start,
-                ov.trim_end,
-                ov.gain_db,
-                ov.fade_in,
-                ov.fade_out,
-                &audio_path,
-            ) {
-                return report.fail(format!("ffmpeg (override): {stem}"), e);
+        }
+
+        // Parallel ffmpeg renders: a small worker pool over the job list.
+        // Workers stream their step to the live feed directly; the report
+        // records the same steps (quietly) after the join, in job order.
+        let workers = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            .clamp(1, 4)
+            .min(jobs.len());
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let results: Vec<std::sync::Mutex<Option<Result<(), String>>>> =
+            jobs.iter().map(|_| std::sync::Mutex::new(None)).collect();
+        let live = report.progress.clone();
+        std::thread::scope(|scope| {
+            for _ in 0..workers {
+                scope.spawn(|| loop {
+                    let i = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    if i >= jobs.len() {
+                        break;
+                    }
+                    let j = &jobs[i];
+                    let r = crate::audio::render_to(
+                        ffmpeg,
+                        &j.source,
+                        j.trim_start,
+                        j.trim_end,
+                        j.gain_db,
+                        j.fade_in,
+                        j.fade_out,
+                        &j.wav.to_string_lossy(),
+                    );
+                    if let Some(tx) = &live {
+                        let _ = tx.send(StepResult {
+                            name: format!("ffmpeg{}: {}", j.kind, j.label),
+                            ok: r.is_ok(),
+                            detail: match &r {
+                                Ok(()) => j.wav.to_string_lossy().into_owned(),
+                                Err(e) => e.clone(),
+                            },
+                        });
+                    }
+                    *results[i].lock().unwrap() = Some(r);
+                });
             }
-            report.ok_step(format!("ffmpeg (override): {stem}"), audio_path.clone());
-            if cfg.skip_compile {
-                continue;
+        });
+        for (i, j) in jobs.iter().enumerate() {
+            let r = results[i]
+                .lock()
+                .unwrap()
+                .take()
+                .unwrap_or_else(|| Err("render did not run".into()));
+            match r {
+                // Recorded directly (not via ok_step) — the worker already
+                // emitted this step to the live feed.
+                Ok(()) => report.steps.push(StepResult {
+                    name: format!("ffmpeg{}: {}", j.kind, j.label),
+                    ok: true,
+                    detail: j.wav.to_string_lossy().into_owned(),
+                }),
+                Err(e) => {
+                    report.ok = false;
+                    report.steps.push(StepResult {
+                        name: format!("ffmpeg{}: {}", j.kind, j.label),
+                        ok: false,
+                        detail: e,
+                    });
+                    return Err(());
+                }
             }
-            match run_resource_compiler(cfg, &audio_path) {
-                Ok(detail) => report.ok_step(format!("compile (override): {stem}"), detail),
-                Err(e) => return report.fail(format!("compile (override): {stem}"), e),
+        }
+
+        if cfg.skip_compile {
+            for j in &jobs {
+                report.ok_step(format!("compile (skipped): {}", j.label), "skipCompile");
+            }
+        } else {
+            // Freshness check: the wav was JUST rendered, so a compiled output
+            // older than it is stale (e.g. left over from an earlier run).
+            let fresh = |j: &AudioJob| -> bool {
+                let (Ok(cm), Ok(wm)) = (
+                    std::fs::metadata(&j.compiled).and_then(|m| m.modified()),
+                    std::fs::metadata(&j.wav).and_then(|m| m.modified()),
+                ) else {
+                    return false;
+                };
+                cm >= wm
+            };
+            for chunk in jobs.chunks(48) {
+                let inputs: Vec<String> =
+                    chunk.iter().map(|j| j.wav.to_string_lossy().into_owned()).collect();
+                match run_resource_compiler_multi(cfg, &inputs) {
+                    Ok(detail) => {
+                        compiled_any = true;
+                        report.ok_step(format!("compile audio ×{}", chunk.len()), detail);
+                    }
+                    Err(e) => {
+                        report.ok_step(
+                            "compile audio (batch)",
+                            format!("batch failed — retrying per file: {e}"),
+                        );
+                    }
+                }
+                for j in chunk {
+                    if fresh(j) {
+                        continue;
+                    }
+                    match run_resource_compiler(cfg, &j.wav.to_string_lossy()) {
+                        Ok(detail) => {
+                            compiled_any = true;
+                            report.ok_step(format!("compile{}: {}", j.kind, j.label), detail);
+                        }
+                        Err(e) => {
+                            return report.fail(format!("compile{}: {}", j.kind, j.label), e)
+                        }
+                    }
+                    if !fresh(j) {
+                        return report.fail(
+                            format!("compile{}: {}", j.kind, j.label),
+                            "resourcecompiler reported success but produced no output",
+                        );
+                    }
+                }
             }
         }
     }
@@ -1517,8 +1765,32 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
         let _ = std::fs::create_dir_all(&tmp_dir);
         for (mi, mod_vpk) in cfg.imported_mods.iter().enumerate() {
             let files = vpk::list(helper, mod_vpk, Some("soundevents/")).unwrap_or_default();
-            for f in files.iter().filter(|f| f.ends_with(".vsndevts_c")) {
+            let src_dir = Path::new(mod_vpk);
+            let cached = src_dir.is_dir();
+            for f in files.iter() {
+                // ONLY true top-level soundevents files. The listing is a
+                // substring match, so a pack's working copies (NEWSoundevents/,
+                // MERGEDSoundevents/, backups) would otherwise be merged,
+                // compiled and STAGED — junk folders in the output vpk.
+                let lower = f.to_lowercase();
+                if !lower.starts_with("soundevents/")
+                    || lower.contains("backup")
+                    || lower.contains("newsoundevents")
+                    || lower.contains("merged")
+                {
+                    continue;
+                }
                 let relpath = f.trim_end_matches("_c").to_string();
+                if cached && f.ends_with(".vsndevts") {
+                    // Cached packs store soundevents as decompiled text — read direct.
+                    if let Ok(text) = std::fs::read_to_string(src_dir.join(f.as_str())) {
+                        imported_texts.entry(relpath).or_default().push(text);
+                    }
+                    continue;
+                }
+                if !f.ends_with(".vsndevts_c") {
+                    continue;
+                }
                 let tmp = tmp_dir.join(format!("m{mi}_{}", f.replace('/', "_")));
                 if vpk::decompile_from_vpk(helper, mod_vpk, f, &tmp.to_string_lossy()).is_ok() {
                     if let Ok(text) = std::fs::read_to_string(&tmp) {
@@ -1542,23 +1814,22 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
         variants.push(Variant { name: "combined", with_imported: true });
     }
 
+    // Any override category present forces a rebuild of every variant: these
+    // paths lack full hash-skip tracking, so we conservatively never skip them.
+    let overrides_present = !cfg.icon_mods.is_empty()
+        || !cfg.sound_overrides.is_empty()
+        || !cfg.effect_overrides.is_empty()
+        || !cfg.vdata_overrides.is_empty()
+        || !cfg.global_overrides.is_empty()
+        || !cfg.world_overrides.is_empty();
+
     for v in &variants {
         let stage = output_dir.join(v.name).join("_staging");
-        let _ = std::fs::remove_dir_all(&stage);
-        if let Err(e) = std::fs::create_dir_all(&stage) {
-            return report.fail("prepare staging", e.to_string());
-        }
-        let mut staged = 0;
         let mut events_c_rels: Vec<String> = Vec::new();
-
-        // Imported audio goes only into the combined variant.
-        if v.with_imported {
-            if let Some(helper) = helper_opt {
-                for mod_vpk in &cfg.imported_mods {
-                    let _ = vpk::extract_all(helper, mod_vpk, &stage.to_string_lossy(), Some("sounds/"));
-                }
-            }
-        }
+        // Set once any events file for this variant is actually (re)written +
+        // compiled this run (i.e. Opt A below did NOT skip it). Combined with the
+        // run-level `compiled_any`, this drives the whole-variant skip.
+        let mut events_dirty = false;
 
         let mut relpaths: BTreeSet<String> = by_file.keys().map(|s| s.to_string()).collect();
         if v.with_imported {
@@ -1629,7 +1900,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                     let current = kv3_core::read_event_array(&text, &ev.event_name, &ev.array_key)
                         .ok()
                         .and_then(|x| x.vsnd_duration);
-                    let merge = event_merge(ev, &cfg.sound_folder, current);
+                    let merge = event_merge(ev, folder_for(cfg, ev), current);
                     match kv3_core::apply_merge(&text, &merge) {
                         Ok(t) => {
                             text = t;
@@ -1666,6 +1937,30 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
             }
 
             let events_dest = content_root.join(rel);
+            let events_c_abs = compiled_root.join(events_c_relpath(rel));
+            // Success stamp: fingerprint of the text the last SUCCESSFUL compile
+            // ran on. The text is written to the content tree before the
+            // compiler runs, so text-equality alone can't prove the existing
+            // `.vsndevts_c` is current — a failed run leaves the new text with
+            // the old `_c`. The stamp is only written after the compiler
+            // succeeds, closing that gap.
+            let events_stamp = events_dest.with_extension("vsndevts.eimstamp");
+            // Opt A: if the freshly-merged text is byte-identical to what the
+            // last successful compile ran on AND the compiled `.vsndevts_c`
+            // still exists, the resourcecompiler pass would just reproduce the
+            // same output — skip its multi-second cold start. (Won't fire for
+            // the combined variant, which shares this content path with `mine`
+            // and so always differs; combined is the rare case, so that's
+            // acceptable.)
+            let unchanged = !cfg.skip_compile
+                && events_c_abs.exists()
+                && std::fs::read_to_string(&events_dest).map(|d| d == text).unwrap_or(false)
+                && stamp_matches(&events_stamp, &fingerprint(&text));
+            if unchanged {
+                report.ok_step(format!("[{}] up to date {rel}", v.name), "unchanged — skipped");
+                events_c_rels.push(events_c_relpath(rel));
+                continue;
+            }
             if let Some(parent) = events_dest.parent() {
                 if let Err(e) = std::fs::create_dir_all(parent) {
                     return report.fail("prepare events dir", e.to_string());
@@ -1687,18 +1982,98 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                 return report.fail(format!("write {rel}"), e.to_string());
             }
             if !cfg.skip_compile {
+                // A stale stamp must never survive into a failed run: clear it
+                // before compiling, write it back only on success.
+                let _ = std::fs::remove_file(&events_stamp);
                 match run_resource_compiler(cfg, &events_dest.to_string_lossy()) {
-                    Ok(detail) => report.ok_step(format!("[{}] compile {rel}", v.name), detail),
+                    Ok(detail) => {
+                        events_dirty = true;
+                        let _ = std::fs::write(&events_stamp, fingerprint(&text));
+                        report.ok_step(format!("[{}] compile {rel}", v.name), detail);
+                    }
                     Err(e) => return report.fail(format!("[{}] compile {rel}", v.name), e),
                 }
+            } else {
+                events_dirty = true;
             }
             events_c_rels.push(events_c_relpath(rel));
+        }
+
+        // Whole-variant skip: if nothing was (re)compiled this run, every
+        // events file was unchanged, AND the existing output was built from
+        // this exact config (the build stamp matches), the output already
+        // reflects the current project — skip the wipe → stage → pack entirely
+        // (the slow part). The stamp fingerprints the whole config + variant,
+        // so changes that never dirty an events file — a removed override, a
+        // dropped events file, toggles, changed imports — still rebuild.
+        let build_stamp = fingerprint(&format!("{cfg:?}|imported:{}", v.with_imported));
+        let stamp_file = output_dir.join(v.name).join(".eim_buildstamp");
+        let out_artifact = if cfg.output_mode == "vpk" {
+            output_dir.join(v.name).join(&cfg.vpk_name)
+        } else {
+            stage.clone()
+        };
+        if !compiled_any
+            && !events_dirty
+            && !overrides_present
+            && out_artifact.exists()
+            && stamp_matches(&stamp_file, &build_stamp)
+        {
+            report.ok_step(format!("[{}] up to date", v.name), "nothing changed — skipped");
+            continue;
+        }
+        // Building (or rebuilding) below: drop the old stamp now so a failed
+        // run can't leave a stamp claiming the partial output is current.
+        let _ = std::fs::remove_file(&stamp_file);
+
+        // (Re)build: reset staging fresh, then extract imported assets + stage.
+        let _ = std::fs::remove_dir_all(&stage);
+        if let Err(e) = std::fs::create_dir_all(&stage) {
+            return report.fail("prepare staging", e.to_string());
+        }
+        let mut staged = 0;
+
+        // Imported assets go only into the combined variant. Full vpk merge:
+        // stage every real asset tree (not just sounds), so models/particles/etc.
+        // come along too. We extract a fixed set of game-content dirs so the
+        // pack's working/junk folders (MYSoundevents, NEWSoundevents, *_BACKUP,
+        // scripts, readmes) are skipped. Soundevents are NOT staged wholesale —
+        // they're merged via array-union (above), since clobbering the live
+        // shared events files would revert other mods + the current patch.
+        const ASSET_DIRS: [&str; 5] =
+            ["sounds/", "models/", "particles/", "materials/", "panorama/"];
+        if v.with_imported {
+            if let Some(helper) = helper_opt {
+                for mod_vpk in &cfg.imported_mods {
+                    for dir in ASSET_DIRS {
+                        let _ = vpk::extract_all(helper, mod_vpk, &stage.to_string_lossy(), Some(dir));
+                    }
+                }
+                // Drop the files the user deselected in this pack's import
+                // review (they were just extracted wholesale above).
+                let mut excluded = 0;
+                for mod_vpk in &cfg.imported_mods {
+                    if let Some(excludes) = cfg.imported_mod_excludes.get(mod_vpk) {
+                        for rel in excludes {
+                            if std::fs::remove_file(stage.join(rel)).is_ok() {
+                                excluded += 1;
+                            }
+                        }
+                    }
+                }
+                if excluded > 0 {
+                    report.ok_step(
+                        format!("[{}] exclude deselected", v.name),
+                        format!("{excluded} file(s) dropped"),
+                    );
+                }
+            }
         }
 
         // Stage our song .vsnd_c + each events .vsndevts_c into this variant.
         for ev in &cfg.events {
             for song in &ev.songs {
-                let rel = vsnd_c_relpath(&cfg.sound_folder, &song.sound_name);
+                let rel = vsnd_c_relpath(folder_for(cfg, ev), &song.sound_name);
                 let src = compiled_root.join(&rel);
                 if cfg.skip_compile && !src.exists() {
                     continue;
@@ -1817,6 +2192,9 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                 Err(e) => return report.fail(format!("[{}] pack vpk", v.name), e),
             }
         }
+        // Variant fully built — record what it was built from so the next
+        // run's whole-variant skip can trust it.
+        let _ = std::fs::write(&stamp_file, &build_stamp);
     }
 
     // Report the output dir (contains mine/ and, if combined, combined/).
@@ -2034,6 +2412,37 @@ mod tests {
     }
 
     #[test]
+    fn vdata_override_quotes_unit_value_on_bare_field() {
+        // A unit-bearing value (e.g. "34m" from a stale randomizer cache) landing
+        // on a bare-number bonus must be QUOTED, else the compile fails on `34m`.
+        let src = "\
+\tability_x =
+\t{
+\t\tm_vecAbilityUpgrades =
+\t\t[
+\t\t\t{
+\t\t\t\tm_vecPropertyUpgrades =
+\t\t\t\t[
+\t\t\t\t\t{
+\t\t\t\t\t\tm_strPropertyName = \"DPS\"
+\t\t\t\t\t\tm_strBonus = 65.0
+\t\t\t\t\t},
+\t\t\t\t]
+\t\t\t},
+\t\t]
+\t}
+";
+        let ovs = vec![VdataCompile {
+            ability_key: "ability_x".into(),
+            prop_key: "@upgrade:0".into(),
+            value: "34m".into(),
+        }];
+        let out = apply_vdata_overrides(src, &ovs);
+        assert!(out.contains("m_strBonus = \"34m\""), "unit value must be quoted:\n{out}");
+        assert!(!out.contains("m_strBonus = 34m"), "must not emit a bare unit value");
+    }
+
+    #[test]
     fn vdata_override_rewrites_weapon_info_field() {
         let src = "\
 \tcitadel_weapon_bull_set =
@@ -2160,6 +2569,7 @@ mod tests {
             event_name: "E".into(),
             array_key: "vsnd_files".into(),
             stock_entry: "a/stock.vsnd".into(),
+            sound_folder: None,
             duration_mode: "auto".into(),
             duration_manual: None,
             previous_owned: vec![],
@@ -2191,6 +2601,7 @@ mod tests {
             event_name: "E".into(),
             array_key: "vsnd_files".into(),
             stock_entry: "a/stock.vsnd".into(),
+            sound_folder: None,
             duration_mode: "manual".into(),
             duration_manual: Some(42.5),
             previous_owned: vec![],
@@ -2237,10 +2648,12 @@ mod tests {
             write_encoding_txt: true,
             skip_compile: false,
             imported_mods: vec![],
+            imported_mod_excludes: Default::default(),
             events: vec![EventCompile {
                 event_name: "Music.MatchIntro.MatchStart.King".into(),
                 array_key: "vsnd_files".into(),
                 stock_entry: "sounds/music/match_intro/music_match_intro_king_160bpm.vsnd".into(),
+                sound_folder: None,
                 duration_mode: "auto".into(),
                 duration_manual: None,
                 previous_owned: vec![],
@@ -2332,6 +2745,7 @@ mod tests {
             write_encoding_txt: true,
             skip_compile: false,
             imported_mods: vec![],
+            imported_mod_excludes: Default::default(),
             events: vec![],
             icon_mods: vec![],
             sound_overrides: vec![],
