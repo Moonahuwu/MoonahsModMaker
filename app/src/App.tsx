@@ -1111,7 +1111,9 @@ export default function App() {
         gainDb: DEFAULT_GAIN_DB,
         fadeIn: 0,
         fadeOut: 0,
-        looping: slot?.eventName.endsWith(".Lp") ?? false,
+        looping:
+          (slot?.eventName.endsWith(".Lp") || /_lp(_|\.|$)/i.test(slot?.stockEntry ?? "")) ??
+          false,
         order,
         lastCompiledHash: null,
       };
@@ -1814,7 +1816,9 @@ export default function App() {
           gainDb: DEFAULT_GAIN_DB,
           fadeIn: 0,
           fadeOut: 0,
-          looping: slot?.eventName.endsWith(".Lp") ?? false,
+          looping:
+          (slot?.eventName.endsWith(".Lp") || /_lp(_|\.|$)/i.test(slot?.stockEntry ?? "")) ??
+          false,
           order,
           lastCompiledHash: null,
           importedRef: ref,
@@ -2583,6 +2587,10 @@ export default function App() {
       if (!sel) return;
       const dur = await audioDuration(sel);
       const id = `snd_${reference.replace(/[^a-z0-9]+/gi, "_").toLowerCase()}`;
+      // Valve's looping sounds carry an `_lp` marker in the file name (they
+      // compile with a loop block) — replacing one should loop by default or
+      // the ambience/engine/whatever cuts out after one play.
+      const looping = /_lp(_|\.|$)/i.test(reference);
       setProject((prev) => {
         if (!prev) return prev;
         const list = (prev.soundOverrides ?? []).filter((o) => o.targetRef !== reference);
@@ -2596,7 +2604,7 @@ export default function App() {
           gainDb: 0,
           fadeIn: 0,
           fadeOut: 0,
-          looping: false,
+          looping,
           lastCompiledHash: null,
         });
         return { ...prev, soundOverrides: list };

@@ -97,11 +97,14 @@ const REPO = "C:/Users/ethob/Desktop/DeadlockModding/EasyIntroModder";
 const CSDK = "C:/Users/ethob/Desktop/DeadlockModding/Reduced_CSDK_12";
 
 /** Where the one-click setup downloads the prebuilt tools bundle (trimmed CSDK
- *  compiler + static ffmpeg, built by `EIM_Tools_v1.zip` at the repo root's
- *  sibling folder). Upload that zip as a GitHub release asset under this tag
- *  before shipping a standalone build. */
+ *  compiler + static ffmpeg, built by `EIM_Tools_v2.zip` at the repo root's
+ *  sibling folder). v2 adds `game/citadel/shaders_{vulkan,pc}_*.vpk` (~51MB)
+ *  and `content/core/materials/default/*.tga|png|txt` (~4MB) — REQUIRED for
+ *  Wall Art material compiles (v1 fails with "No valid vcs file found for
+ *  shader citadel_overlay.vfx", then missing default texture sources).
+ *  Upload the zip as a GitHub release asset under this tag before shipping. */
 export const TOOLS_BUNDLE_URL =
-  "https://github.com/Moonahuwu/MoonahsModMaker/releases/download/tools-v1/EIM_Tools_v1.zip";
+  "https://github.com/Moonahuwu/MoonahsModMaker/releases/download/tools-v2/EIM_Tools_v2.zip";
 
 export const DEFAULT_SETTINGS: Settings = {
   csdkRoot: CSDK,
