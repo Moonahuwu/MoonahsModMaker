@@ -52,6 +52,7 @@ import {
   type PreloadProgress,
 } from "./lib/dataCache";
 import { SidePanel } from "./components/SidePanel";
+import { Backdrop } from "./components/Backdrop";
 import { ImportReview, type PackReview, type ReviewEvent, type ReviewGroup } from "./components/ImportReview";
 import { SetupSection } from "./components/SetupSection";
 import { FirstRunWizard } from "./components/FirstRunWizard";
@@ -2959,8 +2960,13 @@ export default function App() {
 
   return (
     <div className="flex h-screen overflow-hidden">
-      {/* Left sidebar: brand + tabs — fixed, never scrolls */}
-      <aside className="flex h-screen w-52 shrink-0 flex-col gap-1 border-r border-zinc-800 bg-zinc-950/60 p-4">
+      {/* Animated backdrop for the content pane (the opaque sidebar covers its
+          own strip). Swap the placeholder inside Backdrop for the game-style
+          animation when it lands. */}
+      <Backdrop />
+      {/* Left sidebar: brand + tabs — fixed, never scrolls. Opaque so the
+          backdrop animation only shows through the main content area. */}
+      <aside className="relative flex h-screen w-52 shrink-0 flex-col gap-1 border-r border-zinc-800 bg-zinc-950 p-4">
         <div className="mb-2">
           <h1 className="text-sm font-bold uppercase tracking-wider text-zinc-300">
             Moonah's
@@ -3046,8 +3052,9 @@ export default function App() {
         </div>
       </aside>
 
-      {/* Main content — the only scrollable pane */}
-      <main ref={mainRef} className="flex h-screen flex-1 flex-col gap-5 overflow-y-auto p-6 pb-4">
+      {/* Main content — the only scrollable pane (relative so it paints above
+          the fixed backdrop layer) */}
+      <main ref={mainRef} className="relative flex h-screen flex-1 flex-col gap-5 overflow-y-auto p-6 pb-4">
         <header className="flex items-start justify-between gap-4">
           <div>
             <h2 className="bg-gradient-to-r from-zinc-50 to-zinc-400 bg-clip-text text-xl font-bold tracking-tight text-transparent">

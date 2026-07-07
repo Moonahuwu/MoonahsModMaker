@@ -618,11 +618,47 @@ fn fingerprint(text: &str) -> String {
     format!("{h:016x}")
 }
 
+/// Identity of the live game pak (path + size + mtime): folded into the
+/// whole-file vdata stamps so a game patch forces a fresh decompile.
+fn pak_identity(cfg: &CompileConfig) -> String {
+    let p = cfg.pak_path.as_deref().unwrap_or("");
+    let meta = std::fs::metadata(p).ok();
+    let len = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+    let mtime = meta
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!("{p}|{len}|{mtime}")
+}
+
 /// True when `stamp_path` holds exactly `want` (the success stamp matches).
 fn stamp_matches(stamp_path: &Path, want: &str) -> bool {
     std::fs::read_to_string(stamp_path)
         .map(|s| s.trim() == want)
         .unwrap_or(false)
+}
+
+/// Recursively copy a directory tree (stages cached mod extractions — plain
+/// file copies are far faster than re-unpacking a vpk every rebuild).
+fn copy_tree(src: &Path, dest: &Path) -> std::io::Result<usize> {
+    let mut copied = 0;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dest.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            std::fs::create_dir_all(&to)?;
+            copied += copy_tree(&from, &to)?;
+        } else {
+            if let Some(parent) = to.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::copy(&from, &to)?;
+            copied += 1;
+        }
+    }
+    Ok(copied)
 }
 
 fn copy_into(src: &Path, dest_root: &Path, relpath: &str) -> std::io::Result<PathBuf> {
@@ -860,22 +896,23 @@ fn compile_effect_overrides(
     content_root: &Path,
     compiled_root: &Path,
     report: &mut CompileReport,
-) -> Result<(), ()> {
+) -> Result<bool, ()> {
     if cfg.effect_overrides.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
+    let mut dirty = false;
     let helper = match cfg.vpk_helper_path.as_deref() {
         Some(h) => h,
         None => {
             report.soft_fail("recolor effects", "vpkHelperPath not set");
-            return Ok(());
+            return Ok(true);
         }
     };
     let pak = match cfg.pak_path.as_deref() {
         Some(p) => p,
         None => {
             report.soft_fail("recolor effects", "pakPath not set (needed to read the vanilla particle)");
-            return Ok(());
+            return Ok(true);
         }
     };
     // Per-effect failures are soft: one broken recolor shouldn't sink the build.
@@ -888,6 +925,7 @@ fn compile_effect_overrides(
             report.ok_step(format!("up to date: {stem}"), "unchanged — skipped");
             continue;
         }
+        dirty = true;
         // Decompile the vanilla particle source into the content tree.
         let content_vpcf = content_root.join(&rel);
         if let Some(parent) = content_vpcf.parent() {
@@ -932,7 +970,7 @@ fn compile_effect_overrides(
             Err(e) => report.soft_fail(format!("compile (effect): {stem}"), e),
         }
     }
-    Ok(())
+    Ok(dirty)
 }
 
 // ---- Poster art replacement -------------------------------------------------
@@ -1108,23 +1146,24 @@ fn compile_posters(
     content_root: &Path,
     compiled_root: &Path,
     report: &mut CompileReport,
-) -> Result<Vec<String>, ()> {
+) -> Result<(Vec<String>, bool), ()> {
     let mut staged: Vec<String> = Vec::new();
+    let mut dirty = false;
     if cfg.poster_overrides.is_empty() {
-        return Ok(staged);
+        return Ok((staged, false));
     }
     let helper = match cfg.vpk_helper_path.as_deref() {
         Some(h) => h,
         None => {
             report.soft_fail("posters", "vpkHelperPath not set");
-            return Ok(staged);
+            return Ok((staged, true));
         }
     };
     let pak = match cfg.pak_path.as_deref() {
         Some(p) => p,
         None => {
             report.soft_fail("posters", "pakPath not set (needed to read the vanilla atlas)");
-            return Ok(staged);
+            return Ok((staged, true));
         }
     };
     let ffmpeg = cfg.ffmpeg_path.as_deref();
@@ -1168,6 +1207,7 @@ fn compile_posters(
             }
         }
 
+        dirty = true;
         // Fresh vanilla decompile of every material sampling this sheet (also
         // resets the sheet textures so removed overrides don't linger).
         for mat in &materials {
@@ -1248,7 +1288,7 @@ fn compile_posters(
     }
     staged.sort();
     staged.dedup();
-    Ok(staged)
+    Ok((staged, dirty))
 }
 
 /// Path inside the game tree that `abilities.vdata` compiles/stages to.
@@ -1481,24 +1521,35 @@ fn strip_vdata_includes(text: &str) -> String {
 fn compile_vdata_overrides(
     cfg: &CompileConfig,
     content_root: &Path,
-    _compiled_root: &Path,
+    compiled_root: &Path,
     report: &mut CompileReport,
-) -> Result<(), ()> {
+) -> Result<bool, ()> {
     if cfg.vdata_overrides.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
+    // Up-to-date skip: same edits against the same game pak, output on disk.
+    let stamp = content_root.join("scripts/.eim_abilities_stamp");
+    let key = fingerprint(&format!("{:?}|{}", cfg.vdata_overrides, pak_identity(cfg)));
+    if !cfg.skip_compile
+        && compiled_root.join(ABILITIES_VDATA_C_REL).exists()
+        && stamp_matches(&stamp, &key)
+    {
+        report.ok_step("config edits up to date", "unchanged — skipped");
+        return Ok(false);
+    }
+    let _ = std::fs::remove_file(&stamp);
     let helper = match cfg.vpk_helper_path.as_deref() {
         Some(h) => h,
         None => {
             report.soft_fail("config edits", "vpkHelperPath not set");
-            return Ok(());
+            return Ok(true);
         }
     };
     let pak = match cfg.pak_path.as_deref() {
         Some(p) => p,
         None => {
             report.soft_fail("config edits", "pakPath not set (needed to read vanilla abilities.vdata)");
-            return Ok(());
+            return Ok(true);
         }
     };
     let content_vdata = content_root.join(ABILITIES_VDATA_REL);
@@ -1506,7 +1557,7 @@ fn compile_vdata_overrides(
         if let Err(e) = std::fs::create_dir_all(parent) {
             {
             report.soft_fail("prepare config dir", e.to_string());
-            return Ok(());
+            return Ok(true);
         }
         }
     }
@@ -1515,14 +1566,14 @@ fn compile_vdata_overrides(
     {
         {
             report.soft_fail("decompile abilities.vdata", e);
-            return Ok(());
+            return Ok(true);
         }
     }
     let text = match std::fs::read_to_string(&content_vdata) {
         Ok(t) => t,
         Err(e) => {
             report.soft_fail("read abilities.vdata", e.to_string());
-            return Ok(());
+            return Ok(true);
         }
     };
     let edited = apply_vdata_overrides(&text, &cfg.vdata_overrides);
@@ -1530,21 +1581,24 @@ fn compile_vdata_overrides(
     if let Err(e) = std::fs::write(&content_vdata, stripped) {
         {
             report.soft_fail("write abilities.vdata", e.to_string());
-            return Ok(());
+            return Ok(true);
         }
     }
     report.ok_step("config edits", format!("{} value(s)", cfg.vdata_overrides.len()));
     if cfg.skip_compile {
-        return Ok(());
+        return Ok(true);
     }
     match run_resource_compiler(cfg, &content_vdata.to_string_lossy()) {
-        Ok(detail) => report.ok_step("compile (config)", detail),
+        Ok(detail) => {
+            report.ok_step("compile (config)", detail);
+            let _ = std::fs::write(&stamp, &key);
+        }
         Err(e) => {
             report.soft_fail("compile (config)", e);
-            return Ok(());
+            return Ok(true);
         }
     }
-    Ok(())
+    Ok(true)
 }
 
 const GENERIC_DATA_REL: &str = "scripts/generic_data.vdata";
@@ -1590,24 +1644,35 @@ fn apply_global_overrides(text: &str, overrides: &[GlobalCompile]) -> String {
 fn compile_global_overrides(
     cfg: &CompileConfig,
     content_root: &Path,
-    _compiled_root: &Path,
+    compiled_root: &Path,
     report: &mut CompileReport,
-) -> Result<(), ()> {
+) -> Result<bool, ()> {
     if cfg.global_overrides.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
+    // Up-to-date skip: same edits against the same game pak, output on disk.
+    let stamp = content_root.join("scripts/.eim_generic_stamp");
+    let key = fingerprint(&format!("{:?}|{}", cfg.global_overrides, pak_identity(cfg)));
+    if !cfg.skip_compile
+        && compiled_root.join(GENERIC_DATA_C_REL).exists()
+        && stamp_matches(&stamp, &key)
+    {
+        report.ok_step("global stats up to date", "unchanged — skipped");
+        return Ok(false);
+    }
+    let _ = std::fs::remove_file(&stamp);
     let helper = match cfg.vpk_helper_path.as_deref() {
         Some(h) => h,
         None => {
             report.soft_fail("global stats", "vpkHelperPath not set");
-            return Ok(());
+            return Ok(true);
         }
     };
     let pak = match cfg.pak_path.as_deref() {
         Some(p) => p,
         None => {
             report.soft_fail("global stats", "pakPath not set (needed to read vanilla generic_data.vdata)");
-            return Ok(());
+            return Ok(true);
         }
     };
     let content_gd = content_root.join(GENERIC_DATA_REL);
@@ -1615,7 +1680,7 @@ fn compile_global_overrides(
         if let Err(e) = std::fs::create_dir_all(parent) {
             {
             report.soft_fail("prepare global dir", e.to_string());
-            return Ok(());
+            return Ok(true);
         }
         }
     }
@@ -1624,35 +1689,38 @@ fn compile_global_overrides(
     {
         {
             report.soft_fail("decompile generic_data.vdata", e);
-            return Ok(());
+            return Ok(true);
         }
     }
     let text = match std::fs::read_to_string(&content_gd) {
         Ok(t) => t,
         Err(e) => {
             report.soft_fail("read generic_data.vdata", e.to_string());
-            return Ok(());
+            return Ok(true);
         }
     };
     let edited = apply_global_overrides(&text, &cfg.global_overrides);
     if let Err(e) = std::fs::write(&content_gd, edited) {
         {
             report.soft_fail("write generic_data.vdata", e.to_string());
-            return Ok(());
+            return Ok(true);
         }
     }
     report.ok_step("global stats", format!("{} value(s)", cfg.global_overrides.len()));
     if cfg.skip_compile {
-        return Ok(());
+        return Ok(true);
     }
     match run_resource_compiler(cfg, &content_gd.to_string_lossy()) {
-        Ok(detail) => report.ok_step("compile (global)", detail),
+        Ok(detail) => {
+            report.ok_step("compile (global)", detail);
+            let _ = std::fs::write(&stamp, &key);
+        }
         Err(e) => {
             report.soft_fail("compile (global)", e);
-            return Ok(());
+            return Ok(true);
         }
     }
-    Ok(())
+    Ok(true)
 }
 
 /// Rewrite each `(entity, field)` override's value within its entity block,
@@ -1746,24 +1814,40 @@ fn apply_world_overrides(text: &str, overrides: &[WorldCompile]) -> String {
 fn compile_world_overrides(
     cfg: &CompileConfig,
     content_root: &Path,
-    _compiled_root: &Path,
+    compiled_root: &Path,
     report: &mut CompileReport,
-) -> Result<Vec<String>, ()> {
+) -> Result<(Vec<String>, bool), ()> {
     if cfg.world_overrides.is_empty() {
-        return Ok(vec![]);
+        return Ok((vec![], false));
     }
+    // Up-to-date skip: same edits against the same game pak, outputs on disk.
+    let stamp = content_root.join("scripts/.eim_world_stamp");
+    let key = fingerprint(&format!("{:?}|{}", cfg.world_overrides, pak_identity(cfg)));
+    {
+        let mut files: Vec<&str> = cfg.world_overrides.iter().map(|o| o.file.as_str()).collect();
+        files.sort();
+        files.dedup();
+        if !cfg.skip_compile
+            && stamp_matches(&stamp, &key)
+            && files.iter().all(|f| compiled_root.join(format!("{f}_c")).exists())
+        {
+            report.ok_step("world edits up to date", "unchanged — skipped");
+            return Ok((files.iter().map(|f| format!("{f}_c")).collect(), false));
+        }
+    }
+    let _ = std::fs::remove_file(&stamp);
     let helper = match cfg.vpk_helper_path.as_deref() {
         Some(h) => h,
         None => {
             report.soft_fail("world entities", "vpkHelperPath not set");
-            return Ok(vec![]);
+            return Ok((vec![], true));
         }
     };
     let pak = match cfg.pak_path.as_deref() {
         Some(p) => p,
         None => {
             report.soft_fail("world entities", "pakPath not set");
-            return Ok(vec![]);
+            return Ok((vec![], true));
         }
     };
     use std::collections::BTreeMap;
@@ -1779,21 +1863,21 @@ fn compile_world_overrides(
             if let Err(e) = std::fs::create_dir_all(parent) {
                 {
             report.soft_fail("prepare world dir", e.to_string());
-            return Ok(vec![]);
+            return Ok((produced, true));
         }
             }
         }
         if let Err(e) = crate::vpk::decompile_from_vpk(helper, pak, &rel_c, &content_src.to_string_lossy()) {
             {
             report.soft_fail(format!("decompile {file}"), e);
-            return Ok(vec![]);
+            return Ok((produced, true));
         }
         }
         let text = match std::fs::read_to_string(&content_src) {
             Ok(t) => t,
             Err(e) => {
             report.soft_fail(format!("read {file}"), e.to_string());
-            return Ok(vec![]);
+            return Ok((produced, true));
         }
         };
         let owned: Vec<WorldCompile> = ovs.iter().map(|o| (*o).clone()).collect();
@@ -1802,7 +1886,7 @@ fn compile_world_overrides(
         if let Err(e) = std::fs::write(&content_src, stripped) {
             {
             report.soft_fail(format!("write {file}"), e.to_string());
-            return Ok(vec![]);
+            return Ok((produced, true));
         }
         }
         report.ok_step(format!("world edits: {}", file.rsplit('/').next().unwrap_or(file)), format!("{} value(s)", ovs.len()));
@@ -1811,13 +1895,16 @@ fn compile_world_overrides(
                 Ok(detail) => report.ok_step(format!("compile (world): {}", file.rsplit('/').next().unwrap_or(file)), detail),
                 Err(e) => {
             report.soft_fail(format!("compile (world): {file}"), e);
-            return Ok(vec![]);
+            return Ok((produced, true));
         }
             }
         }
         produced.push(rel_c);
     }
-    Ok(produced)
+    if !cfg.skip_compile {
+        let _ = std::fs::write(&stamp, &key);
+    }
+    Ok((produced, true))
 }
 
 /// Scale + compile all icon mods in one resourcecompiler pass. Returns
@@ -1826,22 +1913,69 @@ fn compile_world_overrides(
 /// `panorama_image_list` vdata (the headless equivalent of the Asset Browser's
 /// "Recompile"); the compiler emits `<n>_png.vtex_c`, which we stage at the
 /// game's `_psd.vtex_c` path so it overrides (the suffix is just naming).
+/// Fingerprint of everything that affects the compiled icons: each source
+/// file's identity (path/len/mtime) + the scale/hue params. Matches = the
+/// existing outputs are current and the whole pass can be skipped.
+fn icons_fingerprint(cfg: &CompileConfig) -> String {
+    let mut key = String::new();
+    for m in &cfg.icon_mods {
+        let meta = std::fs::metadata(&m.source_image).ok();
+        let len = meta.as_ref().map(|x| x.len()).unwrap_or(0);
+        let mtime = meta
+            .and_then(|x| x.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        key.push_str(&format!(
+            "{}|{len}|{mtime}|{}|{}|{}|{}\n",
+            m.source_image, m.target_vtexc, m.width, m.height, m.hue
+        ));
+    }
+    fingerprint(&key)
+}
+
+/// Returns the staging list + whether any real work happened (false = the
+/// stamp matched and everything was skipped).
 fn compile_icon_mods(
     cfg: &CompileConfig,
     content_root: &Path,
     compiled_root: &Path,
     report: &mut CompileReport,
-) -> Result<Vec<(String, PathBuf)>, ()> {
+) -> Result<(Vec<(String, PathBuf)>, bool), ()> {
     if cfg.icon_mods.is_empty() {
-        return Ok(vec![]);
+        return Ok((vec![], false));
     }
     let icons_dir = content_root.join("panorama/images/eim_icons");
     if let Err(e) = std::fs::create_dir_all(&icons_dir) {
         report.soft_fail("prepare icons dir", e.to_string());
-        return Ok(vec![]);
+        return Ok((vec![], true));
     }
+
+    // Up-to-date skip: unchanged sources + params and outputs still on disk.
+    let stamp_file = icons_dir.join(".eim_iconstamp");
+    let want = icons_fingerprint(cfg);
+    if !cfg.skip_compile && stamp_matches(&stamp_file, &want) {
+        let produced: Vec<(String, PathBuf)> = cfg
+            .icon_mods
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                (
+                    m.target_vtexc.trim_matches('/').to_string(),
+                    compiled_root.join(format!("panorama/images/eim_icons/icon_{i}_png.vtex_c")),
+                )
+            })
+            .collect();
+        if produced.iter().all(|(_, p)| p.exists()) {
+            report.ok_step("icons up to date", "unchanged — skipped");
+            return Ok((produced, false));
+        }
+    }
+    let _ = std::fs::remove_file(&stamp_file);
+
     let mut list = String::new();
     let mut produced: Vec<(String, PathBuf)> = Vec::new();
+    let mut all_ok = true;
     for (i, m) in cfg.icon_mods.iter().enumerate() {
         let w = m.width.clamp(1, 4096);
         let h = m.height.clamp(1, 4096);
@@ -1850,6 +1984,7 @@ fn compile_icon_mods(
         // A bad source image skips just this icon, not the whole build.
         if let Err(e) = render_icon(cfg.ffmpeg_path.as_deref(), &m.source_image, w, h, m.hue, &png.to_string_lossy()) {
             report.soft_fail(format!("scale icon: {label}"), e);
+            all_ok = false;
             continue;
         }
         list.push_str(&format!("\t\tpanorama:\"file://{{images}}/eim_icons/icon_{i}.png\",\n"));
@@ -1859,7 +1994,7 @@ fn compile_icon_mods(
     report.ok_step("scale icons", format!("{} icon(s)", produced.len()));
 
     if cfg.skip_compile {
-        return Ok(produced);
+        return Ok((produced, true));
     }
 
     let vdata = content_root.join("eim_icons.vdata");
@@ -1868,16 +2003,20 @@ fn compile_icon_mods(
     );
     if let Err(e) = std::fs::write(&vdata, body) {
         report.soft_fail("write icon vdata", e.to_string());
-        return Ok(vec![]);
+        return Ok((vec![], true));
     }
     match run_resource_compiler(cfg, &vdata.to_string_lossy()) {
         Ok(detail) => report.ok_step("compile icons", detail),
         Err(e) => {
             report.soft_fail("compile icons", e);
-            return Ok(vec![]);
+            return Ok((vec![], true));
         }
     }
-    Ok(produced)
+    // Stamp only fully-clean passes so a partial failure always retries.
+    if all_ok && produced.iter().all(|(_, p)| p.exists()) {
+        let _ = std::fs::write(&stamp_file, icons_fingerprint(cfg));
+    }
+    Ok((produced, true))
 }
 
 /// Run the full pipeline. Returns a per-step report (never panics; failures are
@@ -2219,24 +2358,30 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
 
     // VFX recolor overrides: decompile + recolor + recompile once (staged into
     // every variant, like icons).
-    compile_effect_overrides(cfg, content_root, compiled_root, report)?;
+    let effects_dirty = compile_effect_overrides(cfg, content_root, compiled_root, report)?;
 
     // Poster art replacements: decompile atlas materials, composite user art,
     // recompile once (staged into every variant, like icons).
-    let poster_outputs = compile_posters(cfg, content_root, compiled_root, report)?;
+    let (poster_outputs, posters_dirty) = compile_posters(cfg, content_root, compiled_root, report)?;
 
     // Gameplay config edits: rewrite abilities.vdata once (staged into every
     // variant). Custom Server tab.
-    compile_vdata_overrides(cfg, content_root, compiled_root, report)?;
+    let vdata_dirty = compile_vdata_overrides(cfg, content_root, compiled_root, report)?;
 
     // Global match-wide edits: rewrite generic_data.vdata once. Custom Server.
-    compile_global_overrides(cfg, content_root, compiled_root, report)?;
+    let global_dirty = compile_global_overrides(cfg, content_root, compiled_root, report)?;
 
     // World entities (minions/boxes/powerups): rewrite npc_units/misc once.
-    let world_outputs = compile_world_overrides(cfg, content_root, compiled_root, report)?;
+    let (world_outputs, world_dirty) = compile_world_overrides(cfg, content_root, compiled_root, report)?;
 
     // Custom icon overrides: scale + compile once (staged into every variant).
-    let icon_outputs = compile_icon_mods(cfg, content_root, compiled_root, report)?;
+    let (icon_outputs, icons_dirty) = compile_icon_mods(cfg, content_root, compiled_root, report)?;
+
+    // "Did any override subsystem actually produce new output this run?" —
+    // when everything hit its up-to-date skip, the per-variant stage/pack can
+    // skip too (the build stamp guards config changes like removals/toggles).
+    let overrides_dirty =
+        effects_dirty || posters_dirty || vdata_dirty || global_dirty || world_dirty || icons_dirty;
 
     // Group our slots by their events file.
     use std::collections::{BTreeMap, BTreeSet};
@@ -2307,15 +2452,6 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
         variants.push(Variant { name: "combined", with_imported: true });
     }
 
-    // Any override category present forces a rebuild of every variant: these
-    // paths lack full hash-skip tracking, so we conservatively never skip them.
-    let overrides_present = !cfg.icon_mods.is_empty()
-        || !cfg.sound_overrides.is_empty()
-        || !cfg.effect_overrides.is_empty()
-        || !cfg.vdata_overrides.is_empty()
-        || !cfg.global_overrides.is_empty()
-        || !cfg.world_overrides.is_empty()
-        || !cfg.poster_overrides.is_empty();
 
     for v in &variants {
         let stage = output_dir.join(v.name).join("_staging");
@@ -2517,9 +2653,13 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
         } else {
             stage.clone()
         };
+        // `report.ok` guards the case where a subsystem soft-failed: its steps
+        // are red but nothing got dirtied, and skipping would hide the problem
+        // behind a stale artifact.
         if !compiled_any
             && !events_dirty
-            && !overrides_present
+            && !overrides_dirty
+            && report.ok
             && out_artifact.exists()
             && stamp_matches(&stamp_file, &build_stamp)
         {
@@ -2554,15 +2694,59 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                 for mod_vpk in &cfg.imported_mods {
                     let mut copied = 0usize;
                     let mut errs: Vec<String> = Vec::new();
-                    for dir in ASSET_DIRS {
-                        match vpk::extract_all(helper, mod_vpk, &stage.to_string_lossy(), Some(dir)) {
-                            Ok(detail) => {
-                                // "copied N file(s)..." / "extracted N ..." — count what we can
-                                if let Some(n) = detail.split_whitespace().find_map(|w| w.parse::<usize>().ok()) {
-                                    copied += n;
+                    let src_path = Path::new(mod_vpk);
+                    if src_path.is_file() {
+                        // Raw .vpk: unpack ONCE into a persistent cache keyed by
+                        // the file's identity, then stage with plain copies —
+                        // big packs stop paying the vpk-unpack cost every build.
+                        let meta = std::fs::metadata(src_path).ok();
+                        let ident = format!(
+                            "{mod_vpk}|{}|{}",
+                            meta.as_ref().map(|m| m.len()).unwrap_or(0),
+                            meta.and_then(|m| m.modified().ok())
+                                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                                .map(|d| d.as_secs())
+                                .unwrap_or(0)
+                        );
+                        let cache = output_dir.join(".modcache").join(fingerprint(&ident));
+                        let ready = cache.join(".eim_complete");
+                        if !ready.exists() {
+                            let _ = std::fs::remove_dir_all(&cache);
+                            let _ = std::fs::create_dir_all(&cache);
+                            let mut ok = true;
+                            for dir in ASSET_DIRS {
+                                if let Err(e) = vpk::extract_all(
+                                    helper,
+                                    mod_vpk,
+                                    &cache.to_string_lossy(),
+                                    Some(dir),
+                                ) {
+                                    errs.push(format!("{dir}: {e}"));
+                                    ok = false;
                                 }
                             }
-                            Err(e) => errs.push(format!("{dir}: {e}")),
+                            if ok {
+                                let _ = std::fs::write(&ready, "1");
+                            }
+                        }
+                        match copy_tree(&cache, &stage) {
+                            Ok(n) => copied += n.saturating_sub(1), // minus the marker
+                            Err(e) => errs.push(format!("stage from cache: {e}")),
+                        }
+                        let _ = std::fs::remove_file(stage.join(".eim_complete"));
+                    } else {
+                        // Cached-pack dirs are already extracted — prefix copies.
+                        for dir in ASSET_DIRS {
+                            match vpk::extract_all(helper, mod_vpk, &stage.to_string_lossy(), Some(dir)) {
+                                Ok(detail) => {
+                                    if let Some(n) =
+                                        detail.split_whitespace().find_map(|w| w.parse::<usize>().ok())
+                                    {
+                                        copied += n;
+                                    }
+                                }
+                                Err(e) => errs.push(format!("{dir}: {e}")),
+                            }
                         }
                     }
                     let name = Path::new(mod_vpk)

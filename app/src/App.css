@@ -114,3 +114,40 @@ button {
     background-color: #0f0f0f69;
   }
 }
+
+/* ---- Main-area animated backdrop (components/Backdrop.tsx) ----------------
+   Placeholder glows: swap/extend when the game-style animation asset lands.
+   Deliberately faint (opacity < 0.08) so text stays readable over it. */
+.eim-bg-glow {
+  position: absolute;
+  width: 70vmax;
+  height: 70vmax;
+  border-radius: 9999px;
+  filter: blur(90px);
+  opacity: 0.07;
+}
+.eim-bg-glow-a {
+  background: #8b5cf6;
+  top: -20vmax;
+  right: -15vmax;
+  animation: eim-drift-a 60s ease-in-out infinite alternate;
+}
+.eim-bg-glow-b {
+  background: #38bdf8;
+  bottom: -25vmax;
+  left: 20vw;
+  animation: eim-drift-b 80s ease-in-out infinite alternate;
+}
+@keyframes eim-drift-a {
+  from { transform: translate(0, 0) scale(1); }
+  to { transform: translate(-12vw, 10vh) scale(1.15); }
+}
+@keyframes eim-drift-b {
+  from { transform: translate(0, 0) scale(1.1); }
+  to { transform: translate(10vw, -8vh) scale(0.95); }
+}
+.eim-bg-vignette {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at 50% 40%, transparent 55%, rgba(0, 0, 0, 0.5));
+}
