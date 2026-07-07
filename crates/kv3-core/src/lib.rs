@@ -243,7 +243,7 @@ pub fn add_entries(
     let (existing, rstart, rend, indent) =
         match find_value(text, block, array_key, event_name)? {
             ValueSpan::Array(lb, rb) => {
-                (parse_array_entries(text, lb, rb), lb, rb, bracket_indent(text, lb).to_string())
+                (parse_array_entries(text, lb, rb), lb, rb, line_indent(text, lb).to_string())
             }
             ValueSpan::Scalar(qs, qe, v) => (vec![v], qs, qe, line_indent(text, qs).to_string()),
         };
@@ -658,15 +658,9 @@ fn parse_array_entries(text: &str, lbracket: usize, rbracket: usize) -> Vec<Stri
     out
 }
 
-/// Whitespace prefix of the line containing `[` (its indentation).
-fn bracket_indent(text: &str, lbracket: usize) -> &str {
-    let line_start = text[..lbracket].rfind('\n').map(|i| i + 1).unwrap_or(0);
-    &text[line_start..lbracket]
-}
-
-/// Leading whitespace (indentation) of the line containing `pos`. Unlike
-/// `bracket_indent`, this stops at the first non-whitespace char, so it's correct
-/// even when `pos` points mid-line (e.g. a scalar value after `key = `).
+/// Leading whitespace (indentation) of the line containing `pos`. Stops at the
+/// first non-whitespace char, so it's correct even when `pos` points mid-line
+/// (e.g. an inline `key = [...]` array or a scalar value after `key = `).
 fn line_indent(text: &str, pos: usize) -> &str {
     let line_start = text[..pos].rfind('\n').map(|i| i + 1).unwrap_or(0);
     let b = text.as_bytes();
@@ -872,6 +866,33 @@ mod unit {
         // byte-identical).
         let noop = add_entries(SYNTH_SCALAR, "Evt", "vsnd_files", &["a/stock.vsnd".into()]).unwrap();
         assert_eq!(noop, SYNTH_SCALAR);
+    }
+
+    // Hand-authored mod files sometimes write the array inline on the key's
+    // line. The rewritten array's indent must come from the line's leading
+    // whitespace, not the text before `[` (which would inject `vsnd_files = `
+    // into every entry line).
+    const SYNTH_INLINE: &str = "<!-- kv3 encoding:text:version{x} format:generic:version{y} -->\n{\n\tEvt = \n\t{\n\t\tvsnd_files = [ \"a/stock.vsnd\", \"a/foreign1.vsnd\" ]\n\t\tvsnd_duration = 10.0\n\t}\n}\n";
+
+    #[test]
+    fn add_entries_handles_inline_array() {
+        let out = add_entries(SYNTH_INLINE, "Evt", "vsnd_files", &["a/new.vsnd".into()]).unwrap();
+        let v = read_event(&out, "Evt").unwrap();
+        assert_eq!(v.entries, vec!["a/stock.vsnd", "a/foreign1.vsnd", "a/new.vsnd"]);
+        // No entry line may repeat the key text (the old bracket_indent bug).
+        assert_eq!(out.matches("vsnd_files").count(), 1);
+        assert!(out.contains("vsnd_duration = 10.0"));
+    }
+
+    #[test]
+    fn apply_merge_handles_inline_array() {
+        let out = apply_merge(SYNTH_INLINE, &edit(&["a/new.vsnd"], &[], None)).unwrap();
+        let v = read_event(&out, "Evt").unwrap();
+        assert_eq!(
+            v.entries,
+            vec!["a/stock.vsnd", "a/foreign1.vsnd", "a/new.vsnd"]
+        );
+        assert_eq!(out.matches("vsnd_files").count(), 1);
     }
 
     #[test]
