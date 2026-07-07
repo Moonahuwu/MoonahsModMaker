@@ -91,6 +91,8 @@ export interface IconMod {
   height: number;
   /** Hue rotation in degrees (-180..180) applied on compile. 0 = unchanged. */
   hue?: number;
+  /** Unchecked = kept in the project but excluded from the compile (default on). */
+  enabled?: boolean;
 }
 
 /** A loose-file sound override: user audio compiled + staged at a vanilla path. */

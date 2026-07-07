@@ -29,6 +29,7 @@ import {
   scanPackContents,
   eventsForRefs,
   cachePack,
+  packIcons,
   type ImportEvent,
   listSoundeventFiles,
   downloadTools,
@@ -45,6 +46,7 @@ import {
   cHeroSounds as heroSoundsApi,
   cHeroVoicelines as heroVoicelinesApi,
   cItemSoundIndex as itemSoundIndex,
+  cItemRoster,
   clearDataCache,
   preloadGameData,
   type PreloadProgress,
@@ -602,6 +604,21 @@ export default function App() {
   // Slot-group tabs in a canonical sidebar order: Heroes (+Items) on top, the
   // curated categories next, dynamic/unknown groups after, and the utility
   // tabs at the bottom (Replace Sounds last).
+  // Item-name → custom-icon lookup for the Items grid/detail overlays.
+  const customItemIcons = useMemo(() => {
+    const out: Record<string, { src: string; hue: number; enabled: boolean }> = {};
+    for (const m of project?.iconMods ?? []) {
+      if (m.id.startsWith("icon_") && !m.id.startsWith("icon_import_")) {
+        out[m.id.slice(5)] = {
+          src: m.sourceImage,
+          hue: m.hue ?? 0,
+          enabled: m.enabled !== false,
+        };
+      }
+    }
+    return out;
+  }, [project?.iconMods]);
+
   const tabs = useMemo(() => {
     const seen: string[] = [];
     for (const e of project?.events ?? []) {
@@ -1407,11 +1424,76 @@ export default function App() {
           importedModExcludes: excludes,
         });
       }
+      // Adopt the pack's panorama images (item icons etc.) as editable Icon
+      // Mods — otherwise they'd ship invisibly inside the pack (and be missing
+      // from the "mine" build entirely).
+      let adoptedIcons = 0;
+      try {
+        const excludedSet = new Set(excludedFiles);
+        const icons = (await packIcons(s.vpkHelperPath, source)).filter(
+          (ic) => !excludedSet.has(ic.targetVtexc),
+        );
+        if (icons.length > 0) {
+          let byInternal = new Map<string, ItemCard>();
+          try {
+            const roster = await cItemRoster(s.vpkHelperPath, s.deadlockPak);
+            byInternal = new Map(
+              roster.filter((r) => r.iconInternal).map((r) => [r.iconInternal!, r]),
+            );
+          } catch {
+            /* roster is only used for friendly names */
+          }
+          const existing = projectRef.current?.iconMods ?? [];
+          const additions = icons
+            .map((ic) => {
+              const item = byInternal.get(ic.targetVtexc);
+              const id = item
+                ? `icon_${item.name}`
+                : `icon_import_${ic.targetVtexc.replace(/[^a-z0-9]+/gi, "_").toLowerCase()}`;
+              return { ic, item, id };
+            })
+            .filter(
+              ({ ic, id }) =>
+                !existing.some((m) => m.id === id || m.targetVtexc === ic.targetVtexc),
+            );
+          if (additions.length > 0) {
+            adoptedIcons = additions.length;
+            setProject((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    iconMods: [
+                      ...(prev.iconMods ?? []),
+                      ...additions.map(({ ic, item, id }) => ({
+                        id,
+                        name:
+                          item?.displayName ?? ic.targetVtexc.split("/").pop() ?? "imported icon",
+                        targetVtexc: ic.targetVtexc,
+                        sourceImage: ic.pngPath,
+                        width: ic.width,
+                        height: ic.height,
+                        hue: 0,
+                        enabled: true,
+                      })),
+                    ],
+                  }
+                : prev,
+            );
+          }
+        }
+      } catch {
+        /* icon adoption is best-effort — sounds still import */
+      }
+      const iconNote = adoptedIcons > 0 ? ` · ${adoptedIcons} icon(s) adopted` : "";
+
       const events = (pendingImportEvents.current ?? []).filter((ie) =>
         selectedKeys.has(`${ie.eventsRelpath}::${ie.eventName}::${ie.arrayKey}`),
       );
       if (events.length === 0) {
-        push("success", bundle ? "Pack added — it'll be bundled on compile" : "Nothing imported");
+        push(
+          "success",
+          (bundle ? "Pack added — it'll be bundled on compile" : "Nothing imported") + iconNote,
+        );
         return;
       }
       const itemIndex = await buildItemIndex();
@@ -1679,7 +1761,7 @@ export default function App() {
       const absorbNote = absorbed > 0 ? ` · ${absorbed} converted into your own tracks` : "";
       push(
         "success",
-        `Import done — ${adoptedRefs} sound(s): ${counts.hero} hero, ${counts.item} item, ${counts.ui} UI, ${counts.sorted} sorted to tabs, ${counts.misc} misc, ${counts.folded} folded into existing${absorbNote}${exclNote}`,
+        `Import done — ${adoptedRefs} sound(s): ${counts.hero} hero, ${counts.item} item, ${counts.ui} UI, ${counts.sorted} sorted to tabs, ${counts.misc} misc, ${counts.folded} folded into existing${absorbNote}${exclNote}${iconNote}`,
       );
     } catch (e) {
       push("error", `Import failed: ${e}`);
@@ -2404,6 +2486,22 @@ export default function App() {
     push("success", `Custom icon set for ${item.displayName} — compile to apply`);
   }
 
+  // Tick/untick an item's custom icon: kept in the project, excluded from the
+  // compile when off (and the base icon shows again in previews).
+  function toggleItemIconEnabled(itemName: string) {
+    const id = `icon_${itemName}`;
+    setProject((prev) =>
+      prev
+        ? {
+            ...prev,
+            iconMods: (prev.iconMods ?? []).map((m) =>
+              m.id === id ? { ...m, enabled: m.enabled === false } : m,
+            ),
+          }
+        : prev,
+    );
+  }
+
   // Live-adjust the hue of an item's custom icon (no-op if no icon is set yet).
   function setItemHue(itemName: string, hue: number) {
     const id = `icon_${itemName}`;
@@ -3018,6 +3116,16 @@ export default function App() {
                     ?.hue ?? 0
                 : 0
             }
+            iconEnabled={
+              selectedItem
+                ? (project?.iconMods ?? []).find((m) => m.id === `icon_${selectedItem.name}`)
+                    ?.enabled !== false
+                : true
+            }
+            onToggleIconEnabled={() =>
+              selectedItem && toggleItemIconEnabled(selectedItem.name)
+            }
+            customIcons={customItemIcons}
             onHueChange={(hue) => selectedItem && setItemHue(selectedItem.name, hue)}
             onPickIcon={() => selectedItem && void pickItemIcon(selectedItem)}
             onRemoveIcon={() => selectedItem && removeItemIcon(selectedItem.name)}

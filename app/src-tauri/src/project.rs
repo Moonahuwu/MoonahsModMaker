@@ -224,6 +224,13 @@ pub struct IconMod {
     /// Hue rotation applied on compile, in degrees (-180..180). 0 = unchanged.
     #[serde(default)]
     pub hue: f32,
+    /// Unchecked = kept in the project but excluded from the compile.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_sound_folder() -> String {

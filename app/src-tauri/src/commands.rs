@@ -4508,6 +4508,78 @@ fn png_dimensions(path: &std::path::Path) -> Result<(u32, u32), String> {
     Ok((w, h))
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackIcon {
+    /// The pack-internal `.vtex_c` path (the override target).
+    pub target_vtexc: String,
+    /// Decoded PNG in the app-data cache (usable as an IconMod source).
+    pub png_path: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Decode every panorama image (item icons etc.) a mod pack ships, so an
+/// import can adopt them as editable Icon Mods instead of leaving them
+/// invisible inside the pack.
+#[tauri::command]
+pub fn pack_icons(
+    app: tauri::AppHandle,
+    helper_path: String,
+    source: String,
+) -> Result<Vec<PackIcon>, String> {
+    use tauri::Manager;
+    let targets: Vec<String> = crate::vpk::list(&helper_path, &source, Some("panorama/images/"))?
+        .into_iter()
+        .filter(|e| e.ends_with(".vtex_c"))
+        .collect();
+    if targets.is_empty() {
+        return Ok(vec![]);
+    }
+    let mut hash: u32 = 2166136261;
+    for b in source.bytes() {
+        hash = (hash ^ u32::from(b)).wrapping_mul(16777619);
+    }
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("pack_icons")
+        .join(format!("{hash:08x}"));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+
+    let mut out = Vec::new();
+    let src_is_dir = std::path::Path::new(&source).is_dir();
+    for target in targets {
+        let stem = target
+            .rsplit('/')
+            .next()
+            .unwrap_or(&target)
+            .trim_end_matches(".vtex_c");
+        let png = dir.join(format!("{stem}.png"));
+        if !png.exists() {
+            let r = if src_is_dir {
+                let loose = std::path::Path::new(&source).join(&target);
+                crate::vpk::texture_file(&helper_path, &loose.to_string_lossy(), &png.to_string_lossy())
+            } else {
+                crate::vpk::texture_batch(&helper_path, &source, &dir.to_string_lossy(), &[target.clone()])
+                    .map(|_| String::new())
+            };
+            if r.is_err() || !png.exists() {
+                continue; // not a decodable 2D texture — skip it
+            }
+        }
+        let Ok((width, height)) = png_dimensions(&png) else { continue };
+        out.push(PackIcon {
+            target_vtexc: target,
+            png_path: png.to_string_lossy().to_string(),
+            width,
+            height,
+        });
+    }
+    Ok(out)
+}
+
 /// Decompile a poster atlas material from the game pak into the app-data cache
 /// (once) and return its color texture as a viewable PNG. Powers the Posters
 /// tab sheet display.

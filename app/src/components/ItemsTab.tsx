@@ -31,6 +31,9 @@ export function ItemsTab({
   renderSound,
   customIconSource,
   customHue,
+  iconEnabled,
+  onToggleIconEnabled,
+  customIcons,
   onHueChange,
   onPickIcon,
   onRemoveIcon,
@@ -50,6 +53,11 @@ export function ItemsTab({
   renderSound: (s: HeroAbilitySound) => React.ReactNode;
   customIconSource: string | null;
   customHue: number;
+  /** Whether the selected item's custom icon is included in the compile. */
+  iconEnabled: boolean;
+  onToggleIconEnabled: () => void;
+  /** Item-name → custom icon, for grid overlays (only enabled ones render). */
+  customIcons: Record<string, { src: string; hue: number; enabled: boolean }>;
   onHueChange: (hue: number) => void;
   onPickIcon: () => void;
   onRemoveIcon: () => void;
@@ -126,20 +134,40 @@ export function ItemsTab({
         <div className="mt-5 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
           <div className="flex items-center gap-4">
             <span
-              className="flex h-16 w-16 shrink-0 items-center justify-center rounded-lg border-2"
+              className="relative flex h-16 w-16 shrink-0 items-center justify-center rounded-lg border-2"
               style={{ borderColor: cat?.color ?? "#52525b", background: "rgba(0,0,0,0.4)" }}
             >
+              {/* Base icon stays visible; the custom one layers over it when enabled. */}
               <img
-                src={convertFileSrc(customIconSource ?? selected.iconPath ?? "")}
+                src={convertFileSrc(selected.iconPath ?? "")}
                 alt=""
                 className="h-12 w-12 object-contain"
-                // Live preview of the hue shift (matches the ffmpeg pass on compile).
-                style={customIconSource ? { filter: `hue-rotate(${customHue}deg)` } : undefined}
+                style={customIconSource && iconEnabled ? { opacity: 0.25 } : undefined}
               />
+              {customIconSource && iconEnabled && (
+                <img
+                  src={convertFileSrc(customIconSource)}
+                  alt=""
+                  className="absolute inset-2 h-12 w-12 object-contain"
+                  // Live preview of the hue shift (matches the ffmpeg pass on compile).
+                  style={{ filter: `hue-rotate(${customHue}deg)` }}
+                />
+              )}
             </span>
             <div className="min-w-0 flex-1">
-              <div className="text-sm font-semibold text-zinc-200">
+              <div className="flex items-center gap-3 text-sm font-semibold text-zinc-200">
                 Custom icon {customIconSource && <span className="text-emerald-400">· set</span>}
+                {customIconSource && (
+                  <label className="flex cursor-pointer items-center gap-1.5 text-xs font-normal text-zinc-400">
+                    <input
+                      type="checkbox"
+                      checked={iconEnabled}
+                      onChange={onToggleIconEnabled}
+                      className="accent-emerald-500"
+                    />
+                    include in compile
+                  </label>
+                )}
               </div>
               <p className="mt-0.5 text-xs text-zinc-500">
                 Drag a PNG/JPG anywhere here, or click Choose — it’s auto-scaled to the
@@ -326,12 +354,27 @@ export function ItemsTab({
                           className="group relative aspect-square overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950/60 transition hover:border-zinc-500"
                           style={{ outlineColor: cat.color }}
                         >
+                          {customIcons[it.name]?.enabled && (
+                            <>
+                              <img
+                                src={convertFileSrc(customIcons[it.name].src)}
+                                alt=""
+                                loading="lazy"
+                                className="absolute inset-0 z-10 h-full w-full object-contain p-1.5"
+                                style={{ filter: `hue-rotate(${customIcons[it.name].hue}deg)` }}
+                              />
+                              <span className="absolute right-1 top-1 z-20 h-2 w-2 rounded-full bg-emerald-400" />
+                            </>
+                          )}
                           {it.iconPath ? (
                             <img
                               src={convertFileSrc(it.iconPath)}
                               alt={it.displayName}
                               loading="lazy"
                               className="h-full w-full object-contain p-1.5"
+                              style={
+                                customIcons[it.name]?.enabled ? { opacity: 0.2 } : undefined
+                              }
                             />
                           ) : (
                             <span className="flex h-full items-center justify-center text-[9px] text-zinc-600">

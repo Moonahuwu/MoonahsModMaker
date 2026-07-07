@@ -465,6 +465,15 @@ impl CompileReport {
         self.emit_last();
         Err(())
     }
+    /// Record a failure but keep the pipeline going: one bad track/poster/
+    /// effect shouldn't hold everything else up. The report ends not-ok (so
+    /// nothing gets hash-stamped as compiled), but an artifact is still
+    /// produced and a summary of failures is appended at the end.
+    fn soft_fail(&mut self, name: impl Into<String>, detail: impl Into<String>) {
+        self.ok = false;
+        self.steps.push(StepResult { name: name.into(), ok: false, detail: detail.into() });
+        self.emit_last();
+    }
 }
 
 /// Whether a song's compile can be skipped: its params are unchanged since the
@@ -857,12 +866,19 @@ fn compile_effect_overrides(
     }
     let helper = match cfg.vpk_helper_path.as_deref() {
         Some(h) => h,
-        None => return report.fail("recolor effects", "vpkHelperPath not set"),
+        None => {
+            report.soft_fail("recolor effects", "vpkHelperPath not set");
+            return Ok(());
+        }
     };
     let pak = match cfg.pak_path.as_deref() {
         Some(p) => p,
-        None => return report.fail("recolor effects", "pakPath not set (needed to read the vanilla particle)"),
+        None => {
+            report.soft_fail("recolor effects", "pakPath not set (needed to read the vanilla particle)");
+            return Ok(());
+        }
     };
+    // Per-effect failures are soft: one broken recolor shouldn't sink the build.
     for ov in &cfg.effect_overrides {
         let rel = ov.vpcf_rel();
         let rel_c = ov.vpcf_c_rel();
@@ -876,25 +892,31 @@ fn compile_effect_overrides(
         let content_vpcf = content_root.join(&rel);
         if let Some(parent) = content_vpcf.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
-                return report.fail("prepare effect dir", e.to_string());
+                report.soft_fail("prepare effect dir", e.to_string());
+                continue;
             }
         }
         if let Err(e) =
             crate::vpk::decompile_from_vpk(helper, pak, &rel_c, &content_vpcf.to_string_lossy())
         {
-            return report.fail(format!("decompile particle: {stem}"), e);
+            report.soft_fail(format!("decompile particle: {stem}"), e);
+            continue;
         }
         // Recolor in place.
         let text = match std::fs::read_to_string(&content_vpcf) {
             Ok(t) => t,
-            Err(e) => return report.fail(format!("read particle: {stem}"), e.to_string()),
+            Err(e) => {
+                report.soft_fail(format!("read particle: {stem}"), e.to_string());
+                continue;
+            }
         };
         let transformed = match ov.mode.as_str() {
             "rainbow" | "pulse" => animate_particle_source(&text, &ov.mode, ov.hue, ov.saturation),
             _ => recolor_particle_source(&text, ov.hue, ov.saturation),
         };
         if let Err(e) = std::fs::write(&content_vpcf, transformed) {
-            return report.fail(format!("write particle: {stem}"), e.to_string());
+            report.soft_fail(format!("write particle: {stem}"), e.to_string());
+            continue;
         }
         let detail = match ov.mode.as_str() {
             "rainbow" => "rainbow".to_string(),
@@ -907,7 +929,7 @@ fn compile_effect_overrides(
         }
         match run_resource_compiler(cfg, &content_vpcf.to_string_lossy()) {
             Ok(detail) => report.ok_step(format!("compile (effect): {stem}"), detail),
-            Err(e) => return report.fail(format!("compile (effect): {stem}"), e),
+            Err(e) => report.soft_fail(format!("compile (effect): {stem}"), e),
         }
     }
     Ok(())
@@ -1094,15 +1116,15 @@ fn compile_posters(
     let helper = match cfg.vpk_helper_path.as_deref() {
         Some(h) => h,
         None => {
-            let _ = report.fail("posters", "vpkHelperPath not set");
-            return Err(());
+            report.soft_fail("posters", "vpkHelperPath not set");
+            return Ok(staged);
         }
     };
     let pak = match cfg.pak_path.as_deref() {
         Some(p) => p,
         None => {
-            let _ = report.fail("posters", "pakPath not set (needed to read the vanilla atlas)");
-            return Err(());
+            report.soft_fail("posters", "pakPath not set (needed to read the vanilla atlas)");
+            return Ok(staged);
         }
     };
     let ffmpeg = cfg.ffmpeg_path.as_deref();
@@ -1117,15 +1139,16 @@ fn compile_posters(
         ovs.sort_by_key(|o| std::cmp::Reverse(u64::from(o.w) * u64::from(o.h)));
     }
 
-    for (sheet_id, ovs) in by_sheet {
+    // Per-sheet failures are soft: one broken sheet shouldn't sink the build.
+    'sheets: for (sheet_id, ovs) in by_sheet {
         let materials: Vec<String> = ovs[0]
             .materials
             .iter()
             .map(|m| m.trim_matches('/').to_string())
             .collect();
         if materials.is_empty() {
-            let _ = report.fail(format!("posters: {sheet_id}"), "no materials listed");
-            return Err(());
+            report.soft_fail(format!("posters: {sheet_id}"), "no materials listed");
+            continue 'sheets;
         }
         let primary_rel = &materials[0];
         let primary_vmat = content_root.join(primary_rel);
@@ -1152,15 +1175,15 @@ fn compile_posters(
             if let Err(e) =
                 crate::vpk::material_from_vpk(helper, pak, &mat_c, &content_root.to_string_lossy())
             {
-                let _ = report.fail(format!("decompile material: {mat}"), e);
-                return Err(());
+                report.soft_fail(format!("decompile material: {mat}"), e);
+                continue 'sheets;
             }
         }
         let text = match std::fs::read_to_string(&primary_vmat) {
             Ok(t) => t,
             Err(e) => {
-                let _ = report.fail(format!("read material: {primary_rel}"), e.to_string());
-                return Err(());
+                report.soft_fail(format!("read material: {primary_rel}"), e.to_string());
+                continue 'sheets;
             }
         };
         let refs = vmat_texture_refs(&text);
@@ -1173,8 +1196,8 @@ fn compile_posters(
             .find(|(p, _)| p.starts_with("TextureTranslucency"))
             .map(|(_, v)| v.clone());
         let Some(color_rel) = color_rel else {
-            let _ = report.fail(format!("posters: {sheet_id}"), "material has no color texture");
-            return Err(());
+            report.soft_fail(format!("posters: {sheet_id}"), "material has no color texture");
+            continue 'sheets;
         };
         // resourcecompiler must only see source params.
         for mat in &materials {
@@ -1189,16 +1212,16 @@ fn compile_posters(
             if let Err(e) = composite_poster(
                 ffmpeg, &color_abs, &ov.source_image, ov.x, ov.y, ov.w, ov.h, &ov.fit,
             ) {
-                let _ = report.fail(format!("poster art: {}", ov.label), e);
-                return Err(());
+                report.soft_fail(format!("poster art: {}", ov.label), e);
+                continue 'sheets;
             }
             if ov.alpha_coverage < 0.98 {
                 if let Some(trans) = &trans_rel {
                     let trans_abs = content_root.join(trans);
                     if trans_abs.exists() {
                         if let Err(e) = fill_trans_rect(ffmpeg, &trans_abs, ov.x, ov.y, ov.w, ov.h) {
-                            let _ = report.fail(format!("poster trans: {}", ov.label), e);
-                            return Err(());
+                            report.soft_fail(format!("poster trans: {}", ov.label), e);
+                            continue 'sheets;
                         }
                     }
                 }
@@ -1216,8 +1239,8 @@ fn compile_posters(
             match run_resource_compiler(cfg, &p.to_string_lossy()) {
                 Ok(detail) => report.ok_step(format!("compile (poster): {mat}"), detail),
                 Err(e) => {
-                    let _ = report.fail(format!("compile (poster): {mat}"), e);
-                    return Err(());
+                    report.soft_fail(format!("compile (poster): {mat}"), e);
+                    continue 'sheets;
                 }
             }
             staged.extend(poster_staged_rels(compiled_root, mat, &refs));
@@ -1466,31 +1489,49 @@ fn compile_vdata_overrides(
     }
     let helper = match cfg.vpk_helper_path.as_deref() {
         Some(h) => h,
-        None => return report.fail("config edits", "vpkHelperPath not set"),
+        None => {
+            report.soft_fail("config edits", "vpkHelperPath not set");
+            return Ok(());
+        }
     };
     let pak = match cfg.pak_path.as_deref() {
         Some(p) => p,
-        None => return report.fail("config edits", "pakPath not set (needed to read vanilla abilities.vdata)"),
+        None => {
+            report.soft_fail("config edits", "pakPath not set (needed to read vanilla abilities.vdata)");
+            return Ok(());
+        }
     };
     let content_vdata = content_root.join(ABILITIES_VDATA_REL);
     if let Some(parent) = content_vdata.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
-            return report.fail("prepare config dir", e.to_string());
+            {
+            report.soft_fail("prepare config dir", e.to_string());
+            return Ok(());
+        }
         }
     }
     if let Err(e) =
         crate::vpk::decompile_from_vpk(helper, pak, ABILITIES_VDATA_C_REL, &content_vdata.to_string_lossy())
     {
-        return report.fail("decompile abilities.vdata", e);
+        {
+            report.soft_fail("decompile abilities.vdata", e);
+            return Ok(());
+        }
     }
     let text = match std::fs::read_to_string(&content_vdata) {
         Ok(t) => t,
-        Err(e) => return report.fail("read abilities.vdata", e.to_string()),
+        Err(e) => {
+            report.soft_fail("read abilities.vdata", e.to_string());
+            return Ok(());
+        }
     };
     let edited = apply_vdata_overrides(&text, &cfg.vdata_overrides);
     let stripped = strip_vdata_includes(&edited);
     if let Err(e) = std::fs::write(&content_vdata, stripped) {
-        return report.fail("write abilities.vdata", e.to_string());
+        {
+            report.soft_fail("write abilities.vdata", e.to_string());
+            return Ok(());
+        }
     }
     report.ok_step("config edits", format!("{} value(s)", cfg.vdata_overrides.len()));
     if cfg.skip_compile {
@@ -1498,7 +1539,10 @@ fn compile_vdata_overrides(
     }
     match run_resource_compiler(cfg, &content_vdata.to_string_lossy()) {
         Ok(detail) => report.ok_step("compile (config)", detail),
-        Err(e) => return report.fail("compile (config)", e),
+        Err(e) => {
+            report.soft_fail("compile (config)", e);
+            return Ok(());
+        }
     }
     Ok(())
 }
@@ -1554,30 +1598,48 @@ fn compile_global_overrides(
     }
     let helper = match cfg.vpk_helper_path.as_deref() {
         Some(h) => h,
-        None => return report.fail("global stats", "vpkHelperPath not set"),
+        None => {
+            report.soft_fail("global stats", "vpkHelperPath not set");
+            return Ok(());
+        }
     };
     let pak = match cfg.pak_path.as_deref() {
         Some(p) => p,
-        None => return report.fail("global stats", "pakPath not set (needed to read vanilla generic_data.vdata)"),
+        None => {
+            report.soft_fail("global stats", "pakPath not set (needed to read vanilla generic_data.vdata)");
+            return Ok(());
+        }
     };
     let content_gd = content_root.join(GENERIC_DATA_REL);
     if let Some(parent) = content_gd.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
-            return report.fail("prepare global dir", e.to_string());
+            {
+            report.soft_fail("prepare global dir", e.to_string());
+            return Ok(());
+        }
         }
     }
     if let Err(e) =
         crate::vpk::decompile_from_vpk(helper, pak, GENERIC_DATA_C_REL, &content_gd.to_string_lossy())
     {
-        return report.fail("decompile generic_data.vdata", e);
+        {
+            report.soft_fail("decompile generic_data.vdata", e);
+            return Ok(());
+        }
     }
     let text = match std::fs::read_to_string(&content_gd) {
         Ok(t) => t,
-        Err(e) => return report.fail("read generic_data.vdata", e.to_string()),
+        Err(e) => {
+            report.soft_fail("read generic_data.vdata", e.to_string());
+            return Ok(());
+        }
     };
     let edited = apply_global_overrides(&text, &cfg.global_overrides);
     if let Err(e) = std::fs::write(&content_gd, edited) {
-        return report.fail("write generic_data.vdata", e.to_string());
+        {
+            report.soft_fail("write generic_data.vdata", e.to_string());
+            return Ok(());
+        }
     }
     report.ok_step("global stats", format!("{} value(s)", cfg.global_overrides.len()));
     if cfg.skip_compile {
@@ -1585,7 +1647,10 @@ fn compile_global_overrides(
     }
     match run_resource_compiler(cfg, &content_gd.to_string_lossy()) {
         Ok(detail) => report.ok_step("compile (global)", detail),
-        Err(e) => return report.fail("compile (global)", e),
+        Err(e) => {
+            report.soft_fail("compile (global)", e);
+            return Ok(());
+        }
     }
     Ok(())
 }
@@ -1689,11 +1754,17 @@ fn compile_world_overrides(
     }
     let helper = match cfg.vpk_helper_path.as_deref() {
         Some(h) => h,
-        None => return report.fail("world entities", "vpkHelperPath not set").map(|_| vec![]),
+        None => {
+            report.soft_fail("world entities", "vpkHelperPath not set");
+            return Ok(vec![]);
+        }
     };
     let pak = match cfg.pak_path.as_deref() {
         Some(p) => p,
-        None => return report.fail("world entities", "pakPath not set").map(|_| vec![]),
+        None => {
+            report.soft_fail("world entities", "pakPath not set");
+            return Ok(vec![]);
+        }
     };
     use std::collections::BTreeMap;
     let mut by_file: BTreeMap<&str, Vec<&WorldCompile>> = BTreeMap::new();
@@ -1706,27 +1777,42 @@ fn compile_world_overrides(
         let content_src = content_root.join(file);
         if let Some(parent) = content_src.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
-                return report.fail("prepare world dir", e.to_string()).map(|_| vec![]);
+                {
+            report.soft_fail("prepare world dir", e.to_string());
+            return Ok(vec![]);
+        }
             }
         }
         if let Err(e) = crate::vpk::decompile_from_vpk(helper, pak, &rel_c, &content_src.to_string_lossy()) {
-            return report.fail(format!("decompile {file}"), e).map(|_| vec![]);
+            {
+            report.soft_fail(format!("decompile {file}"), e);
+            return Ok(vec![]);
+        }
         }
         let text = match std::fs::read_to_string(&content_src) {
             Ok(t) => t,
-            Err(e) => return report.fail(format!("read {file}"), e.to_string()).map(|_| vec![]),
+            Err(e) => {
+            report.soft_fail(format!("read {file}"), e.to_string());
+            return Ok(vec![]);
+        }
         };
         let owned: Vec<WorldCompile> = ovs.iter().map(|o| (*o).clone()).collect();
         let edited = apply_world_overrides(&text, &owned);
         let stripped = strip_vdata_includes(&edited);
         if let Err(e) = std::fs::write(&content_src, stripped) {
-            return report.fail(format!("write {file}"), e.to_string()).map(|_| vec![]);
+            {
+            report.soft_fail(format!("write {file}"), e.to_string());
+            return Ok(vec![]);
+        }
         }
         report.ok_step(format!("world edits: {}", file.rsplit('/').next().unwrap_or(file)), format!("{} value(s)", ovs.len()));
         if !cfg.skip_compile {
             match run_resource_compiler(cfg, &content_src.to_string_lossy()) {
                 Ok(detail) => report.ok_step(format!("compile (world): {}", file.rsplit('/').next().unwrap_or(file)), detail),
-                Err(e) => return report.fail(format!("compile (world): {file}"), e).map(|_| vec![]),
+                Err(e) => {
+            report.soft_fail(format!("compile (world): {file}"), e);
+            return Ok(vec![]);
+        }
             }
         }
         produced.push(rel_c);
@@ -1751,7 +1837,8 @@ fn compile_icon_mods(
     }
     let icons_dir = content_root.join("panorama/images/eim_icons");
     if let Err(e) = std::fs::create_dir_all(&icons_dir) {
-        report.fail("prepare icons dir", e.to_string())?;
+        report.soft_fail("prepare icons dir", e.to_string());
+        return Ok(vec![]);
     }
     let mut list = String::new();
     let mut produced: Vec<(String, PathBuf)> = Vec::new();
@@ -1760,14 +1847,16 @@ fn compile_icon_mods(
         let h = m.height.clamp(1, 4096);
         let png = icons_dir.join(format!("icon_{i}.png"));
         let label = m.target_vtexc.rsplit('/').next().unwrap_or(&m.target_vtexc);
+        // A bad source image skips just this icon, not the whole build.
         if let Err(e) = render_icon(cfg.ffmpeg_path.as_deref(), &m.source_image, w, h, m.hue, &png.to_string_lossy()) {
-            return report.fail(format!("scale icon: {label}"), e).map(|_| vec![]);
+            report.soft_fail(format!("scale icon: {label}"), e);
+            continue;
         }
         list.push_str(&format!("\t\tpanorama:\"file://{{images}}/eim_icons/icon_{i}.png\",\n"));
         let out_c = compiled_root.join(format!("panorama/images/eim_icons/icon_{i}_png.vtex_c"));
         produced.push((m.target_vtexc.trim_matches('/').to_string(), out_c));
     }
-    report.ok_step("scale icons", format!("{} icon(s)", cfg.icon_mods.len()));
+    report.ok_step("scale icons", format!("{} icon(s)", produced.len()));
 
     if cfg.skip_compile {
         return Ok(produced);
@@ -1778,11 +1867,15 @@ fn compile_icon_mods(
         "{ENCODING_HEADER}{{\n\tgeneric_data_type = \"panorama_image_list\"\n\timage_list =\n\t[\n{list}\t]\n}}\n"
     );
     if let Err(e) = std::fs::write(&vdata, body) {
-        return report.fail("write icon vdata", e.to_string()).map(|_| vec![]);
+        report.soft_fail("write icon vdata", e.to_string());
+        return Ok(vec![]);
     }
     match run_resource_compiler(cfg, &vdata.to_string_lossy()) {
         Ok(detail) => report.ok_step("compile icons", detail),
-        Err(e) => return report.fail("compile icons", e).map(|_| vec![]),
+        Err(e) => {
+            report.soft_fail("compile icons", e);
+            return Ok(vec![]);
+        }
     }
     Ok(produced)
 }
@@ -1805,6 +1898,27 @@ pub fn run_with_progress(
     report.progress = progress;
     if internal_run(cfg, &mut report).is_err() {
         report.ok = false;
+    }
+    // Failure roll-up: soft failures kept the pipeline going, so list what
+    // broke in one place instead of making the user scan the whole feed.
+    let failed: Vec<String> = report
+        .steps
+        .iter()
+        .filter(|s| !s.ok)
+        .map(|s| s.name.clone())
+        .collect();
+    if !failed.is_empty() {
+        let mut list = failed.join(" · ");
+        if list.len() > 600 {
+            list.truncate(600);
+            list.push_str(" …");
+        }
+        report.steps.push(StepResult {
+            name: format!("⚠ {} item(s) failed", failed.len()),
+            ok: false,
+            detail: list,
+        });
+        report.emit_last();
     }
     report
 }
@@ -2012,6 +2126,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                 });
             }
         });
+        let mut failed_jobs: std::collections::HashSet<usize> = Default::default();
         for (i, j) in jobs.iter().enumerate() {
             let r = results[i]
                 .lock()
@@ -2026,6 +2141,8 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                     ok: true,
                     detail: j.wav.to_string_lossy().into_owned(),
                 }),
+                // One bad source file shouldn't sink the build — note it,
+                // skip its compile, and keep going.
                 Err(e) => {
                     report.ok = false;
                     report.steps.push(StepResult {
@@ -2033,13 +2150,19 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                         ok: false,
                         detail: e,
                     });
-                    return Err(());
+                    failed_jobs.insert(i);
                 }
             }
         }
+        let live_jobs: Vec<&AudioJob> = jobs
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !failed_jobs.contains(i))
+            .map(|(_, j)| j)
+            .collect();
 
         if cfg.skip_compile {
-            for j in &jobs {
+            for j in &live_jobs {
                 report.ok_step(format!("compile (skipped): {}", j.label), "skipCompile");
             }
         } else {
@@ -2054,7 +2177,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                 };
                 cm >= wm
             };
-            for chunk in jobs.chunks(48) {
+            for chunk in live_jobs.chunks(48) {
                 let inputs: Vec<String> =
                     chunk.iter().map(|j| j.wav.to_string_lossy().into_owned()).collect();
                 match run_resource_compiler_multi(cfg, &inputs) {
@@ -2079,11 +2202,12 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                             report.ok_step(format!("compile{}: {}", j.kind, j.label), detail);
                         }
                         Err(e) => {
-                            return report.fail(format!("compile{}: {}", j.kind, j.label), e)
+                            report.soft_fail(format!("compile{}: {}", j.kind, j.label), e);
+                            continue;
                         }
                     }
                     if !fresh(j) {
-                        return report.fail(
+                        report.soft_fail(
                             format!("compile{}: {}", j.kind, j.label),
                             "resourcecompiler reported success but produced no output",
                         );
@@ -2208,7 +2332,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
             }
         }
 
-        for relpath in &relpaths {
+        'relpaths: for relpath in &relpaths {
             let rel = relpath.trim_matches('/');
             let vanilla = Path::new(&cfg.vanilla_root).join(rel);
             let mod_texts = if v.with_imported { imported_texts.get(rel) } else { None };
@@ -2238,12 +2362,16 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
             let (mut text, additions): (String, &[String]) = if vanilla.exists() {
                 match std::fs::read_to_string(&vanilla) {
                     Ok(t) => (t, mod_texts.map(|v| v.as_slice()).unwrap_or(&[])),
-                    Err(e) => return report.fail(format!("read {rel}"), e.to_string()),
+                    Err(e) => {
+                        report.soft_fail(format!("read {rel}"), e.to_string());
+                        continue 'relpaths;
+                    }
                 }
             } else if let Some(mt) = mod_texts {
                 (mt[0].clone(), &mt[1..])
             } else {
-                return report.fail(format!("read {rel}"), "no vanilla base or imported source");
+                report.soft_fail(format!("read {rel}"), "no vanilla base or imported source");
+                continue 'relpaths;
             };
 
             let mut added = 0;
@@ -2290,7 +2418,8 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                             skipped.push(label);
                         }
                         Err(e) => {
-                            return report.fail(format!("[{}] merge {rel}", v.name), e.to_string())
+                            report.soft_fail(format!("[{}] merge {rel}", v.name), e.to_string());
+                            continue 'relpaths;
                         }
                     }
                 }
@@ -2333,7 +2462,8 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
             }
             if let Some(parent) = events_dest.parent() {
                 if let Err(e) = std::fs::create_dir_all(parent) {
-                    return report.fail("prepare events dir", e.to_string());
+                    report.soft_fail("prepare events dir", e.to_string());
+                    continue 'relpaths;
                 }
             }
             if events_dest.exists() {
@@ -2349,7 +2479,8 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                 }
             }
             if let Err(e) = std::fs::write(&events_dest, &text) {
-                return report.fail(format!("write {rel}"), e.to_string());
+                report.soft_fail(format!("write {rel}"), e.to_string());
+                continue 'relpaths;
             }
             if !cfg.skip_compile {
                 // A stale stamp must never survive into a failed run: clear it
@@ -2361,7 +2492,10 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                         let _ = std::fs::write(&events_stamp, fingerprint(&text));
                         report.ok_step(format!("[{}] compile {rel}", v.name), detail);
                     }
-                    Err(e) => return report.fail(format!("[{}] compile {rel}", v.name), e),
+                    Err(e) => {
+                        report.soft_fail(format!("[{}] compile {rel}", v.name), e);
+                        continue 'relpaths;
+                    }
                 }
             } else {
                 events_dirty = true;
@@ -2410,13 +2544,41 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
         // scripts, readmes) are skipped. Soundevents are NOT staged wholesale —
         // they're merged via array-union (above), since clobbering the live
         // shared events files would revert other mods + the current patch.
-        const ASSET_DIRS: [&str; 5] =
-            ["sounds/", "models/", "particles/", "materials/", "panorama/"];
+        const ASSET_DIRS: [&str; 7] = [
+            "sounds/", "models/", "particles/", "materials/", "panorama/",
+            // localization strings (item renames) + gameplay vdata mods
+            "resource/", "scripts/",
+        ];
         if v.with_imported {
             if let Some(helper) = helper_opt {
                 for mod_vpk in &cfg.imported_mods {
+                    let mut copied = 0usize;
+                    let mut errs: Vec<String> = Vec::new();
                     for dir in ASSET_DIRS {
-                        let _ = vpk::extract_all(helper, mod_vpk, &stage.to_string_lossy(), Some(dir));
+                        match vpk::extract_all(helper, mod_vpk, &stage.to_string_lossy(), Some(dir)) {
+                            Ok(detail) => {
+                                // "copied N file(s)..." / "extracted N ..." — count what we can
+                                if let Some(n) = detail.split_whitespace().find_map(|w| w.parse::<usize>().ok()) {
+                                    copied += n;
+                                }
+                            }
+                            Err(e) => errs.push(format!("{dir}: {e}")),
+                        }
+                    }
+                    let name = Path::new(mod_vpk)
+                        .file_name()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| mod_vpk.clone());
+                    if errs.is_empty() {
+                        report.ok_step(
+                            format!("[{}] merge assets: {name}", v.name),
+                            format!("{copied} file(s)"),
+                        );
+                    } else {
+                        report.soft_fail(
+                            format!("[{}] merge assets: {name}", v.name),
+                            errs.join(" | "),
+                        );
                     }
                 }
                 // Drop the files the user deselected in this pack's import
@@ -2450,7 +2612,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                 }
                 match copy_into(&src, &stage, &rel) {
                     Ok(_) => staged += 1,
-                    Err(e) => return report.fail(format!("stage: {rel}"), e.to_string()),
+                    Err(e) => report.soft_fail(format!("stage: {rel}"), e.to_string()),
                 }
             }
             // Adopted entries: extract their compiled .vsnd_c from the source mod.
@@ -2479,7 +2641,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
             if src.exists() {
                 match copy_into(&src, &stage, rel) {
                     Ok(_) => staged += 1,
-                    Err(e) => return report.fail(format!("stage: {rel}"), e.to_string()),
+                    Err(e) => report.soft_fail(format!("stage: {rel}"), e.to_string()),
                 }
             }
         }
@@ -2491,7 +2653,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
             }
             match copy_into(src, &stage, target) {
                 Ok(_) => staged += 1,
-                Err(e) => return report.fail(format!("stage icon: {target}"), e.to_string()),
+                Err(e) => report.soft_fail(format!("stage icon: {target}"), e.to_string()),
             }
         }
         // Stage loose-file sound overrides (compiled .vsnd_c at the game's path).
@@ -2503,7 +2665,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
             }
             match copy_into(&src, &stage, &rel) {
                 Ok(_) => staged += 1,
-                Err(e) => return report.fail(format!("stage override: {rel}"), e.to_string()),
+                Err(e) => report.soft_fail(format!("stage override: {rel}"), e.to_string()),
             }
         }
         // Stage VFX recolor overrides (recompiled .vpcf_c at the game's path).
@@ -2515,7 +2677,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
             }
             match copy_into(&src, &stage, &rel) {
                 Ok(_) => staged += 1,
-                Err(e) => return report.fail(format!("stage effect: {rel}"), e.to_string()),
+                Err(e) => report.soft_fail(format!("stage effect: {rel}"), e.to_string()),
             }
         }
         // Stage poster overrides (recompiled .vmat_c + .vtex_c at the game's paths).
@@ -2526,7 +2688,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
             }
             match copy_into(&src, &stage, rel) {
                 Ok(_) => staged += 1,
-                Err(e) => return report.fail(format!("stage poster: {rel}"), e.to_string()),
+                Err(e) => report.soft_fail(format!("stage poster: {rel}"), e.to_string()),
             }
         }
         // Stage the gameplay-config override (recompiled abilities.vdata_c).
@@ -2535,7 +2697,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
             if !(cfg.skip_compile && !src.exists()) {
                 match copy_into(&src, &stage, ABILITIES_VDATA_C_REL) {
                     Ok(_) => staged += 1,
-                    Err(e) => return report.fail("stage config", e.to_string()),
+                    Err(e) => report.soft_fail("stage config", e.to_string()),
                 }
             }
         }
@@ -2545,7 +2707,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
             if !(cfg.skip_compile && !src.exists()) {
                 match copy_into(&src, &stage, GENERIC_DATA_C_REL) {
                     Ok(_) => staged += 1,
-                    Err(e) => return report.fail("stage global", e.to_string()),
+                    Err(e) => report.soft_fail("stage global", e.to_string()),
                 }
             }
         }
@@ -2557,7 +2719,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
             }
             match copy_into(&src, &stage, rel_c) {
                 Ok(_) => staged += 1,
-                Err(e) => return report.fail(format!("stage world: {rel_c}"), e.to_string()),
+                Err(e) => report.soft_fail(format!("stage world: {rel_c}"), e.to_string()),
             }
         }
         report.ok_step(format!("[{}] stage", v.name), format!("{staged} file(s)"));

@@ -182,6 +182,9 @@ export function PostersTab({
   const [category, setCategory] = useState<string | null>(null);
   const [sheet, setSheet] = useState<ManifestSheet | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  // Zoom/pan state for the sheet view (reset when the sheet changes).
+  const [view, setView] = useState({ zoom: 1, x: 0, y: 0 });
   const [sheetImg, setSheetImg] = useState<{ src: string; path: string; forSheet: string } | null>(
     null,
   );
@@ -192,6 +195,10 @@ export function PostersTab({
   const [live, setLive] = useState<{ id: string; rect: Rect } | null>(null);
   const liveRef = useRef<{ id: string; rect: Rect } | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const panRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(
+    null,
+  );
   const dragRef = useRef<{
     id: string;
     mode: DragMode;
@@ -220,12 +227,34 @@ export function PostersTab({
     return rectEdits[`${sh.id}::${p.id}`] ?? { x: p.x, y: p.y, w: p.w, h: p.h };
   }
 
+  // Search across every sheet + region name (respects the unused filter).
+  const results = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    const out: { sheet: ManifestSheet; poster: ManifestPoster | null }[] = [];
+    for (const s of SHEETS) {
+      if (!showUnused && hiddenSheetSet.has(s.id)) continue;
+      if (s.id.toLowerCase().includes(q) || pretty(s.id).toLowerCase().includes(q)) {
+        out.push({ sheet: s, poster: null });
+      }
+      for (const p of s.posters) {
+        if (!showUnused && hiddenSet.has(`${s.id}::${p.id}`)) continue;
+        if (p.id.toLowerCase().includes(q) || pretty(p.id).toLowerCase().includes(q)) {
+          out.push({ sheet: s, poster: p });
+        }
+      }
+      if (out.length >= 40) break;
+    }
+    return out.slice(0, 40);
+  }, [query, showUnused, hiddenSet, hiddenSheetSet]);
+
   // Load (decompile once + cache) the sheet's color texture for display.
   useEffect(() => {
     if (!sheet) return;
     let cancelled = false;
     setSheetErr(null);
     setSheetImg(null);
+    setView({ zoom: 1, x: 0, y: 0 });
     posterSheet(helperPath, pakPath, sheet.materials[0])
       .then((s) => {
         thumbCache.set(sheet.id, s.colorPng);
@@ -331,11 +360,54 @@ export function PostersTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [overrides, rectEdits]);
 
-  /** CSS px → sheet px scale for the current container. */
+  /** CSS px → sheet px scale for the current (zoomed) content. */
   function sheetScale(sh: ManifestSheet): number {
-    const el = containerRef.current;
+    const el = wrapperRef.current ?? containerRef.current;
     if (!el) return 1;
     return sh.width / el.getBoundingClientRect().width;
+  }
+
+  /** Wheel-zoom toward the cursor, clamped 1x..8x. At 1x the pan resets. */
+  function onWheelZoom(e: React.WheelEvent) {
+    const el = containerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const cx = e.clientX - rect.left;
+    const cy = e.clientY - rect.top;
+    setView((v) => {
+      const zoom = Math.min(8, Math.max(1, v.zoom * (e.deltaY < 0 ? 1.2 : 1 / 1.2)));
+      if (zoom === 1) return { zoom: 1, x: 0, y: 0 };
+      const k = zoom / v.zoom;
+      return { zoom, x: cx - (cx - v.x) * k, y: cy - (cy - v.y) * k };
+    });
+  }
+
+  /** Pan with middle-drag anywhere, or left-drag on the sheet background. */
+  function startPan(e: React.PointerEvent) {
+    const isBackground = (e.target as HTMLElement).dataset?.sheetBg === "1";
+    if (e.button !== 1 && !(e.button === 0 && isBackground)) return;
+    e.preventDefault();
+    panRef.current = { startX: e.clientX, startY: e.clientY, origX: view.x, origY: view.y };
+    function onMove(ev: PointerEvent) {
+      const p = panRef.current;
+      if (!p) return;
+      setView((v) => ({ ...v, x: p.origX + (ev.clientX - p.startX), y: p.origY + (ev.clientY - p.startY) }));
+    }
+    function onUp() {
+      panRef.current = null;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    }
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
+  /** Jump to a region from search: open its sheet and select it. */
+  function gotoRegion(sh: ManifestSheet, posterId: string | null) {
+    setCategory(sh.category);
+    setSheet(sh);
+    setSelected(posterId ? `${sh.id}::${posterId}` : null);
+    setQuery("");
   }
 
   function startDrag(e: React.PointerEvent, sh: ManifestSheet, p: ManifestPoster, mode: DragMode) {
@@ -431,6 +503,45 @@ export function PostersTab({
             </span>
           )}
         </p>
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search posters, signs, graffiti… (e.g. cauldron, hex, panda)"
+          className="mb-4 w-full max-w-md rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-1.5 text-xs text-zinc-200 placeholder:text-zinc-600 focus:border-zinc-600 focus:outline-none"
+        />
+        {query.trim() ? (
+          <div className="flex flex-col gap-1">
+            {results.length === 0 && (
+              <div className="text-xs text-zinc-600">No matches for "{query.trim()}".</div>
+            )}
+            {results.map(({ sheet: s, poster: p }) => {
+              const id = p ? `${s.id}::${p.id}` : s.id;
+              const ov = p ? byId.get(`${s.id}::${p.id}`) : undefined;
+              return (
+                <button
+                  key={id}
+                  onClick={() => gotoRegion(s, p?.id ?? null)}
+                  className="flex items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-1.5 text-left transition hover:border-zinc-600 hover:bg-zinc-900"
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-xs text-zinc-200">
+                      {p ? pretty(p.id) : `${pretty(s.id)} (whole sheet)`}
+                    </span>
+                    <span className="block truncate text-[10px] text-zinc-500">
+                      {pretty(s.id)} · {CATEGORIES.find((c) => c.key === s.category)?.label}
+                      {p && ` · ${p.w}×${p.h}`}
+                    </span>
+                  </span>
+                  {ov && (
+                    <span className="rounded bg-emerald-500/15 px-1.5 text-[10px] font-semibold text-emerald-300">
+                      replaced
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        ) : (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
           {CATEGORIES.map((c) => {
             const sheets = visibleSheets(c.key);
@@ -461,6 +572,7 @@ export function PostersTab({
             );
           })}
         </div>
+        )}
         {overrides.length > 0 && (
           <div className="mt-6">
             <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
@@ -695,11 +807,28 @@ export function PostersTab({
       <div className="flex flex-col gap-4 xl:flex-row">
         <div
           ref={containerRef}
+          onWheel={onWheelZoom}
+          onPointerDown={startPan}
           className="relative w-full max-w-3xl shrink-0 select-none overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950"
           style={{ aspectRatio: `${sheet.width} / ${sheet.height}` }}
         >
+          <div
+            ref={wrapperRef}
+            className="absolute inset-0"
+            style={{
+              transform: `translate(${view.x}px, ${view.y}px) scale(${view.zoom})`,
+              transformOrigin: "0 0",
+            }}
+          >
           {sheetImg?.forSheet === sheet.id ? (
-            <img src={sheetImg.src} className="absolute inset-0 h-full w-full" alt="" draggable={false} />
+            <img
+              src={sheetImg.src}
+              data-sheet-bg="1"
+              className="absolute inset-0 h-full w-full"
+              alt=""
+              draggable={false}
+              style={{ cursor: view.zoom > 1 ? "grab" : undefined }}
+            />
           ) : (
             !sheetErr && (
               <div className="absolute inset-0 flex items-center justify-center text-xs text-zinc-600">
@@ -710,8 +839,9 @@ export function PostersTab({
           {wholeOv && (
             <img
               src={convertFileSrc(wholeOv.sourceImage)}
+              data-sheet-bg="1"
               className="absolute inset-0 h-full w-full"
-              style={{ objectFit: "fill", opacity: 0.9 }}
+              style={{ objectFit: "fill", opacity: 0.9, cursor: view.zoom > 1 ? "grab" : undefined }}
               alt=""
               draggable={false}
             />
@@ -750,14 +880,15 @@ export function PostersTab({
                   ...pct,
                   cursor: editMode ? "move" : "pointer",
                   opacity: isHidden ? 0.45 : 1,
+                  // border widths counter-scale so zoomed-in editing stays precise
                   border: isHidden
-                    ? "2px dashed #f59e0b"
+                    ? `${2 / view.zoom}px dashed #f59e0b`
                     : ov
-                      ? "2px solid #34d399"
+                      ? `${2 / view.zoom}px solid #34d399`
                       : isSel
-                        ? `2px solid ${accent}`
-                        : "1px solid rgba(255,255,255,0.3)",
-                  boxShadow: isSel ? `0 0 0 2px ${accent}55` : undefined,
+                        ? `${2 / view.zoom}px solid ${accent}`
+                        : `${1 / view.zoom}px solid rgba(255,255,255,0.3)`,
+                  boxShadow: isSel ? `0 0 0 ${2 / view.zoom}px ${accent}55` : undefined,
                 }}
               >
                 {/* hover tint + name chip */}
@@ -788,18 +919,19 @@ export function PostersTab({
                 {editMode &&
                   isSel &&
                   (["nw", "n", "ne", "e", "se", "s", "sw", "w"] as DragMode[]).map((m) => {
-                    const pos: React.CSSProperties = {};
-                    if (m.includes("n")) pos.top = -5;
-                    else if (m.includes("s")) pos.bottom = -5;
-                    else pos.top = "calc(50% - 5px)";
-                    if (m.includes("w")) pos.left = -5;
-                    else if (m.includes("e")) pos.right = -5;
-                    else pos.left = "calc(50% - 5px)";
+                    const hs = 10 / view.zoom; // handle size counter-scales with zoom
+                    const pos: React.CSSProperties = { width: hs, height: hs };
+                    if (m.includes("n")) pos.top = -hs / 2;
+                    else if (m.includes("s")) pos.bottom = -hs / 2;
+                    else pos.top = `calc(50% - ${hs / 2}px)`;
+                    if (m.includes("w")) pos.left = -hs / 2;
+                    else if (m.includes("e")) pos.right = -hs / 2;
+                    else pos.left = `calc(50% - ${hs / 2}px)`;
                     return (
                       <div
                         key={m}
                         onPointerDown={(e) => startDrag(e, sheet, p, m)}
-                        className="absolute z-10 h-2.5 w-2.5 rounded-sm border border-zinc-900"
+                        className="absolute z-10 rounded-sm border border-zinc-900"
                         style={{ ...pos, background: accent, cursor: handleCursor[m] }}
                       />
                     );
@@ -807,6 +939,18 @@ export function PostersTab({
               </div>
             );
           })}
+          </div>
+          {view.zoom > 1 && (
+            <button
+              onClick={() => setView({ zoom: 1, x: 0, y: 0 })}
+              className="absolute bottom-2 right-2 z-20 rounded-lg bg-zinc-900/90 px-2 py-1 text-[10px] font-semibold text-zinc-300 hover:bg-zinc-800"
+            >
+              {view.zoom.toFixed(1)}× — Reset view
+            </button>
+          )}
+          <span className="pointer-events-none absolute bottom-2 left-2 z-20 rounded bg-zinc-950/70 px-1.5 py-0.5 text-[9px] text-zinc-500">
+            scroll to zoom · drag background to pan
+          </span>
         </div>
         <div className="min-w-0 flex-1">
           {selectedDef && selectedRect ? (

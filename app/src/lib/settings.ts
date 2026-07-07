@@ -211,7 +211,7 @@ export function buildCompileConfig(
   s: Settings,
   events: EventProject[],
   skipCompile = false,
-  iconMods: { sourceImage: string; targetVtexc: string; width: number; height: number; hue?: number }[] = [],
+  iconMods: { sourceImage: string; targetVtexc: string; width: number; height: number; hue?: number; enabled?: boolean }[] = [],
   soundOverrides: SoundOverride[] = [],
   effectOverrides: EffectOverride[] = [],
   vdataOverrides: VdataCompile[] = [],
@@ -233,13 +233,15 @@ export function buildCompileConfig(
     currentHash: posterHash(p, sheetSiblingsKey(posterOverrides, p.sheetId)),
     lastCompiledHash: p.lastCompiledHash ?? null,
   }));
-  const iconCompiles: IconCompile[] = iconMods.map((m) => ({
-    sourceImage: m.sourceImage,
-    targetVtexc: m.targetVtexc,
-    width: m.width,
-    height: m.height,
-    hue: m.hue ?? 0,
-  }));
+  const iconCompiles: IconCompile[] = iconMods
+    .filter((m) => m.enabled !== false)
+    .map((m) => ({
+      sourceImage: m.sourceImage,
+      targetVtexc: m.targetVtexc,
+      width: m.width,
+      height: m.height,
+      hue: m.hue ?? 0,
+    }));
   const effectCompiles: EffectCompile[] = effectOverrides.map((e) => ({
     targetRef: e.targetRef,
     hue: e.hue,

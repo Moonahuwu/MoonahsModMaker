@@ -202,6 +202,16 @@ export function CompileBar({
         if (s.installAfterCompile) await install();
         return true;
       }
+      // Partial success: soft failures didn't stop the build — an artifact
+      // exists, the broken items are listed in red (and rolled up at the end).
+      const failedN = r.steps.filter((st) => !st.ok && !st.name.startsWith("⚠")).length;
+      if (r.outputPath) {
+        push(
+          "info",
+          `Compiled with ${failedN} failed item(s) — everything else built. See the red steps; failed items retry next compile.`,
+        );
+        return false;
+      }
       push("error", "Compile failed — see the step report");
       return false;
     } catch (e) {

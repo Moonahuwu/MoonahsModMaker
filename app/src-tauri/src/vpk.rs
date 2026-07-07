@@ -271,6 +271,14 @@ pub fn decode(
     run(cmd, "decode")
 }
 
+/// Decode ONE loose compiled texture file (`.vtex_c` on disk, e.g. inside a
+/// cached-pack dir) to `out_png`. Returns the written path.
+pub fn texture_file(helper_path: &str, vtex_c_path: &str, out_png: &str) -> Result<String, String> {
+    let mut cmd = helper_command(helper_path);
+    cmd.args(["texture", vtex_c_path, out_png]);
+    run(cmd, "texture")
+}
+
 /// Decode several textures from `vpk` into `dest_dir` in one pass. Returns
 /// `(stem, png_path)` for each decoded `.vtex_c`.
 pub fn texture_batch(

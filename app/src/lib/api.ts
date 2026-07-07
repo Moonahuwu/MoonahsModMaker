@@ -766,6 +766,21 @@ export function effectPreview(
   return invoke("effect_preview", { helperPath, pakPath, particlePath, refresh });
 }
 
+export interface PackIcon {
+  /** The pack-internal .vtex_c path (the override target). */
+  targetVtexc: string;
+  /** Decoded PNG in the app-data cache (usable as an IconMod source). */
+  pngPath: string;
+  width: number;
+  height: number;
+}
+
+/** Decode every panorama image (item icons etc.) a mod pack ships, so an
+ *  import can adopt them as editable Icon Mods. */
+export function packIcons(helperPath: string, source: string): Promise<PackIcon[]> {
+  return invoke("pack_icons", { helperPath, source });
+}
+
 export interface PosterSheet {
   /** Absolute path of the decoded sheet color texture (PNG). */
   colorPng: string;
