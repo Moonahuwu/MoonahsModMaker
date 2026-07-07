@@ -74,10 +74,22 @@ export function posterHash(
     h: number;
     fit: string;
     rotation?: number;
+    erase?: boolean;
   },
   sheetSiblings: string,
 ): string {
-  return [p.id, p.sourceImage, p.x, p.y, p.w, p.h, p.fit, p.rotation ?? 0, sheetSiblings].join("|");
+  return [
+    p.id,
+    p.sourceImage,
+    p.x,
+    p.y,
+    p.w,
+    p.h,
+    p.fit,
+    p.rotation ?? 0,
+    p.erase ? 1 : 0,
+    sheetSiblings,
+  ].join("|");
 }
 
 /** Compile status of a song relative to its last successful compile. */

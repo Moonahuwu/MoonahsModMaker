@@ -130,6 +130,7 @@ export interface PosterCompile {
   sourceImage: string;
   fit: string;
   rotation: number;
+  erase: boolean;
   currentHash: string;
   lastCompiledHash?: string | null;
 }

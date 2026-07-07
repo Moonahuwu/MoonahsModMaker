@@ -91,6 +91,10 @@ pub struct PosterOverride {
     /// some atlas posters are stored sideways).
     #[serde(default)]
     pub rotation: u32,
+    /// Erase mode: no art — the region's trans mask is blanked so the decal
+    /// is invisible in-game (hides vanilla tags overlapping your own art).
+    #[serde(default)]
+    pub erase: bool,
     /// Hash recorded after the last successful compile (null = never compiled).
     #[serde(default)]
     pub last_compiled_hash: Option<String>,

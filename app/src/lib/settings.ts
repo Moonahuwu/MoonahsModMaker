@@ -238,6 +238,7 @@ export function buildCompileConfig(
     sourceImage: p.sourceImage,
     fit: p.fit,
     rotation: p.rotation ?? 0,
+    erase: p.erase ?? false,
     currentHash: posterHash(p, sheetSiblingsKey(posterOverrides, p.sheetId)),
     lastCompiledHash: p.lastCompiledHash ?? null,
   }));

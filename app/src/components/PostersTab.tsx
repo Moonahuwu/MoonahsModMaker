@@ -397,6 +397,30 @@ export function PostersTab({
     if (typeof picked === "string") assign(sh, poster, picked);
   }
 
+  /** Hide a vanilla decal in-game (no art — its trans mask gets blanked).
+   *  For tags/graffiti the map stamps over your own replacement. */
+  function eraseRegion(sh: ManifestSheet, poster: ManifestPoster) {
+    const id = `${sh.id}::${poster.id}`;
+    onAdd({
+      id,
+      sheetId: sh.id,
+      materials: sh.materials,
+      posterId: poster.id,
+      label: `${pretty(sh.id)} · ${pretty(poster.id)} (hidden)`,
+      x: eff(sh, poster).x,
+      y: eff(sh, poster).y,
+      w: eff(sh, poster).w,
+      h: eff(sh, poster).h,
+      alphaCoverage: poster.alphaCoverage ?? 1,
+      sourceImage: "",
+      fit: "cover",
+      erase: true,
+      lastCompiledHash: null,
+    });
+    setSelected(id);
+    push("success", `${pretty(poster.id)} will be invisible in-game after the next compile`);
+  }
+
   /** Full-sheet replacement: same-size art (usually a downloaded + edited
    *  original) stretched over the whole texture. Keeps the vanilla trans mask
    *  so cut-out shapes stay cut out. */
@@ -700,15 +724,21 @@ export function PostersTab({
                   key={o.id}
                   className="flex items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-1.5"
                 >
-                  <img
-                    src={convertFileSrc(o.sourceImage)}
-                    className="h-8 w-8 rounded object-cover"
-                    alt=""
-                  />
+                  {o.erase ? (
+                    <span className="flex h-8 w-8 items-center justify-center rounded bg-red-500/10 text-sm">
+                      🚫
+                    </span>
+                  ) : (
+                    <img
+                      src={convertFileSrc(o.sourceImage)}
+                      className="h-8 w-8 rounded object-cover"
+                      alt=""
+                    />
+                  )}
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-xs text-zinc-200">{o.label}</div>
                     <div className="truncate text-[10px] text-zinc-500">
-                      {o.w}×{o.h} · {o.fit}
+                      {o.w}×{o.h} · {o.erase ? "hidden in-game" : o.fit}
                     </div>
                   </div>
                   <button
@@ -1010,13 +1040,15 @@ export function PostersTab({
                   // border widths counter-scale so zoomed-in editing stays precise
                   border: isHidden
                     ? `${2 / view.zoom}px dashed #f59e0b`
-                    : ov
-                      ? `${2 / view.zoom}px solid #34d399`
-                      : custom
-                        ? `${2 / view.zoom}px dashed #38bdf8`
-                        : isSel
-                          ? `${2 / view.zoom}px solid ${accent}`
-                          : `${1 / view.zoom}px solid rgba(255,255,255,0.3)`,
+                    : ov?.erase
+                      ? `${2 / view.zoom}px dashed #f87171`
+                      : ov
+                        ? `${2 / view.zoom}px solid #34d399`
+                        : custom
+                          ? `${2 / view.zoom}px dashed #38bdf8`
+                          : isSel
+                            ? `${2 / view.zoom}px solid ${accent}`
+                            : `${1 / view.zoom}px solid rgba(255,255,255,0.3)`,
                   boxShadow: isSel ? `0 0 0 ${2 / view.zoom}px ${accent}55` : undefined,
                 }}
               >
@@ -1028,7 +1060,16 @@ export function PostersTab({
                 <span className="pointer-events-none absolute bottom-0 left-0 max-w-full truncate rounded-tr bg-zinc-950/80 px-1 py-0.5 text-[9px] text-zinc-200 opacity-0 transition-opacity group-hover:opacity-100">
                   {pretty(p.id)}
                 </span>
-                {ov && !isHidden && (
+                {ov && !isHidden && ov.erase && (
+                  <>
+                    {/* Erased decal: fully transparent in-game. */}
+                    <div className="absolute inset-0" style={{ ...CHECKER, opacity: 0.85 }} />
+                    <span className="absolute left-0 top-0 bg-red-400/90 px-1 text-[9px] font-bold text-zinc-900">
+                      hidden in-game
+                    </span>
+                  </>
+                )}
+                {ov && !isHidden && !ov.erase && (
                   <>
                     {/* Shape-cut regions compile with the rect blanked (the
                         art's alpha becomes the decal shape) — checkerboard
@@ -1165,6 +1206,21 @@ export function PostersTab({
                     )}
                   </div>
                 </>
+              ) : selectedOv?.erase ? (
+                <>
+                  <p className="mb-3 text-xs text-zinc-400">
+                    <span className="mr-1 rounded bg-red-400/90 px-1.5 text-[10px] font-bold text-zinc-900">
+                      hidden in-game
+                    </span>
+                    This decal compiles fully transparent — it won't render on any wall.
+                  </p>
+                  <button
+                    onClick={() => onRemove(selectedOv.id)}
+                    className="rounded-lg bg-zinc-800 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-700"
+                  >
+                    Unhide (restore original)
+                  </button>
+                </>
               ) : selectedOv ? (
                 <>
                   <img
@@ -1216,13 +1272,22 @@ export function PostersTab({
                   </div>
                 </>
               ) : (
-                <button
-                  onClick={() => void pickImage(sheet, selectedDef)}
-                  className="rounded-lg px-3 py-1.5 text-xs font-semibold text-zinc-900"
-                  style={{ background: accent }}
-                >
-                  Choose image…
-                </button>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => void pickImage(sheet, selectedDef)}
+                    className="rounded-lg px-3 py-1.5 text-xs font-semibold text-zinc-900"
+                    style={{ background: accent }}
+                  >
+                    Choose image…
+                  </button>
+                  <button
+                    onClick={() => eraseRegion(sheet, selectedDef)}
+                    className="rounded-lg px-3 py-1.5 text-xs text-red-400/90 hover:bg-red-500/10 hover:text-red-300"
+                    title="Compile this decal fully transparent so it disappears from every wall (useful for vanilla tags stamped over your own art)"
+                  >
+                    Hide in-game
+                  </button>
+                </div>
               )}
             </div>
           ) : (

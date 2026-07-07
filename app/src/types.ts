@@ -186,6 +186,9 @@ export interface PosterOverride {
   /** Clockwise rotation applied to the art before fitting (some atlas posters
    *  are stored sideways). 0 | 90 | 180 | 270. */
   rotation?: number;
+  /** Erase mode: no art — the region's trans mask is blanked so the decal is
+   *  invisible in-game (hides vanilla tags overlapping your own art). */
+  erase?: boolean;
   lastCompiledHash?: string | null;
 }
 

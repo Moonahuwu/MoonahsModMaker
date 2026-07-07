@@ -325,6 +325,9 @@ pub struct PosterCompile {
     /// Clockwise rotation applied before fitting: 0 | 90 | 180 | 270.
     #[serde(default)]
     pub rotation: u32,
+    /// Erase mode: blank the region's trans mask instead of compositing art.
+    #[serde(default)]
+    pub erase: bool,
     #[serde(default)]
     pub current_hash: Option<String>,
     #[serde(default)]
@@ -1097,6 +1100,40 @@ fn composite_poster(
     std::fs::rename(&tmp, sheet_png).map_err(|e| e.to_string())
 }
 
+/// Blank the rect in the trans mask (in place): the decal becomes fully
+/// transparent in-game. Used by "erase" overrides to hide vanilla decals
+/// (e.g. a tag stamped over the user's own replacement on the same wall).
+fn erase_trans_rect(
+    ffmpeg: Option<&str>,
+    trans_png: &Path,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+) -> Result<(), String> {
+    let exe = ffmpeg.unwrap_or("ffmpeg");
+    let tmp = trans_png.with_extension("eim_tmp.png");
+    let vf = format!("drawbox=x={x}:y={y}:w={w}:h={h}:color=black@1:t=fill");
+    let out = crate::procutil::quiet(exe)
+        .args([
+            "-y",
+            "-i",
+            &trans_png.to_string_lossy(),
+            "-vf",
+            &vf,
+            "-frames:v",
+            "1",
+            &tmp.to_string_lossy(),
+        ])
+        .output()
+        .map_err(|e| format!("launching ffmpeg: {e}"))?;
+    if !out.status.success() {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(String::from_utf8_lossy(&out.stderr).lines().rev().take(2).collect::<Vec<_>>().join(" | "));
+    }
+    std::fs::rename(&tmp, trans_png).map_err(|e| e.to_string())
+}
+
 /// Write the USER ART'S OWN alpha channel into the rect of the trans mask
 /// (in place), fitted/rotated exactly like the color composite. A shaped PNG
 /// (transparent background) becomes a shaped decal in-game — graffiti stays
@@ -1304,6 +1341,33 @@ fn compile_posters(
 
         let color_abs = content_root.join(&color_rel);
         for ov in ovs.iter() {
+            // Erase overrides carry no art: blank the trans rect so the decal
+            // disappears in-game, and skip the color composite entirely.
+            if ov.erase {
+                match &trans_rel {
+                    Some(trans) if content_root.join(trans).exists() => {
+                        let trans_abs = content_root.join(trans);
+                        if let Err(e) =
+                            erase_trans_rect(ffmpeg, &trans_abs, ov.x, ov.y, ov.w, ov.h)
+                        {
+                            report.soft_fail(format!("erase decal: {}", ov.label), e);
+                            continue 'sheets;
+                        }
+                        report.ok_step(
+                            format!("erase decal: {}", ov.label),
+                            format!("{}x{} at ({},{})", ov.w, ov.h, ov.x, ov.y),
+                        );
+                    }
+                    _ => {
+                        report.soft_fail(
+                            format!("erase decal: {}", ov.label),
+                            "this sheet has no trans mask — the decal can't be hidden",
+                        );
+                        continue 'sheets;
+                    }
+                }
+                continue;
+            }
             if let Err(e) = composite_poster(
                 ffmpeg,
                 &color_abs,
@@ -3683,6 +3747,7 @@ mod tests {
                 source_image: art.to_string_lossy().into_owned(),
                 fit: "cover".into(),
                 rotation: 0,
+                erase: false,
                 current_hash: Some("p1".into()),
                 last_compiled_hash: None,
             }],
