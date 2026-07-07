@@ -188,6 +188,9 @@ export interface DigimodConfig {
   deathChance: number;
   scares: DigiEntry[];
   deaths: DigiEntry[];
+  /** Other base_hud-overriding UI mod vpks merged into this build (two HUD
+   *  mods can't coexist as separate paks — merging ships both in one). */
+  mergeVpks?: string[];
 }
 
 /** A replaced in-world poster: user art composited into a pixel rect of a

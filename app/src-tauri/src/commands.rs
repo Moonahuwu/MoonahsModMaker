@@ -4580,33 +4580,76 @@ pub fn pack_icons(
     Ok(out)
 }
 
+/// Helper-free vpk index sniff: the directory tree (plain strings) lives at
+/// the head of a `_dir.vpk` — 4MB covers any addon's index without reading
+/// multi-GB paks into memory. NOTE the tree stores extension, directory, and
+/// file stem as SEPARATE strings ("vjs_c" … "panorama/scripts" …
+/// "digi_master"), so needles must be bare stems or directory paths — a
+/// joined "digi_master.vjs" never appears contiguously.
+fn vpk_head(path: &std::path::Path) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let f = std::fs::File::open(path).ok()?;
+    let mut head = Vec::with_capacity(4 << 20);
+    f.take(4 << 20).read_to_end(&mut head).ok()?;
+    Some(head)
+}
+
+fn head_contains(head: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty() && head.windows(needle.len()).any(|w| w == needle)
+}
+
+fn addon_dir_vpks(addons_dir: &str) -> Vec<std::path::PathBuf> {
+    let Ok(entries) = std::fs::read_dir(addons_dir) else {
+        return vec![];
+    };
+    entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .map(|s| s.to_string_lossy().to_lowercase().ends_with("_dir.vpk"))
+                .unwrap_or(false)
+        })
+        .collect()
+}
+
 /// True when any installed addon pak ships the DigiMaster jumpscare engine
 /// (signature: a compiled digi_master script). Gates the Jumpscares tab.
 #[tauri::command]
 pub fn digimod_detected(addons_dir: String) -> bool {
-    let Ok(entries) = std::fs::read_dir(&addons_dir) else {
-        return false;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let name = path.file_name().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default();
-        if !name.ends_with("_dir.vpk") {
+    addon_dir_vpks(&addons_dir).iter().any(|p| {
+        vpk_head(p).map(|h| head_contains(&h, b"digi_master")).unwrap_or(false)
+    })
+}
+
+/// An installed addon pak that overrides the base HUD layout (a panorama UI
+/// mod). `has_digi` marks paks that ARE the DigiMaster engine — the
+/// Jumpscares tab replaces those rather than merging them.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiModVpk {
+    pub path: String,
+    pub file_name: String,
+    pub has_digi: bool,
+}
+
+/// Scan the addons dir for base_hud-overriding paks — merge candidates for
+/// the Jumpscares tab (two HUD mods can't coexist; merging ships both in one).
+#[tauri::command]
+pub fn list_ui_mods(addons_dir: String) -> Vec<UiModVpk> {
+    let mut out = Vec::new();
+    for path in addon_dir_vpks(&addons_dir) {
+        let Some(head) = vpk_head(&path) else { continue };
+        if !(head_contains(&head, b"panorama/layout") && head_contains(&head, b"base_hud")) {
             continue;
         }
-        // helper-free sniff: the vpk directory index (plain path strings)
-        // lives at the head of the file — 4MB covers any addon's index
-        // without reading multi-GB paks into memory.
-        use std::io::Read;
-        let Ok(f) = std::fs::File::open(&path) else { continue };
-        let mut head = Vec::with_capacity(4 << 20);
-        if f.take(4 << 20).read_to_end(&mut head).is_err() {
-            continue;
-        }
-        if head.windows(b"digi_master.vjs".len()).any(|w| w == b"digi_master.vjs") {
-            return true;
-        }
+        out.push(UiModVpk {
+            path: path.to_string_lossy().to_string(),
+            file_name: path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
+            has_digi: head_contains(&head, b"digi_master"),
+        });
     }
-    false
+    out
 }
 
 /// Which of `names` (case-insensitive exe names) are currently running.

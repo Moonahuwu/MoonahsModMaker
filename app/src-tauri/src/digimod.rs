@@ -62,6 +62,18 @@ fn entry_js(e: &DigiEntry) -> String {
     )
 }
 
+/// path|len|mtime identity line for one source file (0s when unreadable).
+fn file_identity(p: &str) -> String {
+    let meta = std::fs::metadata(p).ok();
+    let len = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+    let mtime = meta
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!("{p}|{len}|{mtime}|")
+}
+
 /// Fingerprint of the whole digimod config + every source file's identity.
 fn digimod_fingerprint(dm: &DigimodCompile) -> String {
     let mut key = format!(
@@ -70,18 +82,63 @@ fn digimod_fingerprint(dm: &DigimodCompile) -> String {
     );
     for e in dm.scares.iter().chain(dm.deaths.iter()) {
         for p in [Some(e.source_media.as_str()), e.source_audio.as_deref()].into_iter().flatten() {
-            let meta = std::fs::metadata(p).ok();
-            let len = meta.as_ref().map(|m| m.len()).unwrap_or(0);
-            let mtime = meta
-                .and_then(|m| m.modified().ok())
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            key.push_str(&format!("{p}|{len}|{mtime}|"));
+            key.push_str(&file_identity(p));
         }
         key.push_str(&format!("{}|{}|{}|{:.2}|{:.2}\n", e.id, e.kind, e.preset, e.show, e.volume));
     }
+    for v in &dm.merge_vpks {
+        key.push_str("merge|");
+        key.push_str(&file_identity(v));
+        key.push('\n');
+    }
     crate::compile::fingerprint(&key)
+}
+
+/// Splice the digi engine's hooks into a foreign mod's base_hud source: the
+/// two style includes, the two script includes, and the overlay anchor
+/// panels. Substring guards make it idempotent (anything already present is
+/// left alone), so re-merging or merging a hud that partially matches ours
+/// can't double-inject.
+fn inject_hooks(xml: &str) -> Result<String, String> {
+    let mut out = xml.to_string();
+    let styles = [
+        ("jumpscare_overlay", "\t\t<include src=\"s2r://panorama/styles/jumpscare_overlay.vcss_c\" />\n"),
+        ("anita_ui.vcss", "\t\t<include src=\"s2r://panorama/styles/anita_ui.vcss_c\" />\n"),
+    ];
+    let add: String = styles.iter().filter(|(k, _)| !out.contains(k)).map(|(_, l)| *l).collect();
+    if !add.is_empty() {
+        let pos = out
+            .find("</styles>")
+            .ok_or("no </styles> block in the mod's base_hud")?;
+        out.insert_str(pos, &add);
+    }
+    let scripts = [
+        ("digi_master", "\t\t<include src=\"s2r://panorama/scripts/digi_master.vjs_c\" />\n"),
+        ("anita_ui_core", "\t\t<include src=\"s2r://panorama/scripts/anita_ui_core.vjs_c\" />\n"),
+    ];
+    let add: String = scripts.iter().filter(|(k, _)| !out.contains(k)).map(|(_, l)| *l).collect();
+    if !add.is_empty() {
+        match out.find("</scripts>") {
+            Some(pos) => out.insert_str(pos, &add),
+            None => {
+                // A hud with no scripts block at all: add one after </styles>.
+                let pos = out
+                    .find("</styles>")
+                    .map(|p| p + "</styles>".len())
+                    .ok_or("no </styles> block in the mod's base_hud")?;
+                out.insert_str(pos, &format!("\n\n\t<scripts>\n{add}\t</scripts>"));
+            }
+        }
+    }
+    if !out.contains("MediaOverlayContainer") {
+        let panels = "\t\t<Panel id=\"MediaOverlayContainer\" hittest=\"false\" />\n\t\t<Panel id=\"AnitaUI_Anchor\" hittest=\"false\" style=\"width: 100%; height: 100%; z-index: 10000;\" />\n";
+        // The last </Panel> closes the WindowRoot panel — land just inside it.
+        let pos = out
+            .rfind("</Panel>")
+            .ok_or("no root <Panel> in the mod's base_hud")?;
+        out.insert_str(pos, panels);
+    }
+    Ok(out)
 }
 
 /// Convert (or copy) a user video into panorama's required VP9 webm.
@@ -176,10 +233,43 @@ pub fn compile_digimod(
     let Some(dm) = &cfg.digimod else {
         return Ok((vec![], false));
     };
-    if dm.scares.is_empty() && dm.deaths.is_empty() {
+    if dm.scares.is_empty() && dm.deaths.is_empty() && dm.merge_vpks.is_empty() {
         return Ok((vec![], false));
     }
     let ffmpeg = cfg.ffmpeg_path.as_deref();
+    let mut all_ok = true;
+
+    // Merged UI mods: list each vpk's panorama files up front (index-only,
+    // cheap) — the rels feed the up-to-date skip, and the last vpk shipping a
+    // base_hud donates the hud source our hooks get injected into.
+    let helper = cfg.vpk_helper_path.as_deref().filter(|h| !h.is_empty());
+    let mut merge_files: Vec<(String, Vec<String>)> = Vec::new();
+    let mut base_hud_donor: Option<String> = None;
+    for vpk in &dm.merge_vpks {
+        let Some(h) = helper else {
+            report.soft_fail("jumpscares: merge UI mods", "vpk helper not configured".to_string());
+            all_ok = false;
+            break;
+        };
+        let name = Path::new(vpk).file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| vpk.clone());
+        match crate::vpk::list(h, vpk, Some("panorama/")) {
+            Ok(entries) => {
+                let mut keep: Vec<String> = Vec::new();
+                for e in entries {
+                    if e == "panorama/layout/base_hud.vxml_c" {
+                        base_hud_donor = Some(vpk.clone());
+                    } else if e.starts_with("panorama/") {
+                        keep.push(e);
+                    }
+                }
+                merge_files.push((vpk.clone(), keep));
+            }
+            Err(e) => {
+                report.soft_fail(format!("jumpscares: read UI mod {name}"), e);
+                all_ok = false;
+            }
+        }
+    }
 
     // Expected staging list (computable without building — used by the skip).
     let mut rels: Vec<String> = vec![
@@ -200,11 +290,20 @@ pub fn compile_digimod(
             rels.push(format!("sounds/digi/{}.vsnd_c", sanitize_id(&e.id)));
         }
     }
+    for (_, keep) in &merge_files {
+        for rel in keep {
+            if !rels.contains(rel) {
+                rels.push(rel.clone());
+            }
+        }
+    }
 
-    // Up-to-date skip.
+    // Up-to-date skip (never on a merge-list read failure — the rels would
+    // be incomplete and staging would drop the merged files).
     let stamp = content_root.join(".eim_digimod_stamp");
     let key = digimod_fingerprint(dm);
     if !cfg.skip_compile
+        && all_ok
         && crate::compile::stamp_matches(&stamp, &key)
         && rels.iter().all(|r| compiled_root.join(r).exists())
     {
@@ -222,9 +321,28 @@ pub fn compile_digimod(
         Ok(p)
     };
 
+    // 0) Merged UI mods: their panorama tree lands in the compiled root as-is
+    //    (already-compiled files ride along raw). This runs FIRST so anything
+    //    we produce below — engine scripts, media, and above all base_hud —
+    //    wins on collision.
+    if !cfg.skip_compile {
+        for (vpk, keep) in &merge_files {
+            let name = Path::new(vpk).file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| vpk.clone());
+            match crate::vpk::extract_all(helper.unwrap_or(""), vpk, &compiled_root.to_string_lossy(), Some("panorama")) {
+                Ok(_) => report.ok_step(
+                    format!("merge UI mod: {name}"),
+                    format!("{} panorama file(s) carried over", keep.len()),
+                ),
+                Err(e) => {
+                    report.soft_fail(format!("merge UI mod: {name}"), e);
+                    all_ok = false;
+                }
+            }
+        }
+    }
+
     // 1) Static engine + generated JS/soundevents into the content tree.
     let mut to_compile: Vec<PathBuf> = Vec::new();
-    let mut all_ok = true;
     for (rel, text) in [
         ("panorama/scripts/digi_master.js", gen_js(dm)),
         ("panorama/scripts/anita_ui_core.js", TPL_ANITA_JS.to_string()),
@@ -337,7 +455,34 @@ pub fn compile_digimod(
             }
         }
     }
-    match write("panorama/layout/base_hud.xml", TPL_XML) {
+    // The hud itself: with a merged UI mod that ships its own base_hud, THAT
+    // becomes the base (VRF recovers clean source from the vxml_c) and the
+    // digi hooks are spliced into it; otherwise our stock template.
+    let hud_xml: String = if let (Some(vpk), Some(h)) = (&base_hud_donor, helper) {
+        let name = Path::new(vpk).file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| vpk.clone());
+        let tmp = content_root.join(".digi_merge_base_hud.xml");
+        let recovered = crate::vpk::decompile_from_vpk(h, vpk, "panorama/layout/base_hud.vxml_c", &tmp.to_string_lossy())
+            .and_then(|_| std::fs::read_to_string(&tmp).map_err(|e| e.to_string()))
+            .and_then(|src| inject_hooks(&src));
+        let _ = std::fs::remove_file(&tmp);
+        match recovered {
+            Ok(xml) => {
+                report.ok_step(format!("merge base_hud: {name}"), "digi hooks injected into the mod's hud");
+                xml
+            }
+            Err(e) => {
+                report.soft_fail(
+                    format!("merge base_hud: {name}"),
+                    format!("{e} — falling back to the stock digi hud (that mod's hud edits won't apply)"),
+                );
+                all_ok = false;
+                TPL_XML.to_string()
+            }
+        }
+    } else {
+        TPL_XML.to_string()
+    };
+    match write("panorama/layout/base_hud.xml", &hud_xml) {
         Ok(p) => {
             if let Err(e) = crate::compile::run_resource_compiler(cfg, &p.to_string_lossy()) {
                 report.soft_fail("jumpscares: compile base_hud", e);
@@ -350,12 +495,66 @@ pub fn compile_digimod(
         }
     }
 
+    let merged_note = if merge_files.is_empty() {
+        String::new()
+    } else {
+        format!(", {} UI mod(s) merged", merge_files.len())
+    };
     report.ok_step(
         "jumpscares mod",
-        format!("{} scare(s), {} death(s)", dm.scares.len(), dm.deaths.len()),
+        format!("{} scare(s), {} death(s){merged_note}", dm.scares.len(), dm.deaths.len()),
     );
     if all_ok {
         let _ = std::fs::write(&stamp, &key);
     }
     Ok((rels, true))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::inject_hooks;
+
+    // Shape of a VRF-recovered foreign hud mod's base_hud (a vanilla copy
+    // plus that mod's own include + panel).
+    const FOREIGN: &str = "<root>\n\t<styles>\n\t\t<include src=\"s2r://panorama/styles/base.vcss_c\" />\n\t\t<include src=\"s2r://panorama/styles/cool_hud.vcss_c\" />\n\t</styles>\n\t<scripts>\n\t\t<include src=\"s2r://panorama/scripts/cool_hud.vjs_c\" />\n\t</scripts>\n\t<Panel class=\"WindowRoot\" hittest=\"false\">\n\t\t<CitadelHud id=\"Hud\" hittest=\"false\" />\n\t\t<Panel id=\"CoolHudExtra\" hittest=\"false\" />\n\t</Panel>\n</root>\n";
+
+    #[test]
+    fn injects_styles_scripts_and_panels() {
+        let out = inject_hooks(FOREIGN).unwrap();
+        // Theirs survive…
+        assert!(out.contains("cool_hud.vcss_c"));
+        assert!(out.contains("cool_hud.vjs_c"));
+        assert!(out.contains("CoolHudExtra"));
+        // …ours arrive…
+        assert!(out.contains("jumpscare_overlay.vcss_c"));
+        assert!(out.contains("digi_master.vjs_c"));
+        assert!(out.contains("anita_ui_core.vjs_c"));
+        assert!(out.contains("MediaOverlayContainer"));
+        // …inside the WindowRoot panel, before its closing tag.
+        assert!(out.rfind("MediaOverlayContainer").unwrap() < out.rfind("</Panel>").unwrap());
+        assert!(out.rfind("MediaOverlayContainer").unwrap() > out.find("CitadelHud").unwrap());
+    }
+
+    #[test]
+    fn idempotent_on_reinjection() {
+        let once = inject_hooks(FOREIGN).unwrap();
+        let twice = inject_hooks(&once).unwrap();
+        assert_eq!(once, twice);
+    }
+
+    #[test]
+    fn adds_scripts_block_when_missing() {
+        let no_scripts = FOREIGN.replace("\t<scripts>\n\t\t<include src=\"s2r://panorama/scripts/cool_hud.vjs_c\" />\n\t</scripts>\n", "");
+        let out = inject_hooks(&no_scripts).unwrap();
+        assert!(out.contains("<scripts>"));
+        assert!(out.contains("digi_master.vjs_c"));
+        // The synthesized block sits between styles and the root panel.
+        assert!(out.find("<scripts>").unwrap() > out.find("</styles>").unwrap());
+        assert!(out.find("</scripts>").unwrap() < out.find("WindowRoot").unwrap());
+    }
+
+    #[test]
+    fn errors_without_styles_or_root_panel() {
+        assert!(inject_hooks("<root></root>").is_err());
+    }
 }

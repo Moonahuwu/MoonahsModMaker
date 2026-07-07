@@ -308,6 +308,11 @@ pub struct DigimodCompile {
     pub death_chance: u32,
     pub scares: Vec<DigiEntry>,
     pub deaths: Vec<DigiEntry>,
+    /// Other base_hud-overriding UI mod vpks to merge in: their panorama
+    /// files ride along raw and the digi hooks are injected into THEIR
+    /// base_hud (two HUD mods can't coexist as separate paks).
+    #[serde(default)]
+    pub merge_vpks: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

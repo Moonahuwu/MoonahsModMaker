@@ -125,6 +125,7 @@ export interface DigimodCompile {
   deathChance: number;
   scares: DigiEntryCompile[];
   deaths: DigiEntryCompile[];
+  mergeVpks?: string[];
 }
 
 export interface DigiEntryCompile {
@@ -141,6 +142,19 @@ export interface DigiEntryCompile {
 /** True when an installed addon pak ships the DigiMaster jumpscare engine. */
 export function digimodDetected(addonsDir: string): Promise<boolean> {
   return invoke("digimod_detected", { addonsDir });
+}
+
+/** An installed pak overriding base_hud (a panorama UI mod) — a candidate
+ *  for the Jumpscares tab's merge. `hasDigi` = it IS the DigiMaster engine. */
+export interface UiModVpk {
+  path: string;
+  fileName: string;
+  hasDigi: boolean;
+}
+
+/** Scan the addons dir for base_hud-overriding paks (merge candidates). */
+export function listUiMods(addonsDir: string): Promise<UiModVpk[]> {
+  return invoke("list_ui_mods", { addonsDir });
 }
 
 export interface PosterCompile {

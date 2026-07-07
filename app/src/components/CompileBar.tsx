@@ -158,7 +158,10 @@ export function CompileBar({
     soundOverrides.length > 0 ||
     effectOverrides.length > 0 ||
     posterOverrides.length > 0 ||
-    (digimod != null && (digimod.scares.length > 0 || digimod.deaths.length > 0)) ||
+    (digimod != null &&
+      (digimod.scares.length > 0 ||
+        digimod.deaths.length > 0 ||
+        (digimod.mergeVpks?.length ?? 0) > 0)) ||
     (settings.includeGameplay &&
       (vdataOverrides.length > 0 || globalOverrides.length > 0 || worldOverrides.length > 0));
 

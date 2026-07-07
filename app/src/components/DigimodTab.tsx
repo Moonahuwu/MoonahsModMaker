@@ -1,5 +1,7 @@
+import { useEffect, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { listUiMods, type UiModVpk } from "../lib/api";
 import type { DigiEntry, DigimodConfig } from "../types";
 
 /**
@@ -45,13 +47,45 @@ function makeId(path: string, existing: DigiEntry[]): string {
 export function DigimodTab({
   config,
   accent,
+  addonsDir,
   onChange,
 }: {
   config: DigimodConfig;
   accent: string;
+  addonsDir: string;
   onChange: (next: DigimodConfig) => void;
 }) {
   const patch = (p: Partial<DigimodConfig>) => onChange({ ...config, ...p });
+
+  // Installed base_hud-overriding paks — candidates for the merge section.
+  const [uiMods, setUiMods] = useState<UiModVpk[]>([]);
+  useEffect(() => {
+    if (!addonsDir) return;
+    listUiMods(addonsDir)
+      .then(setUiMods)
+      .catch(() => {});
+  }, [addonsDir]);
+
+  const mergeVpks = config.mergeVpks ?? [];
+  const toggleMerge = (path: string) =>
+    patch({
+      mergeVpks: mergeVpks.includes(path)
+        ? mergeVpks.filter((p) => p !== path)
+        : [...mergeVpks, path],
+    });
+
+  async function browseMergeVpk() {
+    const picked = await openDialog({
+      multiple: false,
+      filters: [{ name: "Mod pack", extensions: ["vpk"] }],
+    });
+    if (typeof picked === "string" && !mergeVpks.includes(picked)) {
+      patch({ mergeVpks: [...mergeVpks, picked] });
+    }
+  }
+
+  // Browse-picked vpks that aren't in the addons scan still need a row.
+  const externalMerges = mergeVpks.filter((p) => !uiMods.some((m) => m.path === p));
 
   async function addEntry(list: "scares" | "deaths", kind: "video" | "image") {
     const picked = await openDialog({
@@ -284,10 +318,86 @@ export function DigimodTab({
       {renderList("scares", "Jumpscares", "random RNG rolls while you play")}
       {renderList("deaths", "Deaths", "plays when your respawn timer appears")}
 
+      <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
+        <div className="mb-1 flex items-center gap-3">
+          <h3 className="text-sm font-semibold text-zinc-200">Merge UI mods</h3>
+          <span className="text-[11px] text-zinc-500">
+            two HUD mods can't coexist — merging ships theirs + jumpscares in one pak
+          </span>
+          <button
+            onClick={() => void browseMergeVpk()}
+            className="ml-auto rounded-lg bg-zinc-800 px-2.5 py-1 text-xs font-semibold text-zinc-300 hover:bg-zinc-700"
+          >
+            Browse for a vpk…
+          </button>
+        </div>
+        {uiMods.length === 0 && externalMerges.length === 0 ? (
+          <p className="py-3 text-center text-xs text-zinc-600">
+            No other UI mods found in your addons folder. If you install one (anything that
+            changes the in-game HUD), it shows up here for merging.
+          </p>
+        ) : (
+          <div className="mt-2 flex flex-col gap-1.5">
+            {uiMods.map((m) =>
+              m.hasDigi ? (
+                <div
+                  key={m.path}
+                  className="flex items-center gap-2 rounded-lg border border-zinc-800/60 px-3 py-2 text-xs text-zinc-600"
+                  title={m.path}
+                >
+                  <span className="truncate">{m.fileName}</span>
+                  <span className="ml-auto shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-[10px]">
+                    old DigiMaster pak — this tab replaces it, remove it after installing
+                  </span>
+                </div>
+              ) : (
+                <label
+                  key={m.path}
+                  className="flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-xs text-zinc-300 hover:border-zinc-600"
+                  title={m.path}
+                >
+                  <input
+                    type="checkbox"
+                    checked={mergeVpks.includes(m.path)}
+                    onChange={() => toggleMerge(m.path)}
+                    className="accent-red-500"
+                  />
+                  <span className="truncate">{m.fileName}</span>
+                  {mergeVpks.includes(m.path) && (
+                    <span className="ml-auto shrink-0 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] text-emerald-300">
+                      merges on compile — disable the original pak after installing
+                    </span>
+                  )}
+                </label>
+              ),
+            )}
+            {externalMerges.map((p) => (
+              <label
+                key={p}
+                className="flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-xs text-zinc-300 hover:border-zinc-600"
+                title={p}
+              >
+                <input
+                  type="checkbox"
+                  checked
+                  onChange={() => toggleMerge(p)}
+                  className="accent-red-500"
+                />
+                <span className="truncate">{p.replace(/\\/g, "/").split("/").pop()}</span>
+                <span className="ml-auto shrink-0 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] text-emerald-300">
+                  merges on compile
+                </span>
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
+
       <p className="text-[11px] text-zinc-600">
         Compile bakes this into your mod: videos become VP9 webm (panorama's requirement),
         PNGs compile to textures, sounds get their own Digi.* sound events. Heads-up: this
-        overrides the game's base HUD layout — two HUD mods can't be active at once.
+        overrides the game's base HUD layout — two HUD mods can't be active at once, which
+        is what "Merge UI mods" above solves.
       </p>
     </div>
   );

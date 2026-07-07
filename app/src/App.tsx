@@ -733,7 +733,13 @@ export default function App() {
     out.push(POSTERS);
     // Jumpscares only when the DigiMaster engine is in the user's mods (or
     // this project already configures it).
-    if (digimodOn || (project?.digimod && (project.digimod.scares.length > 0 || project.digimod.deaths.length > 0)))
+    if (
+      digimodOn ||
+      (project?.digimod &&
+        (project.digimod.scares.length > 0 ||
+          project.digimod.deaths.length > 0 ||
+          (project.digimod.mergeVpks?.length ?? 0) > 0))
+    )
       out.push(JUMPSCARES);
     out.push(CUSTOM_SERVER, MOD_COMBINER, REPLACE_SOUNDS);
     return out;
@@ -3421,6 +3427,7 @@ export default function App() {
           <DigimodTab
             config={project?.digimod ?? DEFAULT_DIGIMOD}
             accent="#ef4444"
+            addonsDir={settings.addonsDir}
             onChange={(next) => setProject((prev) => (prev ? { ...prev, digimod: next } : prev))}
           />
         ) : activeTab === POSTERS ? (
