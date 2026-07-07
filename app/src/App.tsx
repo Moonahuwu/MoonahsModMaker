@@ -3102,6 +3102,8 @@ export default function App() {
             accent="#8b5cf6"
             rectEdits={settings.posterRectEdits}
             hidden={settings.posterHidden}
+            hiddenSheets={settings.posterHiddenSheets}
+            showUnused={settings.showUnusedPosters}
             onAdd={addPosterOverride}
             onUpdate={updatePosterOverride}
             onRemove={removePosterOverride}
@@ -3115,6 +3117,14 @@ export default function App() {
               const cur = settingsRef.current.posterHidden;
               updateSettings({
                 posterHidden: cur.includes(id) ? cur.filter((h) => h !== id) : [...cur, id],
+              });
+            }}
+            onToggleSheetHidden={(sheetId) => {
+              const cur = settingsRef.current.posterHiddenSheets;
+              updateSettings({
+                posterHiddenSheets: cur.includes(sheetId)
+                  ? cur.filter((s) => s !== sheetId)
+                  : [...cur, sheetId],
               });
             }}
             registerDropHandler={(fn) => {

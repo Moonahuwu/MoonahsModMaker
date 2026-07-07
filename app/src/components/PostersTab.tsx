@@ -67,11 +67,14 @@ export function PostersTab({
   accent,
   rectEdits,
   hidden,
+  hiddenSheets,
+  showUnused,
   onAdd,
   onUpdate,
   onRemove,
   onRectEdit,
   onToggleHidden,
+  onToggleSheetHidden,
   registerDropHandler,
 }: {
   helperPath: string;
@@ -80,14 +83,19 @@ export function PostersTab({
   accent: string;
   /** User rect corrections keyed `sheetId::posterId` (settings-persisted). */
   rectEdits: Record<string, Rect>;
-  /** Region ids marked "unused" — hidden outside edit mode. */
+  /** Region ids marked "unused" — invisible unless showUnused. */
   hidden: string[];
+  /** Whole sheet ids marked "unused" — invisible unless showUnused. */
+  hiddenSheets: string[];
+  /** Settings → Experimental → "Show unused poster assets". */
+  showUnused: boolean;
   onAdd: (ov: PosterOverride) => void;
   onUpdate: (id: string, patch: Partial<PosterOverride>) => void;
   onRemove: (id: string) => void;
   /** rect=null resets the region to its manifest rect. */
   onRectEdit: (id: string, rect: Rect | null) => void;
   onToggleHidden: (id: string) => void;
+  onToggleSheetHidden: (sheetId: string) => void;
   /** Lets the app-level OS drag-drop route dropped images to the rect under
    *  the cursor. Pass null on unmount. Returns true when a rect took the drop. */
   registerDropHandler: (fn: ((paths: string[], cssX: number, cssY: number) => boolean) | null) => void;
@@ -117,6 +125,14 @@ export function PostersTab({
 
   const byId = useMemo(() => new Map(overrides.map((o) => [o.id, o])), [overrides]);
   const hiddenSet = useMemo(() => new Set(hidden), [hidden]);
+  const hiddenSheetSet = useMemo(() => new Set(hiddenSheets), [hiddenSheets]);
+
+  /** Sheets to show for a category, honoring the unused filter. */
+  function visibleSheets(cat: string): ManifestSheet[] {
+    return SHEETS.filter(
+      (s) => s.category === cat && (showUnused || !hiddenSheetSet.has(s.id)),
+    );
+  }
 
   /** Effective rect: user correction wins over the manifest. */
   function eff(sh: ManifestSheet, p: ManifestPoster): Rect {
@@ -286,7 +302,7 @@ export function PostersTab({
         </p>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
           {CATEGORIES.map((c) => {
-            const sheets = SHEETS.filter((s) => s.category === c.key);
+            const sheets = visibleSheets(c.key);
             if (sheets.length === 0) return null;
             const n = overrides.filter((o) => sheets.some((s) => s.id === o.sheetId)).length;
             const regions = sheets.reduce(
@@ -365,7 +381,7 @@ export function PostersTab({
 
   // ---- Sheet grid within a category ----------------------------------------
   if (!sheet) {
-    const sheets = SHEETS.filter((s) => s.category === category);
+    const sheets = visibleSheets(category);
     return (
       <div>
         <button
@@ -378,6 +394,7 @@ export function PostersTab({
           {sheets.map((s) => {
             const n = overrides.filter((o) => o.sheetId === s.id).length;
             const hid = s.posters.filter((p) => hiddenSet.has(`${s.id}::${p.id}`)).length;
+            const sheetHidden = hiddenSheetSet.has(s.id);
             return (
               <button
                 key={s.id}
@@ -385,7 +402,11 @@ export function PostersTab({
                   setSheet(s);
                   setSelected(null);
                 }}
-                className="group relative flex flex-col rounded-xl border border-zinc-800 bg-zinc-900/40 p-4 text-left transition hover:border-zinc-600 hover:bg-zinc-900"
+                className={`group relative flex flex-col rounded-xl border p-4 text-left transition ${
+                  sheetHidden
+                    ? "border-dashed border-amber-500/40 bg-zinc-900/20 opacity-60 hover:opacity-90"
+                    : "border-zinc-800 bg-zinc-900/40 hover:border-zinc-600 hover:bg-zinc-900"
+                }`}
               >
                 <span className="truncate text-sm font-semibold text-zinc-100">{pretty(s.id)}</span>
                 <span className="mt-1 text-[11px] text-zinc-500">
@@ -394,6 +415,11 @@ export function PostersTab({
                   {!s.curated && " · auto-mapped"}
                   {hid > 0 && ` · ${hid} unused`}
                 </span>
+                {sheetHidden && (
+                  <span className="absolute left-2 top-2 rounded bg-amber-400/90 px-1.5 text-[10px] font-bold text-zinc-900">
+                    unused
+                  </span>
+                )}
                 {n > 0 && (
                   <span className="absolute right-2 top-2 rounded bg-emerald-500/15 px-1.5 text-[10px] font-semibold text-emerald-300">
                     {n}
@@ -447,7 +473,21 @@ export function PostersTab({
           {sheet.width}×{sheet.height}
           {!sheet.curated && " · auto-mapped regions"}
         </span>
+        {hiddenSheetSet.has(sheet.id) && (
+          <span className="rounded bg-amber-400/90 px-1.5 text-[10px] font-bold text-zinc-900">
+            unused sheet
+          </span>
+        )}
         <div className="flex-1" />
+        {editMode && (
+          <button
+            onClick={() => onToggleSheetHidden(sheet.id)}
+            className="rounded-lg bg-zinc-800 px-2.5 py-1 text-[11px] font-semibold text-zinc-300 transition hover:bg-zinc-700"
+            title="Mark every asset on this sheet as unused (e.g. Neon Prime-era leftovers). Hidden unless 'Show unused poster assets' is on in Settings."
+          >
+            {hiddenSheetSet.has(sheet.id) ? "Mark sheet as used" : "Mark sheet unused"}
+          </button>
+        )}
         <button
           onClick={() => setEditMode((v) => !v)}
           className={`rounded-lg px-2.5 py-1 text-[11px] font-semibold transition ${
@@ -488,7 +528,7 @@ export function PostersTab({
           {sheet.posters.map((p) => {
             const id = `${sheet.id}::${p.id}`;
             const isHidden = hiddenSet.has(id);
-            if (isHidden && !editMode) return null;
+            if (isHidden && !showUnused) return null;
             const ov = byId.get(id);
             const isSel = selected === id;
             const r = live?.id === id ? live.rect : eff(sheet, p);

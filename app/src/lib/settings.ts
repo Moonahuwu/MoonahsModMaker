@@ -78,8 +78,13 @@ export interface Settings {
    *  is used, and copied into existing overrides when edited. */
   posterRectEdits: Record<string, { x: number; y: number; w: number; h: number }>;
   /** Posters tab: regions the user marked "unused" (atlas junk not visible in
-   *  the map). Hidden from normal browsing; shown dimmed in edit mode. */
+   *  the map). Invisible unless `showUnusedPosters` is on. */
   posterHidden: string[];
+  /** Posters tab: whole sheets marked "unused" (e.g. Neon Prime-era leftovers
+   *  never placed in the map). Invisible unless `showUnusedPosters` is on. */
+  posterHiddenSheets: string[];
+  /** Experimental: reveal unused-marked poster sheets/regions for auditing. */
+  showUnusedPosters: boolean;
 }
 
 const REPO = "C:/Users/ethob/Desktop/DeadlockModding/EasyIntroModder";
@@ -126,6 +131,8 @@ export const DEFAULT_SETTINGS: Settings = {
   uiSoundsMigrated: false,
   posterRectEdits: {},
   posterHidden: [],
+  posterHiddenSheets: [],
+  showUnusedPosters: false,
 };
 
 const STORAGE_KEY = "eim.settings.v1";

@@ -170,6 +170,21 @@ export function SetupSection({
         <p className="-mt-1 pl-6 text-[10px] text-zinc-600">
           Show the Effects tab and per-item effect recoloring. Very work-in-progress.
         </p>
+        <label className="mt-2 flex cursor-pointer items-center gap-2.5">
+          <input
+            type="checkbox"
+            checked={settings.showUnusedPosters}
+            onChange={(e) => update({ showUnusedPosters: e.target.checked })}
+            className="accent-amber-500"
+          />
+          <span className="text-xs font-medium text-zinc-300">
+            Show unused poster assets
+          </span>
+        </label>
+        <p className="-mt-1 pl-6 text-[10px] text-zinc-600">
+          Reveal poster sheets/regions marked "unused" (cut content like Neon Prime
+          leftovers) in the Posters tab so they can be edited or unmarked.
+        </p>
       </div>
 
       {/* Setup — tool & game paths */}
