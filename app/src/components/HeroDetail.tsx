@@ -61,15 +61,16 @@ export function HeroDetail({
     <div>
       {/* Background banner + ability bar */}
       <div
-        className="relative overflow-hidden rounded-2xl border bg-zinc-900"
+        className="relative min-h-[190px] overflow-hidden rounded-2xl border bg-zinc-900"
         style={{ borderColor: `${accent}66`, boxShadow: `0 0 24px ${accent}22` }}
       >
+        {/* Soft ambient wash of the portrait behind everything */}
         {backgroundSrc && (
           <img
             src={convertFileSrc(backgroundSrc)}
             alt=""
             aria-hidden
-            className="absolute inset-0 h-full w-full object-cover object-top opacity-30 blur-[1px]"
+            className="absolute inset-0 h-full w-full object-cover object-top opacity-20 blur-[2px]"
           />
         )}
         <div className="absolute inset-0 bg-gradient-to-t from-zinc-950 via-zinc-950/70 to-zinc-950/30" />
@@ -78,6 +79,21 @@ export function HeroDetail({
           className="absolute inset-0 opacity-40"
           style={{ background: `linear-gradient(120deg, ${accent}55, ${accent2}22 55%, transparent 75%)` }}
         />
+        {/* The portrait itself, uncropped: full banner height on the right,
+            fading into the banner so it never looks cut off. */}
+        {backgroundSrc && (
+          <img
+            src={convertFileSrc(backgroundSrc)}
+            alt=""
+            aria-hidden
+            className="absolute bottom-0 right-0 h-full w-auto max-w-[45%] object-contain object-bottom"
+            style={{
+              maskImage: "linear-gradient(to left, black 60%, transparent 100%)",
+              WebkitMaskImage: "linear-gradient(to left, black 60%, transparent 100%)",
+              filter: `drop-shadow(0 0 18px ${accent}44)`,
+            }}
+          />
+        )}
 
         <div className="relative flex flex-col gap-4 p-5">
           <div className="flex items-center gap-3">

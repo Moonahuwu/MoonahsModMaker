@@ -20,6 +20,37 @@ const CATS = [
 // In-game soul cost per tier (T5 best-effort).
 const TIER_SOULS: Record<number, number> = { 1: 500, 2: 1250, 3: 3000, 4: 6200, 5: 9700 };
 
+/** The W3C luma-preserving hue-rotate matrix — the SAME math as the CSS
+ *  `hue-rotate()` preview and the compile's ffmpeg colorchannelmixer pass, so
+ *  the slider's colors show what the icon will actually become (a plain
+ *  rainbow gradient doesn't: rotation is relative to the original color and
+ *  drifts on saturated colors). */
+function hueRotateColor(hex: string, deg: number): string {
+  const n = parseInt(hex.replace("#", ""), 16);
+  const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  const a = (deg * Math.PI) / 180;
+  const c = Math.cos(a);
+  const s = Math.sin(a);
+  const m = [
+    0.213 + c * 0.787 - s * 0.213, 0.715 - c * 0.715 - s * 0.715, 0.072 - c * 0.072 + s * 0.928,
+    0.213 - c * 0.213 + s * 0.143, 0.715 + c * 0.285 + s * 0.14, 0.072 - c * 0.072 - s * 0.283,
+    0.213 - c * 0.213 - s * 0.787, 0.715 - c * 0.715 + s * 0.715, 0.072 + c * 0.928 + s * 0.072,
+  ];
+  const cl = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
+  return `rgb(${cl(r * m[0] + g * m[1] + b * m[2])}, ${cl(r * m[3] + g * m[4] + b * m[5])}, ${cl(
+    r * m[6] + g * m[7] + b * m[8],
+  )})`;
+}
+
+/** Gradient stops for the hue slider: `base` rotated from -180° to +180°. */
+function hueSliderStops(base: string): string {
+  const stops: string[] = [];
+  for (let deg = -180; deg <= 180; deg += 30) {
+    stops.push(hueRotateColor(base, deg));
+  }
+  return stops.join(", ");
+}
+
 export function ItemsTab({
   helperPath,
   pakPath,
@@ -195,7 +226,9 @@ export function ItemsTab({
           {/* Hue adjustment — only meaningful once a custom image is set. */}
           {customIconSource && (
             <div className="mt-4 flex items-center gap-3 border-t border-zinc-800 pt-3">
-              <label className="shrink-0 text-xs font-medium text-zinc-400">Hue</label>
+              <label className="shrink-0 text-xs font-medium text-zinc-400" title="0° (center) = original colors; the bar shows what this item's color actually becomes">
+                Hue shift
+              </label>
               <input
                 type="range"
                 min={-180}
@@ -205,8 +238,12 @@ export function ItemsTab({
                 onChange={(e) => onHueChange(Number(e.target.value))}
                 className="h-1.5 flex-1 cursor-pointer appearance-none rounded-full"
                 style={{
-                  background:
-                    "linear-gradient(to right, #ff0000, #ffff00, #00ff00, #00ffff, #0000ff, #ff00ff, #ff0000)",
+                  // Center notch (0° = unchanged) over a gradient of the item's
+                  // own color hue-rotated with the SAME matrix the compile and
+                  // the preview use — the bar matches what you'll actually get.
+                  background: `linear-gradient(to right, transparent calc(50% - 1px), rgba(255,255,255,0.9) calc(50% - 1px), rgba(255,255,255,0.9) calc(50% + 1px), transparent calc(50% + 1px)), linear-gradient(to right, ${hueSliderStops(
+                    cat?.color ?? "#f59e0b",
+                  )})`,
                 }}
               />
               <span className="w-12 shrink-0 text-right text-xs tabular-nums text-zinc-300">

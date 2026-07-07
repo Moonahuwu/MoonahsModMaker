@@ -62,6 +62,8 @@ export function SoundBrowser({
   // Multi-select for batch downloads (persists while drilling across folders).
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [downloading, setDownloading] = useState(false);
+  // Anchor for shift-click range selection (index into the shown file list).
+  const lastSelIdx = useRef<number | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   // Media elements keep playing after DOM removal — stop on unmount.
   useEffect(() => () => audioRef.current?.pause(), []);
@@ -288,9 +290,31 @@ export function SoundBrowser({
 
           {/* Files (with "modified only" on, just the replaced ones) */}
           <div className="flex flex-col gap-1.5">
-            {data.files
-              .filter((file) => !modifiedOnly || overrideByRef.has(file.reference))
-              .map((file) => {
+            {(() => {
+              const shownFiles = data.files.filter(
+                (file) => !modifiedOnly || overrideByRef.has(file.reference),
+              );
+              // Toggle one row; shift-click selects the whole range from the
+              // last-clicked row (like a file manager).
+              const toggleSelect = (idx: number, reference: string, shift: boolean) => {
+                setSel((prev) => {
+                  const next = new Set(prev);
+                  if (shift && lastSelIdx.current !== null && lastSelIdx.current !== idx) {
+                    const [a, b] =
+                      lastSelIdx.current < idx ? [lastSelIdx.current, idx] : [idx, lastSelIdx.current];
+                    for (let i = a; i <= b && i < shownFiles.length; i++) {
+                      next.add(shownFiles[i].reference);
+                    }
+                  } else if (next.has(reference)) {
+                    next.delete(reference);
+                  } else {
+                    next.add(reference);
+                  }
+                  lastSelIdx.current = idx;
+                  return next;
+                });
+              };
+              return shownFiles.map((file, idx) => {
               const ov = overrideByRef.get(file.reference);
               const isOpen = openRow === file.reference;
               return (
@@ -303,15 +327,11 @@ export function SoundBrowser({
                     <input
                       type="checkbox"
                       checked={sel.has(file.reference)}
-                      onChange={(e) =>
-                        setSel((prev) => {
-                          const next = new Set(prev);
-                          if (e.target.checked) next.add(file.reference);
-                          else next.delete(file.reference);
-                          return next;
-                        })
+                      onClick={(e) =>
+                        toggleSelect(idx, file.reference, (e as React.MouseEvent).shiftKey)
                       }
-                      title="Select for batch download"
+                      onChange={() => {}}
+                      title="Select for batch download (shift-click to select a range)"
                       className="shrink-0 accent-emerald-500"
                     />
                     <button
@@ -379,7 +399,8 @@ export function SoundBrowser({
                   )}
                 </div>
               );
-            })}
+              });
+            })()}
             {data.files.length === 0 && data.folders.length === 0 && (
               <p className="py-8 text-center text-sm text-zinc-500">
                 {query ? "No sounds match your search." : "No sounds here."}
