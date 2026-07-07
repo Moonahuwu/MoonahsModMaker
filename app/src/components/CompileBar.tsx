@@ -5,6 +5,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   compileProject,
+  runningProcesses,
   installToGame,
   launchGame,
   packUnchangedFiles,
@@ -88,7 +89,32 @@ export function CompileBar({
   const songCount = events.reduce((n, e) => n + e.songs.length, 0);
   const modCount = settings.importedMods.length;
   // "Compiled and installed just now" — drives the success banner.
-  const [success, setSuccess] = useState<{ path?: string } | null>(null);
+  const [success, setSuccess] = useState<{ path?: string; secs?: number } | null>(null);
+
+  // Lock-risk warning: Deadlock or Source 2 Viewer holding the pak/addons
+  // open makes compiles + installs fail in confusing ways. Polled while the
+  // bar is visible; also refreshed right before a compile starts.
+  const [lockRisks, setLockRisks] = useState<string[]>([]);
+  const pollLocks = useCallback(async () => {
+    try {
+      setLockRisks(
+        await runningProcesses(["deadlock.exe", "citadel.exe", "Source2Viewer.exe", "VRF.exe"]),
+      );
+    } catch {
+      /* warning is best-effort */
+    }
+  }, []);
+  useEffect(() => {
+    void pollLocks();
+    const t = setInterval(() => void pollLocks(), 15000);
+    return () => clearInterval(t);
+  }, [pollLocks]);
+  const lockWarning =
+    lockRisks.length === 0
+      ? null
+      : lockRisks.some((p) => p.startsWith("deadlock") || p.startsWith("citadel"))
+        ? "Deadlock is running — close it (or at least stay in the menu) or installs can fail on locked files"
+        : "Source 2 Viewer is open — if it has the game pak loaded, compiles that read it can fail";
 
   // How many items changed since their last successful compile — the pulse +
   // chip on the Compile button, so a needed recompile is never a guess.
@@ -192,6 +218,8 @@ export function CompileBar({
     setReport(null);
     setFeed([]);
     setSuccess(null);
+    void pollLocks();
+    const startedAt = Date.now();
     try {
       // UI soundevent changes make broad, breakage-prone menu edits — excluded
       // from the build unless explicitly enabled (toggle on the UI tab).
@@ -240,7 +268,10 @@ export function CompileBar({
         onCompiled();
         push("success", `Compiled → ${r.outputPath ?? "done"}`);
         if (s.installAfterCompile) await install();
-        setSuccess({ path: r.outputPath ?? undefined });
+        setSuccess({
+          path: r.outputPath ?? undefined,
+          secs: Math.round((Date.now() - startedAt) / 1000),
+        });
         return true;
       }
       // Partial success: soft failures didn't stop the build — an artifact
@@ -774,6 +805,13 @@ export function CompileBar({
         )}
       </AnimatePresence>
 
+      {/* Danger stripe: something is holding game files open. */}
+      {lockWarning && (
+        <div className="eim-danger-stripe mb-2 flex items-center gap-2 rounded-lg border border-amber-500/50 px-3 py-1.5 text-xs font-medium text-amber-200">
+          ⚠ {lockWarning}
+        </div>
+      )}
+
       {/* Post-compile success moment: close the loop right here. */}
       <AnimatePresence>
         {success && !running && (
@@ -783,7 +821,9 @@ export function CompileBar({
             exit={{ opacity: 0, y: 6 }}
             className="mb-2 flex flex-wrap items-center gap-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2"
           >
-            <span className="text-sm font-semibold text-emerald-300">✓ Compiled</span>
+            <span className="text-sm font-semibold text-emerald-300">
+              ✓ Compiled{success.secs !== undefined ? ` in ${success.secs}s` : ""}
+            </span>
             {success.path && (
               <span className="min-w-0 truncate text-xs text-zinc-500" title={success.path}>
                 {success.path}

@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   autodetectPaths,
   checkSoundRefs,
@@ -31,6 +32,8 @@ import {
   cachePack,
   packIcons,
   heroImages,
+  checkAppUpdate,
+  type AppUpdate,
   type HeroImage,
   type ImportEvent,
   listSoundeventFiles,
@@ -3062,6 +3065,15 @@ export default function App() {
               .filter((e) => e.group === g)
               .reduce((n, e) => n + e.songs.length, 0);
 
+  // Quiet update check: one call on launch; a small chip appears when a newer
+  // release exists (never nags on network errors).
+  const [appUpdate, setAppUpdate] = useState<AppUpdate | null>(null);
+  useEffect(() => {
+    checkAppUpdate()
+      .then(setAppUpdate)
+      .catch(() => {});
+  }, []);
+
   // Boot animation: on a fresh launch the sidebar slides open and its entries
   // cascade in. `booted` flips once the show is over so later re-renders
   // (new tabs, count changes) don't replay it.
@@ -3209,9 +3221,19 @@ export default function App() {
             <span className="text-base">⚙</span>
             <span>Settings</span>
           </button>
-          <span className="text-[10px] text-zinc-700">
-            {songCount} track{songCount === 1 ? "" : "s"}
-          </span>
+          {appUpdate ? (
+            <button
+              onClick={() => void openUrl(appUpdate.url)}
+              title={`You have v${appUpdate.current} — open the v${appUpdate.latest} release`}
+              className="rounded bg-violet-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-violet-300 transition hover:bg-violet-500/25"
+            >
+              ⬆ v{appUpdate.latest} available
+            </button>
+          ) : (
+            <span className="text-[10px] text-zinc-700">
+              {songCount} track{songCount === 1 ? "" : "s"}
+            </span>
+          )}
         </div>
       </aside>
 

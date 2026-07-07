@@ -177,3 +177,12 @@ button {
   0%, 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.45); }
   50% { box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); }
 }
+
+/* Danger stripe: warning-tape background for lock-risk banner */
+.eim-danger-stripe {
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(245, 158, 11, 0.12) 0 12px,
+    rgba(245, 158, 11, 0.04) 12px 24px
+  );
+}

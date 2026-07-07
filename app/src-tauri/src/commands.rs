@@ -4580,6 +4580,65 @@ pub fn pack_icons(
     Ok(out)
 }
 
+/// Which of `names` (case-insensitive exe names) are currently running.
+/// Powers the compile bar's "Deadlock / Source 2 Viewer is open" warning —
+/// both hold locks on the pak/addons that make compiles and installs fail
+/// in confusing ways.
+#[tauri::command]
+pub fn running_processes(names: Vec<String>) -> Vec<String> {
+    let out = match crate::procutil::quiet("tasklist").args(["/FO", "CSV", "/NH"]).output() {
+        Ok(o) => o,
+        Err(_) => return vec![],
+    };
+    let text = String::from_utf8_lossy(&out.stdout).to_lowercase();
+    names
+        .into_iter()
+        .filter(|n| text.contains(&format!("\"{}\"", n.to_lowercase())))
+        .collect()
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppUpdate {
+    pub current: String,
+    pub latest: String,
+    pub url: String,
+}
+
+/// Check GitHub for a newer release. Returns None when up to date (or the
+/// check fails — never nag on network errors).
+#[tauri::command]
+pub fn check_app_update() -> Option<AppUpdate> {
+    let current = env!("CARGO_PKG_VERSION").to_string();
+    let out = crate::procutil::quiet(r"C:\Windows\System32\curl.exe")
+        .args([
+            "-s",
+            "-m",
+            "10",
+            "-H",
+            "User-Agent: MoonahsModMaker",
+            "https://api.github.com/repos/Moonahuwu/MoonahsModMaker/releases/latest",
+        ])
+        .output()
+        .ok()?;
+    let body: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    let tag = body.get("tag_name")?.as_str()?;
+    let latest = tag.trim_start_matches('v').to_string();
+    // Tool releases (tools-v2 etc.) aren't app versions — require digits+dots.
+    if latest.is_empty() || !latest.chars().all(|c| c.is_ascii_digit() || c == '.') {
+        return None;
+    }
+    if latest == current {
+        return None;
+    }
+    let url = body
+        .get("html_url")
+        .and_then(|u| u.as_str())
+        .unwrap_or("https://github.com/Moonahuwu/MoonahsModMaker/releases")
+        .to_string();
+    Some(AppUpdate { current, latest, url })
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HeroImage {

@@ -783,6 +783,22 @@ export function packIcons(helperPath: string, source: string): Promise<PackIcon[
   return invoke("pack_icons", { helperPath, source });
 }
 
+/** Which of `names` (exe names) are currently running (lock-risk warning). */
+export function runningProcesses(names: string[]): Promise<string[]> {
+  return invoke("running_processes", { names });
+}
+
+export interface AppUpdate {
+  current: string;
+  latest: string;
+  url: string;
+}
+
+/** Newer GitHub release, or null when up to date / offline. */
+export function checkAppUpdate(): Promise<AppUpdate | null> {
+  return invoke("check_app_update");
+}
+
 export interface HeroImage {
   /** card | card_critical | card_gloat | vertical | sm | mm | background | logo */
   kind: string;

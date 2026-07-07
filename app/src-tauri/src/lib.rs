@@ -119,6 +119,8 @@ pub fn run() {
             commands::poster_sheet,
             commands::pack_icons,
             commands::hero_images,
+            commands::running_processes,
+            commands::check_app_update,
             commands::open_in_viewer,
             commands::item_particles,
             commands::item_roster,
