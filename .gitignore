@@ -12,6 +12,9 @@ tools/vpk-helper/publish
 # ---- Compile output ----
 /output
 
+# poster-manifest debug renders (contain decompiled game art)
+tools/poster-manifest/out
+
 # ---- Extracted Valve game content & tool binaries ----
 # Do NOT commit/share game files (per the CSDK README). These live locally only.
 /ModFiles
