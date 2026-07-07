@@ -98,6 +98,10 @@ export function SongCard({
   // Keep the rename draft in sync if soundName changes elsewhere.
   useEffect(() => setNameDraft(song.soundName), [song.soundName]);
 
+  // Detached Audio objects outlive the component — stop playback on unmount
+  // (tab switch, song removal).
+  useEffect(() => () => audioRef.current?.pause(), []);
+
   // Invalidate cached playback when the trim/gain change.
   useEffect(() => {
     if (renderedKey.current && renderedKey.current !== paramKey) {
@@ -175,7 +179,7 @@ export function SongCard({
   const badge = STATUS_BADGE[songStatus(song)];
 
   return (
-    <div className="rounded-lg border border-zinc-700/60 bg-zinc-900/80 shadow-sm transition hover:border-zinc-600">
+    <div className="group rounded-lg border border-zinc-700/60 bg-zinc-900/80 shadow-sm transition hover:border-zinc-600">
       {/* Header row — always visible; the whole card collapses to just this. */}
       <div className="flex items-center gap-2 p-2.5">
         {handle}
@@ -223,18 +227,19 @@ export function SongCard({
             ■
           </button>
         )}
+        {/* Secondary actions surface on hover to keep the header calm. */}
         <button
           onClick={onDownload}
           aria-label="Download a copy"
           title="Copy this source file to your Downloads folder"
-          className="shrink-0 rounded p-1 text-zinc-500 transition hover:bg-zinc-800 hover:text-zinc-200"
+          className="shrink-0 rounded p-1 text-zinc-500 opacity-0 transition group-hover:opacity-100 focus:opacity-100 hover:bg-zinc-800 hover:text-zinc-200"
         >
           ⤓
         </button>
         <button
           onClick={onRemove}
           aria-label="Remove track"
-          className="shrink-0 rounded p-1 text-zinc-500 transition hover:bg-red-950/50 hover:text-red-300"
+          className="shrink-0 rounded p-1 text-zinc-500 opacity-0 transition group-hover:opacity-100 focus:opacity-100 hover:bg-red-950/50 hover:text-red-300"
         >
           ✕
         </button>

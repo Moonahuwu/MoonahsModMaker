@@ -11,13 +11,18 @@ import type { Settings } from "../lib/settings";
 export function FirstRunWizard({
   settings,
   onRunSetup,
+  onDownloadTools,
   onDone,
 }: {
   settings: Settings;
   onRunSetup: () => Promise<void>;
+  /** Download the prebuilt compile-tools bundle (trimmed CSDK + ffmpeg) into
+   *  app-data and point settings at it — for users without the CSDK. */
+  onDownloadTools: () => Promise<void>;
   onDone: () => void;
 }) {
   const [phase, setPhase] = useState<"intro" | "running" | "done">("intro");
+  const [downloading, setDownloading] = useState(false);
   const [checks, setChecks] = useState<Record<string, boolean | null>>({});
 
   const probe = [
@@ -97,6 +102,22 @@ export function FirstRunWizard({
             );
           })}
         </div>
+
+        {/* No compiler found after setup ran → offer the one-click download. */}
+        {checks["Compiler"] === false && phase !== "running" && (
+          <button
+            onClick={() => {
+              setDownloading(true);
+              void onDownloadTools().finally(() => setDownloading(false));
+            }}
+            disabled={downloading}
+            className="mt-3 w-full rounded-lg border border-sky-500/40 bg-sky-500/10 px-4 py-2 text-sm font-semibold text-sky-200 transition hover:bg-sky-500/20 disabled:opacity-50"
+          >
+            {downloading
+              ? "Downloading compile tools… (~430 MB, a few minutes)"
+              : "⬇ Download the compile tools for me (~430 MB)"}
+          </button>
+        )}
 
         <div className="mt-5 flex items-center justify-end gap-2">
           <button

@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "motion/react";
-import { browseGameSounds, type SoundBrowse } from "../lib/api";
+import { type SoundBrowse } from "../lib/api";
+import { cBrowseGameSounds } from "../lib/dataCache";
 import type { SoundOverride } from "../types";
+import { PauseIcon } from "./PauseIcon";
 
 /**
  * Loose-file sound replacement browser. The game has ~79k sounds, so this never
@@ -28,6 +30,7 @@ export function SoundBrowser({
   onReplace,
   onRemoveOverride,
   renderEditor,
+  modifiedOnly,
 }: {
   helperPath: string;
   pakPath: string;
@@ -41,6 +44,8 @@ export function SoundBrowser({
   onRemoveOverride: (reference: string) => void;
   /** Render the editor for an existing override (trim/gain/fade/loop). */
   renderEditor: (override: SoundOverride) => React.ReactNode;
+  /** "Modified only": show just categories/folders/files with a replacement. */
+  modifiedOnly?: boolean;
 }) {
   // Navigation: null = category grid; otherwise a {prefix,label} into the tree.
   const [cat, setCat] = useState<SoundCategory | null>(null);
@@ -52,6 +57,8 @@ export function SoundBrowser({
   const [playing, setPlaying] = useState<string | null>(null);
   const [openRow, setOpenRow] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  // Media elements keep playing after DOM removal — stop on unmount.
+  useEffect(() => () => audioRef.current?.pause(), []);
 
   const overrideByRef = useMemo(
     () => new Map(overrides.map((o) => [o.targetRef, o])),
@@ -65,7 +72,7 @@ export function SoundBrowser({
     setLoading(true);
     setError(null);
     const t = setTimeout(() => {
-      browseGameSounds(helperPath, pakPath, prefix, query)
+      cBrowseGameSounds(helperPath, pakPath, prefix, query)
         .then((d) => !cancelled && setData(d))
         .catch((e) => !cancelled && setError(String(e)))
         .finally(() => !cancelled && setLoading(false));
@@ -129,9 +136,16 @@ export function SoundBrowser({
             </span>
           )}
         </p>
+        {modifiedOnly &&
+          !categories.some((c) => overrides.some((o) => o.targetRef.startsWith(`${c.prefix}/`))) && (
+            <p className="py-8 text-center text-sm text-zinc-500">
+              No replaced sounds yet — turn off “Modified only” to browse everything.
+            </p>
+          )}
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
           {categories.map((c) => {
             const n = overrides.filter((o) => o.targetRef.startsWith(`${c.prefix}/`)).length;
+            if (modifiedOnly && n === 0) return null;
             return (
               <button
                 key={c.key}
@@ -208,10 +222,16 @@ export function SoundBrowser({
 
       {data && (
         <>
-          {/* Subfolders */}
+          {/* Subfolders (with "modified only" on, just those holding a replacement) */}
           {!query && data.folders.length > 0 && (
             <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-              {data.folders.map((f) => (
+              {data.folders
+                .filter(
+                  (f) =>
+                    !modifiedOnly ||
+                    overrides.some((o) => o.targetRef.startsWith(`${f.prefix}/`)),
+                )
+                .map((f) => (
                 <button
                   key={f.prefix}
                   onClick={() => setPrefix(f.prefix)}
@@ -224,9 +244,11 @@ export function SoundBrowser({
             </div>
           )}
 
-          {/* Files */}
+          {/* Files (with "modified only" on, just the replaced ones) */}
           <div className="flex flex-col gap-1.5">
-            {data.files.map((file) => {
+            {data.files
+              .filter((file) => !modifiedOnly || overrideByRef.has(file.reference))
+              .map((file) => {
               const ov = overrideByRef.get(file.reference);
               const isOpen = openRow === file.reference;
               return (
@@ -241,7 +263,7 @@ export function SoundBrowser({
                       title="Preview stock clip"
                       className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-zinc-700 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-white"
                     >
-                      {playing === file.reference ? "▮▮" : "▶"}
+                      {playing === file.reference ? <PauseIcon /> : "▶"}
                     </button>
                     <span
                       className="min-w-0 flex-1 truncate text-sm text-zinc-200"

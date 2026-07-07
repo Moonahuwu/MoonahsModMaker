@@ -1,5 +1,5 @@
 import { AnimatePresence, motion, Reorder, useDragControls } from "motion/react";
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { EventProject, EventView, Song } from "../types";
 import { SongCard } from "./SongCard";
 
@@ -60,6 +60,16 @@ function StatBadge({ n, label, tone }: { n: number; label: string; tone: string 
   );
 }
 
+/** Friendly source-mod name for an adopted entry's tag: the vpk's file stem
+ *  (or its parent folder for a generic pakNN_dir.vpk), with an app cache dir's
+ *  `_hash` suffix stripped. */
+function modName(vpk: string): string {
+  const parts = vpk.replace(/\\/g, "/").split("/");
+  const file = parts.pop() ?? vpk;
+  const stem = file.replace(/\.vpk$/i, "").replace(/_[0-9a-f]{8}$/i, "");
+  return /^pak\d+_dir$/i.test(stem) ? (parts.pop() ?? stem) : stem;
+}
+
 function Toggle({ on, onClick }: { on: boolean; onClick: () => void }) {
   return (
     <button
@@ -92,6 +102,7 @@ function EntryRow({
   onRemove,
   onEdit,
   onDownload,
+  unplayable,
 }: {
   name: string;
   tag: string;
@@ -103,10 +114,13 @@ function EntryRow({
   onRemove: () => void;
   onEdit?: () => void;
   onDownload: () => void;
+  /** The ref is a placeholder (null.vsnd) or a file the game doesn't ship —
+   *  previewing would play a beep/wrong clip, so offer no preview at all. */
+  unplayable?: boolean;
 }) {
   return (
     <div
-      className={`flex items-center justify-between rounded-lg border px-3 py-2 text-sm transition ${tone} ${
+      className={`group flex items-center justify-between rounded-lg border px-3 py-1.5 text-sm transition ${tone} ${
         included ? "" : "opacity-45"
       }`}
     >
@@ -116,26 +130,38 @@ function EntryRow({
         {name}
       </span>
       <div className="flex shrink-0 items-center gap-2">
-        <span className="text-[10px] uppercase tracking-wide opacity-70">{tag}</span>
-        <button
-          onClick={onPreview}
-          title="Preview the original in-game track"
-          className="rounded p-0.5 text-current opacity-70 transition hover:opacity-100"
-        >
-          {previewState === "loading" ? "…" : previewState === "playing" ? "⏸" : "▶"}
-        </button>
-        <button
-          onClick={onDownload}
-          title="Download a copy to your Downloads folder"
-          className="rounded p-0.5 text-current opacity-70 transition hover:opacity-100"
-        >
-          ⤓
-        </button>
+        <span className="text-[10px] uppercase tracking-wide opacity-60">{tag}</span>
+        {unplayable ? (
+          <span
+            title="This event has no real stock audio (a placeholder or missing file) — nothing to preview. Your own tracks still work."
+            className="rounded bg-zinc-800/70 px-1.5 text-[10px] uppercase tracking-wide text-zinc-500"
+          >
+            no sound
+          </span>
+        ) : (
+          <>
+            <button
+              onClick={onPreview}
+              title="Preview the original in-game track"
+              className="rounded p-0.5 text-current opacity-70 transition hover:opacity-100"
+            >
+              {previewState === "loading" ? "…" : previewState === "playing" ? "⏸" : "▶"}
+            </button>
+            {/* Secondary actions surface on hover to keep rows calm. */}
+            <button
+              onClick={onDownload}
+              title="Download a copy to your Downloads folder"
+              className="rounded p-0.5 text-current opacity-0 transition group-hover:opacity-70 hover:!opacity-100 focus:opacity-100"
+            >
+              ⤓
+            </button>
+          </>
+        )}
         {onEdit && (
           <button
             onClick={onEdit}
             title="Convert to an editable track (trim/gain/fade)"
-            className="rounded p-0.5 text-current opacity-70 transition hover:opacity-100"
+            className="rounded p-0.5 text-current opacity-0 transition group-hover:opacity-70 hover:!opacity-100 focus:opacity-100"
           >
             ✎
           </button>
@@ -145,7 +171,7 @@ function EntryRow({
           onClick={onRemove}
           aria-label="Remove from pool"
           title="Remove from pool"
-          className="rounded p-0.5 text-current opacity-50 transition hover:bg-red-950/40 hover:text-red-300 hover:opacity-100"
+          className="rounded p-0.5 text-current opacity-0 transition group-hover:opacity-50 hover:!opacity-100 hover:bg-red-950/40 hover:text-red-300 focus:opacity-100"
         >
           ✕
         </button>
@@ -176,6 +202,9 @@ export function SidePanel({
   onEditAdopted,
   onDownloadEntry,
   onDownloadSong,
+  moveTargets,
+  onMoveToTab,
+  missingRefs,
 }: {
   ev: EventProject;
   view: EventView | undefined;
@@ -198,6 +227,11 @@ export function SidePanel({
   onEditAdopted: (slotId: string, ref: string, vpk: string, label: string) => void;
   onDownloadEntry: (ref: string, vpk?: string) => void;
   onDownloadSong: (sourceMp3: string) => void;
+  /** When set, a "move to tab" selector shows in the header (auto/import slots). */
+  moveTargets?: { value: string; label: string }[];
+  onMoveToTab?: (slotId: string, group: string) => void;
+  /** Refs known to NOT exist as real files in the game pak (checked upstream). */
+  missingRefs?: Set<string>;
 }) {
   const [stockUrl, setStockUrl] = useState<string | null>(null);
   const [stockErr, setStockErr] = useState<string | null>(null);
@@ -207,6 +241,10 @@ export function SidePanel({
   const [previewRef, setPreviewRef] = useState<string | null>(null);
   const [loadingRef, setLoadingRef] = useState<string | null>(null);
   const previewAudio = useRef<HTMLAudioElement | null>(null);
+
+  // Detached Audio objects outlive the component — stop them on unmount
+  // (tab switch, hero/item drill-out, slot removal).
+  useEffect(() => () => previewAudio.current?.pause(), []);
 
   async function previewEntry(ref: string, vpk?: string) {
     if (previewRef === ref) {
@@ -234,8 +272,18 @@ export function SidePanel({
   const previewStateOf = (ref: string): "idle" | "loading" | "playing" =>
     loadingRef === ref ? "loading" : previewRef === ref ? "playing" : "idle";
 
+  // Placeholder audio (null.vsnd / silence) or a ref the game doesn't ship —
+  // decoding these "works" but plays a beep or a wrong clip, so treat them as
+  // having no stock sound at all.
+  const unplayableRef = (ref: string) =>
+    !ref || /common\/null\.vsnd$|placeholder|util\/silence/i.test(ref) || !!missingRefs?.has(ref);
+
   async function loadStock(open: boolean) {
     if (!open || stockUrl || stockLoading) return;
+    if (unplayableRef(ev.stockEntry)) {
+      setStockErr("This event has no real stock sound (placeholder) — nothing to compare against.");
+      return;
+    }
     setStockLoading(true);
     setStockErr(null);
     try {
@@ -265,8 +313,13 @@ export function SidePanel({
 
   const stockOn = !excluded.has(ev.stockEntry);
   const foreignOn = foreign.filter((e) => !excluded.has(e)).length;
+  // Every original entry currently in play (drives the "replace" checkbox).
+  const originalRefs = [
+    ...(ev.stockEntry && !stockRemoved ? [ev.stockEntry] : []),
+    ...foreign,
+  ];
   const total =
-    (!stockRemoved && stockOn ? 1 : 0) + foreignOn + adoptedOn + ev.songs.length;
+    (!!ev.stockEntry && !stockRemoved && stockOn ? 1 : 0) + foreignOn + adoptedOn + ev.songs.length;
   const sortedSongs = [...ev.songs].sort((a, b) => a.order - b.order);
 
   return (
@@ -286,6 +339,23 @@ export function SidePanel({
           <StatBadge n={total} label="in pool" tone="bg-zinc-800/80 text-zinc-400" />
         </div>
         <div className="flex items-center gap-1.5">
+          {originalRefs.length > 0 && (
+            <label
+              title="Replace the original — mute the stock sound(s) so only your tracks play"
+              className="mr-1 flex cursor-pointer items-center gap-1.5 text-[11px] text-zinc-500"
+            >
+              <span>replace</span>
+              <Toggle
+                on={originalRefs.every((r) => excluded.has(r))}
+                onClick={() => {
+                  const on = !originalRefs.every((r) => excluded.has(r));
+                  for (const r of originalRefs) {
+                    if (excluded.has(r) !== on) onToggleEntry(ev.id, r);
+                  }
+                }}
+              />
+            </label>
+          )}
           {ev.songs.length > 0 && (
             <StatBadge
               n={ev.songs.length}
@@ -298,77 +368,86 @@ export function SidePanel({
               {view.vsndDuration.toFixed(1)}s
             </span>
           )}
+          {moveTargets && onMoveToTab && (
+            <select
+              value={ev.group}
+              onChange={(e) => onMoveToTab(ev.id, e.target.value)}
+              title="Move this event to another tab"
+              className="rounded-md border border-zinc-700/70 bg-zinc-900/80 px-1.5 py-0.5 text-[11px] text-zinc-400 outline-none transition hover:border-zinc-500 hover:text-zinc-200"
+            >
+              {!moveTargets.some((t) => t.value === ev.group) && (
+                <option value={ev.group}>{ev.group}</option>
+              )}
+              {moveTargets.map((t) => (
+                <option key={t.value} value={t.value}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
       </header>
 
-      {/* Stock — toggleable + removable */}
-      {!stockRemoved && (
-        <div className="mb-2">
-          <EntryRow
-            name={`★ ${shortName(ev.stockEntry)}`}
-            tag="Valve original"
-            tone="border-amber-500/30 bg-amber-500/[0.04] text-amber-200"
-            included={stockOn}
-            previewState={previewStateOf(ev.stockEntry)}
-            onPreview={() => void previewEntry(ev.stockEntry)}
-            onToggle={() => onToggleEntry(ev.id, ev.stockEntry)}
-            onRemove={() => onRemoveEntry(ev.id, ev.stockEntry)}
-            onDownload={() => onDownloadEntry(ev.stockEntry)}
-          />
-        </div>
-      )}
-
-      {/* Other mods — toggleable + removable, collapsed by default */}
-      {foreign.length > 0 && (
-        <details className="mb-3 rounded-lg border border-zinc-800 bg-zinc-800/20 px-3 py-2">
-          <summary className="cursor-pointer text-xs text-zinc-500">
-            {foreign.length} track{foreign.length === 1 ? "" : "s"} from other mods
-            <span className="text-zinc-600"> — toggle or remove ({foreignOn} on)</span>
-          </summary>
-          <div className="mt-2 flex flex-col gap-1.5">
-            {foreign.map((e) => (
+      {/* Every existing entry in ONE list: the game's originals (amber),
+          other mods' additions (zinc) and adopted tracks (violet, tagged with
+          their source mod). Secondary controls appear on hover. */}
+      {(!!ev.stockEntry && !stockRemoved) || foreign.length > 0 || adoptedShown.length > 0 ? (
+        <div className="mb-3 flex flex-col gap-1.5">
+          {!!ev.stockEntry && !stockRemoved && (
+            <EntryRow
+              name={`★ ${shortName(ev.stockEntry)}`}
+              tag="Valve original"
+              tone="border-amber-500/30 bg-amber-500/[0.04] text-amber-200"
+              included={stockOn}
+              previewState={previewStateOf(ev.stockEntry)}
+              onPreview={() => void previewEntry(ev.stockEntry)}
+              onToggle={() => onToggleEntry(ev.id, ev.stockEntry)}
+              onRemove={() => onRemoveEntry(ev.id, ev.stockEntry)}
+              onDownload={() => onDownloadEntry(ev.stockEntry)}
+              unplayable={unplayableRef(ev.stockEntry)}
+            />
+          )}
+          {foreign.map((e) => {
+            // In the game pak = an original unmodded track; otherwise it's an
+            // entry some other mod spliced into the shared events file.
+            const vanilla = !missingRefs?.has(e);
+            return (
               <EntryRow
                 key={e}
-                name={shortName(e)}
-                tag="other mod"
-                tone="border-zinc-700 bg-zinc-800/40 text-zinc-300"
+                name={vanilla ? `★ ${shortName(e)}` : shortName(e)}
+                tag={vanilla ? "Valve original" : "other mod"}
+                tone={
+                  vanilla
+                    ? "border-amber-500/30 bg-amber-500/[0.04] text-amber-200"
+                    : "border-zinc-700 bg-zinc-800/40 text-zinc-300"
+                }
                 included={!excluded.has(e)}
                 previewState={previewStateOf(e)}
                 onPreview={() => void previewEntry(e)}
                 onToggle={() => onToggleEntry(ev.id, e)}
                 onRemove={() => onRemoveEntry(ev.id, e)}
                 onDownload={() => onDownloadEntry(e)}
+                unplayable={unplayableRef(e)}
               />
-            ))}
-          </div>
-        </details>
-      )}
-
-      {/* Adopted from other mods (part of your project) */}
-      {adoptedShown.length > 0 && (
-        <div className="mb-3">
-          <div className="mb-1.5 text-[11px] uppercase tracking-wide text-violet-300/80">
-            Adopted from mods
-          </div>
-          <div className="flex flex-col gap-1.5">
-            {adoptedShown.map((a) => (
-              <EntryRow
-                key={a.reference}
-                name={a.label}
-                tag="adopted"
-                tone="border-violet-500/40 bg-violet-500/[0.06] text-violet-200"
-                included={!excluded.has(a.reference)}
-                previewState={previewStateOf(a.reference)}
-                onPreview={() => void previewEntry(a.reference, a.sourceVpk)}
-                onToggle={() => onToggleEntry(ev.id, a.reference)}
-                onRemove={() => onRemoveEntry(ev.id, a.reference)}
-                onEdit={() => onEditAdopted(ev.id, a.reference, a.sourceVpk, a.label)}
-                onDownload={() => onDownloadEntry(a.reference, a.sourceVpk)}
-              />
-            ))}
-          </div>
+            );
+          })}
+          {adoptedShown.map((a) => (
+            <EntryRow
+              key={a.reference}
+              name={a.label}
+              tag={modName(a.sourceVpk)}
+              tone="border-violet-500/40 bg-violet-500/[0.06] text-violet-200"
+              included={!excluded.has(a.reference)}
+              previewState={previewStateOf(a.reference)}
+              onPreview={() => void previewEntry(a.reference, a.sourceVpk)}
+              onToggle={() => onToggleEntry(ev.id, a.reference)}
+              onRemove={() => onRemoveEntry(ev.id, a.reference)}
+              onEdit={() => onEditAdopted(ev.id, a.reference, a.sourceVpk, a.label)}
+              onDownload={() => onDownloadEntry(a.reference, a.sourceVpk)}
+            />
+          ))}
         </div>
-      )}
+      ) : null}
 
       {/* Removed entries — restore */}
       {removedList.length > 0 && (
@@ -433,9 +512,9 @@ export function SidePanel({
           borderColor: dropActive ? "rgb(16 185 129)" : "rgb(63 63 70)",
           backgroundColor: dropActive ? "rgba(16,185,129,0.06)" : "rgba(0,0,0,0)",
         }}
-        className={`mt-3 rounded-xl border border-dashed py-6 text-center text-xs ${
-          dropActive ? "text-emerald-300" : "text-zinc-600"
-        }`}
+        className={`mt-3 rounded-xl border border-dashed text-center text-xs ${
+          ev.songs.length === 0 ? "py-6" : "py-2.5"
+        } ${dropActive ? "text-emerald-300" : "text-zinc-600"}`}
       >
         {ev.songs.length === 0 ? (
           <span>

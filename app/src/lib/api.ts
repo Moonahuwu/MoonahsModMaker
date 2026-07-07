@@ -78,6 +78,9 @@ export interface EventCompile {
   eventName: string;
   arrayKey: string;
   stockEntry: string;
+  /** This event's "respective" content folder (from its stock sound's dir);
+   *  omitted/empty = the global soundFolder. */
+  soundFolder?: string;
   durationMode: string;
   durationManual: number | null;
   previousOwned: string[];
@@ -104,6 +107,7 @@ export interface CompileConfig {
   writeEncodingTxt: boolean;
   skipCompile: boolean;
   importedMods: string[];
+  importedModExcludes?: Record<string, string[]>;
   events: EventCompile[];
   iconMods?: IconCompile[];
   soundOverrides?: SoundOverrideCompile[];
@@ -237,6 +241,143 @@ export function refreshVanilla(
   relpaths: string[],
 ): Promise<RefreshResult> {
   return invoke("refresh_vanilla", { helperPath, pakPath, relpaths });
+}
+
+/** A moddable sound event found in the refreshed vanilla tree (primary
+ *  `vsnd_files` only). Used to auto-discover events a new patch added. */
+export interface DiscoveredEvent {
+  eventsRelpath: string;
+  eventName: string;
+  arrayKey: string;
+  stockEntry: string;
+}
+
+/** Enumerate every primary-`vsnd_files` event across `relpaths` under the
+ *  refreshed `vanillaRoot` (files must already be decompiled there). */
+export function listEditableEvents(
+  vanillaRoot: string,
+  relpaths: string[],
+): Promise<DiscoveredEvent[]> {
+  return invoke("list_editable_events", { vanillaRoot, relpaths });
+}
+
+/** Enumerate every `.vsndevts` file in the game pak (relpaths, `_c` stripped),
+ *  so the patch sweep accounts for every sound-event file. */
+export function listSoundeventFiles(
+  helperPath: string,
+  pakPath: string,
+): Promise<string[]> {
+  return invoke("list_soundevent_files", { helperPath, pakPath });
+}
+
+/** Download + unpack the prebuilt tools bundle (trimmed CSDK compiler + static
+ *  ffmpeg) into app-data `tools/`; resolves to the paths to point settings at. */
+export function downloadTools(
+  url: string,
+): Promise<{ csdkRoot: string; ffmpegPath: string }> {
+  return invoke("download_tools", { url });
+}
+
+/** One event's adoptable entries when importing a mod pack (the entries whose
+ *  audio ships inside the pack). */
+export interface ImportEvent {
+  eventsRelpath: string;
+  eventName: string;
+  arrayKey: string;
+  refs: string[];
+}
+
+/** Scan a mod pack vpk for the author's own sound entries to adopt, per event.
+ *  `excludePrefixes` drops references under those internal paths; pack files at
+ *  stock game paths (vanilla copies / rename-replacements) are never adoptable. */
+export function importPackEvents(
+  helperPath: string,
+  pakPath: string,
+  packVpk: string,
+  excludePrefixes: string[],
+): Promise<ImportEvent[]> {
+  return invoke("import_pack_events", { helperPath, pakPath, packVpk, excludePrefixes });
+}
+
+/** What's inside a mod pack, classified for the import review UI. Every list
+ *  holds the pack's raw internal paths (compiled `_c` names), usable verbatim
+ *  as staging exclusions. */
+export interface PackContents {
+  /** Pack sounds that shadow REAL stock game sounds by identical path (the
+   *  "rename to the original's name" replacement trick). */
+  overwrites: string[];
+  /** The author's own (new-path) sound files, referenced by its sound events. */
+  ownSounds: string[];
+  models: string[];
+  particles: string[];
+  materials: string[];
+  panorama: string[];
+  other: string[];
+}
+
+/** Decompile a whole vpk into source form at destDir (structure preserved):
+ *  sounds → audio, textures → png, other resources → text, the rest raw. */
+export function decompileVpkAll(
+  helperPath: string,
+  vpk: string,
+  destDir: string,
+): Promise<string> {
+  return invoke("decompile_vpk_all", { helperPath, vpk, destDir });
+}
+
+/** Extract a pack ONCE into the app-managed cache; returns the cache dir. All
+ *  later compiles/previews read from it — the original .vpk isn't needed again. */
+export function cachePack(helperPath: string, packVpk: string): Promise<string> {
+  return invoke("cache_pack", { helperPath, packVpk });
+}
+
+/** Which of a pack's files are byte-identical to the game's originals at the
+ *  same path (bundled-but-unchanged vanilla copies). */
+export function packUnchangedFiles(
+  helperPath: string,
+  pakPath: string,
+  source: string,
+): Promise<string[]> {
+  return invoke("pack_unchanged_files", { helperPath, pakPath, source });
+}
+
+/** One (file, event, array) that references a given `.vsnd`. */
+export interface RefEventHit {
+  reference: string;
+  eventsRelpath: string;
+  eventName: string;
+  arrayKey: string;
+}
+
+/** Which events in the local vanilla merge base reference each of `refs`
+ *  (best-effort — scans the already-decompiled soundevents files). */
+export function eventsForRefs(vanillaRoot: string, refs: string[]): Promise<RefEventHit[]> {
+  return invoke("events_for_refs", { vanillaRoot, refs });
+}
+
+/** Classify a pack's contents against the live game (overwrites + counts). */
+export function scanPackContents(
+  helperPath: string,
+  pakPath: string,
+  packVpk: string,
+): Promise<PackContents> {
+  return invoke("scan_pack_contents", { helperPath, pakPath, packVpk });
+}
+
+/** One shop item's reference to a sound event (from abilities.vdata). */
+export interface ItemSoundRef {
+  itemName: string;
+  eventName: string;
+  label: string;
+}
+
+/** Index of every enabled shop item's sound events — lets the importer route a
+ *  `mods/*` sound event to the item(s) that use it. */
+export function itemSoundIndex(
+  helperPath: string,
+  pakPath: string,
+): Promise<ItemSoundRef[]> {
+  return invoke("item_sound_index", { helperPath, pakPath });
 }
 
 export interface DetectedPaths {
@@ -650,6 +791,16 @@ export function browseGameSounds(
   refresh = false,
 ): Promise<SoundBrowse> {
   return invoke("browse_game_sounds", { helperPath, pakPath, prefix, query, refresh });
+}
+
+/** Which of `refs` do NOT exist as real sound files in the pak (placeholder /
+ *  legacy refs whose preview would play a wrong or beep sound). */
+export function checkSoundRefs(
+  helperPath: string,
+  pakPath: string,
+  refs: string[],
+): Promise<string[]> {
+  return invoke("check_sound_refs", { helperPath, pakPath, refs });
 }
 
 /** A shop item card (icon + category + tier) for the Items tab. */

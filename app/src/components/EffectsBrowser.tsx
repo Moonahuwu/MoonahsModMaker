@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { motion } from "motion/react";
-import { browseParticles, effectPreview, type EffectPreview as EffectPreviewData, type ParticleBrowse, type RgbaColor } from "../lib/api";
+import { effectPreview, type EffectPreview as EffectPreviewData, type ParticleBrowse, type RgbaColor } from "../lib/api";
+import { cBrowseParticles } from "../lib/dataCache";
 import type { EffectOverride } from "../types";
 import { EffectPreview } from "./EffectPreview";
 
@@ -73,7 +74,7 @@ export function EffectsBrowser({
     setLoading(true);
     setError(null);
     const t = setTimeout(() => {
-      browseParticles(helperPath, pakPath, prefix, query)
+      cBrowseParticles(helperPath, pakPath, prefix, query)
         .then((d) => !cancelled && setData(d))
         .catch((e) => !cancelled && setError(String(e)))
         .finally(() => !cancelled && setLoading(false));

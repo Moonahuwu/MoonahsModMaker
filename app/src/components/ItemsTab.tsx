@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { motion } from "motion/react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { itemRoster, type ItemCard, type HeroAbilitySound } from "../lib/api";
+import { type ItemCard, type HeroAbilitySound } from "../lib/api";
+import { cItemRoster } from "../lib/dataCache";
 
 /**
  * Items tab — a Deadlock-style shop. Items are grouped into three category
@@ -33,9 +34,11 @@ export function ItemsTab({
   onHueChange,
   onPickIcon,
   onRemoveIcon,
+  experimentalEffects,
   effects,
   onOpenEffectViewer,
   onRecolorEffect,
+  modifiedFilter,
 }: {
   helperPath: string;
   pakPath: string;
@@ -50,12 +53,16 @@ export function ItemsTab({
   onHueChange: (hue: number) => void;
   onPickIcon: () => void;
   onRemoveIcon: () => void;
+  /** Experimental: gate the per-item particle-effect section (VFX recolor is WIP). */
+  experimentalEffects: boolean;
   /** This item's particle effects (null = loading). */
   effects: string[] | null;
   /** Open one of the item's particles in the external viewer. */
   onOpenEffectViewer: (reference: string) => void;
   /** Jump to the Effects tab to recolor. */
   onRecolorEffect: () => void;
+  /** "Modified only" filter: when set, show only items this returns true for. */
+  modifiedFilter?: ((name: string) => boolean) | null;
 }) {
   const [items, setItems] = useState<ItemCard[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -69,7 +76,7 @@ export function ItemsTab({
     setBusy(true);
     setError(null);
     try {
-      setItems(await itemRoster(helperPath, pakPath, refresh));
+      setItems(await cItemRoster(helperPath, pakPath, refresh));
     } catch (e) {
       setError(String(e));
     } finally {
@@ -189,8 +196,9 @@ export function ItemsTab({
           )}
         </div>
 
-        {/* Item effect (particles) — open in the real viewer or recolor */}
-        {effects && effects.length > 0 && (
+        {/* Item effect (particles) — open in the real viewer or recolor.
+            Experimental (VFX recolor is WIP), gated behind the settings toggle. */}
+        {experimentalEffects && effects && effects.length > 0 && (
           <div className="mt-5 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
             <div className="mb-2 flex items-center gap-2">
               <span className="text-sm font-semibold text-zinc-200">✦ Effect</span>
@@ -256,10 +264,21 @@ export function ItemsTab({
     return <div className="p-10 text-center text-sm text-zinc-500">Loading the shop from the game…</div>;
   }
 
+  const shownItems = modifiedFilter ? items.filter((i) => modifiedFilter(i.name)) : items;
+  if (modifiedFilter && shownItems.length === 0) {
+    return (
+      <div className="p-10 text-center text-sm text-zinc-500">
+        No items with changes yet — turn off “Modified only” to browse the shop.
+      </div>
+    );
+  }
+
   return (
     <div>
       <div className="mb-3 flex items-center gap-3">
-        <span className="text-xs text-zinc-500">{items.length} items</span>
+        <span className="text-xs text-zinc-500">
+          {shownItems.length} item{shownItems.length === 1 ? "" : "s"}
+        </span>
         <button
           onClick={() => void load(true)}
           disabled={busy}
@@ -272,7 +291,7 @@ export function ItemsTab({
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         {CATS.map((cat) => {
-          const inCat = items.filter((i) => i.category === cat.key);
+          const inCat = shownItems.filter((i) => i.category === cat.key);
           const tiers = Array.from(new Set(inCat.map((i) => i.tier))).sort((a, b) => a - b);
           return (
             <section

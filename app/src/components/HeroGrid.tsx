@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { motion } from "motion/react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { heroRoster, type HeroPortrait } from "../lib/api";
+import { type HeroPortrait } from "../lib/api";
+import { cHeroRoster } from "../lib/dataCache";
 
 /**
  * In-game-style hero selection grid. Pulls each hero's card portrait from the
@@ -15,12 +16,15 @@ export function HeroGrid({
   showExperimental,
   selected,
   onSelect,
+  modifiedFilter,
 }: {
   helperPath: string;
   pakPath: string;
   showExperimental: boolean;
   selected: string | null;
   onSelect: (hero: HeroPortrait) => void;
+  /** "Modified only" filter: when set, show only heroes this returns true for. */
+  modifiedFilter?: ((codename: string) => boolean) | null;
 }) {
   const [heroes, setHeroes] = useState<HeroPortrait[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -34,7 +38,7 @@ export function HeroGrid({
     setLoading(true);
     setError(null);
     try {
-      setHeroes(await heroRoster(helperPath, pakPath, refresh));
+      setHeroes(await cHeroRoster(helperPath, pakPath, refresh));
     } catch (e) {
       setError(String(e));
     } finally {
@@ -66,8 +70,17 @@ export function HeroGrid({
     );
   }
 
-  const shown = showExperimental ? heroes : heroes.filter((h) => !h.experimental);
+  let shown = showExperimental ? heroes : heroes.filter((h) => !h.experimental);
+  if (modifiedFilter) shown = shown.filter((h) => modifiedFilter(h.codename));
   const hiddenExp = heroes.length - heroes.filter((h) => !h.experimental).length;
+
+  if (modifiedFilter && shown.length === 0) {
+    return (
+      <div className="p-10 text-center text-sm text-zinc-500">
+        No heroes with changes yet — turn off “Modified only” to browse all heroes.
+      </div>
+    );
+  }
 
   return (
     <div>

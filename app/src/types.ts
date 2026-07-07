@@ -34,6 +34,9 @@ export interface Song {
   looping: boolean;
   order: number;
   lastCompiledHash: string | null;
+  /** When converted from a mod pack (absorb / edit-adopted): the original
+   *  `.vsnd` reference, so re-importing the same pack won't double the track. */
+  importedRef?: string | null;
 }
 
 export interface EventProject {

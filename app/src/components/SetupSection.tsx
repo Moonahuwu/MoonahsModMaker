@@ -55,13 +55,13 @@ export function SetupSection({
   settings: Settings;
   update: (patch: Partial<Settings>) => void;
   onClose: () => void;
-  onRefreshVanilla: () => Promise<void>;
-  onAutodetect: () => Promise<void>;
+  onRefreshVanilla: () => Promise<unknown>;
+  onAutodetect: () => Promise<unknown>;
 }) {
   const [checks, setChecks] = useState<Record<string, boolean | null>>({});
   const [busy, setBusy] = useState<null | "detect" | "refresh">(null);
 
-  async function run(which: "detect" | "refresh", fn: () => Promise<void>) {
+  async function run(which: "detect" | "refresh", fn: () => Promise<unknown>) {
     setBusy(which);
     try {
       await fn();
@@ -142,6 +142,33 @@ export function SetupSection({
         <p className="-mt-1 pl-6 text-[10px] text-zinc-600">
           Reveal disabled / in-development heroes (unreleased, may lack data) in the
           Heroes tab.
+        </p>
+      </div>
+
+      {/* Experimental — opt-in, work-in-progress features */}
+      <div className="mb-5 border-t border-zinc-800 pt-4">
+        <h3 className="text-sm font-semibold text-zinc-200">
+          Experimental
+          <span className="ml-2 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-300 align-middle">
+            WIP
+          </span>
+        </h3>
+        <p className="mt-1 mb-2 text-[10px] text-zinc-600">
+          Unfinished features, off by default. Expect rough edges.
+        </p>
+        <label className="flex cursor-pointer items-center gap-2.5">
+          <input
+            type="checkbox"
+            checked={settings.experimentalEffects}
+            onChange={(e) => update({ experimentalEffects: e.target.checked })}
+            className="accent-amber-500"
+          />
+          <span className="text-xs font-medium text-zinc-300">
+            Effects (VFX / particle recolor)
+          </span>
+        </label>
+        <p className="-mt-1 pl-6 text-[10px] text-zinc-600">
+          Show the Effects tab and per-item effect recoloring. Very work-in-progress.
         </p>
       </div>
 

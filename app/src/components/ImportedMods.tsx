@@ -1,135 +1,175 @@
 import { useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { decompileVpkAll } from "../lib/api";
 import type { Settings } from "../lib/settings";
+import { useToast } from "./Toaster";
 
 function baseName(p: string): string {
   return p.split(/[\\/]/).pop() ?? p;
 }
 
-/** Manage the list of other-mod vpks to combine on compile (their sounds +
- *  soundevents are unioned in; nothing of yours is removed). */
+/**
+ * Mod combiner: one "Import a mod…" flow (scan → review what's inside → pick
+ * the sound events to break out + bundle the rest), plus the list of bundled
+ * mods that ride along on every compile.
+ */
 export function ImportedMods({
   settings,
   update,
-  onMerge,
+  onImportPack,
 }: {
   settings: Settings;
   update: (patch: Partial<Settings>) => void;
-  onMerge: (vpk: string) => void;
+  /** Scan a pack and open the import review for it. */
+  onImportPack: (vpk: string) => void;
 }) {
   const [draft, setDraft] = useState("");
+  const [decompiling, setDecompiling] = useState(false);
+  const { push } = useToast();
   const mods = settings.importedMods;
 
-  function add() {
+  /** Utility: dump a whole vpk as decompiled sources (structure preserved). */
+  async function decompileVpk() {
+    const vpk = await open({
+      multiple: false,
+      title: "Decompile which .vpk?",
+      filters: [{ name: "VPK", extensions: ["vpk"] }],
+    });
+    if (!vpk || Array.isArray(vpk)) return;
+    const dest = await open({ directory: true, title: "Decompile into which folder?" });
+    if (!dest || Array.isArray(dest)) return;
+    setDecompiling(true);
+    push("info", "Decompiling the pack… big vpks take a while");
+    try {
+      const summary = await decompileVpkAll(settings.vpkHelperPath, vpk, dest);
+      push("success", `Done — ${summary}`);
+      try {
+        await revealItemInDir(dest);
+      } catch {
+        /* ignore */
+      }
+    } catch (e) {
+      push("error", `Decompile failed: ${e}`);
+    } finally {
+      setDecompiling(false);
+    }
+  }
+
+  function remove(p: string) {
+    // Drop the pack AND its remembered file deselections.
+    const excludes = { ...(settings.importedModExcludes ?? {}) };
+    delete excludes[p];
+    update({ importedMods: mods.filter((m) => m !== p), importedModExcludes: excludes });
+  }
+
+  function addPath() {
     const p = draft.trim().replace(/^"|"$/g, "");
-    if (p && !mods.includes(p)) update({ importedMods: [...mods, p] });
+    if (p) onImportPack(p);
     setDraft("");
   }
-  function remove(p: string) {
-    update({ importedMods: mods.filter((m) => m !== p) });
-  }
 
-  async function browse() {
+  async function browseImport() {
     const sel = await open({
-      multiple: true,
-      title: "Select other mods' pak01_dir.vpk",
+      multiple: false,
+      title: "Import a mod (pak_dir.vpk)",
       filters: [{ name: "VPK", extensions: ["vpk"] }],
     });
     if (!sel) return;
-    const paths = Array.isArray(sel) ? sel : [sel];
-    const next = [...mods];
-    for (const p of paths) if (!next.includes(p)) next.push(p);
-    update({ importedMods: next });
-  }
-
-  async function browseMerge() {
-    const sel = await open({
-      multiple: true,
-      title: "Merge mod(s) into your project",
-      filters: [{ name: "VPK", extensions: ["vpk"] }],
-    });
-    if (!sel) return;
-    for (const p of Array.isArray(sel) ? sel : [sel]) onMerge(p);
+    onImportPack(Array.isArray(sel) ? sel[0] : sel);
   }
 
   return (
     <section className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5">
-      <h3 className="text-sm font-semibold text-zinc-200">
-        Mods to combine{mods.length > 0 ? ` (${mods.length})` : ""}
-      </h3>
-
-      <p className="mt-2 text-xs text-zinc-500">
-        Point at other mods' <span className="font-mono">pak01_dir.vpk</span> files —
-        browse, paste a path, or <span className="text-zinc-400">drag a .vpk onto the
-        window</span>. On compile, their sounds + soundevent entries are merged into
-        yours (in the <span className="font-mono">combined/</span> output) — your
-        tracks are always kept.
+      <h3 className="text-sm font-semibold text-zinc-200">Import a mod</h3>
+      <p className="mt-2 text-xs leading-relaxed text-zinc-500">
+        Point at another mod's <span className="font-mono">pak01_dir.vpk</span> (or{" "}
+        <span className="text-zinc-400">drag a .vpk onto the window</span>). You'll get a
+        review of everything inside — pick which sound events become editable tracks in
+        your tabs, see which original sounds it replaces, and choose whether to bundle
+        the rest (models, effects, UI) into your build. Nothing of yours is ever removed.
       </p>
-
-      <div className="mt-3 flex flex-col gap-1.5">
-        <AnimatePresence initial={false}>
-          {mods.map((m) => (
-            <motion.div
-              key={m}
-              layout
-              initial={{ opacity: 0, x: -6 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -6 }}
-              className="flex items-center justify-between rounded-md border border-zinc-700 bg-zinc-800/40 px-3 py-1.5 text-xs"
-            >
-              <span className="truncate text-zinc-300" title={m}>
-                {baseName(m)}
-                <span className="ml-2 text-zinc-600">{m}</span>
-              </span>
-              <button
-                onClick={() => remove(m)}
-                className="ml-2 shrink-0 rounded p-0.5 text-zinc-500 transition hover:bg-red-950/40 hover:text-red-300"
-                aria-label="Remove imported mod"
-              >
-                ✕
-              </button>
-            </motion.div>
-          ))}
-        </AnimatePresence>
-      </div>
 
       <div className="mt-3 flex gap-2">
         <button
-          onClick={() => void browse()}
-          className="rounded-md bg-zinc-100 px-4 py-1.5 text-xs font-medium text-zinc-900 transition hover:bg-white"
+          onClick={() => void browseImport()}
+          className="rounded-md bg-emerald-600 px-4 py-1.5 text-xs font-medium text-white transition hover:bg-emerald-500"
         >
-          Browse for .vpk…
+          Import a mod…
         </button>
         <input
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && add()}
-          placeholder="…or paste a path"
+          onKeyDown={(e) => e.key === "Enter" && addPath()}
+          placeholder="…or paste a .vpk path and press Enter"
           spellCheck={false}
-          className="flex-1 rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-xs text-zinc-200 outline-none focus:border-violet-500/70"
+          className="flex-1 rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-xs text-zinc-200 outline-none focus:border-emerald-500/70"
         />
-        <button
-          onClick={add}
-          className="rounded-md border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-white"
-        >
-          Add
-        </button>
       </div>
 
       <div className="mt-5 border-t border-zinc-800 pt-4">
-        <h3 className="text-sm font-semibold text-zinc-200">Merge a mod into your project</h3>
-        <p className="mt-2 text-xs text-zinc-500">
-          One-time import: pulls a mod's tracks into your matching slots (Intro / Urn
-          / Heroes) so they show up there — toggle, remove, or hit <span className="text-zinc-400">Edit</span> on
-          one to turn it into your own trimmable track. Different from the list above,
-          which just bundles a whole mod on compile.
+        <h3 className="text-sm font-semibold text-zinc-200">
+          Bundled on compile{mods.length > 0 ? ` (${mods.length})` : ""}
+        </h3>
+        <p className="mt-1 text-xs text-zinc-500">
+          These packs' files ride along in every <span className="font-mono">combined/</span>{" "}
+          build — including sounds that replace originals by filename. Remove one to stop
+          bundling it (any tracks you imported from it stay in your tabs).
+        </p>
+        <div className="mt-3 flex flex-col gap-1.5">
+          {mods.length === 0 && (
+            <span className="text-xs text-zinc-600">Nothing bundled yet.</span>
+          )}
+          <AnimatePresence initial={false}>
+            {mods.map((m) => (
+              <motion.div
+                key={m}
+                layout
+                initial={{ opacity: 0, x: -6 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -6 }}
+                className="flex items-center justify-between rounded-md border border-zinc-700 bg-zinc-800/40 px-3 py-1.5 text-xs"
+              >
+                <span className="truncate text-zinc-300" title={m}>
+                  {baseName(m)}
+                  <span className="ml-2 text-zinc-600">{m}</span>
+                </span>
+                <span className="ml-2 flex shrink-0 items-center gap-1">
+                  <button
+                    onClick={() => onImportPack(m)}
+                    title="Re-open the import review for this pack"
+                    className="rounded px-1.5 py-0.5 text-zinc-500 transition hover:bg-zinc-700/60 hover:text-zinc-200"
+                  >
+                    review
+                  </button>
+                  <button
+                    onClick={() => remove(m)}
+                    className="rounded p-0.5 text-zinc-500 transition hover:bg-red-950/40 hover:text-red-300"
+                    aria-label="Remove bundled mod"
+                  >
+                    ✕
+                  </button>
+                </span>
+              </motion.div>
+            ))}
+          </AnimatePresence>
+        </div>
+      </div>
+
+      <div className="mt-5 border-t border-zinc-800 pt-4">
+        <h3 className="text-sm font-semibold text-zinc-200">Decompile a .vpk</h3>
+        <p className="mt-1 text-xs text-zinc-500">
+          Utility: dump any vpk as its decompiled sources, keeping the folder structure —
+          sounds become mp3/wav, textures become png, soundevents and configs become
+          readable text. Handy for digging through someone else's mod.
         </p>
         <button
-          onClick={() => void browseMerge()}
-          className="mt-3 rounded-md bg-violet-600 px-4 py-1.5 text-xs font-medium text-white transition hover:bg-violet-500"
+          onClick={() => void decompileVpk()}
+          disabled={decompiling}
+          className="mt-2 rounded-md border border-zinc-700 px-4 py-1.5 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-white disabled:opacity-50"
         >
-          Merge a mod into project…
+          {decompiling ? "Decompiling…" : "Decompile a .vpk…"}
         </button>
       </div>
     </section>

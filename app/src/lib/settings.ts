@@ -20,6 +20,9 @@ export interface Settings {
   vpkName: string;
   /** Other mods' pak01_dir.vpk paths to combine in on compile. */
   importedMods: string[];
+  /** Per-mod files DESELECTED in the import review (mod vpk path → raw internal
+   *  paths like `sounds/x.vsnd_c`): dropped from the combined stage on compile. */
+  importedModExcludes: Record<string, string[]>;
   /** Deadlock's `game/citadel/addons` folder — where installs are copied. */
   addonsDir: string;
   /** After a successful compile, also install the .vpk into the game. */
@@ -36,6 +39,12 @@ export interface Settings {
   showExperimentalHeroes: boolean;
   /** Open the per-track "Compare to original" panel by default on each song. */
   compareByDefault: boolean;
+  /** Experimental: reveal the VFX/particle recolor feature — the Effects tab and
+   *  the per-item effect section. Off by default (very WIP). */
+  experimentalEffects: boolean;
+  /** Include UI-tab sound changes in the compiled build. Off by default — UI
+   *  soundevent edits make broad menu changes that can break things. */
+  includeUiSounds: boolean;
   /** Path to VRF's Source2Viewer.exe — enables "Open in real viewer" for effects. */
   source2ViewerPath: string;
   /** Bake Custom Server gameplay edits (abilities.vdata) into the build. OFF by
@@ -51,10 +60,30 @@ export interface Settings {
   /** Name of the currently-loaded profile (build config). Empty until the first
    *  profile is bootstrapped. The active profile owns `importedMods`. */
   activeProfile: string;
+  /** Baseline of known game sound events (`relpath::eventName`), seeded on the
+   *  first "Fix for new patch". Future fixes diff the live game against this so
+   *  only events a NEW patch added surface in the "New / Unsorted" tab. */
+  knownSoundEvents: string[];
+  /** Soundevents files the sweep has already tracked. Empty = the full-pak
+   *  sweep hasn't run yet (its first run seeds unknown files silently); after
+   *  that, a file not in this list means a PATCH added it, so its events
+   *  surface instead of being silently baselined. */
+  knownSweepFiles: string[];
+  /** One-time migration marker: UI-tab edits used to always compile; on first
+   *  load after the includeUiSounds gate shipped, projects that already carry
+   *  UI content get the gate enabled so existing mods keep building. */
+  uiSoundsMigrated: boolean;
 }
 
 const REPO = "C:/Users/ethob/Desktop/DeadlockModding/EasyIntroModder";
 const CSDK = "C:/Users/ethob/Desktop/DeadlockModding/Reduced_CSDK_12";
+
+/** Where the one-click setup downloads the prebuilt tools bundle (trimmed CSDK
+ *  compiler + static ffmpeg, built by `EIM_Tools_v1.zip` at the repo root's
+ *  sibling folder). Upload that zip as a GitHub release asset under this tag
+ *  before shipping a standalone build. */
+export const TOOLS_BUNDLE_URL =
+  "https://github.com/Moonahuwu/MoonahsModMaker/releases/download/tools-v1/EIM_Tools_v1.zip";
 
 export const DEFAULT_SETTINGS: Settings = {
   csdkRoot: CSDK,
@@ -69,6 +98,7 @@ export const DEFAULT_SETTINGS: Settings = {
   outputMode: "vpk",
   vpkName: "pak01_dir.vpk",
   importedMods: [],
+  importedModExcludes: {},
   addonsDir:
     "D:/SteamLibrary/steamapps/common/Deadlock/game/citadel/addons",
   installAfterCompile: false,
@@ -77,11 +107,16 @@ export const DEFAULT_SETTINGS: Settings = {
   firstRunDone: false,
   showExperimentalHeroes: false,
   compareByDefault: false,
+  experimentalEffects: false,
+  includeUiSounds: false,
   source2ViewerPath: "",
   includeGameplay: false,
   excludedConfigKeys: [],
   randomizer: { skipMovement: false, skipCast: false, skipScale: true, includeGuns: false, noNegative: true, randomizeItemTiers: false, heroStats: false, heroInvestment: false, unsorted: false },
   activeProfile: "",
+  knownSoundEvents: [],
+  knownSweepFiles: [],
+  uiSoundsMigrated: false,
 };
 
 const STORAGE_KEY = "eim.settings.v1";
@@ -134,6 +169,20 @@ export function useSettings() {
   return { settings, update, ready };
 }
 
+/** Where a slot's tracks compile to (and what their `.vsnd` refs start with):
+ *  the directory of the event's stock sound — its "respective" home — so urn
+ *  music lands under `sounds/music/…`, hero ability sounds under
+ *  `sounds/abilities/<hero>/…`, etc. Events with no stock ref get a namespaced
+ *  per-tab folder; the global setting stays the fallback for match intro. */
+export function slotSoundFolder(
+  ev: { group: string; stockEntry: string },
+  globalFolder: string,
+): string {
+  const i = ev.stockEntry.lastIndexOf("/");
+  if (i > 0) return ev.stockEntry.slice(0, i);
+  return ev.group === "intro" ? globalFolder : `sounds/eim/${ev.group}`;
+}
+
 /** The compiled .vpk to install: the `combined/` variant when mods are imported
  *  (it contains yours + theirs), otherwise the `mine/` variant. */
 export function installSrcVpk(s: Settings): string {
@@ -184,6 +233,7 @@ export function buildCompileConfig(
     eventName: ev.eventName,
     arrayKey: ev.arrayKey,
     stockEntry: ev.stockEntry,
+    soundFolder: slotSoundFolder(ev, s.soundFolder),
     durationMode: ev.vsndDurationMode,
     durationManual: ev.vsndDurationManual,
     previousOwned: ev.previousOwnedNames,
@@ -224,6 +274,7 @@ export function buildCompileConfig(
     writeEncodingTxt: true,
     skipCompile,
     importedMods: s.importedMods,
+    importedModExcludes: s.importedModExcludes ?? {},
     events: eventCompiles,
     iconMods: iconCompiles,
     soundOverrides: overrideCompiles,

@@ -1,6 +1,7 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { SoundOverride } from "../types";
+import { PauseIcon } from "./PauseIcon";
 
 /**
  * Compact editor for one loose-file sound override: swap the source file, preview
@@ -18,6 +19,8 @@ export function OverrideEditor({
 }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
+  // Media elements keep playing after DOM removal — stop on unmount.
+  useEffect(() => () => audioRef.current?.pause(), []);
 
   const fileName = override.sourceAudio.split(/[\\/]/).pop() ?? override.sourceAudio;
 
@@ -51,7 +54,7 @@ export function OverrideEditor({
           onClick={togglePlay}
           className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-zinc-700 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-white"
         >
-          {playing ? "▮▮" : "▶"}
+          {playing ? <PauseIcon /> : "▶"}
         </button>
         <span className="min-w-0 flex-1 truncate text-zinc-300" title={override.sourceAudio}>
           {fileName}

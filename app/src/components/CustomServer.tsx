@@ -3,17 +3,12 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { Window } from "@tauri-apps/api/window";
 import {
-  globalConfig,
-  heroConfig,
   hostConnectId,
   hostStatus,
-  itemConfig,
-  itemRoster,
   launchHost,
   rconExec,
   revertHosting,
   setupHosting,
-  worldConfig,
   type AbilityConfig,
   type AbilityProp,
   type EntityConfig,
@@ -22,6 +17,7 @@ import {
   type HeroPortrait,
   type ItemCard,
 } from "../lib/api";
+import { cGlobalConfig, cHeroConfig, cItemConfig, cItemRoster, cWorldConfig } from "../lib/dataCache";
 import type { GlobalOverride, VdataOverride, WorldOverride } from "../types";
 import { quickActions } from "../lib/rconActions";
 import { HeroGrid } from "./HeroGrid";
@@ -559,7 +555,7 @@ function HeroesSection({
     let cancelled = false;
     setLoading(true);
     setError(null);
-    heroConfig(helperPath, pakPath, hero.codename)
+    cHeroConfig(helperPath, pakPath, hero.codename)
       .then((a) => !cancelled && setAbilities(a))
       .catch((e) => !cancelled && setError(String(e)))
       .finally(() => !cancelled && setLoading(false));
@@ -660,7 +656,7 @@ function ItemsSection({
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    itemRoster(helperPath, pakPath).then(setItems).catch((e) => setError(String(e)));
+    cItemRoster(helperPath, pakPath).then(setItems).catch((e) => setError(String(e)));
   }, [helperPath, pakPath]);
 
   useEffect(() => {
@@ -670,7 +666,7 @@ function ItemsSection({
     }
     let cancelled = false;
     setLoading(true);
-    itemConfig(helperPath, pakPath, item.name)
+    cItemConfig(helperPath, pakPath, item.name)
       .then((p) => !cancelled && setProps(p))
       .catch(() => !cancelled && setProps([]))
       .finally(() => !cancelled && setLoading(false));
@@ -804,7 +800,7 @@ function GlobalSection({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    globalConfig(helperPath, pakPath).then(setStats).catch((e) => setError(String(e)));
+    cGlobalConfig(helperPath, pakPath).then(setStats).catch((e) => setError(String(e)));
   }, [helperPath, pakPath]);
 
   const groups = useMemo(() => {
@@ -895,7 +891,7 @@ function EntitySection({
     setEntities(null);
     setPicked(null);
     setError(null);
-    worldConfig(helperPath, pakPath, kind).then(setEntities).catch((e) => setError(String(e)));
+    cWorldConfig(helperPath, pakPath, kind).then(setEntities).catch((e) => setError(String(e)));
   }, [kind, helperPath, pakPath]);
 
   const filtered = useMemo(() => {

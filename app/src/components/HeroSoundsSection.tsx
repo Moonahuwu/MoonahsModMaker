@@ -1,6 +1,7 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "motion/react";
 import type { HeroSound, HeroSoundCategory } from "../lib/api";
+import { PauseIcon } from "./PauseIcon";
 
 /**
  * The hero's full non-VO sound set (gunfire, abilities, movement…) shown below
@@ -23,6 +24,7 @@ export function HeroSoundsSection({
   onPreview,
   onOpen,
   renderSound,
+  hasContent,
 }: {
   accent: string;
   sounds: HeroSound[] | null;
@@ -33,12 +35,16 @@ export function HeroSoundsSection({
   onOpen: (s: HeroSound) => void;
   /** Render the editor panel for an opened sound. */
   renderSound: (sound: { eventName: string; label: string }) => React.ReactNode;
+  /** True if this event already has your custom/imported audio (shows a marker). */
+  hasContent?: (eventName: string) => boolean;
 }) {
   const [query, setQuery] = useState("");
   const [openCats, setOpenCats] = useState<Set<string>>(new Set(["gunfire"]));
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [playing, setPlaying] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  // Media elements keep playing after DOM removal — stop on unmount.
+  useEffect(() => () => audioRef.current?.pause(), []);
 
   const byCat = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -138,10 +144,12 @@ export function HeroSoundsSection({
                   <div className="flex flex-col gap-1.5 border-t border-zinc-800 p-2">
                     {items.map((s) => {
                       const rowOpen = expanded.has(s.eventName);
+                      const modded = hasContent?.(s.eventName) ?? false;
                       return (
                         <div
                           key={s.eventName}
                           className="rounded-lg border border-zinc-800 bg-zinc-900/50"
+                          style={modded ? { borderColor: accent } : undefined}
                         >
                           <div className="flex items-center gap-2 px-3 py-1.5">
                             <button
@@ -150,8 +158,15 @@ export function HeroSoundsSection({
                               title={s.stockRef ? "Preview stock clip" : "No stock clip"}
                               className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-zinc-700 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-white disabled:opacity-30"
                             >
-                              {playing === s.eventName ? "▮▮" : "▶"}
+                              {playing === s.eventName ? <PauseIcon /> : "▶"}
                             </button>
+                            {modded && (
+                              <span
+                                title="Has your custom / imported audio"
+                                className="h-2 w-2 shrink-0 rounded-full"
+                                style={{ backgroundColor: accent }}
+                              />
+                            )}
                             <span
                               className="min-w-0 flex-1 truncate text-sm text-zinc-200"
                               title={s.eventName}
@@ -160,10 +175,10 @@ export function HeroSoundsSection({
                             </span>
                             <button
                               onClick={() => toggleRow(s)}
-                              style={rowOpen ? { borderColor: accent, color: accent } : undefined}
+                              style={rowOpen || modded ? { borderColor: accent, color: accent } : undefined}
                               className="shrink-0 rounded-md border border-zinc-700 px-2.5 py-0.5 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-white"
                             >
-                              {rowOpen ? "Close" : "Replace"}
+                              {rowOpen ? "Close" : modded ? "Edit ✓" : "Replace"}
                             </button>
                           </div>
                           {rowOpen && (

@@ -25,6 +25,8 @@ export function HeroDetail({
   soundsLoading,
   onPreviewSound,
   onOpenSound,
+  hasContent,
+  modifiedOnly,
 }: {
   heroName: string;
   backgroundSrc: string | null;
@@ -42,8 +44,18 @@ export function HeroDetail({
   soundsLoading: boolean;
   onPreviewSound: (ref: string) => Promise<string>;
   onOpenSound: (s: HeroSound) => void;
+  /** True if the event already has your custom/imported audio (row marker). */
+  hasContent?: (eventName: string) => boolean;
+  /** "Modified only": filter every sound list down to events with your content. */
+  modifiedOnly?: boolean;
 }) {
   const active = abilities?.find((a) => a.ability === selectedAbility) ?? null;
+  const contentOf = (name: string) => (hasContent ? hasContent(name) : false);
+  const activeSounds = active
+    ? modifiedOnly
+      ? active.sounds.filter((s) => contentOf(s.eventName))
+      : active.sounds
+    : [];
 
   return (
     <div>
@@ -147,13 +159,15 @@ export function HeroDetail({
             <h3 className="mb-3 text-sm font-semibold text-zinc-300">
               {prettyAbility(active.ability, heroName)} — sounds
             </h3>
-            {active.sounds.length === 0 ? (
+            {activeSounds.length === 0 ? (
               <p className="text-sm text-zinc-500">
-                This ability has no editable sound events.
+                {modifiedOnly && active.sounds.length > 0
+                  ? "No modified sounds on this ability — turn off “Modified only” to see all of them."
+                  : "This ability has no editable sound events."}
               </p>
             ) : (
               <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-                {active.sounds.map((s) => (
+                {activeSounds.map((s) => (
                   <div key={s.eventName}>{renderSound(s)}</div>
                 ))}
               </div>
@@ -162,14 +176,24 @@ export function HeroDetail({
         )}
       </AnimatePresence>
 
-      {/* Full hero sound set (gunfire / abilities / movement), auto-grouped. */}
+      {/* Full hero sound set (gunfire / abilities / movement), auto-grouped.
+          Events already shown on an ability card are left out. */}
       <HeroSoundsSection
         accent={accent}
-        sounds={sounds}
+        sounds={
+          sounds
+            ? sounds.filter(
+                (s) =>
+                  !(abilities ?? []).some((a) => a.sounds.some((x) => x.eventName === s.eventName)) &&
+                  (!modifiedOnly || contentOf(s.eventName)),
+              )
+            : sounds
+        }
         loading={soundsLoading}
         onPreview={onPreviewSound}
         onOpen={onOpenSound}
         renderSound={renderSound}
+        hasContent={hasContent}
       />
     </div>
   );

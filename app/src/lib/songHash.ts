@@ -7,8 +7,14 @@ import type { Song } from "../types";
 //
 // Must stay in sync with the backend's skip check (it only compares equality, so
 // any stable string works — the frontend owns the format).
+// Renderer version salt: bump when the ffmpeg render itself changes meaning
+// (e.g. v2 = the -ss placement fix that put fades on the trimmed timeline), so
+// every previously-compiled track re-renders once with the corrected output.
+const RENDER_V = "v2";
+
 export function songHash(song: Song): string {
   return [
+    RENDER_V,
     song.sourceMp3,
     song.soundName,
     song.trimStart,
@@ -32,6 +38,7 @@ export function overrideHash(o: {
   looping: boolean;
 }): string {
   return [
+    RENDER_V,
     o.sourceAudio,
     o.targetRef,
     o.trimStart,

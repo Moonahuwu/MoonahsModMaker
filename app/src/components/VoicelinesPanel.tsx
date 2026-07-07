@@ -1,6 +1,7 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "motion/react";
 import type { VoiceLine } from "../lib/api";
+import { PauseIcon } from "./PauseIcon";
 
 /**
  * A hero's voicelines (often 1000+ single-clip events). Rendered compactly: a
@@ -19,6 +20,8 @@ export function VoicelinesPanel({
   onPreview,
   onOpen,
   renderSound,
+  modifiedFilter,
+  hasContent,
 }: {
   heroName: string;
   accent: string;
@@ -31,21 +34,28 @@ export function VoicelinesPanel({
   onOpen: (vl: VoiceLine) => void;
   /** Render the editor panel for an opened voiceline. */
   renderSound: (sound: { eventName: string; label: string }) => React.ReactNode;
+  /** "Modified only": when set, list only voicelines this returns true for. */
+  modifiedFilter?: ((eventName: string) => boolean) | null;
+  /** True if the voiceline already has your custom audio (row marker). */
+  hasContent?: (eventName: string) => boolean;
 }) {
   const [query, setQuery] = useState("");
   const [limit, setLimit] = useState(PAGE);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [playing, setPlaying] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  // Media elements keep playing after DOM removal — stop on unmount.
+  useEffect(() => () => audioRef.current?.pause(), []);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const list = voicelines ?? [];
+    let list = voicelines ?? [];
+    if (modifiedFilter) list = list.filter((v) => modifiedFilter(v.eventName));
     if (!q) return list;
     return list.filter(
       (v) => v.label.toLowerCase().includes(q) || v.eventName.toLowerCase().includes(q),
     );
-  }, [voicelines, query]);
+  }, [voicelines, query, modifiedFilter]);
 
   const shown = filtered.slice(0, limit);
 
@@ -113,33 +123,47 @@ export function VoicelinesPanel({
           This hero has no voiceline data.
         </p>
       )}
+      {modifiedFilter && voicelines && voicelines.length > 0 && filtered.length === 0 && !query && (
+        <p className="py-8 text-center text-sm text-zinc-500">
+          No modified voicelines yet — turn off “Modified only” to browse all of them.
+        </p>
+      )}
 
       <div className="flex flex-col gap-1.5">
         {shown.map((vl) => {
           const isOpen = expanded.has(vl.eventName);
+          const modded = hasContent?.(vl.eventName) ?? false;
           return (
             <div
               key={vl.eventName}
               className="rounded-lg border border-zinc-800 bg-zinc-900/40"
+              style={modded ? { borderColor: accent } : undefined}
             >
               <div className="flex items-center gap-2 px-3 py-1.5">
                 <button
                   onClick={() => void preview(vl)}
                   disabled={!vl.stockRef}
-                  title={vl.stockRef ? "Preview stock clip" : "No stock clip"}
+                  title={vl.stockRef ? "Preview stock clip (the original — your replacement plays in game)" : "No stock clip"}
                   className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-zinc-700 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-white disabled:opacity-30"
                 >
-                  {playing === vl.eventName ? "▮▮" : "▶"}
+                  {playing === vl.eventName ? <PauseIcon /> : "▶"}
                 </button>
+                {modded && (
+                  <span
+                    title="Has your custom / imported audio"
+                    className="h-2 w-2 shrink-0 rounded-full"
+                    style={{ backgroundColor: accent }}
+                  />
+                )}
                 <span className="min-w-0 flex-1 truncate text-sm text-zinc-200" title={vl.eventName}>
                   {vl.label}
                 </span>
                 <button
                   onClick={() => toggle(vl)}
-                  style={isOpen ? { borderColor: accent, color: accent } : undefined}
+                  style={isOpen || modded ? { borderColor: accent, color: accent } : undefined}
                   className="shrink-0 rounded-md border border-zinc-700 px-2.5 py-0.5 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-white"
                 >
-                  {isOpen ? "Close" : "Replace"}
+                  {isOpen ? "Close" : modded ? "Edit ✓" : "Replace"}
                 </button>
               </div>
               {isOpen && (
