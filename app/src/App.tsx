@@ -3212,6 +3212,15 @@ export default function App() {
             hidden={settings.posterHidden}
             hiddenSheets={settings.posterHiddenSheets}
             showUnused={settings.showUnusedPosters}
+            customRegions={settings.posterCustomRegions}
+            onCustomChange={(sheetId, regions) => {
+              updateSettings({
+                posterCustomRegions: {
+                  ...settingsRef.current.posterCustomRegions,
+                  [sheetId]: regions,
+                },
+              });
+            }}
             onAdd={addPosterOverride}
             onUpdate={updatePosterOverride}
             onRemove={removePosterOverride}

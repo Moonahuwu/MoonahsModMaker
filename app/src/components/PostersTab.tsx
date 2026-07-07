@@ -147,6 +147,8 @@ export function PostersTab({
   hidden,
   hiddenSheets,
   showUnused,
+  customRegions,
+  onCustomChange,
   onAdd,
   onUpdate,
   onRemove,
@@ -167,6 +169,12 @@ export function PostersTab({
   hiddenSheets: string[];
   /** Settings → Experimental → "Show unused poster assets". */
   showUnused: boolean;
+  /** User-drawn extra regions per sheet id (settings-persisted). */
+  customRegions: Record<string, { id: string; x: number; y: number; w: number; h: number }[]>;
+  onCustomChange: (
+    sheetId: string,
+    regions: { id: string; x: number; y: number; w: number; h: number }[],
+  ) => void;
   onAdd: (ov: PosterOverride) => void;
   onUpdate: (id: string, patch: Partial<PosterOverride>) => void;
   onRemove: (id: string) => void;
@@ -222,9 +230,61 @@ export function PostersTab({
     );
   }
 
-  /** Effective rect: user correction wins over the manifest. */
+  /** Manifest regions + the user's own drawn regions, as one list. Custom
+   *  regions carry alphaCoverage 0 so the compile always un-clips their trans
+   *  rect (harmless where the mask is already opaque). */
+  function sheetPosters(sh: ManifestSheet): ManifestPoster[] {
+    const extra = (customRegions[sh.id] ?? []).map((r) => ({
+      id: r.id,
+      x: r.x,
+      y: r.y,
+      w: r.w,
+      h: r.h,
+      alphaCoverage: 0,
+    }));
+    return [...sh.posters, ...extra];
+  }
+
+  function isCustom(sh: ManifestSheet, posterId: string): boolean {
+    return (customRegions[sh.id] ?? []).some((r) => r.id === posterId);
+  }
+
+  /** Effective rect: custom regions carry their own rect; manifest regions get
+   *  the user correction over the generated one. */
   function eff(sh: ManifestSheet, p: ManifestPoster): Rect {
+    const custom = (customRegions[sh.id] ?? []).find((r) => r.id === p.id);
+    if (custom) return { x: custom.x, y: custom.y, w: custom.w, h: custom.h };
     return rectEdits[`${sh.id}::${p.id}`] ?? { x: p.x, y: p.y, w: p.w, h: p.h };
+  }
+
+  function addCustomRegion(sh: ManifestSheet) {
+    const el = containerRef.current;
+    const rect = el?.getBoundingClientRect();
+    // Land the new region in the middle of what's currently on screen.
+    const scaleBase = rect ? sh.width / rect.width : 1;
+    const cx = rect ? ((rect.width / 2 - view.x) / view.zoom) * scaleBase : sh.width / 2;
+    const cy = rect ? ((rect.height / 2 - view.y) / view.zoom) * scaleBase : sh.height / 2;
+    const size = Math.round(Math.min(sh.width, sh.height) / (4 * view.zoom));
+    const region = {
+      id: `custom_${Date.now().toString(36)}`,
+      x: Math.round(Math.min(Math.max(0, cx - size / 2), sh.width - size)),
+      y: Math.round(Math.min(Math.max(0, cy - size / 2), sh.height - size)),
+      w: size,
+      h: size,
+    };
+    onCustomChange(sh.id, [...(customRegions[sh.id] ?? []), region]);
+    setSelected(`${sh.id}::${region.id}`);
+    push("info", "Region added — drag it into place, resize with the handles");
+  }
+
+  function removeCustomRegion(sh: ManifestSheet, posterId: string) {
+    onCustomChange(
+      sh.id,
+      (customRegions[sh.id] ?? []).filter((r) => r.id !== posterId),
+    );
+    const ovId = `${sh.id}::${posterId}`;
+    if (byId.has(ovId)) onRemove(ovId);
+    setSelected(null);
   }
 
   // Search across every sheet + region name (respects the unused filter).
@@ -351,14 +411,14 @@ export function PostersTab({
       if (!sh || paths.length === 0 || editModeRef.current) return false;
       const el = document.elementFromPoint(cssX, cssY)?.closest("[data-poster-rect]");
       const pid = el?.getAttribute("data-poster-rect");
-      const poster = sh.posters.find((p) => p.id === pid);
+      const poster = sheetPosters(sh).find((p) => p.id === pid);
       if (!poster) return false;
       assign(sh, poster, paths[0]);
       return true;
     });
     return () => registerDropHandler(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [overrides, rectEdits]);
+  }, [overrides, rectEdits, customRegions]);
 
   /** CSS px → sheet px scale for the current (zoomed) content. */
   function sheetScale(sh: ManifestSheet): number {
@@ -471,12 +531,23 @@ export function PostersTab({
   }
 
   /** Persist a rect correction (null = reset to manifest) and keep any existing
-   *  override's compile rect in sync. */
+   *  override's compile rect in sync. Custom regions carry their own rect. */
   function commitRect(id: string, rect: Rect | null) {
     const sh = sheetRef.current;
+    const posterId = sh ? id.slice(sh.id.length + 2) : "";
+    if (sh && isCustom(sh, posterId)) {
+      if (rect) {
+        onCustomChange(
+          sh.id,
+          (customRegions[sh.id] ?? []).map((r) => (r.id === posterId ? { ...r, ...rect } : r)),
+        );
+        if (byId.has(id)) onUpdate(id, rect);
+      }
+      return;
+    }
     onRectEdit(id, rect);
     if (byId.has(id)) {
-      const p = sh?.posters.find((pp) => `${sh.id}::${pp.id}` === id);
+      const p = sh ? sheetPosters(sh).find((pp) => `${sh.id}::${pp.id}` === id) : undefined;
       const effective = rect ?? (p ? { x: p.x, y: p.y, w: p.w, h: p.h } : null);
       if (effective) onUpdate(id, effective);
     }
@@ -484,7 +555,7 @@ export function PostersTab({
 
   function patchSelectedRect(patch: Partial<Rect>) {
     if (!sheet || !selected) return;
-    const p = sheet.posters.find((pp) => `${sheet.id}::${pp.id}` === selected);
+    const p = sheetPosters(sheet).find((pp) => `${sheet.id}::${pp.id}` === selected);
     if (!p) return;
     commitRect(selected, { ...eff(sheet, p), ...patch });
   }
@@ -682,9 +753,11 @@ export function PostersTab({
   }
 
   // ---- Sheet detail: image + clickable rect overlays ------------------------
+  const allPosters = sheetPosters(sheet);
   const selectedDef = selected
-    ? sheet.posters.find((p) => `${sheet.id}::${p.id}` === selected)
+    ? allPosters.find((p) => `${sheet.id}::${p.id}` === selected)
     : undefined;
+  const selectedIsCustom = selectedDef ? isCustom(sheet, selectedDef.id) : false;
   const selectedOv = selected ? byId.get(selected) : undefined;
   const selectedRect = selectedDef ? eff(sheet, selectedDef) : undefined;
   const selectedEdited = selected ? !!rectEdits[selected] : false;
@@ -744,6 +817,15 @@ export function PostersTab({
             title="Replace the entire sheet texture with a same-size image (e.g. the downloaded original after editing)"
           >
             Replace whole sheet…
+          </button>
+        )}
+        {editMode && (
+          <button
+            onClick={() => addCustomRegion(sheet)}
+            className="rounded-lg bg-zinc-800 px-2.5 py-1 text-[11px] font-semibold text-zinc-300 transition hover:bg-zinc-700"
+            title="Draw a new region for art the generated map doesn't split out"
+          >
+            ＋ Add region
           </button>
         )}
         {editMode && (
@@ -846,12 +928,13 @@ export function PostersTab({
               draggable={false}
             />
           )}
-          {sheet.posters.map((p) => {
+          {allPosters.map((p) => {
             const id = `${sheet.id}::${p.id}`;
             const isHidden = hiddenSet.has(id);
             if (isHidden && !showUnused) return null;
             const ov = byId.get(id);
             const isSel = selected === id;
+            const custom = isCustom(sheet, p.id);
             const r = live?.id === id ? live.rect : eff(sheet, p);
             const pct = {
               left: `${(r.x / sheet.width) * 100}%`,
@@ -885,9 +968,11 @@ export function PostersTab({
                     ? `${2 / view.zoom}px dashed #f59e0b`
                     : ov
                       ? `${2 / view.zoom}px solid #34d399`
-                      : isSel
-                        ? `${2 / view.zoom}px solid ${accent}`
-                        : `${1 / view.zoom}px solid rgba(255,255,255,0.3)`,
+                      : custom
+                        ? `${2 / view.zoom}px dashed #38bdf8`
+                        : isSel
+                          ? `${2 / view.zoom}px solid ${accent}`
+                          : `${1 / view.zoom}px solid rgba(255,255,255,0.3)`,
                   boxShadow: isSel ? `0 0 0 ${2 / view.zoom}px ${accent}55` : undefined,
                 }}
               >
@@ -957,6 +1042,11 @@ export function PostersTab({
             <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
               <div className="mb-1 flex items-center gap-2 text-sm font-semibold text-zinc-100">
                 {pretty(selectedDef.id)}
+                {selectedIsCustom && (
+                  <span className="rounded bg-sky-500/15 px-1.5 text-[10px] font-semibold text-sky-300">
+                    your region
+                  </span>
+                )}
                 {selectedEdited && (
                   <span className="rounded bg-amber-500/15 px-1.5 text-[10px] font-semibold text-amber-300">
                     adjusted
@@ -995,23 +1085,34 @@ export function PostersTab({
                     ))}
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    <button
-                      onClick={() => onToggleHidden(selected!)}
-                      className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${
-                        selectedHidden
-                          ? "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
-                          : "bg-amber-400 text-zinc-900 hover:bg-amber-300"
-                      }`}
-                    >
-                      {selectedHidden ? "Mark as used" : "Mark unused"}
-                    </button>
-                    {selectedEdited && (
+                    {selectedIsCustom ? (
                       <button
-                        onClick={() => commitRect(selected!, null)}
-                        className="rounded-lg bg-zinc-800 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-700"
+                        onClick={() => removeCustomRegion(sheet, selectedDef.id)}
+                        className="rounded-lg px-3 py-1.5 text-xs font-semibold text-red-400/90 hover:bg-red-500/10 hover:text-red-300"
                       >
-                        Reset to detected
+                        Delete region
                       </button>
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => onToggleHidden(selected!)}
+                          className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${
+                            selectedHidden
+                              ? "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+                              : "bg-amber-400 text-zinc-900 hover:bg-amber-300"
+                          }`}
+                        >
+                          {selectedHidden ? "Mark as used" : "Mark unused"}
+                        </button>
+                        {selectedEdited && (
+                          <button
+                            onClick={() => commitRect(selected!, null)}
+                            className="rounded-lg bg-zinc-800 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-700"
+                          >
+                            Reset to detected
+                          </button>
+                        )}
+                      </>
                     )}
                   </div>
                 </>

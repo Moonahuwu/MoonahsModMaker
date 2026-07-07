@@ -85,6 +85,12 @@ export interface Settings {
   posterHiddenSheets: string[];
   /** Experimental: reveal unused-marked poster sheets/regions for auditing. */
   showUnusedPosters: boolean;
+  /** Posters tab: user-drawn extra regions per sheet (for art the generated
+   *  manifest doesn't split out). Behave exactly like manifest regions. */
+  posterCustomRegions: Record<
+    string,
+    { id: string; x: number; y: number; w: number; h: number }[]
+  >;
 }
 
 const REPO = "C:/Users/ethob/Desktop/DeadlockModding/EasyIntroModder";
@@ -133,6 +139,7 @@ export const DEFAULT_SETTINGS: Settings = {
   posterHidden: [],
   posterHiddenSheets: [],
   showUnusedPosters: false,
+  posterCustomRegions: {},
 };
 
 const STORAGE_KEY = "eim.settings.v1";
