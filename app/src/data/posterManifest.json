@@ -4400,7 +4400,7 @@
     {
       "id": "signage_mystic_01",
       "category": "signage",
-      "curated": false,
+      "curated": true,
       "materials": [
         "materials/overlays/signage_mystic_01.vmat"
       ],
@@ -4410,19 +4410,91 @@
       "height": 2048,
       "posters": [
         {
-          "id": "item_00",
-          "x": 0,
+          "id": "grebb_frogs",
+          "x": 8,
+          "y": 56,
+          "w": 709,
+          "h": 1418,
+          "alphaCoverage": 0.0
+        },
+        {
+          "id": "friedlander_koppelman",
+          "x": 757,
+          "y": 8,
+          "w": 140,
+          "h": 1295,
+          "alphaCoverage": 1.0
+        },
+        {
+          "id": "holy_chains",
+          "x": 922,
+          "y": 8,
+          "w": 130,
+          "h": 510,
+          "alphaCoverage": 1.0
+        },
+        {
+          "id": "afterlife_credit",
+          "x": 1058,
+          "y": 8,
+          "w": 54,
+          "h": 577,
+          "alphaCoverage": 1.0
+        },
+        {
+          "id": "macksound_hoff",
+          "x": 1128,
+          "y": 28,
+          "w": 214,
+          "h": 768,
+          "alphaCoverage": 1.0
+        },
+        {
+          "id": "perfect_shine",
+          "x": 922,
+          "y": 865,
+          "w": 338,
+          "h": 476,
+          "alphaCoverage": 1.0
+        },
+        {
+          "id": "sanguine_laceration",
+          "x": 1342,
           "y": 0,
-          "w": 2048,
-          "h": 2048,
-          "alphaCoverage": 0.617
+          "w": 706,
+          "h": 1342,
+          "alphaCoverage": 1.0
+        },
+        {
+          "id": "anathema_crest",
+          "x": 10,
+          "y": 1531,
+          "w": 210,
+          "h": 348,
+          "alphaCoverage": 0.127
+        },
+        {
+          "id": "anathema_text",
+          "x": 26,
+          "y": 1900,
+          "w": 927,
+          "h": 138,
+          "alphaCoverage": 0.434
+        },
+        {
+          "id": "mosquito_prince",
+          "x": 1055,
+          "y": 1377,
+          "w": 993,
+          "h": 671,
+          "alphaCoverage": 0.999
         }
       ]
     },
     {
       "id": "signage_mystic_02",
       "category": "signage",
-      "curated": false,
+      "curated": true,
       "materials": [
         "materials/overlays/signage_mystic_02.vmat",
         "materials/overlays/signage_mystic_02_surface.vmat"
@@ -4433,59 +4505,59 @@
       "height": 2048,
       "posters": [
         {
-          "id": "item_00",
+          "id": "happy_panda_coffee",
+          "x": 10,
+          "y": 15,
+          "w": 978,
+          "h": 1403,
+          "alphaCoverage": 1.0
+        },
+        {
+          "id": "rescue_beam",
+          "x": 1055,
+          "y": 8,
+          "w": 481,
+          "h": 1103,
+          "alphaCoverage": 0.923
+        },
+        {
+          "id": "hex_jazz_records",
+          "x": 1608,
+          "y": 5,
+          "w": 358,
+          "h": 1372,
+          "alphaCoverage": 0.841
+        },
+        {
+          "id": "crab_eyes",
           "x": 0,
-          "y": 0,
-          "w": 1024,
-          "h": 1490,
-          "alphaCoverage": 1.0
+          "y": 1638,
+          "w": 558,
+          "h": 410,
+          "alphaCoverage": 0.794
         },
         {
-          "id": "item_01",
-          "x": 1091,
-          "y": 0,
-          "w": 511,
-          "h": 1158,
-          "alphaCoverage": 0.992
+          "id": "white_crow",
+          "x": 1111,
+          "y": 1434,
+          "w": 369,
+          "h": 614,
+          "alphaCoverage": 0.782
         },
         {
-          "id": "item_02",
-          "x": 1665,
-          "y": 0,
-          "w": 383,
-          "h": 1479,
-          "alphaCoverage": 1.0
-        },
-        {
-          "id": "item_03",
-          "x": 1152,
-          "y": 1508,
-          "w": 384,
-          "h": 540,
-          "alphaCoverage": 1.0
-        },
-        {
-          "id": "item_04",
-          "x": 1663,
-          "y": 1660,
-          "w": 385,
-          "h": 388,
-          "alphaCoverage": 0.993
-        },
-        {
-          "id": "item_05",
-          "x": 0,
-          "y": 1721,
-          "w": 577,
-          "h": 327,
-          "alphaCoverage": 0.994
+          "id": "yes_bottle",
+          "x": 1608,
+          "y": 1597,
+          "w": 363,
+          "h": 451,
+          "alphaCoverage": 0.724
         }
       ]
     },
     {
       "id": "signage_mystic_03",
       "category": "signage",
-      "curated": false,
+      "curated": true,
       "materials": [
         "materials/overlays/signage_mystic_03.vmat"
       ],
@@ -4495,43 +4567,43 @@
       "height": 2048,
       "posters": [
         {
-          "id": "item_00",
+          "id": "mille_pattes_dazzle",
           "x": 0,
           "y": 0,
-          "w": 1107,
-          "h": 823,
+          "w": 1075,
+          "h": 809,
           "alphaCoverage": 1.0
         },
         {
-          "id": "item_01",
-          "x": 1217,
-          "y": 34,
-          "w": 826,
-          "h": 1981,
-          "alphaCoverage": 0.646
+          "id": "the_66th_store",
+          "x": 1188,
+          "y": 26,
+          "w": 763,
+          "h": 2022,
+          "alphaCoverage": 0.673
         },
         {
-          "id": "item_02",
-          "x": 876,
-          "y": 1021,
-          "w": 278,
-          "h": 1027,
-          "alphaCoverage": 0.992
+          "id": "spark_offering_mix",
+          "x": 845,
+          "y": 978,
+          "w": 271,
+          "h": 1070,
+          "alphaCoverage": 0.885
         },
         {
-          "id": "item_03",
+          "id": "offering_unit_car",
           "x": 0,
-          "y": 1467,
-          "w": 864,
-          "h": 581,
-          "alphaCoverage": 1.0
+          "y": 1382,
+          "w": 835,
+          "h": 666,
+          "alphaCoverage": 0.872
         }
       ]
     },
     {
       "id": "signage_mystic_04",
       "category": "signage",
-      "curated": false,
+      "curated": true,
       "materials": [
         "materials/overlays/signage_mystic_04.vmat"
       ],
@@ -4541,11 +4613,27 @@
       "height": 2048,
       "posters": [
         {
-          "id": "item_00",
+          "id": "ethereal_strings",
           "x": 0,
           "y": 0,
-          "w": 2048,
+          "w": 855,
+          "h": 858,
+          "alphaCoverage": 0.0
+        },
+        {
+          "id": "daveralie_fleur",
+          "x": 1300,
+          "y": 0,
+          "w": 650,
           "h": 2048,
+          "alphaCoverage": 0.0
+        },
+        {
+          "id": "dark_horizon_unicorn",
+          "x": 8,
+          "y": 1275,
+          "w": 1266,
+          "h": 773,
           "alphaCoverage": 0.0
         }
       ]
@@ -4553,7 +4641,7 @@
     {
       "id": "signage_mystic_05",
       "category": "signage",
-      "curated": false,
+      "curated": true,
       "materials": [
         "materials/overlays/signage_mystic_05.vmat"
       ],
@@ -4563,11 +4651,27 @@
       "height": 2048,
       "posters": [
         {
-          "id": "item_00",
-          "x": 0,
+          "id": "midnight_cadence_jazz",
+          "x": 8,
+          "y": 8,
+          "w": 709,
+          "h": 1046,
+          "alphaCoverage": 0.0
+        },
+        {
+          "id": "eclipse_blades",
+          "x": 1306,
           "y": 0,
-          "w": 2048,
-          "h": 2048,
+          "w": 645,
+          "h": 1859,
+          "alphaCoverage": 0.0
+        },
+        {
+          "id": "dimensional_chess",
+          "x": 8,
+          "y": 1147,
+          "w": 1272,
+          "h": 901,
           "alphaCoverage": 0.0
         }
       ]
@@ -4575,7 +4679,7 @@
     {
       "id": "signage_mystic_06",
       "category": "signage",
-      "curated": false,
+      "curated": true,
       "materials": [
         "materials/overlays/signage_mystic_06.vmat"
       ],
@@ -4585,11 +4689,27 @@
       "height": 2048,
       "posters": [
         {
-          "id": "item_00",
+          "id": "obscura_labrium",
           "x": 0,
           "y": 0,
+          "w": 707,
+          "h": 1270,
+          "alphaCoverage": 0.0
+        },
+        {
+          "id": "optiwerk_scope",
+          "x": 957,
+          "y": 0,
+          "w": 1038,
+          "h": 1270,
+          "alphaCoverage": 0.0
+        },
+        {
+          "id": "somnex_astral",
+          "x": 0,
+          "y": 1321,
           "w": 2048,
-          "h": 2048,
+          "h": 727,
           "alphaCoverage": 0.0
         }
       ]
@@ -4597,7 +4717,7 @@
     {
       "id": "signage_mystic_07",
       "category": "signage",
-      "curated": false,
+      "curated": true,
       "materials": [
         "materials/overlays/signage_mystic_07.vmat"
       ],
@@ -4607,11 +4727,27 @@
       "height": 2048,
       "posters": [
         {
-          "id": "item_00",
+          "id": "pendleton_shoes",
           "x": 0,
           "y": 0,
-          "w": 2048,
-          "h": 2048,
+          "w": 676,
+          "h": 998,
+          "alphaCoverage": 0.0
+        },
+        {
+          "id": "longston_hats",
+          "x": 0,
+          "y": 1009,
+          "w": 911,
+          "h": 1039,
+          "alphaCoverage": 0.0
+        },
+        {
+          "id": "spirattra",
+          "x": 1101,
+          "y": 0,
+          "w": 894,
+          "h": 1270,
           "alphaCoverage": 0.0
         }
       ]
@@ -4619,7 +4755,7 @@
     {
       "id": "signage_mystic_08",
       "category": "signage",
-      "curated": false,
+      "curated": true,
       "materials": [
         "materials/overlays/signage_mystic_08.vmat"
       ],
@@ -4629,11 +4765,27 @@
       "height": 2048,
       "posters": [
         {
-          "id": "item_00",
+          "id": "golden_loops_cereal",
           "x": 0,
-          "y": 0,
+          "y": 26,
+          "w": 1331,
+          "h": 1036,
+          "alphaCoverage": 0.0
+        },
+        {
+          "id": "blackwell_weston_detectives",
+          "x": 1362,
+          "y": 10,
+          "w": 604,
+          "h": 1157,
+          "alphaCoverage": 0.0
+        },
+        {
+          "id": "dr_rockwells_dental",
+          "x": 0,
+          "y": 1244,
           "w": 2048,
-          "h": 2048,
+          "h": 804,
           "alphaCoverage": 0.0
         }
       ]

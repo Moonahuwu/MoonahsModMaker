@@ -131,6 +131,76 @@ HAND = {
                        35: "neon_u", 36: "neon_s", 51: "graffiti_hcko"},
         "auto_merge": [("blue_graffiti_column", [37, 42, 43, 44, 45, 46, 48])],
     },
+    # Neon/selfillum signage: the trans masks are black (light comes from the
+    # selfillum channel), so auto-detection can't see the posters — every
+    # mystic sheet is hand-mapped from the color texture.
+    "signage_mystic_01": {
+        "manual": [
+            ("grebb_frogs", 8, 56, 709, 1418, False),
+            ("friedlander_koppelman", 757, 8, 140, 1295, False),
+            ("holy_chains", 922, 8, 130, 510, False),
+            ("afterlife_credit", 1058, 8, 54, 577, False),
+            ("macksound_hoff", 1128, 28, 214, 768, False),
+            ("perfect_shine", 922, 865, 338, 476, False),
+            ("sanguine_laceration", 1342, 0, 706, 1342, False),
+            ("anathema_crest", 10, 1531, 210, 348, False),
+            ("anathema_text", 26, 1900, 927, 138, False),
+            ("mosquito_prince", 1055, 1377, 993, 671, False),
+        ],
+    },
+    "signage_mystic_02": {
+        "manual": [
+            ("happy_panda_coffee", 10, 15, 978, 1403, False),
+            ("rescue_beam", 1055, 8, 481, 1103, False),
+            ("hex_jazz_records", 1608, 5, 358, 1372, False),
+            ("crab_eyes", 0, 1638, 558, 410, False),
+            ("white_crow", 1111, 1434, 369, 614, False),
+            ("yes_bottle", 1608, 1597, 363, 451, False),
+        ],
+    },
+    "signage_mystic_03": {
+        "manual": [
+            ("mille_pattes_dazzle", 0, 0, 1075, 809, False),
+            ("the_66th_store", 1188, 26, 763, 2022, False),
+            ("spark_offering_mix", 845, 978, 271, 1070, False),
+            ("offering_unit_car", 0, 1382, 835, 666, False),
+        ],
+    },
+    "signage_mystic_04": {
+        "manual": [
+            ("ethereal_strings", 0, 0, 855, 858, False),
+            ("daveralie_fleur", 1300, 0, 650, 2048, False),
+            ("dark_horizon_unicorn", 8, 1275, 1266, 814, False),
+        ],
+    },
+    "signage_mystic_05": {
+        "manual": [
+            ("midnight_cadence_jazz", 8, 8, 709, 1046, False),
+            ("eclipse_blades", 1306, 0, 645, 1859, False),
+            ("dimensional_chess", 8, 1147, 1272, 942, False),
+        ],
+    },
+    "signage_mystic_06": {
+        "manual": [
+            ("obscura_labrium", 0, 0, 707, 1270, False),
+            ("optiwerk_scope", 957, 0, 1038, 1270, False),
+            ("somnex_astral", 0, 1321, 2048, 727, False),
+        ],
+    },
+    "signage_mystic_07": {
+        "manual": [
+            ("pendleton_shoes", 0, 0, 676, 998, False),
+            ("longston_hats", 0, 1009, 911, 1039, False),
+            ("spirattra", 1101, 0, 894, 1270, False),
+        ],
+    },
+    "signage_mystic_08": {
+        "manual": [
+            ("golden_loops_cereal", 0, 26, 1331, 1036, False),
+            ("blackwell_weston_detectives", 1362, 10, 604, 1157, False),
+            ("dr_rockwells_dental", 0, 1244, 2048, 804, False),
+        ],
+    },
     "poster_test": {
         "manual": [
             ("prime_neon_sold_here", 64, 64, 640, 1152, False),
