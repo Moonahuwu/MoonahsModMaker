@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { decompileVpkAll, listUiMods, type UiModVpk } from "../lib/api";
+import { decompileVpkAll, type UiModVpk } from "../lib/api";
+import { cListUiMods } from "../lib/dataCache";
 import type { Settings } from "../lib/settings";
 import type { DigimodConfig } from "../types";
 import { useToast } from "./Toaster";
@@ -41,7 +42,7 @@ export function ImportedMods({
   const [uiMods, setUiMods] = useState<UiModVpk[]>([]);
   useEffect(() => {
     if (!settings.addonsDir) return;
-    listUiMods(settings.addonsDir)
+    cListUiMods(settings.addonsDir)
       .then(setUiMods)
       .catch(() => {});
   }, [settings.addonsDir]);

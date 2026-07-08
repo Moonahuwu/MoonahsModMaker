@@ -4615,11 +4615,17 @@ fn addon_dir_vpks(addons_dir: &str) -> Vec<std::path::PathBuf> {
 
 /// True when any installed addon pak ships the DigiMaster jumpscare engine
 /// (signature: a compiled digi_master script). Gates the Jumpscares tab.
+/// Async is load-bearing: this reads the head of every installed pak (tens
+/// of MB of disk) — a sync command would do that on the UI thread.
 #[tauri::command]
-pub fn digimod_detected(addons_dir: String) -> bool {
-    addon_dir_vpks(&addons_dir).iter().any(|p| {
-        vpk_head(p).map(|h| head_contains(&h, b"digi_master")).unwrap_or(false)
+pub async fn digimod_detected(addons_dir: String) -> bool {
+    tauri::async_runtime::spawn_blocking(move || {
+        addon_dir_vpks(&addons_dir).iter().any(|p| {
+            vpk_head(p).map(|h| head_contains(&h, b"digi_master")).unwrap_or(false)
+        })
     })
+    .await
+    .unwrap_or(false)
 }
 
 /// An installed addon pak that overrides the base HUD layout (a panorama UI
@@ -4635,21 +4641,26 @@ pub struct UiModVpk {
 
 /// Scan the addons dir for base_hud-overriding paks — merge candidates for
 /// the Jumpscares tab (two HUD mods can't coexist; merging ships both in one).
+/// Async for the same reason as `digimod_detected`.
 #[tauri::command]
-pub fn list_ui_mods(addons_dir: String) -> Vec<UiModVpk> {
-    let mut out = Vec::new();
-    for path in addon_dir_vpks(&addons_dir) {
-        let Some(head) = vpk_head(&path) else { continue };
-        if !(head_contains(&head, b"panorama/layout") && head_contains(&head, b"base_hud")) {
-            continue;
+pub async fn list_ui_mods(addons_dir: String) -> Vec<UiModVpk> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut out = Vec::new();
+        for path in addon_dir_vpks(&addons_dir) {
+            let Some(head) = vpk_head(&path) else { continue };
+            if !(head_contains(&head, b"panorama/layout") && head_contains(&head, b"base_hud")) {
+                continue;
+            }
+            out.push(UiModVpk {
+                path: path.to_string_lossy().to_string(),
+                file_name: path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
+                has_digi: head_contains(&head, b"digi_master"),
+            });
         }
-        out.push(UiModVpk {
-            path: path.to_string_lossy().to_string(),
-            file_name: path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
-            has_digi: head_contains(&head, b"digi_master"),
-        });
-    }
-    out
+        out
+    })
+    .await
+    .unwrap_or_default()
 }
 
 /// Adopt an existing DigiMaster pak: parse its CONFIG + LIBRARY, pull every

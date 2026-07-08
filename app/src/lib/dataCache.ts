@@ -10,7 +10,9 @@ import {
   itemConfig,
   itemRoster,
   itemSoundIndex,
+  listUiMods,
   worldConfig,
+  type UiModVpk,
   type AbilityConfig,
   type AbilityProp,
   type EntityConfig,
@@ -106,6 +108,12 @@ export function cWorldConfig(
   kind: "minions" | "boxes" | "powerups",
 ): Promise<EntityConfig[]> {
   return cached(`worldConfig|${helper}|${pak}|${kind}`, () => worldConfig(helper, pak, kind));
+}
+
+/** Installed HUD-mod scan (reads the head of every addon pak — expensive on
+ *  disk, so once per session; pass refresh after installs change things). */
+export function cListUiMods(addonsDir: string, refresh = false): Promise<UiModVpk[]> {
+  return cached(`uiMods|${addonsDir}`, () => listUiMods(addonsDir), refresh);
 }
 
 // ---- Startup preload ---------------------------------------------------------

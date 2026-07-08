@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { importDigimod, listUiMods, probeAudio, processAudio, type UiModVpk } from "../lib/api";
+import { importDigimod, probeAudio, processAudio, type UiModVpk } from "../lib/api";
+import { cListUiMods } from "../lib/dataCache";
 import { videoThumb } from "../lib/videoThumbs";
 import { Waveform } from "./Waveform";
 import { useToast } from "./Toaster";
@@ -81,6 +82,9 @@ function VideoPreview({ path, ffmpegPath }: { path: string; ffmpegPath?: string 
     return (
       <video
         src={convertFileSrc(path)}
+        // The thumb doubles as the poster: without it the element paints a
+        // black frame for the instant before the first frame decodes.
+        poster={typeof thumb === "string" ? thumb : undefined}
         muted
         loop
         autoPlay
@@ -295,7 +299,7 @@ export function DigimodTab({
   const [importing, setImporting] = useState<string | null>(null);
   useEffect(() => {
     if (!addonsDir) return;
-    listUiMods(addonsDir)
+    cListUiMods(addonsDir)
       .then((mods) => setDigiPaks(mods.filter((m) => m.hasDigi)))
       .catch(() => {});
   }, [addonsDir]);
