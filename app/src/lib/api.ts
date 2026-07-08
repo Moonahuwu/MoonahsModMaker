@@ -223,6 +223,17 @@ export function readUiFile(
   return invoke("read_ui_file", { helperPath, pakPath, internalPath });
 }
 
+/** UI Master spike: compile UI edits and place them LOOSE in the game's
+ *  grimoire dir (top-priority search path) — no vpk, no install. */
+export function pushUiFiles(config: CompileConfig, citadelDir: string): Promise<string[]> {
+  return invoke("push_ui_files", { config, citadelDir });
+}
+
+/** Undo push_ui_files (manifest-driven). Returns removed-file count. */
+export function clearPushedUi(citadelDir: string): Promise<number> {
+  return invoke("clear_pushed_ui", { citadelDir });
+}
+
 /** Extract a video's audio track to an mp3 (app-data cached); null when the
  *  video has no usable audio. Auto-pairs jumpscare videos with their sound. */
 export function extractVideoAudio(

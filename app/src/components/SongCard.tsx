@@ -27,6 +27,8 @@ interface SongCardProps {
   onRename: (raw: string) => void;
   onRemove: () => void;
   onDownload: () => void;
+  /** Copy this track (file + trims/gain/fades/loop) to the sound clipboard. */
+  onCopy: () => void;
   /** Accent color + the event's stock track, so the card can optionally show
    *  the original waveform stacked above yours for comparison. */
   accent: string;
@@ -57,6 +59,7 @@ export function SongCard({
   onRename,
   onRemove,
   onDownload,
+  onCopy,
   accent,
   stockName,
   stockUrl,
@@ -235,6 +238,14 @@ export function SongCard({
           className="shrink-0 rounded p-1 text-zinc-500 opacity-0 transition group-hover:opacity-100 focus:opacity-100 hover:bg-zinc-800 hover:text-zinc-200"
         >
           ⤓
+        </button>
+        <button
+          onClick={onCopy}
+          aria-label="Copy track"
+          title="Copy — paste it into any other slot (file + trims/gain/fades come along)"
+          className="shrink-0 rounded p-1 text-zinc-500 opacity-0 transition group-hover:opacity-100 focus:opacity-100 hover:bg-zinc-800 hover:text-zinc-200"
+        >
+          ⧉
         </button>
         <button
           onClick={onRemove}

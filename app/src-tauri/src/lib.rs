@@ -128,6 +128,8 @@ pub fn run() {
             commands::extract_video_audio,
             commands::list_ui_files,
             commands::read_ui_file,
+            commands::push_ui_files,
+            commands::clear_pushed_ui,
             commands::check_app_update,
             commands::open_in_viewer,
             commands::item_particles,

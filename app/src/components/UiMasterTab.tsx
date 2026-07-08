@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { listUiFiles, readUiFile } from "../lib/api";
+import { clearPushedUi, listUiFiles, pushUiFiles, readUiFile } from "../lib/api";
+import { buildCompileConfig, type Settings } from "../lib/settings";
+import { launchGame } from "../lib/api";
 import { useToast } from "./Toaster";
 import type { UiFileOverride } from "../types";
 
@@ -35,17 +37,48 @@ function folderOf(rel: string): string {
 }
 
 export function UiMasterTab({
-  helperPath,
-  pakPath,
+  settings,
   overrides,
   onChange,
 }: {
-  helperPath: string;
-  pakPath: string;
+  settings: Settings;
   overrides: UiFileOverride[];
   onChange: (next: UiFileOverride[]) => void;
 }) {
+  const helperPath = settings.vpkHelperPath;
+  const pakPath = settings.deadlockPak;
+  // …/game/citadel/pak01_dir.vpk -> …/game/citadel
+  const citadelDir = pakPath ? pakPath.replace(/[\\/][^\\/]*$/, "") : "";
   const { push } = useToast();
+  const [pushing, setPushing] = useState(false);
+  const [pushedN, setPushedN] = useState<number | null>(null);
+
+  /** Compile the edits + drop them loose into grimoire (no vpk, no install). */
+  async function pushToGame() {
+    setPushing(true);
+    try {
+      const config = buildCompileConfig(
+        settings, [], false, [], [], [], [], [], [], [], null, overrides,
+      );
+      const rels = await pushUiFiles(config, citadelDir);
+      setPushedN(rels.length);
+      push("success", `${rels.length} UI file(s) pushed to grimoire`);
+    } catch (e) {
+      push("error", `Push failed: ${e}`);
+    } finally {
+      setPushing(false);
+    }
+  }
+
+  async function clearPushed() {
+    try {
+      const n = await clearPushedUi(citadelDir);
+      setPushedN(null);
+      push("success", `${n} pushed file(s) removed — game is back to normal`);
+    } catch (e) {
+      push("error", `Cleanup failed: ${e}`);
+    }
+  }
   const [files, setFiles] = useState<string[]>([]);
   const [filesErr, setFilesErr] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -125,7 +158,51 @@ export function UiMasterTab({
   const edited = openRel !== null && (open !== undefined || (vanilla !== null && text !== vanilla));
 
   return (
-    <div className="flex min-h-0 flex-1 gap-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-3">
+      {/* Phase-2 spike: fast test-in-game loop via the grimoire dir (the
+          top-priority loose search path — outranks addons AND pak01). */}
+      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-amber-500/25 bg-amber-500/5 px-4 py-2.5">
+        <div className="min-w-[16rem] flex-1">
+          <span className="text-sm font-semibold text-amber-200">⚡ Test in game</span>
+          <p className="text-[11px] leading-4 text-zinc-500">
+            Pushes your edits loose into <span className="font-mono">citadel/grimoire/</span> —
+            no vpk, no install. Restart the game (or rejoin the map) to see them; sandbox
+            is the fastest way to check HUD changes.
+          </p>
+        </div>
+        {pushedN !== null && (
+          <span className="rounded bg-amber-500/15 px-2 py-0.5 text-[11px] font-semibold text-amber-300">
+            {pushedN} file(s) live
+          </span>
+        )}
+        <button
+          onClick={() => void pushToGame()}
+          disabled={pushing || overrides.length === 0}
+          className="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-semibold text-amber-950 hover:bg-amber-400 disabled:opacity-40"
+        >
+          {pushing ? "Pushing…" : `Push ${overrides.length} edit(s)`}
+        </button>
+        <button
+          onClick={() => {
+            const root = citadelDir.replace(/[\\/]game[\\/]citadel$/i, "");
+            launchGame(root || undefined)
+              .then(() => push("success", "Launching Deadlock…"))
+              .catch((e) => push("error", `Launch failed: ${e}`));
+          }}
+          className="rounded-lg border border-amber-500/40 px-3 py-1.5 text-xs font-semibold text-amber-200 hover:bg-amber-500/10"
+        >
+          ▶ Launch game
+        </button>
+        <button
+          onClick={() => void clearPushed()}
+          title="Remove everything pushed to grimoire (game back to stock)"
+          className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-400 hover:border-red-400/60 hover:text-red-300"
+        >
+          🧹 Remove pushed
+        </button>
+      </div>
+
+      <div className="flex min-h-0 flex-1 gap-4">
       {/* File browser */}
       <div className="flex w-72 shrink-0 flex-col gap-2">
         <input
@@ -270,6 +347,7 @@ export function UiMasterTab({
             </p>
           </>
         )}
+      </div>
       </div>
     </div>
   );

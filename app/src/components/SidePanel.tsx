@@ -1,6 +1,7 @@
 import { AnimatePresence, motion, Reorder, useDragControls } from "motion/react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { EventProject, EventView, Song } from "../types";
+import { copySound, useCopiedSound } from "../lib/soundClipboard";
 import { SongCard } from "./SongCard";
 
 /** One reorderable song row: drags only via the handle passed to its children. */
@@ -205,6 +206,7 @@ export function SidePanel({
   moveTargets,
   onMoveToTab,
   missingRefs,
+  onPasteSong,
 }: {
   ev: EventProject;
   view: EventView | undefined;
@@ -232,7 +234,10 @@ export function SidePanel({
   onMoveToTab?: (slotId: string, group: string) => void;
   /** Refs known to NOT exist as real files in the game pak (checked upstream). */
   missingRefs?: Set<string>;
+  /** Paste the sound-clipboard track into this slot. */
+  onPasteSong: (slotId: string) => void;
 }) {
+  const copied = useCopiedSound();
   const [stockUrl, setStockUrl] = useState<string | null>(null);
   const [stockErr, setStockErr] = useState<string | null>(null);
   const [stockLoading, setStockLoading] = useState(false);
@@ -492,6 +497,18 @@ export function SidePanel({
                   onRename={(raw) => onSongRename(s.id, raw)}
                   onRemove={() => onSongRemove(s.id)}
                   onDownload={() => onDownloadSong(s.sourceMp3)}
+                  onCopy={() =>
+                    copySound({
+                      label: s.label,
+                      sourceMp3: s.sourceMp3,
+                      trimStart: s.trimStart,
+                      trimEnd: s.trimEnd,
+                      gainDb: s.gainDb,
+                      fadeIn: s.fadeIn,
+                      fadeOut: s.fadeOut,
+                      looping: s.looping,
+                    })
+                  }
                   accent={accent}
                   stockName={shortName(ev.stockEntry)}
                   stockUrl={stockUrl}
@@ -523,6 +540,17 @@ export function SidePanel({
           </span>
         ) : (
           <span>Drop another .mp3 to add to {ev.side}</span>
+        )}
+        {copied && (
+          <div className="mt-1.5">
+            <button
+              onClick={() => onPasteSong(ev.id)}
+              title={copied.sourceMp3}
+              className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-semibold text-emerald-300 transition hover:bg-emerald-500/20"
+            >
+              📋 Paste "{copied.label}"
+            </button>
+          </div>
         )}
       </motion.div>
     </motion.section>

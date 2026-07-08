@@ -4834,6 +4834,98 @@ pub async fn read_ui_file(
     .map_err(|e| e.to_string())?
 }
 
+/// UI Master phase-2 spike: compile the current UI edits and copy them LOOSE
+/// into `game/citadel/grimoire/` — the TOP-priority search path in
+/// gameinfo.gi (above addons and pak01), so a running/next-boot game reads
+/// our files instead of the pak's. No vpk build, no install: the fastest
+/// possible iteration loop. A manifest records every pushed file so
+/// `clear_pushed_ui` can cleanly undo the whole experiment.
+#[tauri::command]
+pub async fn push_ui_files(
+    config: CompileConfig,
+    citadel_dir: String,
+) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if config.ui_overrides.is_empty() {
+            return Err("no edited UI files to push".to_string());
+        }
+        let mut report = compile::CompileReport::new();
+        let (rels, _dirty) = compile::compile_ui_overrides(
+            &config,
+            std::path::Path::new(&config.content_root),
+            std::path::Path::new(&config.compiled_root),
+            &mut report,
+        )
+        .map_err(|_| "UI compile failed".to_string())?;
+        if !report.ok {
+            let why = report
+                .steps
+                .iter()
+                .filter(|s| !s.ok)
+                .map(|s| format!("{}: {}", s.name, s.detail))
+                .collect::<Vec<_>>()
+                .join(" | ");
+            return Err(why);
+        }
+        let grimoire = std::path::Path::new(&citadel_dir).join("grimoire");
+        let manifest_path = grimoire.join(".eim_pushed.json");
+        // Union with anything pushed earlier so removal cleans everything.
+        let mut pushed: Vec<String> = std::fs::read_to_string(&manifest_path)
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default();
+        for rel in &rels {
+            let src = std::path::Path::new(&config.compiled_root).join(rel);
+            let dest = grimoire.join(rel);
+            if let Some(parent) = dest.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            std::fs::copy(&src, &dest).map_err(|e| format!("push {rel}: {e}"))?;
+            if !pushed.contains(rel) {
+                pushed.push(rel.clone());
+            }
+        }
+        std::fs::write(&manifest_path, serde_json::to_string_pretty(&pushed).unwrap_or_default())
+            .map_err(|e| e.to_string())?;
+        Ok(rels)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Remove every UI file `push_ui_files` placed in grimoire (manifest-driven;
+/// nothing else in there is touched). Returns how many files were removed.
+#[tauri::command]
+pub async fn clear_pushed_ui(citadel_dir: String) -> Result<u32, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let grimoire = std::path::Path::new(&citadel_dir).join("grimoire");
+        let manifest_path = grimoire.join(".eim_pushed.json");
+        let pushed: Vec<String> = std::fs::read_to_string(&manifest_path)
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default();
+        let mut removed = 0u32;
+        for rel in &pushed {
+            let p = grimoire.join(rel);
+            if std::fs::remove_file(&p).is_ok() {
+                removed += 1;
+            }
+            // Prune now-empty dirs up to grimoire itself (best-effort).
+            let mut dir = p.parent().map(|d| d.to_path_buf());
+            while let Some(d) = dir {
+                if d == grimoire || std::fs::remove_dir(&d).is_err() {
+                    break;
+                }
+                dir = d.parent().map(|x| x.to_path_buf());
+            }
+        }
+        let _ = std::fs::remove_file(&manifest_path);
+        Ok(removed)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Which of `names` (case-insensitive exe names) are currently running.
 /// Powers the compile bar's "Deadlock / Source 2 Viewer is open" warning —
 /// both hold locks on the pak/addons that make compiles and installs fail

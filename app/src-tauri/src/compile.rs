@@ -548,7 +548,7 @@ pub struct CompileReport {
 }
 
 impl CompileReport {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         CompileReport { ok: true, steps: vec![], output_path: None, progress: None, est_total: 0 }
     }
     fn emit_last(&self) {
@@ -2312,7 +2312,7 @@ pub fn run_with_progress(
 /// UI Master: write each edited panorama source into the content tree,
 /// compile the batch, and hand back the compiled rels to stage (whole-file
 /// overrides at the game's own paths). Returns (rels, dirty).
-fn compile_ui_overrides(
+pub(crate) fn compile_ui_overrides(
     cfg: &CompileConfig,
     content_root: &Path,
     compiled_root: &Path,
@@ -3752,6 +3752,86 @@ mod tests {
         };
         let m = event_merge(&ev, "sounds/music/match_intro", Some(27.0));
         assert_eq!(m.new_duration, Some(42.5));
+    }
+
+    /// UI Master round-trip against the real toolchain: VRF-decompile a
+    /// panorama style from the live pak, edit it, recompile via
+    /// compile_ui_overrides. Proves decompiled sources survive
+    /// resourcecompiler. Run with:
+    ///   cargo test -p app --lib -- --ignored e2e_ui_override_roundtrip --nocapture
+    #[test]
+    #[ignore]
+    fn e2e_ui_override_roundtrip() {
+        let csdk = r"C:\Users\ethob\Desktop\DeadlockModding\Reduced_CSDK_12";
+        let helper = r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\tools\vpk-helper\dist\vpk-helper.exe";
+        let pak = r"D:\SteamLibrary\steamapps\common\Deadlock\game\citadel\pak01_dir.vpk";
+        if !Path::new(helper).exists() || !Path::new(pak).exists() {
+            eprintln!("skipping: helper or pak missing");
+            return;
+        }
+        let addon = "eim_ui_e2e";
+        let content_root = format!(r"{csdk}\content\citadel_addons\{addon}");
+        let compiled_root = format!(r"{csdk}\game\citadel_addons\{addon}");
+        let _ = std::fs::remove_dir_all(&content_root);
+        let _ = std::fs::remove_dir_all(&compiled_root);
+
+        // Decompile a real style + a real layout from the live pak.
+        let tmp = std::env::temp_dir().join("eim_ui_e2e_src");
+        let _ = std::fs::create_dir_all(&tmp);
+        let mut ui = vec![];
+        for rel in ["panorama/styles/hud_paused.vcss_c", "panorama/layout/hud_paused.vxml_c"] {
+            let out = tmp.join(rel.replace('/', "_"));
+            crate::vpk::decompile_from_vpk(helper, pak, rel, &out.to_string_lossy())
+                .expect("decompile failed");
+            let mut text = std::fs::read_to_string(&out).expect("read failed");
+            if rel.ends_with(".vcss_c") {
+                text.push_str("\n/* eim ui e2e marker */\n");
+            }
+            ui.push(UiFileCompile { target_rel: rel.into(), text });
+        }
+
+        let cfg = CompileConfig {
+            content_root: content_root.clone(),
+            compiled_root: compiled_root.clone(),
+            game_info_dir: format!(r"{csdk}\game\citadel"),
+            sound_folder: "sounds/music/match_intro".into(),
+            resource_compiler: format!(r"{csdk}\game\bin_tools\win64\resourcecompiler.exe"),
+            ffmpeg_path: None,
+            vpk_helper_path: Some(helper.into()),
+            vanilla_root: r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\ModFiles".into(),
+            pak_path: None,
+            output_dir: std::env::temp_dir().join("eim_ui_e2e_out").to_string_lossy().into_owned(),
+            output_mode: "vpk".into(),
+            vpk_name: "pak01_dir.vpk".into(),
+            write_encoding_txt: false,
+            skip_compile: false,
+            imported_mods: vec![],
+            imported_mod_excludes: Default::default(),
+            events: vec![],
+            icon_mods: vec![],
+            sound_overrides: vec![],
+            effect_overrides: vec![],
+            vdata_overrides: vec![],
+            global_overrides: vec![],
+            world_overrides: vec![],
+            poster_overrides: vec![],
+            digimod: None,
+            ui_overrides: ui,
+        };
+        let mut report = CompileReport::new();
+        let (rels, dirty) =
+            compile_ui_overrides(&cfg, Path::new(&content_root), Path::new(&compiled_root), &mut report)
+                .expect("hard fail");
+        for s in &report.steps {
+            eprintln!("[{}] {} :: {}", if s.ok { "OK" } else { "FAIL" }, s.name, s.detail);
+        }
+        assert!(report.ok, "ui compile reported failure");
+        assert!(dirty);
+        assert_eq!(rels.len(), 2);
+        for rel in &rels {
+            assert!(Path::new(&compiled_root).join(rel).exists(), "missing {rel}");
+        }
+        eprintln!("both files recompiled OK");
     }
 
     /// Full end-to-end pipeline against the local CSDK + ffmpeg + ValvePak.

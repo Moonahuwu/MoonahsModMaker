@@ -74,6 +74,7 @@ import { EffectsBrowser } from "./components/EffectsBrowser";
 import { PostersTab } from "./components/PostersTab";
 import { DigimodTab, DEFAULT_DIGIMOD } from "./components/DigimodTab";
 import { UiMasterTab } from "./components/UiMasterTab";
+import { getCopiedSound } from "./lib/soundClipboard";
 import { CustomServer } from "./components/CustomServer";
 import { ProfileSwitcher } from "./components/ProfileSwitcher";
 import { useToast } from "./components/Toaster";
@@ -1226,31 +1227,36 @@ export default function App() {
     return `${base}_${i}`;
   }
 
-  async function addSong(slotId: string, path: string) {
+  async function addSong(slotId: string, path: string, preset?: Partial<Song>) {
     const proj = projectRef.current;
     if (!proj) return;
     try {
       const ffmpegPath = settingsRef.current.ffmpegPath || undefined;
-      const info = await probeAudio(path, ffmpegPath);
-      const sanitized = await sanitizeName(baseName(path));
+      // A paste (preset) already knows its trim window — skip the probe.
+      const trimEnd =
+        preset?.trimEnd !== undefined ? preset.trimEnd : (await probeAudio(path, ffmpegPath)).duration;
+      const sanitized = await sanitizeName(preset?.label ?? baseName(path));
       const soundName = uniqueSoundName(sanitized, proj);
       const slot = proj.events.find((e) => e.id === slotId);
       const order = slot ? slot.songs.length : 0;
       const song: Song = {
-        id: crypto.randomUUID(),
         label: baseName(path),
         sourceMp3: path,
-        soundName,
         trimStart: 0,
-        trimEnd: info.duration,
+        trimEnd,
         gainDb: DEFAULT_GAIN_DB,
         fadeIn: 0,
         fadeOut: 0,
         looping:
           (slot?.eventName.endsWith(".Lp") || /_lp(_|\.|$)/i.test(slot?.stockEntry ?? "")) ??
           false,
-        order,
         lastCompiledHash: null,
+        // Pasted tracks carry their copied settings over the defaults; the
+        // identity fields below always win.
+        ...preset,
+        soundName,
+        order,
+        id: crypto.randomUUID(),
       };
       setProject((prev) =>
         prev
@@ -1274,6 +1280,22 @@ export default function App() {
     } catch (e) {
       push("error", `Could not add ${baseName(path)}: ${e}`);
     }
+  }
+
+  /** Paste the sound-clipboard track into a slot: same file + all its edits
+   *  (trims/gain/fades/loop), fresh identity. */
+  function pasteSong(slotId: string) {
+    const c = getCopiedSound();
+    if (!c) return;
+    void addSong(slotId, c.sourceMp3, {
+      label: c.label,
+      trimStart: c.trimStart,
+      trimEnd: c.trimEnd,
+      gainDb: c.gainDb,
+      fadeIn: c.fadeIn,
+      fadeOut: c.fadeOut,
+      looping: c.looping,
+    });
   }
 
   function updateSong(songId: string, patch: Partial<Song>) {
@@ -3054,6 +3076,7 @@ export default function App() {
     <SidePanel
       key={ev.id}
       ev={ev}
+      onPasteSong={pasteSong}
       view={pools[ev.id]}
       moveTargets={isAutoSlot(ev.id) || isImportSlot(ev.id) ? MOVE_TARGETS : undefined}
       onMoveToTab={moveSlotToTab}
@@ -3528,8 +3551,7 @@ export default function App() {
           />
         ) : activeTab === UIMASTER ? (
           <UiMasterTab
-            helperPath={settings.vpkHelperPath}
-            pakPath={settings.deadlockPak}
+            settings={settings}
             overrides={project?.uiOverrides ?? []}
             onChange={(next) =>
               setProject((prev) => (prev ? { ...prev, uiOverrides: next } : prev))
