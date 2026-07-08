@@ -186,3 +186,31 @@ button {
     rgba(245, 158, 11, 0.04) 12px 24px
   );
 }
+
+/* ---- Backdrop sigil (Backdrop.tsx): two white-SVG masks tinted with the
+   active tab accent. Outer spins counter-clockwise with a slow leftward
+   drift; the inscribed triangle counter-rotates slower. Ultra-slow + very
+   low opacity so it reads as texture, never competes with content. */
+.eim-sigil {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 115vmin;
+  height: 115vmin;
+  opacity: 0.055;
+}
+.eim-sigil-outer {
+  animation: eim-sigil-outer 360s linear infinite;
+}
+.eim-sigil-inner {
+  animation: eim-sigil-inner 480s linear infinite;
+}
+@keyframes eim-sigil-outer {
+  0%   { transform: translate(-50%, -50%) translateX(0) rotate(0deg); }
+  50%  { transform: translate(-50%, -50%) translateX(-5vmin) rotate(-180deg); }
+  100% { transform: translate(-50%, -50%) translateX(0) rotate(-360deg); }
+}
+@keyframes eim-sigil-inner {
+  0%   { transform: translate(-50%, -50%) rotate(0deg); }
+  100% { transform: translate(-50%, -50%) rotate(360deg); }
+}

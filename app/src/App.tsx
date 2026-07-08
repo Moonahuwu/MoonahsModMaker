@@ -3301,7 +3301,7 @@ export default function App() {
       {/* Animated backdrop for the content pane (the opaque sidebar covers its
           own strip). Swap the placeholder inside Backdrop for the game-style
           animation when it lands. */}
-      <Backdrop />
+      <Backdrop accent={accentFor({ group: activeTab, side: "" })} />
       {/* Left sidebar: brand + tabs — fixed, never scrolls. Opaque so the
           backdrop animation only shows through the main content area. */}
       <aside
