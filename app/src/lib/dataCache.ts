@@ -4,6 +4,7 @@ import {
   globalConfig,
   heroConfig,
   heroDetail,
+  heroImages,
   heroRoster,
   heroSounds,
   heroVoicelines,
@@ -18,6 +19,7 @@ import {
   type EntityConfig,
   type GlobalStat,
   type HeroAbility,
+  type HeroImage,
   type HeroPortrait,
   type HeroSound,
   type ItemCard,
@@ -76,6 +78,18 @@ export function cHeroSounds(helper: string, pak: string, codename: string, refre
 
 export function cHeroVoicelines(helper: string, pak: string, codename: string, refresh = false): Promise<VoiceLine[]> {
   return cached(`voicelines|${helper}|${pak}|${codename}`, () => heroVoicelines(helper, pak, codename, refresh), refresh);
+}
+
+/** Display-name stem used by backgrounds + name logos (abrams, grey_talon…). */
+export function heroStem(displayName: string): string {
+  return displayName
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+export function cHeroImages(helper: string, pak: string, codename: string, stem: string): Promise<HeroImage[]> {
+  return cached(`heroImages|${helper}|${pak}|${codename}`, () => heroImages(helper, pak, codename, stem));
 }
 
 export function cItemSoundIndex(helper: string, pak: string): Promise<ItemSoundRef[]> {
@@ -191,10 +205,13 @@ export async function preloadGameData(
   state.coreDone = true;
   report();
 
-  // Background warm-up: every hero's abilities + sound list, 3 at a time.
+  // Background warm-up: every hero's abilities + sound list + replaceable
+  // images (the texture decodes are the "few seconds" on first drill-in),
+  // 3 at a time.
   const jobs = roster.flatMap((h) => [
     () => cHeroDetail(helper, pak, h.codename),
     () => cHeroSounds(helper, pak, h.codename),
+    () => cHeroImages(helper, pak, h.codename, heroStem(h.displayName)),
   ]);
   state.bgTotal = jobs.length;
   report();

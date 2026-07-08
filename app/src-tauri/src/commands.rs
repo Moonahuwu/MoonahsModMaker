@@ -1263,8 +1263,7 @@ fn parse_heroes_vdata(text: &str) -> Vec<HeroInfo> {
 /// game's `heroes.vdata`: in-game names, portrait join, and an experimental flag
 /// (disabled / in-development). Cache lives in app-data/hero_portraits; pass
 /// `refresh = true` to re-pull after a game update.
-#[tauri::command]
-pub fn hero_roster(
+fn hero_roster_impl(
     app: tauri::AppHandle,
     helper_path: String,
     pak_path: String,
@@ -2717,8 +2716,7 @@ fn hero_event_index(
 /// which sound events exist) is **static** game data, so it's cached per-hero to
 /// `detail_<code>.json` — the frontend reads the live sound *pools* separately,
 /// so only sounds you actually edit ever change. Pass `refresh: true` to rebuild.
-#[tauri::command]
-pub fn hero_detail(
+fn hero_detail_impl(
     app: tauri::AppHandle,
     helper_path: String,
     pak_path: String,
@@ -3107,8 +3105,7 @@ fn parse_vo_events(text: &str) -> Vec<(String, Option<String>)> {
 
 /// A hero's voicelines (from `soundevents/vo/generated_vo_hero_<code>.vsndevts`).
 /// Cached per hero. Returns an empty list if the hero has no VO file.
-#[tauri::command]
-pub fn hero_voicelines(
+fn hero_voicelines_impl(
     app: tauri::AppHandle,
     helper_path: String,
     pak_path: String,
@@ -3223,8 +3220,7 @@ fn prettify_hero_sound(event: &str, code: &str) -> String {
 
 /// A hero's non-VO sound events (gunfire, abilities, movement) from
 /// `soundevents/hero/<code>.vsndevts`. Cached per hero. Empty if no file.
-#[tauri::command]
-pub fn hero_sounds(
+fn hero_sounds_impl(
     app: tauri::AppHandle,
     helper_path: String,
     pak_path: String,
@@ -3546,8 +3542,7 @@ fn mods_event_index(
 
 /// The shop item roster: every enabled shop item with category, tier, decoded
 /// icon, and display name. Cached to `items/roster.json`; `refresh` rebuilds.
-#[tauri::command]
-pub fn item_roster(
+fn item_roster_impl(
     app: tauri::AppHandle,
     helper_path: String,
     pak_path: String,
@@ -3646,8 +3641,7 @@ pub fn item_roster(
 
 /// One item's editable sound events (resolved to their `soundevents/mods/*` file
 /// via the index; shared/stale events dropped). Cached per item.
-#[tauri::command]
-pub fn item_detail(
+fn item_detail_impl(
     app: tauri::AppHandle,
     helper_path: String,
     pak_path: String,
@@ -3711,8 +3705,7 @@ pub struct ItemSoundRef {
 
 /// Flat index of every enabled shop item's sound events, so the importer can
 /// route an imported `mods/*` sound event to the item(s) that use it.
-#[tauri::command]
-pub fn item_sound_index(
+fn item_sound_index_impl(
     app: tauri::AppHandle,
     helper_path: String,
     pak_path: String,
@@ -4118,8 +4111,7 @@ fn game_sound_index(
 /// Browse the game's sound tree under `prefix` (lazy). With `query`, returns a
 /// flat recursive search (capped); without, returns immediate subfolders + the
 /// files directly at this level.
-#[tauri::command]
-pub fn browse_game_sounds(
+fn browse_game_sounds_impl(
     app: tauri::AppHandle,
     helper_path: String,
     pak_path: String,
@@ -5065,8 +5057,7 @@ pub struct HeroImage {
 /// small + minimap icons, menu background, name logo) into the app-data cache.
 /// `display_stem` is the display-name file stem (abrams, grey_talon, ...) used
 /// by backgrounds + hero_names; `codename` is the internal one (atlas, ...).
-#[tauri::command]
-pub fn hero_images(
+fn hero_images_impl(
     app: tauri::AppHandle,
     helper_path: String,
     pak_path: String,
@@ -5195,4 +5186,73 @@ pub fn poster_sheet(
     }
     let (width, height) = png_dimensions(&color_abs)?;
     Ok(PosterSheet { color_png: color_abs.to_string_lossy().to_string(), width, height })
+}
+
+// ---------------------------------------------------------------------------
+// Async wrappers: the game-data derivations above are heavy (vpk-helper
+// subprocesses, texture decodes) — as sync commands they'd run ON THE UI
+// THREAD and freeze the window for seconds. Each wrapper hops to a worker.
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn hero_roster(app: tauri::AppHandle, helper_path: String, pak_path: String, refresh: Option<bool>) -> Result<Vec<HeroPortrait>, String> {
+    tauri::async_runtime::spawn_blocking(move || hero_roster_impl(app, helper_path, pak_path, refresh))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn hero_detail(app: tauri::AppHandle, helper_path: String, pak_path: String, codename: String, refresh: Option<bool>) -> Result<Vec<HeroAbility>, String> {
+    tauri::async_runtime::spawn_blocking(move || hero_detail_impl(app, helper_path, pak_path, codename, refresh))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn hero_voicelines(app: tauri::AppHandle, helper_path: String, pak_path: String, codename: String, refresh: Option<bool>) -> Result<Vec<VoiceLine>, String> {
+    tauri::async_runtime::spawn_blocking(move || hero_voicelines_impl(app, helper_path, pak_path, codename, refresh))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn hero_sounds(app: tauri::AppHandle, helper_path: String, pak_path: String, codename: String, refresh: Option<bool>) -> Result<Vec<HeroSound>, String> {
+    tauri::async_runtime::spawn_blocking(move || hero_sounds_impl(app, helper_path, pak_path, codename, refresh))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn item_roster(app: tauri::AppHandle, helper_path: String, pak_path: String, refresh: Option<bool>) -> Result<Vec<ItemCard>, String> {
+    tauri::async_runtime::spawn_blocking(move || item_roster_impl(app, helper_path, pak_path, refresh))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn item_detail(app: tauri::AppHandle, helper_path: String, pak_path: String, item_name: String, refresh: Option<bool>) -> Result<Vec<HeroAbilitySound>, String> {
+    tauri::async_runtime::spawn_blocking(move || item_detail_impl(app, helper_path, pak_path, item_name, refresh))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn item_sound_index(app: tauri::AppHandle, helper_path: String, pak_path: String) -> Result<Vec<ItemSoundRef>, String> {
+    tauri::async_runtime::spawn_blocking(move || item_sound_index_impl(app, helper_path, pak_path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn browse_game_sounds(app: tauri::AppHandle, helper_path: String, pak_path: String, prefix: String, query: Option<String>, refresh: Option<bool>) -> Result<SoundBrowse, String> {
+    tauri::async_runtime::spawn_blocking(move || browse_game_sounds_impl(app, helper_path, pak_path, prefix, query, refresh))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn hero_images(app: tauri::AppHandle, helper_path: String, pak_path: String, codename: String, display_stem: String) -> Result<Vec<HeroImage>, String> {
+    tauri::async_runtime::spawn_blocking(move || hero_images_impl(app, helper_path, pak_path, codename, display_stem))
+        .await
+        .map_err(|e| e.to_string())?
 }

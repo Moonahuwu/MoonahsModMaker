@@ -31,7 +31,6 @@ import {
   eventsForRefs,
   cachePack,
   packIcons,
-  heroImages,
   checkAppUpdate,
   digimodDetected,
   installAppUpdate,
@@ -50,11 +49,13 @@ import {
 } from "./lib/api";
 import {
   cHeroDetail as heroDetailApi,
+  cHeroImages,
   cHeroSounds as heroSoundsApi,
   cHeroVoicelines as heroVoicelinesApi,
   cItemSoundIndex as itemSoundIndex,
   cItemRoster,
   clearDataCache,
+  heroStem,
   preloadGameData,
   type PreloadProgress,
 } from "./lib/dataCache";
@@ -581,12 +582,9 @@ export default function App() {
     const s = settingsRef.current;
     // backgrounds + hero_names use the display-name stem (abrams, grey_talon…);
     // cards/icons use the internal codename (selectedHero).
-    const stem = (selectedHeroInfo?.displayName ?? selectedHero)
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "_")
-      .replace(/^_+|_+$/g, "");
+    const stem = heroStem(selectedHeroInfo?.displayName ?? selectedHero);
     let cancelled = false;
-    heroImages(s.vpkHelperPath, s.deadlockPak, selectedHero, stem)
+    cHeroImages(s.vpkHelperPath, s.deadlockPak, selectedHero, stem)
       .then((r) => !cancelled && setHeroImgs(r))
       .catch(() => !cancelled && setHeroImgs([]));
     return () => {
@@ -3722,6 +3720,11 @@ export default function App() {
             <HeroGrid
               helperPath={settings.vpkHelperPath}
               pakPath={settings.deadlockPak}
+              warmup={
+                preload && preload.bgTotal > 0 && preload.bgDone < preload.bgTotal
+                  ? { done: preload.bgDone, total: preload.bgTotal }
+                  : null
+              }
               showExperimental={settings.showExperimentalHeroes}
               selected={selectedHero}
               onSelect={(h) => {

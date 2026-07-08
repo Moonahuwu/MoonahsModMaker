@@ -17,6 +17,7 @@ export function HeroGrid({
   selected,
   onSelect,
   modifiedFilter,
+  warmup,
 }: {
   helperPath: string;
   pakPath: string;
@@ -25,6 +26,8 @@ export function HeroGrid({
   onSelect: (hero: HeroPortrait) => void;
   /** "Modified only" filter: when set, show only heroes this returns true for. */
   modifiedFilter?: ((codename: string) => boolean) | null;
+  /** Background hero-data warm-up progress (null/undefined = done or n/a). */
+  warmup?: { done: number; total: number } | null;
 }) {
   const [heroes, setHeroes] = useState<HeroPortrait[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -96,6 +99,25 @@ export function HeroGrid({
 
   return (
     <div>
+      {/* Background warm-up: hero data (abilities/sounds/images) is being
+          cached so drill-ins open instantly. Clicking early still works —
+          an unwarmed hero just loads on the spot. */}
+      {warmup && warmup.total > 0 && warmup.done < warmup.total && (
+        <div className="mb-3 rounded-lg border border-zinc-800 bg-zinc-900/50 px-3 py-2">
+          <div className="flex items-center justify-between text-[11px] text-zinc-400">
+            <span>Preparing hero data in the background — heroes open instantly once ready</span>
+            <span className="tabular-nums text-zinc-500">
+              {warmup.done}/{warmup.total}
+            </span>
+          </div>
+          <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-zinc-800">
+            <div
+              className="h-full rounded-full bg-emerald-500/70 transition-[width] duration-500"
+              style={{ width: `${Math.round((warmup.done / warmup.total) * 100)}%` }}
+            />
+          </div>
+        </div>
+      )}
       <div className="mb-3 flex items-center gap-3">
         <span className="text-xs text-zinc-500">{shown.length} heroes</span>
         {!showExperimental && hiddenExp > 0 && (
