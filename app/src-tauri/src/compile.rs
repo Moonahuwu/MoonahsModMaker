@@ -164,6 +164,21 @@ pub struct CompileConfig {
     /// the `.vmat_c` + `.vtex_c` at the vanilla paths (whole-material override).
     #[serde(default)]
     pub poster_overrides: Vec<PosterCompile>,
+    /// UI Master: edited panorama layout/style sources, compiled and staged
+    /// at the game's own paths (whole-file overrides). Experimental.
+    #[serde(default)]
+    pub ui_overrides: Vec<UiFileCompile>,
+}
+
+/// One edited panorama file (UI Master): the compiled internal path it
+/// shadows + the user's edited source text.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UiFileCompile {
+    /// Compiled path in the vpk, e.g. `panorama/styles/hud_paused.vcss_c`.
+    pub target_rel: String,
+    /// Edited source (XML for vxml_c, CSS for vcss_c).
+    pub text: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2294,6 +2309,74 @@ pub fn run_with_progress(
     report
 }
 
+/// UI Master: write each edited panorama source into the content tree,
+/// compile the batch, and hand back the compiled rels to stage (whole-file
+/// overrides at the game's own paths). Returns (rels, dirty).
+fn compile_ui_overrides(
+    cfg: &CompileConfig,
+    content_root: &Path,
+    compiled_root: &Path,
+    report: &mut CompileReport,
+) -> Result<(Vec<String>, bool), ()> {
+    if cfg.ui_overrides.is_empty() {
+        return Ok((vec![], false));
+    }
+    let rels: Vec<String> = cfg.ui_overrides.iter().map(|u| u.target_rel.clone()).collect();
+
+    // Up-to-date skip: the texts themselves are the fingerprint.
+    let stamp = content_root.join(".eim_uistamp");
+    let key = {
+        let mut k = String::from("v1\n");
+        for u in &cfg.ui_overrides {
+            k.push_str(&format!("{}|{}\n", u.target_rel, fingerprint(&u.text)));
+        }
+        fingerprint(&k)
+    };
+    if !cfg.skip_compile
+        && stamp_matches(&stamp, &key)
+        && rels.iter().all(|r| compiled_root.join(r).exists())
+    {
+        report.ok_step("UI files up to date", "unchanged — skipped");
+        return Ok((rels, false));
+    }
+    let _ = std::fs::remove_file(&stamp);
+
+    // Compiled path -> source path: panorama sources use plain extensions
+    // (`.vcss_c` compiles from `.css`, `.vxml_c` from `.xml`).
+    let mut sources: Vec<String> = Vec::new();
+    let mut all_ok = true;
+    for u in &cfg.ui_overrides {
+        let src_rel = u
+            .target_rel
+            .replace(".vcss_c", ".css")
+            .replace(".vxml_c", ".xml");
+        let path = content_root.join(&src_rel);
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match std::fs::write(&path, &u.text) {
+            Ok(()) => sources.push(path.to_string_lossy().into_owned()),
+            Err(e) => {
+                report.soft_fail(format!("UI file: {}", u.target_rel), e.to_string());
+                all_ok = false;
+            }
+        }
+    }
+    if !sources.is_empty() && !cfg.skip_compile {
+        match run_resource_compiler_multi(cfg, &sources) {
+            Ok(_) => report.ok_step("UI files", format!("{} file(s) compiled", sources.len())),
+            Err(e) => {
+                report.soft_fail("UI files: compile", e);
+                return Ok((vec![], true));
+            }
+        }
+    }
+    if all_ok && !cfg.skip_compile {
+        let _ = std::fs::write(&stamp, &key);
+    }
+    Ok((rels, true))
+}
+
 /// Step budget for the progress bar: a rough forecast of how many steps this
 /// run will record. Only the bar's pacing depends on it (pct saturates at 99
 /// until the run truly ends), so close-enough beats exact.
@@ -2340,6 +2423,9 @@ fn estimate_steps(cfg: &CompileConfig) -> usize {
     est += 2 * cfg.imported_mods.len();
     if !cfg.imported_mods.is_empty() {
         est += 3; // the combined/ variant stages + packs too
+    }
+    if !cfg.ui_overrides.is_empty() {
+        est += 2; // write batch + compile batch
     }
     est
 }
@@ -2667,6 +2753,10 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
     // Custom icon overrides: scale + compile once (staged into every variant).
     let (icon_outputs, icons_dirty) = compile_icon_mods(cfg, content_root, compiled_root, report)?;
 
+    // UI Master: edited panorama files compile once. Runs BEFORE digimod so
+    // a digimod build's base_hud (with the digi hooks) wins on collision.
+    let (ui_outputs, ui_dirty) = compile_ui_overrides(cfg, content_root, compiled_root, report)?;
+
     // Jumpscares/Deaths HUD mod: generate + compile once (staged everywhere).
     let (digimod_outputs, digimod_dirty) =
         crate::digimod::compile_digimod(cfg, content_root, compiled_root, report)?;
@@ -2680,6 +2770,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
         || global_dirty
         || world_dirty
         || icons_dirty
+        || ui_dirty
         || digimod_dirty;
 
     // Group our slots by their events file.
@@ -3161,6 +3252,18 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
             match copy_into(&src, &stage, &rel) {
                 Ok(_) => staged += 1,
                 Err(e) => report.soft_fail(format!("stage effect: {rel}"), e.to_string()),
+            }
+        }
+        // Stage UI Master's edited panorama files (before digimod so a
+        // digimod base_hud overwrites a plain edit of the same file).
+        for rel in &ui_outputs {
+            let src = compiled_root.join(rel);
+            if cfg.skip_compile && !src.exists() {
+                continue;
+            }
+            match copy_into(&src, &stage, rel) {
+                Ok(_) => staged += 1,
+                Err(e) => report.soft_fail(format!("stage UI file: {rel}"), e.to_string()),
             }
         }
         // Stage the jumpscares/deaths mod outputs (panorama + sounds + webms).
@@ -3718,6 +3821,7 @@ mod tests {
             world_overrides: vec![],
             poster_overrides: vec![],
             digimod: None,
+            ui_overrides: vec![],
         };
 
         let report = run(&cfg);
@@ -3801,6 +3905,7 @@ mod tests {
             world_overrides: vec![],
             poster_overrides: vec![],
             digimod: None,
+            ui_overrides: vec![],
         };
 
         let report = run(&cfg);
@@ -3910,6 +4015,7 @@ mod tests {
             global_overrides: vec![],
             world_overrides: vec![],
             digimod: None,
+            ui_overrides: vec![],
             poster_overrides: vec![PosterCompile {
                 sheet_id: "posters_bodega_comp1".into(),
                 materials: vec!["materials/overlays/posters_bodega_comp1.vmat".into()],

@@ -163,6 +163,18 @@ export interface Project {
   worldOverrides?: WorldOverride[];
   posterOverrides?: PosterOverride[];
   digimod?: DigimodConfig | null;
+  uiOverrides?: UiFileOverride[];
+}
+
+/** UI Master: one edited panorama layout/style, staged over the game's own
+ *  file on compile (whole-file override). Experimental. */
+export interface UiFileOverride {
+  /** Compiled path in the pak, e.g. `panorama/styles/hud_paused.vcss_c`. */
+  targetRel: string;
+  /** Edited source text (XML for layouts, CSS for styles). */
+  text: string;
+  /** The vanilla source at first edit (for revert + local diffing). */
+  vanillaText?: string;
 }
 
 /** One jumpscare/death media entry (DigiMaster HUD mod). */

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { CompileConfig, EffectCompile, EventCompile, GlobalCompile, IconCompile, PosterCompile, SoundOverrideCompile, VdataCompile, WorldCompile } from "./api";
 import { loadSettings, saveSettings } from "./api";
-import type { DigimodConfig, EffectOverride, EventProject, PosterOverride, SoundOverride } from "../types";
+import type { DigimodConfig, EffectOverride, EventProject, PosterOverride, SoundOverride, UiFileOverride } from "../types";
 import { songHash, overrideHash, effectHash, posterHash } from "./songHash";
 
 // User-facing settings. We derive the verbose CompileConfig paths from a CSDK
@@ -46,6 +46,10 @@ export interface Settings {
    *  hosting). Off by default; the tab stays visible while a project already
    *  carries gameplay edits so they can't get stranded. */
   experimentalServer: boolean;
+  /** Experimental: reveal the UI Master tab (edit the game's panorama
+   *  layouts/styles directly). Very experimental — a bad edit can break the
+   *  in-game UI until the mod is removed. */
+  experimentalUiMaster: boolean;
   /** Include UI-tab sound changes in the compiled build. Off by default — UI
    *  soundevent edits make broad menu changes that can break things. */
   includeUiSounds: boolean;
@@ -134,6 +138,7 @@ export const DEFAULT_SETTINGS: Settings = {
   compareByDefault: false,
   experimentalEffects: false,
   experimentalServer: false,
+  experimentalUiMaster: false,
   includeUiSounds: false,
   source2ViewerPath: "",
   includeGameplay: false,
@@ -234,6 +239,7 @@ export function buildCompileConfig(
   worldOverrides: WorldCompile[] = [],
   posterOverrides: PosterOverride[] = [],
   digimod: DigimodConfig | null = null,
+  uiOverrides: UiFileOverride[] = [],
 ): CompileConfig {
   const posterCompiles: PosterCompile[] = posterOverrides.map((p) => ({
     sheetId: p.sheetId,
@@ -369,6 +375,10 @@ export function buildCompileConfig(
           };
         })()
       : null,
+    // Whole-file text overrides — only real edits ship.
+    uiOverrides: uiOverrides
+      .filter((u) => u.text.trim().length > 0)
+      .map((u) => ({ targetRel: u.targetRel, text: u.text })),
   };
 }
 

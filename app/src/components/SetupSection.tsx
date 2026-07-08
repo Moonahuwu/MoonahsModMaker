@@ -188,6 +188,21 @@ export function SetupSection({
         <label className="mt-2 flex cursor-pointer items-center gap-2.5">
           <input
             type="checkbox"
+            checked={settings.experimentalUiMaster}
+            onChange={(e) => update({ experimentalUiMaster: e.target.checked })}
+            className="accent-amber-500"
+          />
+          <span className="text-xs font-medium text-zinc-300">
+            UI Master (edit the game's UI files)
+          </span>
+        </label>
+        <p className="-mt-1 pl-6 text-[10px] text-zinc-600">
+          Browse and edit the game's panorama layouts/styles directly. VERY experimental —
+          a bad edit can break the in-game UI until the mod is removed.
+        </p>
+        <label className="mt-2 flex cursor-pointer items-center gap-2.5">
+          <input
+            type="checkbox"
             checked={settings.showUnusedPosters}
             onChange={(e) => update({ showUnusedPosters: e.target.checked })}
             className="accent-amber-500"

@@ -4796,6 +4796,44 @@ pub async fn extract_video_audio(
     .map_err(|e| e.to_string())?
 }
 
+/// List the game's panorama layout/style files — the UI Master tab's browse
+/// tree. Scripts (`.vjs_c`) are excluded for now: VRF can't decompile them
+/// to clean source, so they aren't editable yet.
+#[tauri::command]
+pub async fn list_ui_files(helper_path: String, pak_path: String) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut out = crate::vpk::list(&helper_path, &pak_path, Some("panorama/"))?;
+        out.retain(|p| p.ends_with(".vcss_c") || p.ends_with(".vxml_c"));
+        out.sort();
+        Ok(out)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Decompile one panorama layout/style from the pak to editable source text
+/// (UI Master's "open file"). VRF reconstructs clean XML/CSS — proven by the
+/// base_hud merge pipeline.
+#[tauri::command]
+pub async fn read_ui_file(
+    helper_path: String,
+    pak_path: String,
+    internal_path: String,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let tmp = std::env::temp_dir().join(format!(
+            "eim_ui_{}.txt",
+            crate::compile::fingerprint(&internal_path)
+        ));
+        crate::vpk::decompile_from_vpk(&helper_path, &pak_path, &internal_path, &tmp.to_string_lossy())?;
+        let text = std::fs::read_to_string(&tmp).map_err(|e| e.to_string())?;
+        let _ = std::fs::remove_file(&tmp);
+        Ok(text)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Which of `names` (case-insensitive exe names) are currently running.
 /// Powers the compile bar's "Deadlock / Source 2 Viewer is open" warning —
 /// both hold locks on the pak/addons that make compiles and installs fail

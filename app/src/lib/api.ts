@@ -117,6 +117,12 @@ export interface CompileConfig {
   worldOverrides?: WorldCompile[];
   posterOverrides?: PosterCompile[];
   digimod?: DigimodCompile | null;
+  uiOverrides?: UiFileCompile[];
+}
+
+export interface UiFileCompile {
+  targetRel: string;
+  text: string;
 }
 
 export interface DigimodCompile {
@@ -201,6 +207,20 @@ export interface DigiSoundImported {
 /** Adopt an installed DigiMaster pak into the Jumpscares tab. */
 export function importDigimod(helperPath: string, vpk: string): Promise<DigimodImport> {
   return invoke("import_digimod", { helperPath, vpk });
+}
+
+/** UI Master: list the game's panorama layout/style files (editable set). */
+export function listUiFiles(helperPath: string, pakPath: string): Promise<string[]> {
+  return invoke("list_ui_files", { helperPath, pakPath });
+}
+
+/** UI Master: decompile one panorama layout/style to editable source text. */
+export function readUiFile(
+  helperPath: string,
+  pakPath: string,
+  internalPath: string,
+): Promise<string> {
+  return invoke("read_ui_file", { helperPath, pakPath, internalPath });
 }
 
 /** Extract a video's audio track to an mp3 (app-data cached); null when the

@@ -126,6 +126,8 @@ pub fn run() {
             commands::import_digimod,
             commands::media_thumb,
             commands::extract_video_audio,
+            commands::list_ui_files,
+            commands::read_ui_file,
             commands::check_app_update,
             commands::open_in_viewer,
             commands::item_particles,

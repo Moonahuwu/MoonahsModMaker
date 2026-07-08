@@ -73,6 +73,7 @@ import { OverrideEditor } from "./components/OverrideEditor";
 import { EffectsBrowser } from "./components/EffectsBrowser";
 import { PostersTab } from "./components/PostersTab";
 import { DigimodTab, DEFAULT_DIGIMOD } from "./components/DigimodTab";
+import { UiMasterTab } from "./components/UiMasterTab";
 import { CustomServer } from "./components/CustomServer";
 import { ProfileSwitcher } from "./components/ProfileSwitcher";
 import { useToast } from "./components/Toaster";
@@ -98,6 +99,8 @@ const CUSTOM_SERVER = "customserver";
 const POSTERS = "posters";
 /** Jumpscares/Deaths (DigiMaster) — only when the engine is detected installed. */
 const JUMPSCARES = "jumpscares";
+/** UI Master (experimental): edit the game's panorama layouts/styles. */
+const UIMASTER = "uimaster";
 /** Catch-all tab for events auto-discovered from a new patch. */
 const UNSORTED = "unsorted";
 
@@ -175,6 +178,7 @@ const TAB_LABELS: Record<string, string> = {
   [EFFECTS]: "Effects",
   [POSTERS]: "Wall Art",
   [JUMPSCARES]: "Jumpscares",
+  [UIMASTER]: "UI Master",
   [CUSTOM_SERVER]: "Custom Server",
   [MOD_COMBINER]: "Mod combiner",
 };
@@ -522,6 +526,7 @@ function accentFor(ev: { group: string; side: string }): string {
   if (ev.group === EFFECTS) return "#c084fc"; // violet (VFX)
   if (ev.group === POSTERS) return "#8b5cf6"; // deep violet (posters)
   if (ev.group === JUMPSCARES) return "#ef4444"; // red (spooky)
+  if (ev.group === UIMASTER) return "#f59e0b"; // amber (experimental UI editing)
   if (ev.group === CUSTOM_SERVER) return "#38bdf8"; // sky (server)
   return "#e0564f"; // heroes
 }
@@ -734,6 +739,7 @@ export default function App() {
     // Recolors in the project stop compiling while it's off (see the
     // CompileBar effectOverrides prop), so nothing ships invisibly.
     if (settings.experimentalEffects) out.push(EFFECTS);
+    if (settings.experimentalUiMaster) out.push(UIMASTER);
     out.push(POSTERS);
     // Jumpscares only when the DigiMaster engine is in the user's mods (or
     // this project already configures it).
@@ -750,7 +756,13 @@ export default function App() {
     if (settings.experimentalServer) out.push(CUSTOM_SERVER);
     out.push(MOD_COMBINER, REPLACE_SOUNDS);
     return out;
-  }, [project, settings.experimentalEffects, settings.experimentalServer, digimodOn]);
+  }, [
+    project,
+    settings.experimentalEffects,
+    settings.experimentalServer,
+    settings.experimentalUiMaster,
+    digimodOn,
+  ]);
 
   // If the active tab vanishes (e.g. turning off an experimental feature while
   // viewing it), fall back to the first tab.
@@ -3367,7 +3379,9 @@ export default function App() {
                       ? "Replace the world's posters, signs, ghost signs, and graffiti with your own images — drop a PNG onto a region and compile."
                       : activeTab === JUMPSCARES
                         ? "Random jumpscares while you play + videos when you die — your DigiMaster mod, configured here and rebuilt on compile."
-                        : "Your entries merge in — every other mod stays untouched."}
+                        : activeTab === UIMASTER
+                          ? "Edit the game's UI files directly — decompiled to source, compiled back into your mod. Very experimental."
+                          : "Your entries merge in — every other mod stays untouched."}
             </p>
           </div>
           {profiles.length > 0 && (
@@ -3511,6 +3525,15 @@ export default function App() {
             onUpdate={updateEffectOverride}
             onRemove={removeEffectOverride}
             onOpenViewer={(ref) => void openEffectInViewer(ref)}
+          />
+        ) : activeTab === UIMASTER ? (
+          <UiMasterTab
+            helperPath={settings.vpkHelperPath}
+            pakPath={settings.deadlockPak}
+            overrides={project?.uiOverrides ?? []}
+            onChange={(next) =>
+              setProject((prev) => (prev ? { ...prev, uiOverrides: next } : prev))
+            }
           />
         ) : activeTab === JUMPSCARES ? (
           <DigimodTab
@@ -3685,6 +3708,7 @@ export default function App() {
             worldOverrides={project.worldOverrides ?? []}
             posterOverrides={project.posterOverrides ?? []}
             digimod={project.digimod ?? null}
+            uiOverrides={settings.experimentalUiMaster ? (project.uiOverrides ?? []) : []}
             onCompiled={markAllCompiled}
             onBulkGain={bulkGain}
             onFixForNewPatch={refreshVanilla}

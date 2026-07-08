@@ -20,7 +20,7 @@ import { ExportModal, type ExportExtra, type ExportSlot } from "./ExportModal";
 import { buildCompileConfig, installSrcVpk, sheetSiblingsKey, slotSoundFolder, type Settings } from "../lib/settings";
 import { songStatus, overrideHash, effectHash, posterHash } from "../lib/songHash";
 import { useToast } from "./Toaster";
-import type { DigimodConfig, EffectOverride, EventProject, GlobalOverride, IconMod, PosterOverride, SoundOverride, VdataOverride, WorldOverride } from "../types";
+import type { DigimodConfig, EffectOverride, EventProject, GlobalOverride, IconMod, PosterOverride, SoundOverride, UiFileOverride, VdataOverride, WorldOverride } from "../types";
 
 const pakName = (n: number) => `pak${String(n).padStart(2, "0")}_dir.vpk`;
 
@@ -36,6 +36,7 @@ export function CompileBar({
   worldOverrides,
   posterOverrides,
   digimod,
+  uiOverrides,
   onCompiled,
   onFixForNewPatch,
   onBulkGain,
@@ -52,6 +53,7 @@ export function CompileBar({
   worldOverrides: WorldOverride[];
   posterOverrides: PosterOverride[];
   digimod: DigimodConfig | null;
+  uiOverrides: UiFileOverride[];
   /** Called after a successful compile so the project can record compiled hashes. */
   onCompiled: () => void;
   /** Nudge every track's + replacement's gain by `delta` dB (loudness leveling). */
@@ -170,6 +172,7 @@ export function CompileBar({
       (digimod.scares.length > 0 ||
         digimod.deaths.length > 0 ||
         (digimod.mergeVpks?.length ?? 0) > 0)) ||
+    uiOverrides.length > 0 ||
     (settings.includeGameplay &&
       (vdataOverrides.length > 0 || globalOverrides.length > 0 || worldOverrides.length > 0));
 
@@ -276,7 +279,7 @@ export function CompileBar({
             return true;
           })
         : [];
-      const config = buildCompileConfig(s, evts, false, iconMods, soundOverrides, effectOverrides, gameplay, global, world, posterOverrides, digimod);
+      const config = buildCompileConfig(s, evts, false, iconMods, soundOverrides, effectOverrides, gameplay, global, world, posterOverrides, digimod, uiOverrides);
       const r = await compileProject(config);
       setReport(r);
       if (r.ok) {
