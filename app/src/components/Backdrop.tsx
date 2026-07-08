@@ -73,14 +73,16 @@ export function Backdrop({ accent = "#34d399" }: { accent?: string }) {
       // Exponential ease back toward cruise speed (~2.5s to settle).
       speedRef.current += (1 - speedRef.current) * Math.min(1, dt * 1.2);
       angle += BASE_DEG_PER_SEC * speedRef.current * dt;
-      // Slow horizontal sway tied to the rotation phase. The layers fill a
-      // positioned wrapper, so these transforms are pure spin/drift.
+      // Slow horizontal sway tied to the rotation phase — applied to BOTH
+      // layers so the triangle never slides out of its circle (only the
+      // rotations differ between them).
       const drift = Math.sin((angle * Math.PI) / 360) * -3;
+      const sway = `translateX(${drift.toFixed(3)}vh)`;
       if (outerRef.current) {
-        outerRef.current.style.transform = `translateX(${drift.toFixed(3)}vh) rotate(${(-angle).toFixed(3)}deg)`;
+        outerRef.current.style.transform = `${sway} rotate(${(-angle).toFixed(3)}deg)`;
       }
       if (innerRef.current) {
-        innerRef.current.style.transform = `rotate(${(angle * 0.7).toFixed(3)}deg)`;
+        innerRef.current.style.transform = `${sway} rotate(${(angle * 0.7).toFixed(3)}deg)`;
       }
       raf = requestAnimationFrame(tick);
     };
