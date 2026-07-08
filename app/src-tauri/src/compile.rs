@@ -308,11 +308,27 @@ pub struct DigimodCompile {
     pub death_chance: u32,
     pub scares: Vec<DigiEntry>,
     pub deaths: Vec<DigiEntry>,
+    /// The sound library: each becomes a `Digi.<id>` sound event, shareable
+    /// across any number of entries (like the user's original mod, where
+    /// several death videos played the same event).
+    #[serde(default)]
+    pub sounds: Vec<DigiSound>,
     /// Other base_hud-overriding UI mod vpks to merge in: their panorama
     /// files ride along raw and the digi hooks are injected into THEIR
     /// base_hud (two HUD mods can't coexist as separate paks).
     #[serde(default)]
     pub merge_vpks: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DigiSound {
+    pub id: String,
+    /// User's source audio file (any format — rendered to wav for the compiler).
+    pub source_audio: String,
+    /// Soundevent volume (Base.UI scale; the original mod used 0.1-5).
+    #[serde(default = "default_digi_volume")]
+    pub volume: f64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -330,12 +346,9 @@ pub struct DigiEntry {
     pub show: f64,
     /// "fullscreen" | "banner".
     pub preset: String,
-    /// Optional sound played alongside (any audio format).
+    /// Optional sound-library id played alongside (see `DigimodCompile::sounds`).
     #[serde(default)]
-    pub source_audio: Option<String>,
-    /// Soundevent volume (Base.UI scale; the mod used 2-5).
-    #[serde(default = "default_digi_volume")]
-    pub volume: f64,
+    pub sound_id: Option<String>,
 }
 
 fn default_digi_volume() -> f64 {

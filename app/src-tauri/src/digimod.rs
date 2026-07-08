@@ -14,7 +14,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::compile::{CompileConfig, CompileReport, DigiEntry, DigimodCompile};
+use crate::compile::{CompileConfig, CompileReport, DigiEntry, DigimodCompile, DigiSound};
 
 const TPL_JS: &str = include_str!("../templates/digimod/digi_master.js");
 const TPL_XML: &str = include_str!("../templates/digimod/base_hud.xml");
@@ -32,8 +32,8 @@ fn sanitize_id(s: &str) -> String {
     if trimmed.is_empty() { "entry".into() } else { trimmed }
 }
 
-fn event_name(e: &DigiEntry) -> String {
-    format!("Digi.{}", sanitize_id(&e.id))
+fn sound_event(sound_id: &str) -> String {
+    format!("Digi.{}", sanitize_id(sound_id))
 }
 
 fn media_rel(e: &DigiEntry) -> String {
@@ -44,12 +44,17 @@ fn media_rel(e: &DigiEntry) -> String {
     }
 }
 
+/// A sound library entry is usable when it has a source file.
+fn valid_sound<'a>(dm: &'a DigimodCompile, id: &Option<String>) -> Option<&'a DigiSound> {
+    let id = id.as_deref().filter(|s| !s.is_empty())?;
+    dm.sounds.iter().find(|s| s.id == id && !s.source_audio.is_empty())
+}
+
 /// JSON-ish JS literal for one library entry.
-fn entry_js(e: &DigiEntry) -> String {
-    let sound = if e.source_audio.as_deref().map(|s| !s.is_empty()).unwrap_or(false) {
-        format!("\"{}\"", event_name(e))
-    } else {
-        "null".into()
+fn entry_js(dm: &DigimodCompile, e: &DigiEntry) -> String {
+    let sound = match valid_sound(dm, &e.sound_id) {
+        Some(s) => format!("\"{}\"", sound_event(&s.id)),
+        None => "null".into(),
     };
     format!(
         "{{ name: \"{}\", type: \"{}\", src: \"s2r://{}\", show: {:.2}, sound: {}, preset: \"{}\" }}",
@@ -81,10 +86,19 @@ fn digimod_fingerprint(dm: &DigimodCompile) -> String {
         dm.rng_interval, dm.scare_chance, dm.death_chance
     );
     for e in dm.scares.iter().chain(dm.deaths.iter()) {
-        for p in [Some(e.source_media.as_str()), e.source_audio.as_deref()].into_iter().flatten() {
-            key.push_str(&file_identity(p));
-        }
-        key.push_str(&format!("{}|{}|{}|{:.2}|{:.2}\n", e.id, e.kind, e.preset, e.show, e.volume));
+        key.push_str(&file_identity(&e.source_media));
+        key.push_str(&format!(
+            "{}|{}|{}|{:.2}|{}\n",
+            e.id,
+            e.kind,
+            e.preset,
+            e.show,
+            e.sound_id.as_deref().unwrap_or("")
+        ));
+    }
+    for s in &dm.sounds {
+        key.push_str(&file_identity(&s.source_audio));
+        key.push_str(&format!("sound|{}|{:.2}\n", s.id, s.volume));
     }
     for v in &dm.merge_vpks {
         key.push_str("merge|");
@@ -182,20 +196,17 @@ fn to_webm(ffmpeg: Option<&str>, src: &str, dest: &Path) -> Result<String, Strin
     Ok("converted to VP9 webm".into())
 }
 
-/// Generate the soundevents file (Digi.* events only, like the original mod).
+/// Generate the soundevents file: one Digi.* event per library sound.
 fn gen_soundevents(dm: &DigimodCompile) -> String {
     let mut out = String::from(
         "<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} format:generic:version{7412167c-06e9-4698-aff2-e63eb59037e7} -->\n{\n",
     );
-    for e in dm.scares.iter().chain(dm.deaths.iter()) {
-        if e.source_audio.as_deref().map(|s| s.is_empty()).unwrap_or(true) {
-            continue;
-        }
+    for s in dm.sounds.iter().filter(|s| !s.source_audio.is_empty()) {
         out.push_str(&format!(
             "\t{} = \n\t{{\n\t\tbase = \"Base.UI\"\n\t\tvolume = {:.6}\n\t\tpitch = 1.000000\n\t\tvsnd_files = \"sounds/digi/{}.vsnd\"\n\t}}\n",
-            event_name(e),
-            e.volume.clamp(0.0, 10.0),
-            sanitize_id(&e.id),
+            sound_event(&s.id),
+            s.volume.clamp(0.0, 10.0),
+            sanitize_id(&s.id),
         ));
     }
     out.push_str("}\n");
@@ -210,8 +221,8 @@ fn gen_js(dm: &DigimodCompile) -> String {
         dm.scare_chance.min(100),
         dm.death_chance.min(100),
     );
-    let scares: Vec<String> = dm.scares.iter().map(entry_js).collect();
-    let deaths: Vec<String> = dm.deaths.iter().map(entry_js).collect();
+    let scares: Vec<String> = dm.scares.iter().map(|e| entry_js(dm, e)).collect();
+    let deaths: Vec<String> = dm.deaths.iter().map(|e| entry_js(dm, e)).collect();
     let library = format!(
         "{{\n    SCARES: [\n        {}\n    ],\n    DEATHS: [\n        {}\n    ],\n}}",
         scares.join(",\n        "),
@@ -286,9 +297,9 @@ pub fn compile_digimod(
         } else {
             rels.push(format!("panorama/videos/digi/{}.webm", sanitize_id(&e.id)));
         }
-        if e.source_audio.as_deref().map(|s| !s.is_empty()).unwrap_or(false) {
-            rels.push(format!("sounds/digi/{}.vsnd_c", sanitize_id(&e.id)));
-        }
+    }
+    for s in dm.sounds.iter().filter(|s| !s.source_audio.is_empty()) {
+        rels.push(format!("sounds/digi/{}.vsnd_c", sanitize_id(&s.id)));
     }
     for (_, keep) in &merge_files {
         for rel in keep {
@@ -385,30 +396,32 @@ pub fn compile_digimod(
                 }
             }
         }
-        if let Some(audio) = e.source_audio.as_deref().filter(|s| !s.is_empty()) {
-            // Any audio format -> wav source; the compiler makes the vsnd_c.
-            let wav = content_root.join(format!("sounds/digi/{id}.wav"));
-            if let Some(parent) = wav.parent() {
-                let _ = std::fs::create_dir_all(parent);
+    }
+    // Sound library: any audio format -> wav source; the compiler makes the
+    // vsnd_c. One file per library sound, shared by every entry using it.
+    for s in dm.sounds.iter().filter(|s| !s.source_audio.is_empty()) {
+        let id = sanitize_id(&s.id);
+        let wav = content_root.join(format!("sounds/digi/{id}.wav"));
+        if let Some(parent) = wav.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let exe = ffmpeg.unwrap_or("ffmpeg");
+        let out = crate::procutil::quiet(exe)
+            .args(["-y", "-i", &s.source_audio])
+            .arg(&wav)
+            .output();
+        match out {
+            Ok(o) if o.status.success() => to_compile.push(wav),
+            Ok(o) => {
+                report.soft_fail(
+                    format!("jumpscare sound: {id}"),
+                    String::from_utf8_lossy(&o.stderr).lines().rev().take(2).collect::<Vec<_>>().join(" | "),
+                );
+                all_ok = false;
             }
-            let exe = ffmpeg.unwrap_or("ffmpeg");
-            let out = crate::procutil::quiet(exe)
-                .args(["-y", "-i", audio])
-                .arg(&wav)
-                .output();
-            match out {
-                Ok(o) if o.status.success() => to_compile.push(wav),
-                Ok(o) => {
-                    report.soft_fail(
-                        format!("jumpscare sound: {}", e.name),
-                        String::from_utf8_lossy(&o.stderr).lines().rev().take(2).collect::<Vec<_>>().join(" | "),
-                    );
-                    all_ok = false;
-                }
-                Err(err) => {
-                    report.soft_fail(format!("jumpscare sound: {}", e.name), err.to_string());
-                    all_ok = false;
-                }
+            Err(err) => {
+                report.soft_fail(format!("jumpscare sound: {id}"), err.to_string());
+                all_ok = false;
             }
         }
     }
@@ -526,6 +539,9 @@ pub struct DigimodImport {
     pub death_chance: u32,
     pub scares: Vec<ImportedEntry>,
     pub deaths: Vec<ImportedEntry>,
+    /// The recovered sound library: one per Digi.* event, deduped — entries
+    /// sharing an event in the pak share a sound here too.
+    pub sounds: Vec<ImportedSound>,
     /// Non-fatal per-entry problems (media missing from the pak etc.).
     pub warnings: Vec<String>,
 }
@@ -539,7 +555,15 @@ pub struct ImportedEntry {
     pub source_media: String,
     pub show: f64,
     pub preset: String,
-    pub source_audio: Option<String>,
+    pub sound_id: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportedSound {
+    pub id: String,
+    pub name: String,
+    pub source_audio: String,
     pub volume: f64,
 }
 
@@ -676,6 +700,42 @@ pub fn import_from_vpk(helper: &str, vpk: &str, dest_dir: &Path) -> Result<Digim
 
     let mut warnings: Vec<String> = Vec::new();
     let mut used_ids: Vec<String> = Vec::new();
+    // Sound library: one entry per Digi.* event — decoded once, shared by
+    // every media entry that references it (mirrors the pak's structure).
+    let mut sounds: Vec<ImportedSound> = Vec::new();
+    let mut sound_fail: Vec<String> = Vec::new(); // events that didn't decode
+    let mut sound_for_event = |event: &str, warnings: &mut Vec<String>| -> Option<String> {
+        let id = sanitize_id(event.trim_start_matches("Digi."));
+        if let Some(s) = sounds.iter().find(|s| s.id == id) {
+            return Some(s.id.clone());
+        }
+        if sound_fail.iter().any(|e| e == event) {
+            return None;
+        }
+        let Some((volume, vsnd)) = event_info(&kv3, event) else {
+            warnings.push(format!("sound event {event} not found in the pak"));
+            sound_fail.push(event.to_string());
+            return None;
+        };
+        let base = dest_dir.join(format!("{id}_sound"));
+        match crate::vpk::decode(helper, vpk, &format!("{vsnd}_c"), &base.to_string_lossy()) {
+            Ok(written) => {
+                let path = written.lines().last().map(|l| l.trim().to_string())?;
+                sounds.push(ImportedSound {
+                    id: id.clone(),
+                    name: event.trim_start_matches("Digi.").to_string(),
+                    source_audio: path,
+                    volume,
+                });
+                Some(id)
+            }
+            Err(e) => {
+                warnings.push(format!("sound {vsnd} not recovered ({e})"));
+                sound_fail.push(event.to_string());
+                None
+            }
+        }
+    };
     let mut parse_list = |key: &str| -> Vec<ImportedEntry> {
         let Some(array) = array_after(&js, key) else { return vec![] };
         let mut out = Vec::new();
@@ -718,20 +778,9 @@ pub fn import_from_vpk(helper: &str, vpk: &str, dest_dir: &Path) -> Result<Digim
                 }
             };
 
-            // Sound: event name -> vsnd path -> decode to playable audio.
-            let mut volume = 3.0;
-            let source_audio = str_after(obj, "sound").and_then(|event| {
-                let (vol, vsnd) = event_info(&kv3, &event)?;
-                volume = vol;
-                let base = dest_dir.join(format!("{id}_sound"));
-                match crate::vpk::decode(helper, vpk, &format!("{vsnd}_c"), &base.to_string_lossy()) {
-                    Ok(written) => written.lines().last().map(|l| l.trim().to_string()),
-                    Err(e) => {
-                        warnings.push(format!("{name}: sound {vsnd} not recovered ({e})"));
-                        None
-                    }
-                }
-            });
+            // Sound: event name -> shared library sound (decoded once).
+            let sound_id =
+                str_after(obj, "sound").and_then(|event| sound_for_event(&event, &mut warnings));
 
             out.push(ImportedEntry {
                 id,
@@ -743,8 +792,7 @@ pub fn import_from_vpk(helper: &str, vpk: &str, dest_dir: &Path) -> Result<Digim
                     Some("banner") => "banner".into(),
                     _ => "fullscreen".into(),
                 },
-                source_audio,
-                volume,
+                sound_id,
             });
         }
         out
@@ -752,6 +800,8 @@ pub fn import_from_vpk(helper: &str, vpk: &str, dest_dir: &Path) -> Result<Digim
 
     let scares = parse_list("SCARES");
     let deaths = parse_list("DEATHS");
+    drop(parse_list);
+    drop(sound_for_event);
     let _ = std::fs::remove_dir_all(&tmp);
     if scares.is_empty() && deaths.is_empty() {
         return Err("no media entries found in this pak's DigiMaster library".into());
@@ -762,6 +812,7 @@ pub fn import_from_vpk(helper: &str, vpk: &str, dest_dir: &Path) -> Result<Digim
         death_chance: num_after(&js, "DEATH_CHANCE").unwrap_or(100.0) as u32,
         scares,
         deaths,
+        sounds,
         warnings,
     })
 }
@@ -830,23 +881,35 @@ var LIBRARY = {
         let _ = std::fs::remove_dir_all(&dest);
         let imp = super::import_from_vpk(helper, pak, &dest).expect("import failed");
         eprintln!(
-            "interval={} scare%={} death%={} | {} scares, {} deaths, {} warnings",
+            "interval={} scare%={} death%={} | {} scares, {} deaths, {} sounds, {} warnings",
             imp.rng_interval, imp.scare_chance, imp.death_chance,
-            imp.scares.len(), imp.deaths.len(), imp.warnings.len()
+            imp.scares.len(), imp.deaths.len(), imp.sounds.len(), imp.warnings.len()
         );
         for w in &imp.warnings {
             eprintln!("  warn: {w}");
         }
+        for s in &imp.sounds {
+            let ok = std::path::Path::new(&s.source_audio).exists();
+            eprintln!("  sound {} vol={} ok={ok}", s.id, s.volume);
+            assert!(ok, "sound audio missing for {}", s.id);
+        }
         for e in imp.scares.iter().chain(imp.deaths.iter()) {
             let media_ok = std::path::Path::new(&e.source_media).exists();
-            let audio_ok = e.source_audio.as_deref().map(|p| std::path::Path::new(p).exists());
+            let sound_ok = e
+                .sound_id
+                .as_deref()
+                .map(|id| imp.sounds.iter().any(|s| s.id == id));
             eprintln!(
-                "  {} [{}] show={} preset={} vol={} media_ok={media_ok} audio={audio_ok:?}",
-                e.id, e.kind, e.show, e.preset, e.volume
+                "  {} [{}] show={} preset={} sound={:?} media_ok={media_ok} sound_in_library={sound_ok:?}",
+                e.id, e.kind, e.show, e.preset, e.sound_id
             );
             assert!(media_ok, "media missing for {}", e.id);
+            assert_ne!(sound_ok, Some(false), "dangling sound id on {}", e.id);
         }
         assert!(!imp.scares.is_empty() && !imp.deaths.is_empty());
+        // The pak reuses events across entries — the library must be deduped
+        // (fewer sounds than entries proves sharing survived the import).
+        assert!(imp.sounds.len() < imp.scares.len() + imp.deaths.len());
     }
 
     #[test]

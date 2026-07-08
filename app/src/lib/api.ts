@@ -125,7 +125,14 @@ export interface DigimodCompile {
   deathChance: number;
   scares: DigiEntryCompile[];
   deaths: DigiEntryCompile[];
+  sounds?: DigiSoundCompile[];
   mergeVpks?: string[];
+}
+
+export interface DigiSoundCompile {
+  id: string;
+  sourceAudio: string;
+  volume: number;
 }
 
 export interface DigiEntryCompile {
@@ -135,8 +142,7 @@ export interface DigiEntryCompile {
   sourceMedia: string;
   show: number;
   preset: string;
-  sourceAudio?: string | null;
-  volume: number;
+  soundId?: string | null;
 }
 
 /** True when an installed addon pak ships the DigiMaster jumpscare engine. */
@@ -165,6 +171,8 @@ export interface DigimodImport {
   deathChance: number;
   scares: DigiEntryImported[];
   deaths: DigiEntryImported[];
+  /** Deduped: one per Digi.* event, shared by entries exactly like the pak. */
+  sounds: DigiSoundImported[];
   warnings: string[];
 }
 
@@ -175,7 +183,13 @@ export interface DigiEntryImported {
   sourceMedia: string;
   show: number;
   preset: string;
-  sourceAudio?: string | null;
+  soundId?: string | null;
+}
+
+export interface DigiSoundImported {
+  id: string;
+  name: string;
+  sourceAudio: string;
   volume: number;
 }
 

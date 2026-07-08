@@ -175,9 +175,21 @@ export interface DigiEntry {
   /** Seconds on screen. */
   show: number;
   preset: "fullscreen" | "banner";
-  /** Optional sound played alongside (any audio format). */
+  /** Sound-library id played alongside (see DigimodConfig.sounds). */
+  soundId?: string | null;
+  /** @deprecated pre-library shape — migrated into `sounds` on load. */
   sourceAudio?: string | null;
-  /** Soundevent volume (Base.UI scale; the original mod used 2–5). */
+  /** @deprecated pre-library shape — migrated into `sounds` on load. */
+  volume?: number;
+}
+
+/** One shared sound: compiles to a `Digi.<id>` event any entry can play. */
+export interface DigiSound {
+  id: string;
+  name: string;
+  /** Source audio file (any format — rendered to wav on compile). */
+  sourceAudio: string;
+  /** Soundevent volume (Base.UI scale; the original mod used 0.1–5). */
   volume: number;
 }
 
@@ -188,6 +200,8 @@ export interface DigimodConfig {
   deathChance: number;
   scares: DigiEntry[];
   deaths: DigiEntry[];
+  /** Shared sound library (each entry picks one by id via dropdown). */
+  sounds?: DigiSound[];
   /** Other base_hud-overriding UI mod vpks merged into this build (two HUD
    *  mods can't coexist as separate paks — merging ships both in one). */
   mergeVpks?: string[];

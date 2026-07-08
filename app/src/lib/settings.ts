@@ -330,12 +330,34 @@ export function buildCompileConfig(
     worldOverrides,
     posterOverrides: posterCompiles,
     // Entries without media can't compile — drop them rather than failing.
+    // Sounds/soundIds map to the shared library shape the backend expects.
     digimod: digimod
-      ? {
-          ...digimod,
-          scares: digimod.scares.filter((e) => e.sourceMedia),
-          deaths: digimod.deaths.filter((e) => e.sourceMedia),
-        }
+      ? (() => {
+          const sounds = (digimod.sounds ?? []).filter((s) => s.sourceAudio);
+          const entry = (e: (typeof digimod.scares)[number]) => ({
+            id: e.id,
+            name: e.name,
+            kind: e.kind,
+            sourceMedia: e.sourceMedia,
+            show: e.show,
+            preset: e.preset,
+            soundId:
+              e.soundId && sounds.some((s) => s.id === e.soundId) ? e.soundId : null,
+          });
+          return {
+            rngInterval: digimod.rngInterval,
+            scareChance: digimod.scareChance,
+            deathChance: digimod.deathChance,
+            scares: digimod.scares.filter((e) => e.sourceMedia).map(entry),
+            deaths: digimod.deaths.filter((e) => e.sourceMedia).map(entry),
+            sounds: sounds.map((s) => ({
+              id: s.id,
+              sourceAudio: s.sourceAudio,
+              volume: s.volume,
+            })),
+            mergeVpks: digimod.mergeVpks ?? [],
+          };
+        })()
       : null,
   };
 }
