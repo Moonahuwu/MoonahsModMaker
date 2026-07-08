@@ -725,11 +725,10 @@ export default function App() {
       // Anything discovery/import routed into a group we don't know yet.
       ...seen.filter((g) => !SIDEBAR_ORDER.includes(g)),
     ];
-    // Effects is experimental (VFX recolor) — shown when opted in, and always
-    // when recolors already exist: they compile into every build, so the user
-    // must be able to see and remove them.
-    if (settings.experimentalEffects || (project?.effectOverrides?.length ?? 0) > 0)
-      out.push(EFFECTS);
+    // Effects is experimental (VFX recolor): the toggle is authoritative.
+    // Recolors in the project stop compiling while it's off (see the
+    // CompileBar effectOverrides prop), so nothing ships invisibly.
+    if (settings.experimentalEffects) out.push(EFFECTS);
     out.push(POSTERS);
     // Jumpscares only when the DigiMaster engine is in the user's mods (or
     // this project already configures it).
@@ -741,15 +740,9 @@ export default function App() {
           (project.digimod.mergeVpks?.length ?? 0) > 0))
     )
       out.push(JUMPSCARES);
-    // Custom Server is experimental (opt-in), but never hide a project that
-    // already carries gameplay edits.
-    if (
-      settings.experimentalServer ||
-      (project?.vdataOverrides?.length ?? 0) > 0 ||
-      (project?.globalOverrides?.length ?? 0) > 0 ||
-      (project?.worldOverrides?.length ?? 0) > 0
-    )
-      out.push(CUSTOM_SERVER);
+    // Custom Server is experimental: the toggle is authoritative (gameplay
+    // edits only compile behind the separate includeGameplay option anyway).
+    if (settings.experimentalServer) out.push(CUSTOM_SERVER);
     out.push(MOD_COMBINER, REPLACE_SOUNDS);
     return out;
   }, [project, settings.experimentalEffects, settings.experimentalServer, digimodOn]);
@@ -3602,7 +3595,7 @@ export default function App() {
             events={project.events}
             iconMods={project.iconMods ?? []}
             soundOverrides={project.soundOverrides ?? []}
-            effectOverrides={project.effectOverrides ?? []}
+            effectOverrides={settings.experimentalEffects ? (project.effectOverrides ?? []) : []}
             vdataOverrides={project.vdataOverrides ?? []}
             globalOverrides={project.globalOverrides ?? []}
             worldOverrides={project.worldOverrides ?? []}
