@@ -187,20 +187,6 @@ export function SetupSection({
               title="Compare to original by default"
               desc="Open the per-track original-vs-yours waveform panel automatically on each song."
             />
-            <Toggle
-              checked={settings.showExperimentalHeroes}
-              onChange={(v) => update({ showExperimentalHeroes: v })}
-              title="Show experimental heroes"
-              desc="Reveal disabled / in-development heroes (unreleased, may lack data) in the Heroes tab."
-              accent="accent-amber-500"
-            />
-            <Toggle
-              checked={settings.showUnusedPosters}
-              onChange={(v) => update({ showUnusedPosters: v })}
-              title="Show unused poster assets"
-              desc="Reveal poster sheets/regions marked unused (cut content like Neon Prime leftovers) in the Wall Art tab."
-              accent="accent-amber-500"
-            />
           </div>
         </Section>
 
@@ -233,6 +219,20 @@ export function SetupSection({
               onChange={(v) => update({ experimentalUiMaster: v })}
               title="UI Master (edit the game's UI files)"
               desc="Browse and edit the game's panorama layouts/styles directly. VERY experimental — a bad edit can break the in-game UI until the mod is removed."
+              accent="accent-amber-500"
+            />
+            <Toggle
+              checked={settings.showExperimentalHeroes}
+              onChange={(v) => update({ showExperimentalHeroes: v })}
+              title="Show experimental heroes"
+              desc="Reveal disabled / in-development heroes (unreleased, may lack data) in the Heroes tab."
+              accent="accent-amber-500"
+            />
+            <Toggle
+              checked={settings.showUnusedPosters}
+              onChange={(v) => update({ showUnusedPosters: v })}
+              title="Show unused poster assets"
+              desc="Reveal poster sheets/regions marked unused (cut content like Neon Prime leftovers) in the Wall Art tab."
               accent="accent-amber-500"
             />
           </div>
