@@ -421,8 +421,11 @@ export function SongCard({
                   />
                   Loop
                 </label>
+              </div>
 
-                <label className="flex flex-1 items-center gap-2 text-xs text-zinc-400">
+              {/* Sliders in an even grid — no ragged wrap. */}
+              <div className="mt-2 grid grid-cols-1 gap-x-5 gap-y-2 sm:grid-cols-3">
+                <label className="flex items-center gap-2 text-xs text-zinc-400">
                   <span className="whitespace-nowrap text-zinc-500">Gain</span>
                   <input
                     type="range"
@@ -431,15 +434,15 @@ export function SongCard({
                     step={0.5}
                     value={song.gainDb}
                     onChange={(e) => onChange({ gainDb: Number(e.target.value) })}
-                    className="min-w-[80px] flex-1 accent-emerald-500"
+                    className="min-w-[70px] flex-1 accent-emerald-500"
                   />
-                  <span className="w-12 text-right tabular-nums text-zinc-300">
+                  <span className="w-14 text-right tabular-nums text-zinc-300">
                     {song.gainDb > 0 ? "+" : ""}
-                    {song.gainDb}
+                    {song.gainDb}dB
                   </span>
                 </label>
 
-                <label className="flex flex-1 items-center gap-2 text-xs text-zinc-400">
+                <label className="flex items-center gap-2 text-xs text-zinc-400">
                   <span className="whitespace-nowrap text-zinc-500">Fade&nbsp;in</span>
                   <input
                     type="range"
@@ -448,14 +451,14 @@ export function SongCard({
                     step={0.1}
                     value={song.fadeIn}
                     onChange={(e) => onChange({ fadeIn: Number(e.target.value) })}
-                    className="min-w-[80px] flex-1 accent-emerald-500"
+                    className="min-w-[70px] flex-1 accent-emerald-500"
                   />
                   <span className="w-12 text-right tabular-nums text-zinc-300">
                     {song.fadeIn.toFixed(1)}s
                   </span>
                 </label>
 
-                <label className="flex flex-1 items-center gap-2 text-xs text-zinc-400">
+                <label className="flex items-center gap-2 text-xs text-zinc-400">
                   <span className="whitespace-nowrap text-zinc-500">Fade&nbsp;out</span>
                   <input
                     type="range"
@@ -464,7 +467,7 @@ export function SongCard({
                     step={0.1}
                     value={song.fadeOut}
                     onChange={(e) => onChange({ fadeOut: Number(e.target.value) })}
-                    className="min-w-[80px] flex-1 accent-emerald-500"
+                    className="min-w-[70px] flex-1 accent-emerald-500"
                   />
                   <span className="w-12 text-right tabular-nums text-zinc-300">
                     {song.fadeOut.toFixed(1)}s
