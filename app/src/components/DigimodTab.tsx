@@ -3,6 +3,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { importDigimod, listUiMods, probeAudio, processAudio, type UiModVpk } from "../lib/api";
 import { videoThumb } from "../lib/videoThumbs";
+import { Waveform } from "./Waveform";
 import { useToast } from "./Toaster";
 import type { DigiEntry, DigimodConfig, DigiSound } from "../types";
 
@@ -104,6 +105,16 @@ function VideoPreview({ path }: { path: string }) {
         <span className="rounded-full bg-black/55 px-2.5 py-1 text-sm text-white/90">▶</span>
       </span>
     </div>
+  );
+}
+
+/** Labeled control cell — same layout the other sound editors use. */
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-[11px] font-medium text-zinc-500">{label}</span>
+      {children}
+    </label>
   );
 }
 
@@ -617,29 +628,25 @@ export function DigimodTab({
                 (s.fadeIn ?? 0) > 0 ||
                 (s.fadeOut ?? 0) > 0;
               const num = (
-                label: string,
                 key: "trimStart" | "trimEnd" | "gainDb" | "fadeIn" | "fadeOut",
                 step: number,
                 min?: number,
               ) => (
-                <label className="flex items-center gap-1 text-[11px] text-zinc-400">
-                  {label}
-                  <input
-                    type="number"
-                    step={step}
-                    min={min}
-                    value={s[key] ?? 0}
-                    onChange={(ev) =>
-                      updateSound(s.id, { [key]: Number(ev.target.value) || 0 })
-                    }
-                    className="w-16 rounded border border-zinc-700 bg-zinc-950 px-1 text-zinc-200"
-                  />
-                </label>
+                <input
+                  type="number"
+                  step={step}
+                  min={min}
+                  value={s[key] ?? 0}
+                  onChange={(ev) => updateSound(s.id, { [key]: Number(ev.target.value) || 0 })}
+                  className="w-full rounded border border-zinc-700 bg-zinc-950/60 px-2 py-1 text-zinc-200 outline-none focus:border-zinc-500"
+                />
               );
               return (
                 <div
                   key={s.id}
-                  className="rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2"
+                  className={`rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 ${
+                    editSound === s.id ? "md:col-span-2" : ""
+                  }`}
                 >
                   <div className="flex items-center gap-2">
                     <div className="min-w-0 flex-1">
@@ -701,21 +708,39 @@ export function DigimodTab({
                     </button>
                   </div>
                   {editSound === s.id && (
-                    <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-md border border-zinc-800 bg-zinc-900/50 px-3 py-2">
-                      {num("start", "trimStart", 0.1, 0)}
-                      {num("end", "trimEnd", 0.1, 0)}
-                      {num("gain dB", "gainDb", 0.5)}
-                      {num("fade in", "fadeIn", 0.1, 0)}
-                      {num("fade out", "fadeOut", 0.1, 0)}
-                      <button
-                        onClick={() => void previewClip(s)}
-                        className="rounded bg-zinc-800 px-2.5 py-1 text-[11px] font-semibold text-zinc-200 hover:bg-zinc-700"
-                      >
-                        {previewing === s.id ? "▶ playing…" : "▶ Preview clip"}
-                      </button>
-                      <span className="text-[10px] text-zinc-600">
-                        seconds; end 0 = full length. This is what ships in the mod.
-                      </span>
+                    <div className="mt-2 flex flex-col gap-3 rounded-md border border-zinc-800 bg-zinc-900/50 p-3 text-sm">
+                      <Waveform
+                        url={convertFileSrc(s.sourceAudio)}
+                        trimStart={s.trimStart ?? 0}
+                        trimEnd={s.trimEnd ?? 0}
+                        onTrimChange={(a, b) =>
+                          updateSound(s.id, {
+                            trimStart: Math.round(a * 100) / 100,
+                            trimEnd: Math.round(b * 100) / 100,
+                          })
+                        }
+                        timeline
+                      />
+                      <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-5">
+                        <Field label="Trim start (s)">{num("trimStart", 0.1, 0)}</Field>
+                        <Field label="Trim end (s)">{num("trimEnd", 0.1, 0)}</Field>
+                        <Field label="Gain (dB)">{num("gainDb", 0.5)}</Field>
+                        <Field label="Fade in (s)">{num("fadeIn", 0.1, 0)}</Field>
+                        <Field label="Fade out (s)">{num("fadeOut", 0.1, 0)}</Field>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <button
+                          onClick={() => void previewClip(s)}
+                          className="rounded-md bg-zinc-800 px-3 py-1 text-xs font-semibold text-zinc-200 hover:bg-zinc-700"
+                        >
+                          {previewing === s.id ? "▶ playing…" : "▶ Preview clip"}
+                        </button>
+                        <span className="text-[11px] text-zinc-600">
+                          Drag the green window to trim (click it to play that slice).
+                          Trim 0 → 0 uses the whole file; preview plays exactly what
+                          ships.
+                        </span>
+                      </div>
                     </div>
                   )}
                 </div>
