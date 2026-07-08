@@ -4675,6 +4675,59 @@ pub async fn import_digimod(
     .map_err(|e| e.to_string())?
 }
 
+/// First-frame thumbnail for a local video, cached on disk (app-data
+/// `digimod_media/.thumbs/<identity>.jpg`). The webview never decodes video
+/// just to draw a card — ffmpeg renders one small jpeg per file identity,
+/// once ever; later sessions hit the disk cache.
+#[tauri::command]
+pub async fn media_thumb(
+    app: tauri::AppHandle,
+    ffmpeg_path: Option<String>,
+    media_path: String,
+) -> Result<String, String> {
+    use tauri::Manager;
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("digimod_media")
+        .join(".thumbs");
+    tauri::async_runtime::spawn_blocking(move || {
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let meta = std::fs::metadata(&media_path).map_err(|e| e.to_string())?;
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let key = crate::compile::fingerprint(&format!("{media_path}|{}|{mtime}", meta.len()));
+        let out = dir.join(format!("{key}.jpg"));
+        if out.exists() {
+            return Ok(out.to_string_lossy().into_owned());
+        }
+        let exe = ffmpeg_path.as_deref().filter(|s| !s.is_empty()).unwrap_or("ffmpeg");
+        let grab = |seek: &str| {
+            crate::procutil::quiet(exe)
+                .args(["-y", "-ss", seek, "-i", &media_path, "-frames:v", "1", "-vf", "scale=320:-2"])
+                .arg(&out)
+                .output()
+        };
+        // Frame 0 is often black — grab a beat in; clips shorter than that
+        // produce no frame, so fall back to the very start.
+        let ok = match grab("0.4") {
+            Ok(o) if o.status.success() && out.exists() => true,
+            _ => matches!(grab("0"), Ok(o) if o.status.success()) && out.exists(),
+        };
+        if !ok {
+            return Err("ffmpeg could not extract a frame".into());
+        }
+        Ok(out.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Which of `names` (case-insensitive exe names) are currently running.
 /// Powers the compile bar's "Deadlock / Source 2 Viewer is open" warning —
 /// both hold locks on the pak/addons that make compiles and installs fail

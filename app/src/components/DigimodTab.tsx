@@ -61,23 +61,23 @@ function makeId(path: string, existing: DigiEntry[]): string {
   return id;
 }
 
-/** Cached-still video preview: decodes real video only while hovered, so a
- *  page of clips doesn't lag every visit (thumbnails persist per session). */
-function VideoPreview({ path }: { path: string }) {
+/** Still-image video card: the backend renders a one-time ffmpeg thumbnail
+ *  (disk-cached), so the webview NEVER decodes video at rest — only the one
+ *  clip you're hovering plays. */
+function VideoPreview({ path, ffmpegPath }: { path: string; ffmpegPath?: string }) {
   const [thumb, setThumb] = useState<string | null | "pending">("pending");
   const [hover, setHover] = useState(false);
   useEffect(() => {
     let live = true;
     setThumb("pending");
-    videoThumb(path).then((t) => {
+    videoThumb(path, ffmpegPath).then((t) => {
       if (live) setThumb(t);
     });
     return () => {
       live = false;
     };
-  }, [path]);
-  // Capture failed (rare) — fall back to the always-on video.
-  if (thumb === null || hover) {
+  }, [path, ffmpegPath]);
+  if (hover) {
     return (
       <video
         src={convertFileSrc(path)}
@@ -98,6 +98,10 @@ function VideoPreview({ path }: { path: string }) {
     >
       {thumb === "pending" ? (
         <div className="h-full w-full animate-pulse bg-zinc-900" />
+      ) : thumb === null ? (
+        <div className="flex h-full w-full items-center justify-center bg-zinc-900 text-2xl">
+          🎬
+        </div>
       ) : (
         <img src={thumb} className="h-full w-full object-cover" alt="" />
       )}
@@ -420,7 +424,7 @@ export function DigimodTab({
             >
               <div className="relative aspect-video w-full overflow-hidden bg-zinc-900">
                 {e.kind === "video" ? (
-                  <VideoPreview path={e.sourceMedia} />
+                  <VideoPreview path={e.sourceMedia} ffmpegPath={ffmpegPath} />
                 ) : (
                   <img
                     src={convertFileSrc(e.sourceMedia)}
