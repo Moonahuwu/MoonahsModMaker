@@ -74,11 +74,19 @@ export function CompileBar({
 
   // Live compile feed: the backend emits every pipeline step as it happens.
   const [feed, setFeed] = useState<{ name: string; ok: boolean; detail: string }[]>([]);
+  // Pipeline progress 0–100 for the bar along the footer's bottom edge
+  // (backend steps carry a pct from the step-budget forecast; 100 is set
+  // locally when the run finishes). null = no run / indeterminate.
+  const [pct, setPct] = useState<number | null>(null);
   const feedRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    const un = listen<{ name: string; ok: boolean; detail: string }>(
+    const un = listen<{ name: string; ok: boolean; detail: string; pct?: number }>(
       "compile://progress",
-      (e) => setFeed((prev) => [...prev.slice(-199), e.payload]),
+      (e) => {
+        setFeed((prev) => [...prev.slice(-199), e.payload]);
+        if (typeof e.payload.pct === "number")
+          setPct((prev) => Math.max(prev ?? 0, e.payload.pct!));
+      },
     );
     return () => {
       void un.then((f) => f());
@@ -223,6 +231,7 @@ export function CompileBar({
     setRunning(true);
     setReport(null);
     setFeed([]);
+    setPct(0);
     setSuccess(null);
     void pollLocks();
     const startedAt = Date.now();
@@ -298,6 +307,9 @@ export function CompileBar({
       return false;
     } finally {
       setRunning(false);
+      // Land the bar on 100 briefly, then clear it.
+      setPct(100);
+      setTimeout(() => setPct(null), 1500);
     }
   }
 
@@ -527,7 +539,20 @@ export function CompileBar({
   return (
     // -mx-6/-mb-4 cancel <main>'s padding so the bar runs edge-to-edge with no
     // see-through gap beneath it when scrolled to the bottom.
-    <div className="z-30 shrink-0 border-t border-zinc-800 bg-zinc-950/85 px-6 py-3 backdrop-blur">
+    <div className="relative z-30 shrink-0 border-t border-zinc-800 bg-zinc-950/85 px-6 py-3 backdrop-blur">
+      {/* Compile progress: a slim bar along the footer's bottom edge. */}
+      {pct !== null && (
+        <div className="absolute inset-x-0 bottom-0 h-[3px] overflow-hidden">
+          <div
+            className={`h-full transition-[width] duration-300 ease-out ${
+              pct >= 100
+                ? "bg-emerald-400"
+                : "bg-gradient-to-r from-emerald-600 via-emerald-400 to-emerald-300"
+            }`}
+            style={{ width: `${Math.max(2, pct)}%` }}
+          />
+        </div>
+      )}
       {/* Partial export picker. */}
       <AnimatePresence>
         {exportOpen && (
@@ -908,7 +933,7 @@ export function CompileBar({
             title={changedN > 0 ? `${changedN} item(s) changed since the last compile` : undefined}
           >
             {running
-              ? "Compiling…"
+              ? `Compiling… ${pct !== null ? `${Math.min(pct, 99)}%` : ""}`
               : settings.installAfterCompile
                 ? "Compile & Install"
                 : "Compile"}

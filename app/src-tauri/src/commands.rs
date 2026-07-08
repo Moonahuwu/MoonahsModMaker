@@ -55,9 +55,11 @@ pub async fn compile_project(app: tauri::AppHandle, config: CompileConfig) -> Co
                 name: "compile task".into(),
                 ok: false,
                 detail: format!("compile worker panicked: {e}"),
+                pct: None,
             }],
             output_path: None,
             progress: None,
+            est_total: 0,
         })
 }
 

@@ -504,6 +504,11 @@ pub struct StepResult {
     pub name: String,
     pub ok: bool,
     pub detail: String,
+    /// Overall pipeline progress 0..=99 when this step was recorded (from the
+    /// step budget forecast — None when no budget was set). Drives the UI's
+    /// compile progress bar; 100 is only ever shown by the UI on completion.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pct: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -521,25 +526,40 @@ pub struct CompileReport {
     /// no v6 manifest and then fails to even load (STATUS_ENTRYPOINT_NOT_FOUND).
     #[serde(skip)]
     pub(crate) progress: Option<std::sync::mpsc::Sender<StepResult>>,
+    /// Forecast of how many steps this run will record (see `estimate_steps`);
+    /// 0 = unknown → steps carry no pct and the UI shows an indeterminate bar.
+    #[serde(skip)]
+    pub(crate) est_total: usize,
 }
 
 impl CompileReport {
     fn new() -> Self {
-        CompileReport { ok: true, steps: vec![], output_path: None, progress: None }
+        CompileReport { ok: true, steps: vec![], output_path: None, progress: None, est_total: 0 }
     }
     fn emit_last(&self) {
         if let (Some(tx), Some(step)) = (&self.progress, self.steps.last()) {
             let _ = tx.send(step.clone());
         }
     }
+    /// Progress fraction for the step being recorded now. The budget is a
+    /// forecast, so this saturates at 99 — the UI shows 100 on completion.
+    fn next_pct(&self) -> Option<u32> {
+        if self.est_total == 0 {
+            return None;
+        }
+        let done = self.steps.len() + 1;
+        Some(((done * 100 / self.est_total.max(done + 1)) as u32).min(99))
+    }
     pub(crate) fn ok_step(&mut self, name: impl Into<String>, detail: impl Into<String>) {
-        self.steps.push(StepResult { name: name.into(), ok: true, detail: detail.into() });
+        let pct = self.next_pct();
+        self.steps.push(StepResult { name: name.into(), ok: true, detail: detail.into(), pct });
         self.emit_last();
     }
     /// Record a failure and return Err to short-circuit the pipeline.
     fn fail(&mut self, name: impl Into<String>, detail: impl Into<String>) -> Result<(), ()> {
         self.ok = false;
-        self.steps.push(StepResult { name: name.into(), ok: false, detail: detail.into() });
+        let pct = self.next_pct();
+        self.steps.push(StepResult { name: name.into(), ok: false, detail: detail.into(), pct });
         self.emit_last();
         Err(())
     }
@@ -549,7 +569,8 @@ impl CompileReport {
     /// produced and a summary of failures is appended at the end.
     pub(crate) fn soft_fail(&mut self, name: impl Into<String>, detail: impl Into<String>) {
         self.ok = false;
-        self.steps.push(StepResult { name: name.into(), ok: false, detail: detail.into() });
+        let pct = self.next_pct();
+        self.steps.push(StepResult { name: name.into(), ok: false, detail: detail.into(), pct });
         self.emit_last();
     }
 }
@@ -2266,13 +2287,65 @@ pub fn run_with_progress(
             name: format!("⚠ {} item(s) failed", failed.len()),
             ok: false,
             detail: list,
+            pct: None,
         });
         report.emit_last();
     }
     report
 }
 
+/// Step budget for the progress bar: a rough forecast of how many steps this
+/// run will record. Only the bar's pacing depends on it (pct saturates at 99
+/// until the run truly ends), so close-enough beats exact.
+fn estimate_steps(cfg: &CompileConfig) -> usize {
+    let mut est = 8; // fixed overhead: setup, events compile, stage, pack, summary
+    let mut relpaths: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for ev in &cfg.events {
+        if !ev.songs.is_empty() {
+            relpaths.insert(ev.events_relpath.as_str());
+        }
+        for s in &ev.songs {
+            est += 1; // every song records at least an up-to-date/skip step
+            if !(s.current_hash.is_some() && s.current_hash == s.last_compiled_hash) {
+                est += 1; // changed songs render + compile
+            }
+        }
+    }
+    est += 2 * relpaths.len(); // merge + compile per touched events file
+    est += cfg.icon_mods.len();
+    est += 2 * cfg.sound_overrides.len();
+    est += 2 * cfg.effect_overrides.len();
+    est += 2 * cfg
+        .poster_overrides
+        .iter()
+        .map(|p| p.sheet_id.as_str())
+        .collect::<std::collections::HashSet<_>>()
+        .len();
+    if let Some(dm) = &cfg.digimod {
+        est += 3
+            + dm.scares.len()
+            + dm.deaths.len()
+            + dm.sounds.len()
+            + 2 * dm.merge_vpks.len();
+    }
+    if !cfg.vdata_overrides.is_empty() {
+        est += 2;
+    }
+    if !cfg.global_overrides.is_empty() {
+        est += 1;
+    }
+    if !cfg.world_overrides.is_empty() {
+        est += 2;
+    }
+    est += 2 * cfg.imported_mods.len();
+    if !cfg.imported_mods.is_empty() {
+        est += 3; // the combined/ variant stages + packs too
+    }
+    est
+}
+
 fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), ()> {
+    report.est_total = estimate_steps(cfg);
     let content_root = Path::new(&cfg.content_root);
     let compiled_root = Path::new(&cfg.compiled_root);
     let ffmpeg = cfg.ffmpeg_path.as_deref();
@@ -2469,6 +2542,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                                 Ok(()) => j.wav.to_string_lossy().into_owned(),
                                 Err(e) => e.clone(),
                             },
+                            pct: None,
                         });
                     }
                     *results[i].lock().unwrap() = Some(r);
@@ -2485,19 +2559,25 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
             match r {
                 // Recorded directly (not via ok_step) — the worker already
                 // emitted this step to the live feed.
-                Ok(()) => report.steps.push(StepResult {
-                    name: format!("ffmpeg{}: {}", j.kind, j.label),
-                    ok: true,
-                    detail: j.wav.to_string_lossy().into_owned(),
-                }),
+                Ok(()) => {
+                    let pct = report.next_pct();
+                    report.steps.push(StepResult {
+                        name: format!("ffmpeg{}: {}", j.kind, j.label),
+                        ok: true,
+                        detail: j.wav.to_string_lossy().into_owned(),
+                        pct,
+                    })
+                }
                 // One bad source file shouldn't sink the build — note it,
                 // skip its compile, and keep going.
                 Err(e) => {
                     report.ok = false;
+                    let pct = report.next_pct();
                     report.steps.push(StepResult {
                         name: format!("ffmpeg{}: {}", j.kind, j.label),
                         ok: false,
                         detail: e,
+                        pct,
                     });
                     failed_jobs.insert(i);
                 }
