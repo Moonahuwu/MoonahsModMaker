@@ -4739,6 +4739,61 @@ pub async fn media_thumb(
     .map_err(|e| e.to_string())?
 }
 
+/// Pull the audio track out of a video into an mp3 under app-data
+/// `digimod_media/` — used to auto-pair a jumpscare video with its own
+/// sound (the webm conversion strips audio; panorama plays it via a
+/// soundevent instead). Ok(None) when the video has no usable audio.
+/// Output is keyed by file identity, so re-adding the same video reuses it.
+#[tauri::command]
+pub async fn extract_video_audio(
+    app: tauri::AppHandle,
+    ffmpeg_path: Option<String>,
+    media_path: String,
+) -> Result<Option<String>, String> {
+    use tauri::Manager;
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("digimod_media");
+    tauri::async_runtime::spawn_blocking(move || {
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let meta = std::fs::metadata(&media_path).map_err(|e| e.to_string())?;
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let key = crate::compile::fingerprint(&format!("{media_path}|{}|{mtime}", meta.len()));
+        let stem = std::path::Path::new(&media_path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "video".into());
+        let out = dir.join(format!("{stem}_{}.mp3", &key[..8]));
+        if out.exists() {
+            return Ok(Some(out.to_string_lossy().into_owned()));
+        }
+        let exe = ffmpeg_path.as_deref().filter(|s| !s.is_empty()).unwrap_or("ffmpeg");
+        let result = crate::procutil::quiet(exe)
+            .args(["-y", "-i", &media_path, "-vn", "-acodec", "libmp3lame", "-q:a", "4"])
+            .arg(&out)
+            .output()
+            .map_err(|e| e.to_string())?;
+        // Silent/no-audio videos either fail outright or write a header-only
+        // file — both mean "no sound to pair".
+        let ok = result.status.success()
+            && out.metadata().map(|m| m.len() > 1024).unwrap_or(false);
+        if !ok {
+            let _ = std::fs::remove_file(&out);
+            return Ok(None);
+        }
+        Ok(Some(out.to_string_lossy().into_owned()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Which of `names` (case-insensitive exe names) are currently running.
 /// Powers the compile bar's "Deadlock / Source 2 Viewer is open" warning —
 /// both hold locks on the pak/addons that make compiles and installs fail

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { importDigimod, probeAudio, processAudio, type UiModVpk } from "../lib/api";
+import { extractVideoAudio, importDigimod, probeAudio, processAudio, type UiModVpk } from "../lib/api";
 import { cListUiMods } from "../lib/dataCache";
 import { videoThumb } from "../lib/videoThumbs";
 import { Waveform } from "./Waveform";
@@ -363,21 +363,51 @@ export function DigimodTab({
     });
     const paths = typeof picked === "string" ? [picked] : (picked ?? []);
     if (paths.length === 0) return;
-    const next = [...config[list]];
+    // Videos auto-pair with their own audio track: extracted to mp3 and
+    // added as a library sound (webm conversion strips audio — the game
+    // plays it through the soundevent instead). Silent videos get null.
+    let audios: (string | null)[] = paths.map(() => null);
+    if (kind === "video") {
+      push("info", `Adding ${paths.length} video(s)… extracting audio`);
+      audios = await Promise.all(
+        paths.map((p) => extractVideoAudio(p, ffmpegPath || undefined).catch(() => null)),
+      );
+    }
+    const newEntries: DigiEntry[] = [];
+    const newSounds: DigiSound[] = [];
     const all = [...config.scares, ...config.deaths];
-    for (const p of paths) {
-      const entry: DigiEntry = {
-        id: makeId(p, [...all, ...next]),
-        name: baseName(p).replace(/\.[^.]+$/, ""),
+    for (let i = 0; i < paths.length; i++) {
+      const p = paths[i];
+      const name = baseName(p).replace(/\.[^.]+$/, "");
+      let soundId: string | null = null;
+      if (audios[i]) {
+        soundId = makeSoundId(audios[i]!, [...sounds, ...newSounds]);
+        newSounds.push({ id: soundId, name, sourceAudio: audios[i]!, volume: 3 });
+      }
+      newEntries.push({
+        id: makeId(p, [...all, ...newEntries]),
+        name,
         kind,
         sourceMedia: p,
         show: list === "scares" ? 0.8 : 5.0,
         preset: list === "scares" ? "fullscreen" : "banner",
-        soundId: null,
-      };
-      next.push(entry);
+        soundId,
+      });
     }
-    patch({ [list]: next } as Partial<DigimodConfig>);
+    onChange({
+      ...config,
+      [list]: [...config[list], ...newEntries],
+      sounds: [...sounds, ...newSounds],
+    });
+    const withAudio = newSounds.length;
+    if (kind === "video") {
+      push(
+        "success",
+        withAudio > 0
+          ? `Added ${newEntries.length} video(s) — ${withAudio} came with their own sound`
+          : `Added ${newEntries.length} video(s) (no audio track found)`,
+      );
+    }
   }
 
   function updateEntry(list: "scares" | "deaths", id: string, p: Partial<DigiEntry>) {

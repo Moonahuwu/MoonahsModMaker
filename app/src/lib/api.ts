@@ -203,6 +203,15 @@ export function importDigimod(helperPath: string, vpk: string): Promise<DigimodI
   return invoke("import_digimod", { helperPath, vpk });
 }
 
+/** Extract a video's audio track to an mp3 (app-data cached); null when the
+ *  video has no usable audio. Auto-pairs jumpscare videos with their sound. */
+export function extractVideoAudio(
+  mediaPath: string,
+  ffmpegPath?: string,
+): Promise<string | null> {
+  return invoke("extract_video_audio", { mediaPath, ffmpegPath: ffmpegPath || null });
+}
+
 export interface PosterCompile {
   sheetId: string;
   materials: string[];
