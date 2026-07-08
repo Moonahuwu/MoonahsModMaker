@@ -131,7 +131,7 @@ export function OverrideEditor({
         </Field>
       </div>
       <p className="text-[11px] text-zinc-600">
-        Trim 0 → 0 uses the whole file. This replaces the game's file directly — no
+        Trim 0 → 0 uses the whole file. This replaces the game's file directly - no
         soundevent is changed, so it works even for sounds with no editable event.
       </p>
     </div>

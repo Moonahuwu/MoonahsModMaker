@@ -165,7 +165,7 @@ fn to_webm(ffmpeg: Option<&str>, src: &str, dest: &Path) -> Result<String, Strin
     }
     if src.to_lowercase().ends_with(".webm") {
         std::fs::copy(src, dest).map_err(|e| e.to_string())?;
-        return Ok("webm — copied as-is".into());
+        return Ok("webm - copied as-is".into());
     }
     let exe = ffmpeg.unwrap_or("ffmpeg");
     let out = crate::procutil::quiet(exe)
@@ -321,7 +321,7 @@ pub fn compile_digimod(
         && crate::compile::stamp_matches(&stamp, &key)
         && rels.iter().all(|r| compiled_root.join(r).exists())
     {
-        report.ok_step("jumpscares up to date", "unchanged — skipped");
+        report.ok_step("jumpscares up to date", "unchanged - skipped");
         return Ok((rels, false));
     }
     let _ = std::fs::remove_file(&stamp);
@@ -515,7 +515,7 @@ pub fn compile_digimod(
             Err(e) => {
                 report.soft_fail(
                     format!("merge base_hud: {name}"),
-                    format!("{e} — falling back to the stock digi hud (that mod's hud edits won't apply)"),
+                    format!("{e} - falling back to the stock digi hud (that mod's hud edits won't apply)"),
                 );
                 all_ok = false;
                 TPL_XML.to_string()

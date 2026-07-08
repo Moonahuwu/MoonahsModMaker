@@ -55,14 +55,14 @@ function fileSections(c: PackContents) {
       title: "Replaces original game sounds",
       color: "#f59e0b",
       files: c.overwrites,
-      note: "Named exactly like the game's own files — they override the originals just by being bundled. Uncheck any you don't want replaced.",
+      note: "Named exactly like the game's own files - they override the originals just by being bundled. Uncheck any you don't want replaced.",
     },
     {
       key: "ownSounds",
       title: "The pack's own sound files",
       color: "#38bdf8",
       files: c.ownSounds,
-      note: "New audio the pack ships under its own paths. The sound events above play these — unchecking one silences whatever uses it.",
+      note: "New audio the pack ships under its own paths. The sound events above play these - unchecking one silences whatever uses it.",
     },
     { key: "models", title: "Models", color: "#a78bfa", files: c.models, note: "Model/skin replacements." },
     { key: "particles", title: "Particles (VFX)", color: "#f472b6", files: c.particles, note: "Particle-effect replacements." },
@@ -282,7 +282,7 @@ export function ImportReview({
         <header className="border-b border-zinc-800 p-5 pb-4">
           <h3 className="text-base font-bold text-zinc-100">Import “{review.name}”</h3>
           <p className="mt-1 text-xs text-zinc-500">
-            Pick what to bring in — nothing is added until you confirm.
+            Pick what to bring in - nothing is added until you confirm.
           </p>
 
           {/* Composition bar: what the pack is made of. */}
@@ -353,7 +353,7 @@ export function ImportReview({
                           <span className="ml-2 flex shrink-0 items-center gap-2">
                             {e.overwrite && (
                               <span
-                                title="This pack replaces the original file by name. Importing converts its audio into your own track and adds it to the event's array — the original stays and can be toggled."
+                                title="This pack replaces the original file by name. Importing converts its audio into your own track and adds it to the event's array - the original stays and can be toggled."
                                 className="rounded bg-amber-500/15 px-1.5 text-[10px] text-amber-300"
                               >
                                 replaces original
@@ -377,7 +377,7 @@ export function ImportReview({
             </div>
           ) : (
             <p className="text-xs text-zinc-500">
-              No editable sound events found — this pack works by replacing files directly (see below).
+              No editable sound events found - this pack works by replacing files directly (see below).
             </p>
           )}
 
@@ -426,9 +426,9 @@ export function ImportReview({
                   <span className="font-medium text-zinc-300">Keep linked to the pack</span>
                   <span className="text-zinc-600">
                     {" "}
-                    — tracks show a “{review.name.replace(/\.vpk$/i, "")}” tag so you always know
+                    - tracks show a “{review.name.replace(/\.vpk$/i, "")}” tag so you always know
                     where they came from; audio comes from the pack. (“replaces original” tracks
-                    are always converted into your own — they have no event entry to link.)
+                    are always converted into your own - they have no event entry to link.)
                   </span>
                 </span>
               </label>
@@ -444,7 +444,7 @@ export function ImportReview({
                   <span className="font-medium text-zinc-300">Make them my tracks</span>
                   <span className="text-zinc-600">
                     {" "}
-                    — every selected sound is converted into your own editable track
+                    - every selected sound is converted into your own editable track
                     (trim/gain/rename, compiled by you), as if you'd added the audio yourself.
                   </span>
                 </span>
@@ -463,7 +463,7 @@ export function ImportReview({
                 Keep the mod's original volume (0 dB gain)
                 <span className="text-zinc-600">
                   {" "}
-                  — converted tracks come in as-is; unchecked adds the usual +6 dB boost new
+                  - converted tracks come in as-is; unchecked adds the usual +6 dB boost new
                   tracks get.
                 </span>
               </span>
@@ -480,7 +480,7 @@ export function ImportReview({
               Bundle the included files on compile
               <span className="text-zinc-600">
                 {" "}
-                — they ride along in your <span className="font-mono">combined/</span> build.
+                - they ride along in your <span className="font-mono">combined/</span> build.
                 Unchecked files above are left out.
                 {mode === "absorb" ? " Sounds you absorb are dropped from the bundle automatically." : ""}
               </span>

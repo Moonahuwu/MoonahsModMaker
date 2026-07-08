@@ -95,7 +95,7 @@ export function ServerLogPanel({ deadlockRoot }: { deadlockRoot: string }) {
       >
         {lines.length === 0 || (lines.length === 1 && !lines[0]) ? (
           <p className="text-zinc-600">
-            No server output yet. Launch a host from the Server tab — output appears here live.
+            No server output yet. Launch a host from the Server tab - output appears here live.
           </p>
         ) : (
           lines.map((l, i) => (

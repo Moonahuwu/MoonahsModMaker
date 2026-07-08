@@ -201,7 +201,7 @@ export function ItemsTab({
                 )}
               </div>
               <p className="mt-0.5 text-xs text-zinc-500">
-                Drag a PNG/JPG anywhere here, or click Choose — it’s auto-scaled to the
+                Drag a PNG/JPG anywhere here, or click Choose - it’s auto-scaled to the
                 icon size and compiled into your mod.
               </p>
             </div>
@@ -357,7 +357,7 @@ export function ItemsTab({
   if (modifiedFilter && shownItems.length === 0) {
     return (
       <div className="p-10 text-center text-sm text-zinc-500">
-        No items with changes yet — turn off “Modified only” to browse the shop.
+        No items with changes yet - turn off “Modified only” to browse the shop.
       </div>
     );
   }

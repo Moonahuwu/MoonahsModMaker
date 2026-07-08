@@ -124,7 +124,7 @@ export function FirstRunWizard({
             onClick={onDone}
             className="rounded-md px-3 py-1.5 text-xs text-zinc-500 transition hover:text-zinc-300"
           >
-            {phase === "done" ? "Close" : "Skip — I'll set up manually"}
+            {phase === "done" ? "Close" : "Skip - I'll set up manually"}
           </button>
           {phase !== "done" ? (
             <button

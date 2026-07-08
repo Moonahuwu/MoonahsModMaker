@@ -796,7 +796,7 @@ impl Project {
                 slot(
                     "hero_billy_blasted",
                     "heroes",
-                    "Billy — Blasted (E)",
+                    "Billy - Blasted (E)",
                     "Punkgoat.Blasted.Lp",
                     "vsnd_files",
                     "sounds/abilities/punkgoat/a3/punkgoat_blasted_lp.vsnd",

@@ -56,7 +56,7 @@ export function Backdrop({ accent = "#34d399" }: { accent?: string }) {
   const inner = useSigilSvg("inner.svg");
   const outerRef = useRef<HTMLDivElement | null>(null);
   const innerRef = useRef<HTMLDivElement | null>(null);
-  const speedRef = useRef(KICK); // boots with a kick too — settles on its own
+  const speedRef = useRef(KICK); // boots with a kick too - settles on its own
 
   // Every category switch nudges the spin, which then fades back to cruise.
   useEffect(() => {

@@ -164,7 +164,7 @@ export function CustomServer({
 
         {!includeGameplay && editCount > 0 && (
           <p className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-            Gameplay edits are saved but <b>excluded from the build</b> — enable "Include in
+            Gameplay edits are saved but <b>excluded from the build</b> - enable "Include in
             build" to bake them in. Don't use them in public matchmaking.
           </p>
         )}
@@ -213,7 +213,7 @@ export function CustomServer({
               <button
                 onClick={() => onRandomize(temp)}
                 disabled={randomizing}
-                title={`Roll every gameplay number — up to ×${peakLabel}`}
+                title={`Roll every gameplay number - up to ×${peakLabel}`}
                 className="rounded-l-lg border border-fuchsia-500/50 bg-fuchsia-500/10 px-3 py-1.5 text-sm font-medium text-fuchsia-300 transition hover:bg-fuchsia-500/20 disabled:opacity-50"
               >
                 {randomizing ? "Rolling…" : "Randomize"}
@@ -229,7 +229,7 @@ export function CustomServer({
               </button>
               {showRandomOpts && (
                 <div className="absolute right-0 top-full z-20 mt-2 w-64 rounded-xl border border-zinc-700 bg-zinc-900 p-3 shadow-2xl">
-                  <div className="mb-2 text-xs font-semibold text-zinc-300">Randomizer — leave alone:</div>
+                  <div className="mb-2 text-xs font-semibold text-zinc-300">Randomizer - leave alone:</div>
                   {([
                     ["skipMovement", "Movement (jump, stamina, dash, speed)"],
                     ["skipCast", "Cast / channel / wind-up times"],
@@ -264,7 +264,7 @@ export function CustomServer({
                       className="mt-0.5 h-3.5 w-3.5 accent-fuchsia-500"
                     />
                     <span>
-                      Item tiers — give every shop item a random tier &amp; scale its
+                      Item tiers - give every shop item a random tier &amp; scale its
                       stats to match (re-prices too)
                     </span>
                   </label>
@@ -284,7 +284,7 @@ export function CustomServer({
                       onChange={(e) => onSetRandomizerOpts({ heroInvestment: e.target.checked })}
                       className="mt-0.5 h-3.5 w-3.5 accent-fuchsia-500"
                     />
-                    <span>Hero investment — per-level scaling (health/damage/tech-power per level)</span>
+                    <span>Hero investment - per-level scaling (health/damage/tech-power per level)</span>
                   </label>
                   <label className="mt-1.5 flex cursor-pointer items-start gap-2 text-xs text-zinc-300">
                     <input
@@ -294,7 +294,7 @@ export function CustomServer({
                       className="mt-0.5 h-3.5 w-3.5 accent-amber-500"
                     />
                     <span>
-                      Everything else (unsorted) — sweep every other uncategorized
+                      Everything else (unsorted) - sweep every other uncategorized
                       value across global + world data. Chaotic.
                     </span>
                   </label>
@@ -362,7 +362,7 @@ export function CustomServer({
               <button
                 key={key}
                 onClick={() => onSetExcluded([catKey], included)}
-                title={included ? "Included — click to exclude this whole category" : "Excluded — click to include"}
+                title={included ? "Included - click to exclude this whole category" : "Excluded - click to include"}
                 className={`flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium transition ${
                   included
                     ? "border-emerald-600/40 bg-emerald-500/10 text-emerald-300"
@@ -818,7 +818,7 @@ function GlobalSection({
     <>
       <div className="mb-3 flex items-center justify-between gap-3">
         <p className="text-sm text-zinc-400">
-          Match-wide values from <code className="text-zinc-300">generic_data.vdata</code> — gold
+          Match-wide values from <code className="text-zinc-300">generic_data.vdata</code> - gold
           rewards, comeback health, timers.
         </p>
         <IncludeToggle
@@ -858,9 +858,9 @@ function GlobalSection({
 // --------------------------------------------------------------------------- Minions/Boxes/Powerups
 
 const WORLD_BLURB: Record<WorldKind, string> = {
-  minions: "Troopers, neutrals, guardians and bosses — health, speed, damage…",
-  boxes: "Breakable crates / containers — what they drop and how tough they are.",
-  powerups: "Pickups (gun/spirit/movement) and gold drops — their bonus values.",
+  minions: "Troopers, neutrals, guardians and bosses - health, speed, damage…",
+  boxes: "Breakable crates / containers - what they drop and how tough they are.",
+  powerups: "Pickups (gun/spirit/movement) and gold drops - their bonus values.",
 };
 
 function EntitySection({
@@ -1099,7 +1099,7 @@ function HostPanel({ deadlockRoot }: { deadlockRoot: string }) {
     setBusy(true);
     try {
       setStatus(await setupHosting(deadlockRoot));
-      push("success", "Hosting enabled — gameinfo.gi patched (backed up)");
+      push("success", "Hosting enabled - gameinfo.gi patched (backed up)");
     } catch (e) {
       push("error", `Setup failed: ${e}`);
     } finally {
@@ -1121,7 +1121,7 @@ function HostPanel({ deadlockRoot }: { deadlockRoot: string }) {
     setBusy(true);
     try {
       const info = await launchHost(deadlockRoot, map, maxPlayers);
-      push("success", `Server starting on ${map} in a new console window — it runs headless (pid ${info.pid})`);
+      push("success", `Server starting on ${map} in a new console window - it runs headless (pid ${info.pid})`);
       setConnectId(null);
       setRconPassword(info.rconPassword);
       setRconLog([]);
@@ -1155,7 +1155,7 @@ function HostPanel({ deadlockRoot }: { deadlockRoot: string }) {
           </div>
           <p className="mt-1 text-sm text-zinc-400">
             Runs your installed Deadlock as a <b className="text-zinc-300">headless</b> dedicated
-            host (no separate download). It launches in its own console window — that console{" "}
+            host (no separate download). It launches in its own console window - that console{" "}
             <b className="text-zinc-300">is</b> the running server; there's no game window on this
             PC. To play, join from a Deadlock client's dev console (Deadlock uses Steam P2P).
           </p>
@@ -1199,7 +1199,7 @@ function HostPanel({ deadlockRoot }: { deadlockRoot: string }) {
                   />
                 </div>
                 <div className="flex items-center gap-1.5">
-                  <label className="text-xs text-zinc-500" title="Server slots. 12 = 6v6. Higher fits more bots but is experimental — Deadlock is built for 12.">
+                  <label className="text-xs text-zinc-500" title="Server slots. 12 = 6v6. Higher fits more bots but is experimental - Deadlock is built for 12.">
                     Max players
                   </label>
                   <input
@@ -1227,7 +1227,7 @@ function HostPanel({ deadlockRoot }: { deadlockRoot: string }) {
               </div>
               {connectId && (
                 <div className="mt-4 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
-                  <div className="text-xs font-semibold text-emerald-300">Server is up — share this to join:</div>
+                  <div className="text-xs font-semibold text-emerald-300">Server is up - share this to join:</div>
                   <div className="mt-1.5 flex items-center gap-2">
                     <code className="select-all rounded bg-zinc-950 px-2 py-1 text-sm text-emerald-200">
                       connect {connectId}
@@ -1245,7 +1245,7 @@ function HostPanel({ deadlockRoot }: { deadlockRoot: string }) {
                   <p className="mt-1.5 text-[11px] text-zinc-500">
                     <b className="text-zinc-400">Friends</b> paste that into Deadlock's dev console (~).{" "}
                     <b className="text-zinc-400">You</b> (same PC) should instead use{" "}
-                    <code className="text-emerald-300">connect 127.0.0.1:27015</code> — the relay ID
+                    <code className="text-emerald-300">connect 127.0.0.1:27015</code> - the relay ID
                     loops you out and back and tends to stall. Enable the console via the{" "}
                     <code>-console</code> launch option first.
                   </p>
@@ -1270,7 +1270,7 @@ function HostPanel({ deadlockRoot }: { deadlockRoot: string }) {
                     </button>
                   </div>
                   <p className="mt-1 text-[11px] text-zinc-500">
-                    Send commands straight to the running server — no need to alt-tab to its console.
+                    Send commands straight to the running server - no need to alt-tab to its console.
                     Press <kbd className="rounded bg-zinc-800 px-1">F8</kbd> anytime (even in-game, if
                     Deadlock is in borderless-windowed) to toggle the floating mod menu.
                   </p>
@@ -1290,7 +1290,7 @@ function HostPanel({ deadlockRoot }: { deadlockRoot: string }) {
                   </div>
                   <p className="mt-1.5 text-[11px] text-zinc-500">
                     "Bot match 6v6" sets up a solo bot match (so bots actually play) + the match
-                    intro, then restarts the map. <b>Connect after</b> — the match runs its pregame
+                    intro, then restarts the map. <b>Connect after</b> - the match runs its pregame
                     → intro → play once you're in. Bots stay idle until the match actually starts.
                   </p>
 
@@ -1335,7 +1335,7 @@ function HostPanel({ deadlockRoot }: { deadlockRoot: string }) {
                 </div>
               )}
               <p className="mt-2 text-[11px] text-zinc-600">
-                Tip: build &amp; install your mod first — the server loads it from{" "}
+                Tip: build &amp; install your mod first - the server loads it from{" "}
                 <code>citadel/addons</code>. The connect ID is read from the server log
                 automatically (or type <code>status</code> in the server console to see it).
               </p>

@@ -76,7 +76,7 @@ export function ModMenuOverlay() {
       <div className="space-y-2 px-3 pt-2">
         {!ready && (
           <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-300">
-            No server yet — click <b>Host game now</b> in the app, then these controls go live.
+            No server yet - click <b>Host game now</b> in the app, then these controls go live.
           </div>
         )}
 

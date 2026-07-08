@@ -121,7 +121,7 @@ pub fn install(
             n
         }
         None => next_free_slot(&used)
-            .ok_or_else(|| format!("no free addon slots — all {MAX_SLOT} are in use"))?,
+            .ok_or_else(|| format!("no free addon slots - all {MAX_SLOT} are in use"))?,
     };
 
     let target = addons_dir.join(format!("pak{slot:02}_dir.vpk"));

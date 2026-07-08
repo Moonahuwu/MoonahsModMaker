@@ -404,7 +404,7 @@ export function DigimodTab({
       push(
         "success",
         withAudio > 0
-          ? `Added ${newEntries.length} video(s) — ${withAudio} came with their own sound`
+          ? `Added ${newEntries.length} video(s) - ${withAudio} came with their own sound`
           : `Added ${newEntries.length} video(s) (no audio track found)`,
       );
     }
@@ -447,7 +447,7 @@ export function DigimodTab({
       </div>
       {config[list].length === 0 ? (
         <p className="py-6 text-center text-xs text-zinc-600">
-          Nothing yet — add a video (any format, it converts to webm) or a PNG.
+          Nothing yet - add a video (any format, it converts to webm) or a PNG.
         </p>
       ) : (
         <div className="grid grid-cols-1 gap-3 p-3 lg:grid-cols-2 2xl:grid-cols-3">
@@ -529,7 +529,7 @@ export function DigimodTab({
                     }}
                     className="min-w-0 flex-1 rounded border border-zinc-700 bg-zinc-950 px-1 py-0.5 text-zinc-300 focus:border-zinc-500 focus:outline-none"
                   >
-                    <option value="">— no sound —</option>
+                    <option value="">- no sound -</option>
                     {sounds.map((s) => (
                       <option key={s.id} value={s.id}>
                         {s.name}
@@ -585,7 +585,7 @@ export function DigimodTab({
           />
         </div>
         <p className="mt-2 text-[10px] text-zinc-600">
-          These compile in as the defaults — the in-game F8 menu ("DigiMaster") can still
+          These compile in as the defaults - the in-game F8 menu ("DigiMaster") can still
           tweak them per session.
         </p>
       </div>
@@ -639,7 +639,7 @@ export function DigimodTab({
             {sounds.length}
           </span>
           <span className="text-[11px] text-zinc-500">
-            each becomes its own sound event — assign to any number of videos above
+            each becomes its own sound event - assign to any number of videos above
           </span>
           <button
             onClick={() => void addSoundsToLibrary()}
@@ -650,7 +650,7 @@ export function DigimodTab({
         </div>
         {sounds.length === 0 ? (
           <p className="py-5 text-center text-xs text-zinc-600">
-            No sounds yet — add mp3/wav/ogg files here (or straight from a video's dropdown)
+            No sounds yet - add mp3/wav/ogg files here (or straight from a video's dropdown)
             and pick them per video.
           </p>
         ) : (
@@ -791,7 +791,7 @@ export function DigimodTab({
       <p className="text-[11px] text-zinc-600">
         Compile bakes this into your mod: videos become VP9 webm (panorama's requirement),
         PNGs compile to textures, sounds get their own Digi.* sound events. This overrides
-        the game's base HUD layout — merge other HUD mods in the Mod Combiner tab, and
+        the game's base HUD layout - merge other HUD mods in the Mod Combiner tab, and
         remove your old DigiMaster pak from addons once this one is installed.
       </p>
     </div>

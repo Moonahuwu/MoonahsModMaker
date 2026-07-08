@@ -89,7 +89,7 @@ export function ExportModal({
         <header className="border-b border-zinc-800 p-5 pb-4">
           <h3 className="text-base font-bold text-zinc-100">Export part of your pack</h3>
           <p className="mt-1 text-xs text-zinc-500">
-            Pick what to include — it compiles into its own standalone{" "}
+            Pick what to include - it compiles into its own standalone{" "}
             <span className="font-mono">pak01_dir.vpk</span> in a folder you choose, ready to
             share. Your project isn't changed.
           </p>
@@ -97,7 +97,7 @@ export function ExportModal({
 
         <div className="min-h-0 flex-1 overflow-y-auto p-5">
           {slots.length === 0 && extras.length === 0 && (
-            <p className="text-xs text-zinc-600">Nothing to export yet — add some tracks first.</p>
+            <p className="text-xs text-zinc-600">Nothing to export yet - add some tracks first.</p>
           )}
           <div className="flex flex-col gap-4">
             {slotGroups.map(([group, list]) => (

@@ -41,7 +41,7 @@ export function commandCatalog(map: string): CatalogGroup[] {
       title: "Bots",
       items: [
         { label: "More bots (12)", cmds: ["citadel_spawn_practice_bots_count 12"] },
-        { label: "Crazy bots (24)", title: "Experimental — needs Max players raised at launch", cmds: ["citadel_spawn_practice_bots_count 24"] },
+        { label: "Crazy bots (24)", title: "Experimental - needs Max players raised at launch", cmds: ["citadel_spawn_practice_bots_count 24"] },
         { label: "Bots wander", cmds: ["citadel_bot_move_random 1"] },
         { label: "Bots shop", cmds: ["citadel_bot_shop 2"] },
         { label: "Kick bots", cmds: ["sv_cheats 1", "bot_kick_all"] },

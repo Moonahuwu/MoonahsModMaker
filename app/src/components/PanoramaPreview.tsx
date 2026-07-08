@@ -69,7 +69,7 @@ export function PanoramaPreview({ xml, cssSources }: { xml: string; cssSources: 
           approximate
         </span>
         <span>
-          no game data / scripts / textures — colors, layout & fonts only. Hover to inspect.
+          no game data / scripts / textures - colors, layout & fonts only. Hover to inspect.
         </span>
         <span className="ml-auto truncate font-mono text-amber-200/80">{hover ?? ""}</span>
       </div>
@@ -96,7 +96,7 @@ export function PanoramaPreview({ xml, cssSources }: { xml: string; cssSources: 
             renderNode(tree, [], "none", "r")
           ) : (
             <div style={{ padding: 40, fontSize: 28, color: "#f87171" }}>
-              Layout didn't parse — check the XML for errors.
+              Layout didn't parse - check the XML for errors.
             </div>
           )}
         </div>

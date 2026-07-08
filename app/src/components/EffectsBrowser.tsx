@@ -124,7 +124,7 @@ export function EffectsBrowser({
     return (
       <div>
         <p className="mb-4 text-sm text-zinc-500">
-          Recolor any in-game particle effect — hero abilities, item effects (Curse =
+          Recolor any in-game particle effect - hero abilities, item effects (Curse =
           "aoe_silence"), and more. Pick a category, find the effect, then tune its hue.
           {overrides.length > 0 && (
             <span className="ml-1 text-emerald-400">

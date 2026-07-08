@@ -145,7 +145,7 @@ export function HeroDetail({
         />
         {/* The portrait: full banner height on the right (art keeps its own
             aspect, like before) ending in a hard slanted cutoff instead of a
-            soft fade — the clip rides the image box itself so it scales with
+            soft fade - the clip rides the image box itself so it scales with
             whatever size the art renders at. */}
         {backgroundSrc && (
           <img
@@ -336,12 +336,12 @@ export function HeroDetail({
             className="mt-5"
           >
             <h3 className="mb-3 text-sm font-semibold text-zinc-300">
-              {prettyAbility(active.ability, heroName)} — sounds
+              {prettyAbility(active.ability, heroName)} - sounds
             </h3>
             {activeSounds.length === 0 ? (
               <p className="text-sm text-zinc-500">
                 {modifiedOnly && active.sounds.length > 0
-                  ? "No modified sounds on this ability — turn off “Modified only” to see all of them."
+                  ? "No modified sounds on this ability - turn off “Modified only” to see all of them."
                   : "This ability has no editable sound events."}
               </p>
             ) : (

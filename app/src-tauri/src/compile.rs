@@ -1036,7 +1036,7 @@ fn compile_effect_overrides(
         let stem = ov.stem();
         let compiled = compiled_root.join(&rel_c);
         if ov.up_to_date(cfg.skip_compile, compiled.exists()) {
-            report.ok_step(format!("up to date: {stem}"), "unchanged — skipped");
+            report.ok_step(format!("up to date: {stem}"), "unchanged - skipped");
             continue;
         }
         dirty = true;
@@ -1402,7 +1402,7 @@ fn compile_posters(
                     let refs = vmat_texture_refs(&text);
                     staged.extend(poster_staged_rels(compiled_root, mat, &refs));
                 }
-                report.ok_step(format!("posters up to date: {sheet_id}"), "unchanged — skipped");
+                report.ok_step(format!("posters up to date: {sheet_id}"), "unchanged - skipped");
                 continue;
             }
         }
@@ -1469,7 +1469,7 @@ fn compile_posters(
                     _ => {
                         report.soft_fail(
                             format!("erase decal: {}", ov.label),
-                            "this sheet has no trans mask — the decal can't be hidden",
+                            "this sheet has no trans mask - the decal can't be hidden",
                         );
                         continue 'sheets;
                     }
@@ -1780,7 +1780,7 @@ fn compile_vdata_overrides(
         && compiled_root.join(ABILITIES_VDATA_C_REL).exists()
         && stamp_matches(&stamp, &key)
     {
-        report.ok_step("config edits up to date", "unchanged — skipped");
+        report.ok_step("config edits up to date", "unchanged - skipped");
         return Ok(false);
     }
     let _ = std::fs::remove_file(&stamp);
@@ -1903,7 +1903,7 @@ fn compile_global_overrides(
         && compiled_root.join(GENERIC_DATA_C_REL).exists()
         && stamp_matches(&stamp, &key)
     {
-        report.ok_step("global stats up to date", "unchanged — skipped");
+        report.ok_step("global stats up to date", "unchanged - skipped");
         return Ok(false);
     }
     let _ = std::fs::remove_file(&stamp);
@@ -2077,7 +2077,7 @@ fn compile_world_overrides(
             && stamp_matches(&stamp, &key)
             && files.iter().all(|f| compiled_root.join(format!("{f}_c")).exists())
         {
-            report.ok_step("world edits up to date", "unchanged — skipped");
+            report.ok_step("world edits up to date", "unchanged - skipped");
             return Ok((files.iter().map(|f| format!("{f}_c")).collect(), false));
         }
     }
@@ -2238,7 +2238,7 @@ fn compile_icon_mods(
             })
             .collect();
         if produced.iter().all(|(_, p)| p.exists()) {
-            report.ok_step("icons up to date", "unchanged — skipped");
+            report.ok_step("icons up to date", "unchanged - skipped");
             return Ok((produced, false));
         }
     }
@@ -2384,7 +2384,7 @@ pub(crate) fn compile_ui_overrides(
         && stamp_matches(&stamp, &key)
         && rels.iter().all(|r| compiled_root.join(r).exists())
     {
-        report.ok_step("UI files up to date", "unchanged — skipped");
+        report.ok_step("UI files up to date", "unchanged - skipped");
         return Ok((rels, false));
     }
     let _ = std::fs::remove_file(&stamp);
@@ -2498,7 +2498,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                 return report.fail(
                     "validate track names",
                     format!(
-                        "'{}' — track names must be lowercase letters, numbers or _ only; rename the track and recompile",
+                        "'{}' - track names must be lowercase letters, numbers or _ only; rename the track and recompile",
                         song.sound_name
                     ),
                 );
@@ -2564,7 +2564,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
             let folder = folder_for(cfg, ev);
             let compiled = compiled_root.join(vsnd_c_relpath(folder, &song.sound_name));
             if is_up_to_date(song, cfg.skip_compile, compiled.exists()) {
-                report.ok_step(format!("up to date: {}", song.sound_name), "unchanged — skipped");
+                report.ok_step(format!("up to date: {}", song.sound_name), "unchanged - skipped");
                 continue;
             }
             jobs.push(AudioJob {
@@ -2609,7 +2609,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
             let (folder, stem) = ov.folder_stem();
             let compiled = compiled_root.join(ov.vsnd_c_rel());
             if ov.up_to_date(cfg.skip_compile, compiled.exists()) {
-                report.ok_step(format!("up to date: {stem}"), "unchanged — skipped");
+                report.ok_step(format!("up to date: {stem}"), "unchanged - skipped");
                 continue;
             }
             jobs.push(AudioJob {
@@ -2751,7 +2751,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                     Err(e) => {
                         report.ok_step(
                             "compile audio (batch)",
-                            format!("batch failed — retrying per file: {e}"),
+                            format!("batch failed - retrying per file: {e}"),
                         );
                     }
                 }
@@ -3030,7 +3030,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                 && std::fs::read_to_string(&events_dest).map(|d| d == text).unwrap_or(false)
                 && stamp_matches(&events_stamp, &fingerprint(&text));
             if unchanged {
-                report.ok_step(format!("[{}] up to date {rel}", v.name), "unchanged — skipped");
+                report.ok_step(format!("[{}] up to date {rel}", v.name), "unchanged - skipped");
                 events_c_rels.push(events_c_relpath(rel));
                 continue;
             }
@@ -3101,7 +3101,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
             && out_artifact.exists()
             && stamp_matches(&stamp_file, &build_stamp)
         {
-            report.ok_step(format!("[{}] up to date", v.name), "nothing changed — skipped");
+            report.ok_step(format!("[{}] up to date", v.name), "nothing changed - skipped");
             continue;
         }
         // Building (or rebuilding) below: drop the old stamp now so a failed

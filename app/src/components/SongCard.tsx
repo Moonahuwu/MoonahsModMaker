@@ -254,7 +254,7 @@ export function SongCard({
         <button
           onClick={onCopy}
           aria-label="Copy track"
-          title="Copy — paste it into any other slot (file + trims/gain/fades come along)"
+          title="Copy - paste it into any other slot (file + trims/gain/fades come along)"
           className="shrink-0 rounded p-1 text-zinc-500 opacity-0 transition group-hover:opacity-100 focus:opacity-100 hover:bg-zinc-800 hover:text-zinc-200"
         >
           ⧉
@@ -403,7 +403,7 @@ export function SongCard({
                 {mineTime > 0 && (
                   <span
                     className="rounded bg-emerald-500/10 px-2 py-1 text-[11px] tabular-nums text-emerald-300"
-                    title="Playhead position — click the waveform to play from there"
+                    title="Playhead position - click the waveform to play from there"
                   >
                     ▶ {fmtTime(mineTime)}
                   </span>
@@ -411,7 +411,7 @@ export function SongCard({
 
                 <label
                   className="flex items-center gap-1.5 text-xs text-zinc-400"
-                  title="Loop this track (writes loop points to encoding.txt — needed for _lp slots)"
+                  title="Loop this track (writes loop points to encoding.txt - needed for _lp slots)"
                 >
                   <input
                     type="checkbox"

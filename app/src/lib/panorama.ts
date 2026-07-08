@@ -117,7 +117,7 @@ export function parseCss(text: string): PRule[] {
     if (decls.length === 0) continue;
     for (const one of selectorText.split(",")) {
       const sel = parseSelector(one.trim());
-      if (!sel) continue; // pseudo-selectors (hover/active) skipped — static preview
+      if (!sel) continue; // pseudo-selectors (hover/active) skipped - static preview
       rules.push({ selector: sel.chain, specificity: sel.spec, order: order++, decls });
     }
   }
@@ -159,7 +159,7 @@ function substituteDefines(value: string, defines: Map<string, string>): string 
 }
 
 function parseSelector(sel: string): { chain: Simple[]; spec: number } | null {
-  if (sel.includes(":")) return null; // :hover/:active/:enabled/:not — skip
+  if (sel.includes(":")) return null; // :hover/:active/:enabled/:not - skip
   if (sel.includes(">")) sel = sel.replace(/>/g, " "); // treat child as descendant
   const chain: Simple[] = [];
   let spec = 0;
@@ -359,7 +359,7 @@ export function toCss(
       case "x": st.left = v; break;
       case "y": st.top = v; break;
       default:
-        break; // unknown / unsupported — skip silently
+        break; // unknown / unsupported - skip silently
     }
   }
 

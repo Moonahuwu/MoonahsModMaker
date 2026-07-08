@@ -92,7 +92,7 @@ export function HeroGrid({
   if (modifiedFilter && shown.length === 0) {
     return (
       <div className="p-10 text-center text-sm text-zinc-500">
-        No heroes with changes yet — turn off “Modified only” to browse all heroes.
+        No heroes with changes yet - turn off “Modified only” to browse all heroes.
       </div>
     );
   }
@@ -100,12 +100,12 @@ export function HeroGrid({
   return (
     <div>
       {/* Background warm-up: hero data (abilities/sounds/images) is being
-          cached so drill-ins open instantly. Clicking early still works —
+          cached so drill-ins open instantly. Clicking early still works -
           an unwarmed hero just loads on the spot. */}
       {warmup && warmup.total > 0 && warmup.done < warmup.total && (
         <div className="mb-3 rounded-lg border border-zinc-800 bg-zinc-900/50 px-3 py-2">
           <div className="flex items-center justify-between text-[11px] text-zinc-400">
-            <span>Preparing hero data in the background — heroes open instantly once ready</span>
+            <span>Preparing hero data in the background - heroes open instantly once ready</span>
             <span className="tabular-nums text-zinc-500">
               {warmup.done}/{warmup.total}
             </span>

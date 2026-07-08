@@ -869,7 +869,7 @@ pub fn rcon_exec(state: tauri::State<'_, HostState>, command: String) -> Result<
         .lock()
         .unwrap()
         .clone()
-        .ok_or("No host running from this app yet — click \"Host game now\" first.")?;
+        .ok_or("No host running from this app yet - click \"Host game now\" first.")?;
     crate::rcon::exec_auto(&pw, &command)
 }
 
@@ -3292,7 +3292,7 @@ pub fn open_in_viewer(
             viewer = candidate;
         } else {
             return Err(format!(
-                "'{}' is a folder with no Source2Viewer.exe — point this at the .exe in Setup",
+                "'{}' is a folder with no Source2Viewer.exe - point this at the .exe in Setup",
                 viewer.display()
             ));
         }

@@ -136,7 +136,7 @@ export function SoundBrowser({
     return (
       <div>
         <p className="mb-4 text-sm text-zinc-500">
-          Replace any in-game sound with your own audio — no soundevents touched.
+          Replace any in-game sound with your own audio - no soundevents touched.
           Pick a category, find the sound, preview it, then drop in a replacement.
           {overrides.length > 0 && (
             <span className="ml-1 text-emerald-400">
@@ -147,7 +147,7 @@ export function SoundBrowser({
         {modifiedOnly &&
           !categories.some((c) => overrides.some((o) => o.targetRef.startsWith(`${c.prefix}/`))) && (
             <p className="py-8 text-center text-sm text-zinc-500">
-              No replaced sounds yet — turn off “Modified only” to browse everything.
+              No replaced sounds yet - turn off “Modified only” to browse everything.
             </p>
           )}
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">

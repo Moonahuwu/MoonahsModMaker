@@ -79,7 +79,7 @@ export function ProfileSwitcher({
         className="flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900/70 px-3 py-1.5 text-sm text-zinc-200 transition hover:border-zinc-500 disabled:opacity-50"
       >
         <span className="text-[11px] uppercase tracking-wide text-zinc-500">Profile</span>
-        <span className="max-w-[12rem] truncate font-medium">{active || "—"}</span>
+        <span className="max-w-[12rem] truncate font-medium">{active || "-"}</span>
         <span className="text-zinc-500">▾</span>
       </button>
 

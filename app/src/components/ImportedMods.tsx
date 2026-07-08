@@ -86,7 +86,7 @@ export function ImportedMods({
     push("info", "Decompiling the pack… big vpks take a while");
     try {
       const summary = await decompileVpkAll(settings.vpkHelperPath, vpk, dest);
-      push("success", `Done — ${summary}`);
+      push("success", `Done - ${summary}`);
       try {
         await revealItemInDir(dest);
       } catch {
@@ -128,7 +128,7 @@ export function ImportedMods({
       <p className="mt-2 text-xs leading-relaxed text-zinc-500">
         Point at another mod's <span className="font-mono">pak01_dir.vpk</span> (or{" "}
         <span className="text-zinc-400">drag a .vpk onto the window</span>). You'll get a
-        review of everything inside — pick which sound events become editable tracks in
+        review of everything inside - pick which sound events become editable tracks in
         your tabs, see which original sounds it replaces, and choose whether to bundle
         the rest (models, effects, UI) into your build. Nothing of yours is ever removed.
       </p>
@@ -156,7 +156,7 @@ export function ImportedMods({
         </h3>
         <p className="mt-1 text-xs text-zinc-500">
           These packs' files ride along in every <span className="font-mono">combined/</span>{" "}
-          build — including sounds that replace originals by filename. Remove one to stop
+          build - including sounds that replace originals by filename. Remove one to stop
           bundling it (any tracks you imported from it stay in your tabs).
         </p>
         <div className="mt-3 flex flex-col gap-1.5">
@@ -213,7 +213,7 @@ export function ImportedMods({
         </div>
         <p className="mt-1 text-xs text-zinc-500">
           HUD mods (anything overriding the in-game HUD layout) can't be bundled like the
-          packs above — two HUDs can't coexist. Merging splices them together instead:
+          packs above - two HUDs can't coexist. Merging splices them together instead:
           their HUD edits + your Jumpscares/Deaths ship as one. Installed HUD mods show up
           here automatically.
         </p>
@@ -230,7 +230,7 @@ export function ImportedMods({
               >
                 <span className="truncate">{m.fileName}</span>
                 <span className="ml-auto shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-[10px]">
-                  DigiMaster pak — import it in the Jumpscares tab instead
+                  DigiMaster pak - import it in the Jumpscares tab instead
                 </span>
               </div>
             ) : (
@@ -248,7 +248,7 @@ export function ImportedMods({
                 <span className="truncate">{m.fileName}</span>
                 {mergeVpks.includes(m.path) && (
                   <span className="ml-auto shrink-0 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] text-emerald-300">
-                    merges on compile — disable the original pak after installing
+                    merges on compile - disable the original pak after installing
                   </span>
                 )}
               </label>
@@ -278,7 +278,7 @@ export function ImportedMods({
       <div className="mt-5 border-t border-zinc-800 pt-4">
         <h3 className="text-sm font-semibold text-zinc-200">Decompile a .vpk</h3>
         <p className="mt-1 text-xs text-zinc-500">
-          Utility: dump any vpk as its decompiled sources, keeping the folder structure —
+          Utility: dump any vpk as its decompiled sources, keeping the folder structure -
           sounds become mp3/wav, textures become png, soundevents and configs become
           readable text. Handy for digging through someone else's mod.
         </p>

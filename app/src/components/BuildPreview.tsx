@@ -28,7 +28,7 @@ function dirname(path: string): string {
 }
 
 const STATUS_DOT: Record<YoursFile["status"], { color: string; label: string }> = {
-  new: { color: "#34d399", label: "new — first compile" },
+  new: { color: "#34d399", label: "new - first compile" },
   changed: { color: "#f59e0b", label: "changed since the last compile" },
   unchanged: { color: "#3f3f46", label: "unchanged" },
 };
@@ -46,7 +46,7 @@ function YoursList({ files }: { files: YoursFile[] }) {
     return [...by.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   }, [files]);
   if (files.length === 0)
-    return <p className="text-xs text-zinc-600">Nothing here — everything is already compiled (or add tracks first).</p>;
+    return <p className="text-xs text-zinc-600">Nothing here - everything is already compiled (or add tracks first).</p>;
   return (
     <div className="flex max-h-48 flex-col gap-1 overflow-y-auto">
       {folders.map(([dir, fs]) => (
@@ -59,7 +59,7 @@ function YoursList({ files }: { files: YoursFile[] }) {
           </summary>
           <div className="mt-1 flex flex-col gap-0.5 pl-3">
             {fs.map((f) => (
-              <span key={f.path} className="flex items-center gap-1.5 truncate font-mono text-[11px] text-zinc-400" title={`${f.path} — ${STATUS_DOT[f.status].label}`}>
+              <span key={f.path} className="flex items-center gap-1.5 truncate font-mono text-[11px] text-zinc-400" title={`${f.path} - ${STATUS_DOT[f.status].label}`}>
                 <span
                   className="h-1.5 w-1.5 shrink-0 rounded-full"
                   style={{ backgroundColor: STATUS_DOT[f.status].color }}
@@ -166,7 +166,7 @@ export function BuildPreview({
           <p className="mt-1 text-xs text-zinc-500">
             {filter === "all" ? (
               <>
-                Everything the next compile puts in the .vpk — {yours.length} of your files
+                Everything the next compile puts in the .vpk - {yours.length} of your files
                 {mods.length > 0
                   ? ` + ${totalBundled} bundled from ${mods.length} mod${mods.length === 1 ? "" : "s"}${
                       totalExcluded > 0 ? ` (${totalExcluded} excluded)` : ""
@@ -177,7 +177,7 @@ export function BuildPreview({
             ) : (
               <>
                 Only what actually changes the game: your new/edited files ({shownYours.length})
-                and each pack's genuinely modified files — bundled vanilla copies and
+                and each pack's genuinely modified files - bundled vanilla copies and
                 already-compiled unchanged files are hidden.
               </>
             )}
@@ -186,7 +186,7 @@ export function BuildPreview({
 
         <div className="min-h-0 flex-1 overflow-y-auto p-5">
           <div className="mb-1.5 text-xs font-bold uppercase tracking-wider text-zinc-300">
-            Your files <span className="font-normal normal-case text-zinc-600">— always included (they are the mod)</span>
+            Your files <span className="font-normal normal-case text-zinc-600">- always included (they are the mod)</span>
           </div>
           <YoursList files={shownYours} />
 
@@ -205,7 +205,7 @@ export function BuildPreview({
                     return (
                       <p key={m.source} className="text-[11px] text-zinc-600">
                         {m.name}: all {m.files.length} bundled files are identical to the game's
-                        originals — nothing it actually changes.
+                        originals - nothing it actually changes.
                       </p>
                     );
                   }
@@ -221,7 +221,7 @@ export function BuildPreview({
                           ? ` ${hidden} file${hidden === 1 ? "" : "s"} identical to the game's originals hidden by the filter.`
                           : "") +
                         (m.skipped > 0
-                          ? ` (${m.skipped} junk/non-asset file${m.skipped === 1 ? "" : "s"} — e.g. working folders like NewSoundevents — are never bundled.)`
+                          ? ` (${m.skipped} junk/non-asset file${m.skipped === 1 ? "" : "s"} - e.g. working folders like NewSoundevents - are never bundled.)`
                           : "")
                       }
                       selected={sel.get(m.source) ?? new Set()}

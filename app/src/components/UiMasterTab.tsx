@@ -76,7 +76,7 @@ export function UiMasterTab({
     try {
       const n = await clearPushedUi(citadelDir);
       setPushedN(null);
-      push("success", `${n} pushed file(s) removed — game is back to normal`);
+      push("success", `${n} pushed file(s) removed - game is back to normal`);
     } catch (e) {
       push("error", `Cleanup failed: ${e}`);
     }
@@ -116,7 +116,7 @@ export function UiMasterTab({
             if (live) {
               setPreview(null);
               setPreviewNote(
-                `No layout named ${stem}.vxml_c found to preview this style against — open a layout (.vxml_c) for a live preview.`,
+                `No layout named ${stem}.vxml_c found to preview this style against - open a layout (.vxml_c) for a live preview.`,
               );
             }
             return;
@@ -211,13 +211,13 @@ export function UiMasterTab({
     if (vanilla !== null && text === vanilla) {
       // Saving unchanged text = removing the override.
       onChange(overrides.filter((o) => o.targetRel !== openRel));
-      push("info", `${fileName(openRel)} matches vanilla — override removed`);
+      push("info", `${fileName(openRel)} matches vanilla - override removed`);
       return;
     }
     const next = overrides.filter((o) => o.targetRel !== openRel);
     next.push({ targetRel: openRel, text, vanillaText: vanilla ?? undefined });
     onChange(next);
-    push("success", `${fileName(openRel)} saved — ships on next compile`);
+    push("success", `${fileName(openRel)} saved - ships on next compile`);
   }
 
   function revert() {
@@ -234,13 +234,13 @@ export function UiMasterTab({
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
       {/* Phase-2 spike: fast test-in-game loop via the grimoire dir (the
-          top-priority loose search path — outranks addons AND pak01). */}
+          top-priority loose search path - outranks addons AND pak01). */}
       <div className="flex flex-wrap items-center gap-3 rounded-xl border border-amber-500/25 bg-amber-500/5 px-4 py-2.5">
         <div className="min-w-[16rem] flex-1">
           <span className="text-sm font-semibold text-amber-200">Test in game</span>
           <p className="text-[11px] leading-4 text-zinc-500">
             Pushes your edits loose into <span className="font-mono">citadel/eim_dev/</span>{" "}
-            (mounted top-priority in gameinfo) — no vpk, no install. Restart the game (or
+            (mounted top-priority in gameinfo) - no vpk, no install. Restart the game (or
             rejoin the map) to see them; sandbox is the fastest way to check HUD changes.
           </p>
         </div>
@@ -349,13 +349,13 @@ export function UiMasterTab({
             <div className="max-w-md p-6 text-center text-sm text-zinc-500">
               <p>
                 Pick a layout (<span className="font-mono text-xs">.vxml_c</span>) or style
-                (<span className="font-mono text-xs">.vcss_c</span>) on the left — it
+                (<span className="font-mono text-xs">.vcss_c</span>) on the left - it
                 decompiles to editable source. Save your edit and it ships inside your mod
                 on the next compile, overriding the game's file.
               </p>
               <p className="mt-3 text-[11px] text-zinc-600">
                 Tip: styles are the safe playground (colors, sizes, positions). Layout
-                edits can break panels — keep the structure, tweak attributes.
+                edits can break panels - keep the structure, tweak attributes.
               </p>
             </div>
           </div>
@@ -445,7 +445,7 @@ export function UiMasterTab({
             </div>
             <p className="text-[10px] text-zinc-600">
               Whole-file override: your version replaces the game's on compile. "Fix for
-              new patch" won't rebase these — re-check edited files after big game updates.
+              new patch" won't rebase these - re-check edited files after big game updates.
             </p>
           </>
         )}

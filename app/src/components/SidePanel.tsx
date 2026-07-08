@@ -77,7 +77,7 @@ function Toggle({ on, onClick }: { on: boolean; onClick: () => void }) {
       role="switch"
       aria-checked={on}
       onClick={onClick}
-      title={on ? "Enabled — click to disable" : "Disabled — click to enable"}
+      title={on ? "Enabled - click to disable" : "Disabled - click to enable"}
       className={`relative h-4 w-7 shrink-0 rounded-full transition ${
         on ? "bg-emerald-500/70" : "bg-zinc-700"
       }`}
@@ -134,7 +134,7 @@ function EntryRow({
         <span className="text-[10px] uppercase tracking-wide opacity-60">{tag}</span>
         {unplayable ? (
           <span
-            title="This event has no real stock audio (a placeholder or missing file) — nothing to preview. Your own tracks still work."
+            title="This event has no real stock audio (a placeholder or missing file) - nothing to preview. Your own tracks still work."
             className="rounded bg-zinc-800/70 px-1.5 text-[10px] uppercase tracking-wide text-zinc-500"
           >
             no sound
@@ -286,7 +286,7 @@ export function SidePanel({
   async function loadStock(open: boolean) {
     if (!open || stockUrl || stockLoading) return;
     if (unplayableRef(ev.stockEntry)) {
-      setStockErr("This event has no real stock sound (placeholder) — nothing to compare against.");
+      setStockErr("This event has no real stock sound (placeholder) - nothing to compare against.");
       return;
     }
     setStockLoading(true);
@@ -346,7 +346,7 @@ export function SidePanel({
         <div className="flex items-center gap-1.5">
           {originalRefs.length > 0 && (
             <label
-              title="Replace the original — mute the stock sound(s) so only your tracks play"
+              title="Replace the original - mute the stock sound(s) so only your tracks play"
               className="mr-1 flex cursor-pointer items-center gap-1.5 text-[11px] text-zinc-500"
             >
               <span>replace</span>
@@ -458,7 +458,7 @@ export function SidePanel({
       {removedList.length > 0 && (
         <details className="mb-3 rounded-lg border border-dashed border-zinc-800 px-3 py-2">
           <summary className="cursor-pointer text-xs text-zinc-600">
-            {removedList.length} removed — click to restore
+            {removedList.length} removed - click to restore
           </summary>
           <div className="mt-2 flex flex-col gap-1.5">
             {removedList.map((e) => (

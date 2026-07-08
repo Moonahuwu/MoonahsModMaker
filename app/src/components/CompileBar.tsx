@@ -125,8 +125,8 @@ export function CompileBar({
     lockRisks.length === 0
       ? null
       : lockRisks.some((p) => p.startsWith("deadlock") || p.startsWith("citadel"))
-        ? "Deadlock is running — close it (or at least stay in the menu) or installs can fail on locked files"
-        : "Source 2 Viewer is open — if it has the game pak loaded, compiles that read it can fail";
+        ? "Deadlock is running - close it (or at least stay in the menu) or installs can fail on locked files"
+        : "Source 2 Viewer is open - if it has the game pak loaded, compiles that read it can fail";
 
   // How many items changed since their last successful compile — the pulse +
   // chip on the Compile button, so a needed recompile is never a guess.
@@ -298,11 +298,11 @@ export function CompileBar({
       if (r.outputPath) {
         push(
           "info",
-          `Compiled with ${failedN} failed item(s) — everything else built. See the red steps; failed items retry next compile.`,
+          `Compiled with ${failedN} failed item(s) - everything else built. See the red steps; failed items retry next compile.`,
         );
         return false;
       }
-      push("error", "Compile failed — see the step report");
+      push("error", "Compile failed - see the step report");
       return false;
     } catch (e) {
       setReport({ ok: false, steps: [{ name: "invoke", ok: false, detail: String(e) }] });
@@ -332,7 +332,7 @@ export function CompileBar({
     setFixing(true);
     try {
       const fixed = await onFixForNewPatch();
-      if (fixed === null) return; // refresh failed — toast already shown
+      if (fixed === null) return; // refresh failed - toast already shown
       // Recompile with the freshly-corrected events AND the refreshed
       // vanillaRoot (avoids racing React state/settings — the props in this
       // closure predate the refresh). Nothing to build? The refresh +
@@ -512,7 +512,7 @@ export function CompileBar({
         setExportOpen(false);
       } else {
         setReport(r);
-        push("error", "Export failed — see the step report");
+        push("error", "Export failed - see the step report");
       }
     } catch (e) {
       push("error", `Export failed: ${e}`);
@@ -534,7 +534,7 @@ export function CompileBar({
     push(
       "success",
       dropped > 0
-        ? `Build selection saved — ${dropped} file(s) stay out of the combined build`
+        ? `Build selection saved - ${dropped} file(s) stay out of the combined build`
         : "Build selection saved",
     );
   }
@@ -746,7 +746,7 @@ export function CompileBar({
                     className="w-16 rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 text-zinc-200 outline-none focus:border-violet-500/70"
                   />
                   {fixedTaken && (
-                    <span className="text-amber-400" title="A file already occupies this slot — it will be backed up and overwritten">
+                    <span className="text-amber-400" title="A file already occupies this slot - it will be backed up and overwritten">
                       ⚠ in use
                     </span>
                   )}
@@ -758,7 +758,7 @@ export function CompileBar({
                   {slots?.nextFree
                     ? `→ ${pakName(slots.nextFree)} (${slots.used.length}/${slots.maxSlot} slots used)`
                     : slots
-                      ? "no free slots — all 99 in use"
+                      ? "no free slots - all 99 in use"
                       : "set addons folder in Setup"}
                 </span>
               )}
@@ -794,7 +794,7 @@ export function CompileBar({
                 onClick={() => void openPreview()}
                 disabled={busy || previewLoading}
                 className="rounded-md border border-zinc-700 px-3 py-1.5 font-medium text-zinc-300 transition hover:border-zinc-500 hover:text-white disabled:opacity-40"
-                title="See every file the next compile will put in the .vpk — and deselect bundled files you don't want"
+                title="See every file the next compile will put in the .vpk - and deselect bundled files you don't want"
               >
                 {previewLoading ? "Scanning…" : "◎ Preview build"}
               </button>
@@ -897,7 +897,7 @@ export function CompileBar({
           whileTap={{ scale: 0.97 }}
           onClick={() => void fixForNewPatch()}
           disabled={busy || !settings.deadlockPak}
-          title="New game patch? Re-pull the live game's sound data from pak01, repair every drifted stock track, then recompile your mods against the new patch — all in one click."
+          title="New game patch? Re-pull the live game's sound data from pak01, repair every drifted stock track, then recompile your mods against the new patch - all in one click."
           className="rounded-lg border border-amber-500/50 bg-amber-500/10 px-4 py-2 text-sm font-semibold text-amber-200 transition hover:bg-amber-500/20 disabled:opacity-40"
         >
           {fixing ? "Fixing…" : "⚙ Fix for new patch"}

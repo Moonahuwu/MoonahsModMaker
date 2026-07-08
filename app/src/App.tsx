@@ -125,7 +125,7 @@ const PARTICLE_CATEGORIES: { key: string; label: string; prefix: string; hint?: 
   { key: "weapons", label: "Weapons & Gunfire", prefix: "particles/weapons" },
   { key: "world", label: "World & Map", prefix: "particles/world" },
   { key: "status", label: "Status Effects", prefix: "particles/status_effects" },
-  { key: "all", label: "Everything (all particles)", prefix: "particles", hint: "Full tree — power users" },
+  { key: "all", label: "Everything (all particles)", prefix: "particles", hint: "Full tree - power users" },
 ];
 
 /** Curated top categories for the loose-file sound browser (path prefixes into
@@ -144,7 +144,7 @@ const SOUND_CATEGORIES: { key: string; label: string; prefix: string; hint?: str
   { key: "guardian", label: "Guardians & NPCs", prefix: "sounds/npc" },
   { key: "ambient", label: "Ambience", prefix: "sounds/ambient" },
   { key: "cosmetics", label: "Cosmetics", prefix: "sounds/cosmetics" },
-  { key: "all", label: "Everything (all sounds)", prefix: "sounds", hint: "Full tree — power users" },
+  { key: "all", label: "Everything (all sounds)", prefix: "sounds", hint: "Full tree - power users" },
 ];
 
 /** The built-in, undeletable empty profile = stock game (no tracks). */
@@ -630,7 +630,7 @@ export default function App() {
               ...(prev.iconMods ?? []).filter((m) => m.id !== id),
               {
                 id,
-                name: `${selectedHeroInfo?.displayName ?? selectedHero} — ${img.kind}`,
+                name: `${selectedHeroInfo?.displayName ?? selectedHero} - ${img.kind}`,
                 targetVtexc: img.target,
                 sourceImage: picked,
                 width: w || 512,
@@ -642,7 +642,7 @@ export default function App() {
           }
         : prev,
     );
-    push("success", "Hero image set — compile to apply");
+    push("success", "Hero image set - compile to apply");
   }
 
   function removeHeroImage(img: HeroImage) {
@@ -939,7 +939,7 @@ export default function App() {
         csdkRoot: res.csdkRoot,
         ...(res.ffmpegPath ? { ffmpegPath: res.ffmpegPath } : {}),
       });
-      push("success", "Compile tools installed — you're ready to build");
+      push("success", "Compile tools installed - you're ready to build");
     } catch (e) {
       push("error", `Tools download failed: ${e}`);
     }
@@ -1147,7 +1147,7 @@ export default function App() {
           if (addedN > 0) {
             updateSettings({ importedMods: next });
             setActiveTab(MOD_COMBINER);
-            push("success", `Added ${addedN} mods to bundle — import them one at a time to pick their sounds`);
+            push("success", `Added ${addedN} mods to bundle - import them one at a time to pick their sounds`);
           } else {
             push("info", "Those mod(s) are already in the combine list");
           }
@@ -1618,10 +1618,10 @@ export default function App() {
       const needsCache = bundle || mode === "linked";
       if (needsCache) {
         try {
-          push("info", "Caching pack files (one-time — the .vpk won't be needed again)…");
+          push("info", "Caching pack files (one-time - the .vpk won't be needed again)…");
           source = await cachePack(s.vpkHelperPath, vpk);
         } catch (e) {
-          push("error", `Couldn't cache the pack — keeping the original .vpk as the source: ${e}`);
+          push("error", `Couldn't cache the pack - keeping the original .vpk as the source: ${e}`);
         }
       }
       if (bundle) {
@@ -1707,7 +1707,7 @@ export default function App() {
       if (events.length === 0) {
         push(
           "success",
-          (bundle ? "Pack added — it'll be bundled on compile" : "Nothing imported") + iconNote,
+          (bundle ? "Pack added - it'll be bundled on compile" : "Nothing imported") + iconNote,
         );
         return;
       }
@@ -1976,7 +1976,7 @@ export default function App() {
       const absorbNote = absorbed > 0 ? ` · ${absorbed} converted into your own tracks` : "";
       push(
         "success",
-        `Import done — ${adoptedRefs} sound(s): ${counts.hero} hero, ${counts.item} item, ${counts.ui} UI, ${counts.sorted} sorted to tabs, ${counts.misc} misc, ${counts.folded} folded into existing${absorbNote}${exclNote}${iconNote}`,
+        `Import done - ${adoptedRefs} sound(s): ${counts.hero} hero, ${counts.item} item, ${counts.ui} UI, ${counts.sorted} sorted to tabs, ${counts.misc} misc, ${counts.folded} folded into existing${absorbNote}${exclNote}${iconNote}`,
       );
     } catch (e) {
       push("error", `Import failed: ${e}`);
@@ -2315,7 +2315,7 @@ export default function App() {
         if (seeding) {
           push(
             "info",
-            `Indexed ${liveKeys.size} game sound events — from the next patch on, brand-new events appear automatically under “New / Unsorted”.`,
+            `Indexed ${liveKeys.size} game sound events - from the next patch on, brand-new events appear automatically under “New / Unsorted”.`,
           );
         }
       } catch (e) {
@@ -2342,7 +2342,7 @@ export default function App() {
           if (untouched) {
             if (rec) next.push(rec); // else: reconcile dropped it (removed by patch)
           } else {
-            next.push(p); // edited or created while the fix ran — user wins
+            next.push(p); // edited or created while the fix ran - user wins
           }
         }
         const have = new Set(next.map((e) => e.id));
@@ -2376,7 +2376,7 @@ export default function App() {
         const shown = removedNames.slice(0, 4).join(", ");
         push(
           "info",
-          `Heads up: ${removedKept} event(s) you've modded were removed in this patch (${shown}${removedNames.length > 4 ? "…" : ""}). Your tracks are kept, not deleted — they just won't apply until the event returns.`,
+          `Heads up: ${removedKept} event(s) you've modded were removed in this patch (${shown}${removedNames.length > 4 ? "…" : ""}). Your tracks are kept, not deleted - they just won't apply until the event returns.`,
         );
       }
       return { events: finalEvents, vanillaRoot: root };
@@ -2401,7 +2401,7 @@ export default function App() {
         updateSettings(patch);
         push("success", `Auto-detected ${found} path(s)`);
       } else {
-        push("info", "Couldn't auto-detect any paths — set them manually");
+        push("info", "Couldn't auto-detect any paths - set them manually");
       }
     } catch (e) {
       push("error", `Auto-detect failed: ${e}`);
@@ -2732,7 +2732,7 @@ export default function App() {
       });
       return { ...prev, iconMods: mods };
     });
-    push("success", `Custom icon set for ${item.displayName} — compile to apply`);
+    push("success", `Custom icon set for ${item.displayName} - compile to apply`);
   }
 
   // Tick/untick an item's custom icon: kept in the project, excluded from the
@@ -2831,7 +2831,7 @@ export default function App() {
         });
         return { ...prev, soundOverrides: list };
       });
-      push("success", `Replacement set for ${label} — compile to apply`);
+      push("success", `Replacement set for ${label} - compile to apply`);
     } catch (e) {
       push("error", `Couldn't pick audio: ${e}`);
     }
@@ -3202,7 +3202,7 @@ export default function App() {
       // On success the app exits and the installer takes over.
       await installAppUpdate(appUpdate.setupAsset);
     } catch (e) {
-      push("error", `Update failed: ${e} — opening the release page instead`);
+      push("error", `Update failed: ${e} - opening the release page instead`);
       void openUrl(appUpdate.url);
       setUpdating(false);
     }
@@ -3472,7 +3472,7 @@ export default function App() {
           {appUpdate ? (
             <button
               onClick={() => setUpdatePromptOpen(true)}
-              title={`You have v${appUpdate.current} — v${appUpdate.latest} is out`}
+              title={`You have v${appUpdate.current} - v${appUpdate.latest} is out`}
               className="rounded bg-violet-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-violet-300 transition hover:bg-violet-500/25"
             >
               ⬆ v{appUpdate.latest} available
@@ -3501,17 +3501,17 @@ export default function App() {
             {(() => {
               const sub =
                 activeTab === MOD_COMBINER
-                  ? "Merge other mods' sounds into your compile — nothing of yours is removed."
+                  ? "Merge other mods' sounds into your compile - nothing of yours is removed."
                   : activeTab === REPLACE_SOUNDS
-                    ? "Replace any game sound directly by its file — no soundevents touched. Browse a category, preview, then drop in your audio."
+                    ? "Replace any game sound directly by its file - no soundevents touched. Browse a category, preview, then drop in your audio."
                     : activeTab === EFFECTS
-                      ? "Recolor any particle effect — hero abilities, item effects, and more. Preview the recolor live, then compile to apply."
+                      ? "Recolor any particle effect - hero abilities, item effects, and more. Preview the recolor live, then compile to apply."
                       : activeTab === POSTERS
-                        ? "Replace the world's posters, signs, ghost signs, and graffiti with your own images — drop a PNG onto a region and compile."
+                        ? "Replace the world's posters, signs, ghost signs, and graffiti with your own images - drop a PNG onto a region and compile."
                         : activeTab === JUMPSCARES
-                          ? "Random jumpscares while you play + videos when you die — your DigiMaster mod, configured here and rebuilt on compile."
+                          ? "Random jumpscares while you play + videos when you die - your DigiMaster mod, configured here and rebuilt on compile."
                           : activeTab === UIMASTER
-                            ? "Edit the game's UI files directly — decompiled to source, compiled back into your mod. Very experimental."
+                            ? "Edit the game's UI files directly - decompiled to source, compiled back into your mod. Very experimental."
                             : null;
               return sub ? <p className="mt-1 text-sm text-zinc-500">{sub}</p> : null;
             })()}
@@ -3829,7 +3829,7 @@ export default function App() {
                   <span className="font-semibold text-amber-300">Apply UI sound changes in the build</span>
                   <br />
                   <span className="text-zinc-500">
-                    Off by default — UI soundevent edits make broad menu changes that can
+                    Off by default - UI soundevent edits make broad menu changes that can
                     break things. Your edits are kept either way; this only controls
                     whether they're compiled in.
                   </span>
@@ -3884,11 +3884,11 @@ export default function App() {
             <h3 className="text-base font-bold text-zinc-100">⬆ Update available</h3>
             <p className="mt-1 text-sm text-zinc-400">
               Moonahs Mod Maker <span className="font-semibold text-violet-300">v{appUpdate.latest}</span>{" "}
-              is out — you have v{appUpdate.current}.
+              is out - you have v{appUpdate.current}.
             </p>
             <p className="mt-2 text-[11px] text-zinc-600">
               {appUpdate.setupAsset
-                ? '"Install now" downloads the new installer and runs it — the app closes itself; your projects and settings are kept.'
+                ? '"Install now" downloads the new installer and runs it - the app closes itself; your projects and settings are kept.'
                 : "This release has no installer attached, so the release page opens in your browser instead."}
             </p>
             <div className="mt-4 flex justify-end gap-2">
@@ -3968,7 +3968,7 @@ export default function App() {
               </ul>
               <p className="mt-4 text-[11px] leading-relaxed text-zinc-500">
                 The first launch takes a moment while portraits, icons and the sound index are
-                pulled from the game — after that it's cached and quick.
+                pulled from the game - after that it's cached and quick.
               </p>
               <button
                 onClick={() => setPreloadDismissed(true)}

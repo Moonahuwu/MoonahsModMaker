@@ -76,7 +76,7 @@ pub fn exec(addr: SocketAddr, password: &str, command: &str) -> Result<String, S
         // The server may emit an empty RESPONSE_VALUE before the auth verdict.
         if ptype == SERVERDATA_AUTH_RESPONSE {
             if id == -1 {
-                return Err("RCON auth failed — wrong password (relaunch the host so the password matches)".into());
+                return Err("RCON auth failed - wrong password (relaunch the host so the password matches)".into());
             }
             break;
         }

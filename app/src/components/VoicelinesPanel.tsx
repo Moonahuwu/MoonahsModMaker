@@ -125,7 +125,7 @@ export function VoicelinesPanel({
       )}
       {modifiedFilter && voicelines && voicelines.length > 0 && filtered.length === 0 && !query && (
         <p className="py-8 text-center text-sm text-zinc-500">
-          No modified voicelines yet — turn off “Modified only” to browse all of them.
+          No modified voicelines yet - turn off “Modified only” to browse all of them.
         </p>
       )}
 
@@ -143,7 +143,7 @@ export function VoicelinesPanel({
                 <button
                   onClick={() => void preview(vl)}
                   disabled={!vl.stockRef}
-                  title={vl.stockRef ? "Preview stock clip (the original — your replacement plays in game)" : "No stock clip"}
+                  title={vl.stockRef ? "Preview stock clip (the original - your replacement plays in game)" : "No stock clip"}
                   className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-zinc-700 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-white disabled:opacity-30"
                 >
                   {playing === vl.eventName ? <PauseIcon /> : "▶"}

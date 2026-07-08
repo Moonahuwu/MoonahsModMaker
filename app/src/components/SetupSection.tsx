@@ -218,7 +218,7 @@ export function SetupSection({
               checked={settings.experimentalUiMaster}
               onChange={(v) => update({ experimentalUiMaster: v })}
               title="UI Master (edit the game's UI files)"
-              desc="Browse and edit the game's panorama layouts/styles directly. VERY experimental — a bad edit can break the in-game UI until the mod is removed."
+              desc="Browse and edit the game's panorama layouts/styles directly. VERY experimental - a bad edit can break the in-game UI until the mod is removed."
               accent="accent-amber-500"
             />
             <Toggle
@@ -283,7 +283,7 @@ export function SetupSection({
               label="Game pak (pak01_dir.vpk)"
               value={settings.deadlockPak}
               onChange={(v) => update({ deadlockPak: v })}
-              hint="Deadlock install — used to decode stock tracks for comparison"
+              hint="Deadlock install - used to decode stock tracks for comparison"
             />
             <Field
               label="ffmpeg path (blank = PATH)"
@@ -294,7 +294,7 @@ export function SetupSection({
               label="Source2Viewer path (optional)"
               value={settings.source2ViewerPath}
               onChange={(v) => update({ source2ViewerPath: v })}
-              hint="VRF's Source2Viewer.exe — enables 'Open in real viewer' for effects"
+              hint="VRF's Source2Viewer.exe - enables 'Open in real viewer' for effects"
             />
             <Field
               label="Sound folder (content-relative)"
@@ -316,7 +316,7 @@ export function SetupSection({
               label="Deadlock addons folder"
               value={settings.addonsDir}
               onChange={(v) => update({ addonsDir: v })}
-              hint="game/citadel/addons — where 'Install to game' copies the .vpk"
+              hint="game/citadel/addons - where 'Install to game' copies the .vpk"
             />
           </div>
         </Section>
@@ -346,7 +346,7 @@ export function SetupSection({
             title="GameBanana page coming soon"
             className="inline-flex items-center gap-1.5 rounded-full border border-zinc-700 px-2.5 py-1 text-[11px] text-zinc-600"
           >
-            GameBanana — soon
+            GameBanana - soon
           </span>
         )}
         <span className="ml-auto text-[10px] text-zinc-700">Moonah's Mod Maker</span>

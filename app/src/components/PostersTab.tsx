@@ -312,7 +312,7 @@ export function PostersTab({
     };
     onCustomChange(sh.id, [...(customRegions[sh.id] ?? []), region]);
     setSelected(`${sh.id}::${region.id}`);
-    push("info", "Region added — drag it into place, resize with the handles");
+    push("info", "Region added - drag it into place, resize with the handles");
   }
 
   function removeCustomRegion(sh: ManifestSheet, posterId: string) {
@@ -389,7 +389,7 @@ export function PostersTab({
       });
     }
     setSelected(id);
-    push("success", `Art set — ${pretty(poster.id)} (${r.w}×${r.h})`);
+    push("success", `Art set - ${pretty(poster.id)} (${r.w}×${r.h})`);
   }
 
   async function pickImage(sh: ManifestSheet, poster: ManifestPoster) {
@@ -447,7 +447,7 @@ export function PostersTab({
         lastCompiledHash: null,
       });
     }
-    push("success", `Whole sheet replaced — ${pretty(sh.id)}`);
+    push("success", `Whole sheet replaced - ${pretty(sh.id)}`);
   }
 
   async function downloadSheet(sh: ManifestSheet) {
@@ -634,7 +634,7 @@ export function PostersTab({
     return (
       <div>
         <p className="mb-4 text-sm text-zinc-500">
-          Replace any in-world poster, sign, or graffiti with your own image — drop a PNG on a
+          Replace any in-world poster, sign, or graffiti with your own image - drop a PNG on a
           highlighted region (or click it) and the compile paints it into the game's texture
           atlas.
           {overrides.length > 0 && (
@@ -881,7 +881,7 @@ export function PostersTab({
           onClick={() => void downloadSheet(sheet)}
           disabled={downloading}
           className="rounded-lg bg-zinc-800 px-2.5 py-1 text-[11px] font-semibold text-zinc-300 transition hover:bg-zinc-700 disabled:opacity-50"
-          title="Save the original sheet texture (PNG) to Downloads — edit it, then use Replace whole sheet"
+          title="Save the original sheet texture (PNG) to Downloads - edit it, then use Replace whole sheet"
         >
           {downloading ? "Saving…" : "⬇ Download sheet"}
         </button>
@@ -1020,7 +1020,7 @@ export function PostersTab({
               <div
                 key={p.id}
                 data-poster-rect={p.id}
-                title={`${pretty(p.id)} — ${r.w}×${r.h}`}
+                title={`${pretty(p.id)} - ${r.w}×${r.h}`}
                 onPointerDown={(e) => {
                   if (editMode) startDrag(e, sheet, p, "move");
                 }}
@@ -1072,7 +1072,7 @@ export function PostersTab({
                 {ov && !isHidden && !ov.erase && (
                   <>
                     {/* Shape-cut regions compile with the rect blanked (the
-                        art's alpha becomes the decal shape) — checkerboard
+                        art's alpha becomes the decal shape) - checkerboard
                         behind the preview = "transparent in-game here". */}
                     {(p.alphaCoverage ?? 1) < 0.98 && (
                       <div className="absolute inset-0" style={CHECKER} />
@@ -1119,7 +1119,7 @@ export function PostersTab({
               onClick={() => setView({ zoom: 1, x: 0, y: 0 })}
               className="absolute bottom-2 right-2 z-20 rounded-lg bg-zinc-900/90 px-2 py-1 text-[10px] font-semibold text-zinc-300 hover:bg-zinc-800"
             >
-              {view.zoom.toFixed(1)}× — Reset view
+              {view.zoom.toFixed(1)}× - Reset view
             </button>
           )}
           <span className="pointer-events-none absolute bottom-2 left-2 z-20 rounded bg-zinc-950/70 px-1.5 py-0.5 text-[9px] text-zinc-500">
@@ -1151,7 +1151,7 @@ export function PostersTab({
                 {selectedRect.w}×{selectedRect.h} at ({selectedRect.x},{selectedRect.y})
                 {(selectedDef.alphaCoverage ?? 1) < 0.98 && (
                   <span className="ml-1 text-amber-400">
-                    · shape-cut in vanilla — a PNG with transparency keeps its shape in-game;
+                    · shape-cut in vanilla - a PNG with transparency keeps its shape in-game;
                     opaque art fills the whole rectangle
                   </span>
                 )}
@@ -1212,7 +1212,7 @@ export function PostersTab({
                     <span className="mr-1 rounded bg-red-400/90 px-1.5 text-[10px] font-bold text-zinc-900">
                       hidden in-game
                     </span>
-                    This decal compiles fully transparent — it won't render on any wall.
+                    This decal compiles fully transparent - it won't render on any wall.
                   </p>
                   <button
                     onClick={() => onRemove(selectedOv.id)}
@@ -1299,7 +1299,7 @@ export function PostersTab({
           )}
           {sheetOverrideCount > 0 && (
             <div className="mt-3 text-[11px] text-zinc-500">
-              {sheetOverrideCount} replacement{sheetOverrideCount === 1 ? "" : "s"} on this sheet —
+              {sheetOverrideCount} replacement{sheetOverrideCount === 1 ? "" : "s"} on this sheet -
               all compile together.
             </div>
           )}
