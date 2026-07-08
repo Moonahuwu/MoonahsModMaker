@@ -529,7 +529,8 @@ function accentFor(ev: { group: string; side: string }): string {
   if (ev.group === "gameplay") return "#f87171"; // red (hit feedback)
   if (ev.group === "combat") return "#fb923c"; // orange (combat SFX)
   if (ev.group === UNSORTED) return "#fbbf24"; // amber (new/unsorted)
-  if (ev.group === ITEMS) return "#f59e0b"; // amber (items)
+  if (ev.group === "heroes") return "#a7fff1"; // mint (heroes)
+  if (ev.group === ITEMS) return "#fb923c"; // orange (items)
   if (ev.group === EFFECTS) return "#c084fc"; // violet (VFX)
   if (ev.group === POSTERS) return "#8b5cf6"; // deep violet (posters)
   if (ev.group === JUMPSCARES) return "#ef4444"; // red (spooky)
@@ -3221,9 +3222,39 @@ export default function App() {
     booted ? undefined : { animationDelay: `${0.35 + i * 0.05}s` };
 
   // One sidebar tab button (indented when nested under a parent category).
+  // Heroes/Items get their own tint (like the sky ♪ Sound master) so the big
+  // three sections read at a glance: mint / orange / sky.
   const renderTabButton = (g: string, indented: boolean, bootIdx?: number) => {
     const count = tabCount(g);
     const active = g === activeTab;
+    const tint = !indented && (g === "heroes" || g === ITEMS) ? accentFor({ group: g, side: "" }) : null;
+    if (tint) {
+      return (
+        <button
+          key={g}
+          onClick={() => setActiveTab(g)}
+          style={{
+            ...(bootIdx !== undefined ? bootStyle(bootIdx) : {}),
+            borderColor: active ? `${tint}80` : `${tint}33`,
+            backgroundColor: active ? `${tint}1f` : `${tint}0d`,
+            color: tint,
+          }}
+          className={`mt-1 flex items-center justify-between rounded-lg border px-3 py-1.5 text-left text-[11px] font-bold uppercase tracking-widest transition hover:brightness-125 ${
+            bootIdx !== undefined ? bootCls : ""
+          }`}
+        >
+          <span>{TAB_LABELS[g] ?? g}</span>
+          {count > 0 && (
+            <span
+              style={{ backgroundColor: `${tint}26`, color: tint }}
+              className="rounded px-1.5 text-[10px] font-semibold"
+            >
+              {count}
+            </span>
+          )}
+        </button>
+      );
+    }
     return (
       <button
         key={g}
