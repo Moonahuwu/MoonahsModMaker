@@ -35,9 +35,10 @@ export function Backdrop({ accent = "#34d399" }: { accent?: string }) {
       <div className="eim-bg-glow eim-bg-glow-b" />
       {/* Sigil layers: oversized square centered in the pane so the spin
           never reveals edges; opacity keeps it behind text. */}
+      <div className="eim-bg-vignette" />
+      {/* Sigil above the vignette so its lines aren't dimmed. */}
       <div className="eim-sigil eim-sigil-outer" style={layer("outer.svg")} />
       <div className="eim-sigil eim-sigil-inner" style={layer("inner.svg")} />
-      <div className="eim-bg-vignette" />
     </div>
   );
 }

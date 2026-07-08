@@ -197,7 +197,7 @@ button {
   top: 50%;
   width: 115vmin;
   height: 115vmin;
-  opacity: 0.09;
+  opacity: 0.17;
 }
 .eim-sigil-outer {
   animation: eim-sigil-outer 360s linear infinite;
