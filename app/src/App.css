@@ -199,8 +199,8 @@ button {
      transforms (spin/drift) are driven from Backdrop.tsx. */
   left: 81%;
   top: 47%;
-  width: 104vh;
-  height: 104vh;
+  width: 94vh;
+  height: 94vh;
   opacity: 0.17;
   transform: translate(-50%, -50%);
 }
