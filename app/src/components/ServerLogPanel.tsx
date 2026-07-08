@@ -51,7 +51,7 @@ export function ServerLogPanel({ deadlockRoot }: { deadlockRoot: string }) {
   return (
     <section className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-5">
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <span className="text-2xl">📜</span>
+        <span className="text-2xl text-zinc-400">≡</span>
         <h3 className="text-lg font-bold text-zinc-100">Server Output</h3>
         <span className="text-[11px] text-zinc-500">live tail of console.log</span>
 

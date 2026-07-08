@@ -2993,7 +2993,7 @@ export default function App() {
       );
       updateSettings({ includeGameplay: true });
       const n = rolled.vdata.length + rolled.global.length + rolled.world.length;
-      push("success", `${temperature > 0.85 ? "💥" : "🎲"} Randomized ${n} values`);
+      push("success", `Randomized ${n} values`);
     } catch (e) {
       push("error", `Randomize failed: ${e}`);
     } finally {

@@ -146,7 +146,7 @@ export function HeroDetail({
               style={{ borderColor: `${accent}99` }}
               className="ml-auto rounded-md border bg-zinc-900/60 px-3 py-1 text-xs font-medium text-zinc-200 transition hover:bg-zinc-800 hover:text-white"
             >
-              🎙 Voicelines
+              ❝ Voicelines
             </button>
           </div>
 
@@ -202,7 +202,7 @@ export function HeroDetail({
       {images && images.length > 0 && (
         <details className="mt-5 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
           <summary className="cursor-pointer text-sm font-semibold text-zinc-200">
-            🖼 Hero images
+            ▦ Hero images
             <span className="ml-2 text-xs font-normal text-zinc-500">
               portraits, icons, minimap, menu background
             </span>

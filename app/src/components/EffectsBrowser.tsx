@@ -216,7 +216,7 @@ export function EffectsBrowser({
                   onClick={() => setPrefix(f.prefix)}
                   className="flex items-center justify-between rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-left text-sm text-zinc-200 transition hover:border-zinc-600 hover:bg-zinc-900"
                 >
-                  <span className="truncate">📁 {f.name}</span>
+                  <span className="truncate">▸ {f.name}</span>
                   <span className="ml-2 shrink-0 text-[10px] text-zinc-500">{f.count}</span>
                 </button>
               ))}
@@ -245,7 +245,7 @@ export function EffectsBrowser({
                         style={{ backgroundColor: `${accent}22`, color: accent }}
                       >
                         {ov.mode === "rainbow"
-                          ? "🌈 rainbow"
+                          ? "rainbow"
                           : ov.mode === "pulse"
                             ? "pulse"
                             : `${ov.hue > 0 ? "+" : ""}${Math.round(ov.hue)}°`}
@@ -314,7 +314,7 @@ export function EffectsBrowser({
                               {(
                                 [
                                   ["static", "Static"],
-                                  ["rainbow", "🌈 Rainbow"],
+                                  ["rainbow", "Rainbow"],
                                   ["pulse", "Pulse"],
                                 ] as const
                               ).map(([m, label]) => (

@@ -73,7 +73,7 @@ export function FirstRunWizard({
         className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl"
       >
         <h2 className="text-lg font-semibold text-zinc-100">
-          Welcome to Moonah's Mod Maker 👋
+          Welcome to Moonah's Mod Maker
         </h2>
         <p className="mt-2 text-sm leading-relaxed text-zinc-400">
           Let's get set up. This finds your Deadlock install, the CSDK compiler,

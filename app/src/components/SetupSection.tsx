@@ -234,7 +234,7 @@ export function SetupSection({
           disabled={busy !== null}
           className="rounded-md border border-violet-500/40 bg-violet-500/10 px-3 py-1.5 text-xs font-medium text-violet-200 transition hover:bg-violet-500/20 disabled:opacity-50"
         >
-          {busy === "detect" ? "Detecting…" : "✨ Auto-detect paths"}
+          {busy === "detect" ? "Detecting…" : "✦ Auto-detect paths"}
         </button>
         <button
           onClick={() => void run("refresh", onRefreshVanilla)}

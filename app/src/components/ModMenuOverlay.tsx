@@ -57,7 +57,7 @@ export function ModMenuOverlay() {
         data-tauri-drag-region
         className="flex items-center gap-2 border-b border-zinc-800 px-3 py-2"
       >
-        <span className="text-sm">🛡️</span>
+        <span className="text-sm text-violet-300">◈</span>
         <span className="text-xs font-bold tracking-wide text-violet-200">MOD MENU</span>
         <span
           className={`h-2 w-2 rounded-full ${ready ? "bg-emerald-400" : "bg-zinc-600"}`}

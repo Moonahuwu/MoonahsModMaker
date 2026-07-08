@@ -107,8 +107,8 @@ export function CustomServer({
       {/* Top-level split: Server (host + admin + log) vs Configs (gameplay editor) */}
       <div className="flex items-center gap-1.5">
         {([
-          ["server", "🖥️ Server"],
-          ["configs", "⚙️ Configs"],
+          ["server", "▣ Server"],
+          ["configs", "⚙ Configs"],
         ] as const).map(([key, label]) => (
           <button
             key={key}
@@ -141,7 +141,7 @@ export function CustomServer({
       <section className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-5">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
-            <span className="text-2xl">⚙️</span>
+            <span className="text-2xl text-zinc-400">⚙</span>
             <h3 className="text-lg font-bold text-zinc-100">Gameplay Config Editor</h3>
             {editCount > 0 && (
               <span className="rounded-full bg-sky-500/15 px-2.5 py-1 text-xs font-semibold text-sky-300">
@@ -172,11 +172,11 @@ export function CustomServer({
         {/* Section nav + randomize/reset */}
         <div className="mb-4 flex flex-wrap items-center gap-1.5">
           {([
-            ["heroes", "🦸 Heroes"],
-            ["items", "🛒 Items"],
-            ["global", "🌐 Global"],
-            ["minions", "👹 Minions"],
-            ["boxes", "📦 Boxes"],
+            ["heroes", "Heroes"],
+            ["items", "Items"],
+            ["global", "Global"],
+            ["minions", "Minions"],
+            ["boxes", "Boxes"],
             ["powerups", "Powerups"],
           ] as const).map(([key, label]) => (
             <button
@@ -216,7 +216,7 @@ export function CustomServer({
                 title={`Roll every gameplay number — up to ×${peakLabel}`}
                 className="rounded-l-lg border border-fuchsia-500/50 bg-fuchsia-500/10 px-3 py-1.5 text-sm font-medium text-fuchsia-300 transition hover:bg-fuchsia-500/20 disabled:opacity-50"
               >
-                {randomizing ? "Rolling…" : temp > 0.85 ? "💥 Randomize" : "🎲 Randomize"}
+                {randomizing ? "Rolling…" : "Randomize"}
               </button>
               <button
                 onClick={() => setShowRandomOpts((v) => !v)}
@@ -1143,7 +1143,7 @@ function HostPanel({ deadlockRoot }: { deadlockRoot: string }) {
   return (
     <section className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-5">
       <div className="flex items-start gap-4">
-        <span className="text-3xl">🖥️</span>
+        <span className="text-3xl text-zinc-400">▣</span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <h3 className="text-lg font-bold text-zinc-100">Host a Custom Game</h3>
@@ -1255,7 +1255,7 @@ function HostPanel({ deadlockRoot }: { deadlockRoot: string }) {
               {rconPassword && (
                 <div className="mt-4 rounded-lg border border-violet-500/30 bg-violet-500/5 p-3">
                   <div className="flex items-center gap-2">
-                    <span className="text-sm">🛡️</span>
+                    <span className="text-sm text-violet-300">◈</span>
                     <h4 className="text-sm font-bold text-violet-200">Server Admin (RCON)</h4>
                     <span className="rounded-full bg-violet-500/15 px-2 py-0.5 text-[10px] font-semibold text-violet-300">
                       LIVE

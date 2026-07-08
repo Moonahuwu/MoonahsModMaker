@@ -788,7 +788,7 @@ export function CompileBar({
                 className="ml-auto rounded-md border border-zinc-700 px-3 py-1.5 font-medium text-zinc-300 transition hover:border-zinc-500 hover:text-white disabled:opacity-40"
                 title="Compile a chosen subset of your pack into its own standalone .vpk"
               >
-                📦 Export…
+                ▤ Export…
               </button>
               <button
                 onClick={() => void openPreview()}
@@ -796,7 +796,7 @@ export function CompileBar({
                 className="rounded-md border border-zinc-700 px-3 py-1.5 font-medium text-zinc-300 transition hover:border-zinc-500 hover:text-white disabled:opacity-40"
                 title="See every file the next compile will put in the .vpk — and deselect bundled files you don't want"
               >
-                {previewLoading ? "Scanning…" : "🔍 Preview build"}
+                {previewLoading ? "Scanning…" : "◎ Preview build"}
               </button>
               <button
                 onClick={() => void install()}
@@ -900,7 +900,7 @@ export function CompileBar({
           title="New game patch? Re-pull the live game's sound data from pak01, repair every drifted stock track, then recompile your mods against the new patch — all in one click."
           className="rounded-lg border border-amber-500/50 bg-amber-500/10 px-4 py-2 text-sm font-semibold text-amber-200 transition hover:bg-amber-500/20 disabled:opacity-40"
         >
-          {fixing ? "Fixing…" : "🔧 Fix for new patch"}
+          {fixing ? "Fixing…" : "⚙ Fix for new patch"}
         </motion.button>
 
         <button

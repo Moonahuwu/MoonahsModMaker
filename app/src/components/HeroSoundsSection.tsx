@@ -11,9 +11,9 @@ import { PauseIcon } from "./PauseIcon";
  */
 
 const GROUPS: { key: HeroSoundCategory; label: string; icon: string }[] = [
-  { key: "gunfire", label: "Gunfire", icon: "🔫" },
+  { key: "gunfire", label: "Gunfire", icon: "⌖" },
   { key: "abilities", label: "Abilities", icon: "✦" },
-  { key: "movement", label: "Movement & Melee", icon: "🏃" },
+  { key: "movement", label: "Movement & Melee", icon: "»" },
   { key: "other", label: "Other", icon: "•" },
 ];
 

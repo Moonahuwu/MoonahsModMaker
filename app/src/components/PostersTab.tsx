@@ -42,11 +42,11 @@ export interface Rect {
 const SHEETS = (manifestJson as { sheets: ManifestSheet[] }).sheets;
 
 const CATEGORIES: { key: string; label: string; hint: string; icon: string }[] = [
-  { key: "posters", label: "Posters", hint: "Street posters, newspapers, stickers", icon: "🖼️" },
-  { key: "signage", label: "Signs & Billboards", hint: "Shop signs, street & subway signage", icon: "🪧" },
-  { key: "ghostsigns", label: "Ghost Signs", hint: "Faded painted wall ads", icon: "🧱" },
-  { key: "graffiti", label: "Graffiti", hint: "Tags and murals", icon: "🎨" },
-  { key: "sigils", label: "Sigils", hint: "Occult wall markings", icon: "🕯️" },
+  { key: "posters", label: "Posters", hint: "Street posters, newspapers, stickers", icon: "▦" },
+  { key: "signage", label: "Signs & Billboards", hint: "Shop signs, street & subway signage", icon: "◫" },
+  { key: "ghostsigns", label: "Ghost Signs", hint: "Faded painted wall ads", icon: "▤" },
+  { key: "graffiti", label: "Graffiti", hint: "Tags and murals", icon: "✎" },
+  { key: "sigils", label: "Sigils", hint: "Occult wall markings", icon: "✦" },
 ];
 
 const IMAGE_FILTERS = [{ name: "Image", extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }];
@@ -726,7 +726,7 @@ export function PostersTab({
                 >
                   {o.erase ? (
                     <span className="flex h-8 w-8 items-center justify-center rounded bg-red-500/10 text-sm">
-                      🚫
+                      ∅
                     </span>
                   ) : (
                     <img
