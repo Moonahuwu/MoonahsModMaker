@@ -198,6 +198,11 @@ const TAB_CATEGORIES: { label: string; tabs: string[] }[] = [
   { label: "Game SFX", tabs: ["gameplay", "combat", "mapsfx", "ambience", "npcs"] },
 ];
 
+/** The ♪ "Sound" master header: every sound-event category/tab nests under it. */
+const SOUND_MASTER = "Sound";
+const SOUND_MASTER_CATEGORIES = ["In-game", "Match", "Game SFX"];
+const SOUND_MASTER_TABS = ["ui", UNSORTED];
+
 /** Tabs an auto-discovered/imported slot can be manually moved between. The
  *  id-keyed drill-in tabs (Heroes, Items) are excluded — their UIs render
  *  slots by their own id scheme and wouldn't show a foreign slot. */
@@ -770,24 +775,35 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [settingsOpen]);
 
-  // Sidebar nav structure: standalone tabs, with category tabs collapsed under a
-  // single parent header (rendered at the position of the first member tab).
+  // Sidebar nav structure: standalone tabs, with category tabs collapsed under
+  // a single parent header (rendered at the position of the first member tab).
+  // All sound-event tabs additionally nest under one colored ♪ "Sound" master.
   const navItems = useMemo(() => {
-    const items: (
-      | { type: "tab"; key: string }
-      | { type: "category"; label: string; tabs: string[] }
-    )[] = [];
+    type Child = { type: "tab"; key: string } | { type: "category"; label: string; tabs: string[] };
+    const items: (Child | { type: "master"; label: string; items: Child[] })[] = [];
     const usedCats = new Set<string>();
+    let master: { type: "master"; label: string; items: Child[] } | null = null;
+    const pushSound = (child: Child) => {
+      if (!master) {
+        master = { type: "master", label: SOUND_MASTER, items: [] };
+        items.push(master);
+      }
+      master.items.push(child);
+    };
     for (const g of tabs) {
       const cat = TAB_CATEGORIES.find((c) => c.tabs.includes(g));
       if (cat) {
         if (usedCats.has(cat.label)) continue;
         usedCats.add(cat.label);
-        items.push({
+        const entry: Child = {
           type: "category",
           label: cat.label,
           tabs: cat.tabs.filter((t) => tabs.includes(t)),
-        });
+        };
+        if (SOUND_MASTER_CATEGORIES.includes(cat.label)) pushSound(entry);
+        else items.push(entry);
+      } else if (SOUND_MASTER_TABS.includes(g)) {
+        pushSound({ type: "tab", key: g });
       } else {
         items.push({ type: "tab", key: g });
       }
@@ -3149,6 +3165,59 @@ export default function App() {
     );
   };
 
+  // One collapsible category header + its member tabs (top-level or nested
+  // inside the ♪ Sound master). Returns null when modified-only hides it all.
+  const renderCategory = (
+    item: { label: string; tabs: string[] },
+    bootIdx?: number,
+  ): React.ReactNode => {
+    const memberTabs = modifiedOnly
+      ? item.tabs.filter((t) => groupModified(t) || t === activeTab)
+      : item.tabs;
+    if (modifiedOnly && memberTabs.length === 0) return null;
+    const collapsed = collapsedCats.has(item.label);
+    const catCount = memberTabs.reduce((n, t) => n + tabCount(t), 0);
+    const hasActive = item.tabs.includes(activeTab);
+    return (
+      <div
+        key={item.label}
+        className={`flex flex-col gap-1${bootIdx !== undefined ? bootCls : ""}`}
+        style={bootIdx !== undefined ? bootStyle(bootIdx) : undefined}
+      >
+        <button
+          onClick={() =>
+            setCollapsedCats((prev) => {
+              const next = new Set(prev);
+              if (next.has(item.label)) next.delete(item.label);
+              else next.add(item.label);
+              return next;
+            })
+          }
+          className={`mt-1 flex items-center justify-between rounded-lg border px-3 py-1.5 text-left text-[11px] font-bold uppercase tracking-widest transition ${
+            hasActive
+              ? "border-zinc-700 bg-zinc-900 text-zinc-100"
+              : "border-zinc-800/80 bg-zinc-900/40 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
+          }`}
+        >
+          <span className="flex items-center gap-1.5">
+            <span className="text-[9px] text-zinc-600">{collapsed ? "▶" : "▼"}</span>
+            {item.label}
+          </span>
+          {catCount > 0 && (
+            <span className="rounded bg-emerald-500/15 px-1.5 text-[10px] font-semibold text-emerald-300">
+              {catCount}
+            </span>
+          )}
+        </button>
+        {!collapsed && (
+          <div className="ml-3 flex flex-col gap-1 border-l border-zinc-800/70 pl-1.5">
+            {memberTabs.map((t) => renderTabButton(t, true))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="flex h-screen overflow-hidden">
       {/* Animated backdrop for the content pane (the opaque sidebar covers its
@@ -3188,14 +3257,17 @@ export default function App() {
               if (modifiedOnly && !groupModified(item.key) && item.key !== activeTab) return null;
               return renderTabButton(item.key, false, navIdx + 2);
             }
-            // Category: a collapsible parent header over its member tabs.
-            const memberTabs = modifiedOnly
-              ? item.tabs.filter((t) => groupModified(t) || t === activeTab)
-              : item.tabs;
-            if (modifiedOnly && memberTabs.length === 0) return null;
+            if (item.type === "category") return renderCategory(item, navIdx + 2);
+            // ♪ Sound master: one colored parent over every sound-event
+            // category/tab (the "this whole block is sounds" divider).
+            const allTabs = item.items.flatMap((c) => (c.type === "tab" ? [c.key] : c.tabs));
+            const visibleTabs = modifiedOnly
+              ? allTabs.filter((t) => groupModified(t) || t === activeTab)
+              : allTabs;
+            if (modifiedOnly && visibleTabs.length === 0) return null;
             const collapsed = collapsedCats.has(item.label);
-            const catCount = memberTabs.reduce((n, t) => n + tabCount(t), 0);
-            const hasActive = item.tabs.includes(activeTab);
+            const soundCount = visibleTabs.reduce((n, t) => n + tabCount(t), 0);
+            const hasActive = allTabs.includes(activeTab);
             return (
               <div
                 key={item.label}
@@ -3213,23 +3285,31 @@ export default function App() {
                   }
                   className={`mt-1 flex items-center justify-between rounded-lg border px-3 py-1.5 text-left text-[11px] font-bold uppercase tracking-widest transition ${
                     hasActive
-                      ? "border-zinc-700 bg-zinc-900 text-zinc-100"
-                      : "border-zinc-800/80 bg-zinc-900/40 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
+                      ? "border-sky-500/50 bg-sky-500/10 text-sky-100"
+                      : "border-sky-500/25 bg-sky-500/5 text-sky-300/90 hover:border-sky-400/50 hover:text-sky-200"
                   }`}
                 >
                   <span className="flex items-center gap-1.5">
-                    <span className="text-[9px] text-zinc-600">{collapsed ? "▶" : "▼"}</span>
+                    <span className="text-[9px] text-sky-500/80">{collapsed ? "▶" : "▼"}</span>
+                    <span className="text-[13px] leading-none text-sky-300">♪</span>
                     {item.label}
                   </span>
-                  {catCount > 0 && (
-                    <span className="rounded bg-emerald-500/15 px-1.5 text-[10px] font-semibold text-emerald-300">
-                      {catCount}
+                  {soundCount > 0 && (
+                    <span className="rounded bg-sky-500/15 px-1.5 text-[10px] font-semibold text-sky-300">
+                      {soundCount}
                     </span>
                   )}
                 </button>
                 {!collapsed && (
-                  <div className="ml-3 flex flex-col gap-1 border-l border-zinc-800/70 pl-1.5">
-                    {memberTabs.map((t) => renderTabButton(t, true))}
+                  <div className="ml-3 flex flex-col gap-1 border-l border-sky-500/25 pl-1.5">
+                    {item.items.map((c) =>
+                      c.type === "tab" ? (
+                        (!modifiedOnly || groupModified(c.key) || c.key === activeTab) &&
+                          renderTabButton(c.key, true)
+                      ) : (
+                        renderCategory(c)
+                      ),
+                    )}
                   </div>
                 )}
               </div>
