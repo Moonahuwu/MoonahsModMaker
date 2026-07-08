@@ -17,9 +17,9 @@
   <g id="Layer_1-2" data-name="Layer 1">
     <g>
       <polygon class="cls-2" points="265.18 456.09 525.69 4.87 4.67 4.87 265.18 456.09"/>
-      <circle class="cls-1" cx="4.67" cy="4.87" r="4.67"/>
-      <circle class="cls-1" cx="525.69" cy="4.67" r="4.67"/>
-      <circle class="cls-1" cx="265.18" cy="455.58" r="4.67"/>
+      <circle class="cls-1" cx="4.67" cy="4.87" r="10"/>
+      <circle class="cls-1" cx="525.69" cy="4.67" r="10"/>
+      <circle class="cls-1" cx="265.18" cy="455.58" r="10"/>
     </g>
   </g>
 </svg>

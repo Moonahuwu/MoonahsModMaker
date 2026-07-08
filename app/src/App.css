@@ -193,12 +193,18 @@ button {
    low opacity so it reads as texture, never competes with content. */
 .eim-sigil {
   position: absolute;
-  /* Right-of-center like the in-game loading screen (partially off the
-     right edge on wide windows). Transforms are driven from Backdrop.tsx. */
-  left: 78%;
-  top: 50%;
-  width: 118vmin;
-  height: 118vmin;
+  /* Matches the user's mock of the in-game look: circle center right of
+     the content pane, triangle tips running off the edges. The circle is
+     49.86% of the art box, so a 104vh box = a ~52vh circle. Layer
+     transforms (spin/drift) are driven from Backdrop.tsx. */
+  left: 81%;
+  top: 47%;
+  width: 104vh;
+  height: 104vh;
   opacity: 0.17;
   transform: translate(-50%, -50%);
+}
+.eim-sigil-layer {
+  position: absolute;
+  inset: 0;
 }

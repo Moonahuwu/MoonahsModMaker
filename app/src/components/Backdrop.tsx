@@ -18,17 +18,23 @@ import { useEffect, useRef, useState } from "react";
  * Sits right-of-center like the in-game loading screen.
  */
 
-/** Fetch + prep one sigil svg: white → currentColor, fills the layer box. */
+/** Fetch + prep one sigil svg: white → currentColor, fills the layer box.
+ *  Editor exports carry `<style>` blocks with generic class names (.cls-1…)
+ *  — inlined SVG styles are DOCUMENT-global, so two files' identical class
+ *  names clobber each other (that ate the inner triangle's vertex dots).
+ *  Namespacing the classes per file keeps each sheet to itself. */
 function useSigilSvg(file: string): string | null {
   const [svg, setSvg] = useState<string | null>(null);
   useEffect(() => {
     let live = true;
+    const ns = file.replace(/\W/g, "");
     fetch(`/backdrop/${file}`)
       .then((r) => (r.ok ? r.text() : Promise.reject(new Error(String(r.status)))))
       .then((text) => {
         if (!live) return;
         const prepped = text
           .replace(/#fff\b|#ffffff\b|white\b/gi, "currentColor")
+          .replace(/cls-/g, `${ns}-cls-`)
           .replace("<svg ", '<svg width="100%" height="100%" ');
         setSvg(prepped);
       })
@@ -67,13 +73,14 @@ export function Backdrop({ accent = "#34d399" }: { accent?: string }) {
       // Exponential ease back toward cruise speed (~2.5s to settle).
       speedRef.current += (1 - speedRef.current) * Math.min(1, dt * 1.2);
       angle += BASE_DEG_PER_SEC * speedRef.current * dt;
-      // Slow horizontal sway tied to the rotation phase.
-      const drift = Math.sin((angle * Math.PI) / 360) * -4;
+      // Slow horizontal sway tied to the rotation phase. The layers fill a
+      // positioned wrapper, so these transforms are pure spin/drift.
+      const drift = Math.sin((angle * Math.PI) / 360) * -3;
       if (outerRef.current) {
-        outerRef.current.style.transform = `translate(-50%, -50%) translateX(${drift.toFixed(3)}vmin) rotate(${(-angle).toFixed(3)}deg)`;
+        outerRef.current.style.transform = `translateX(${drift.toFixed(3)}vh) rotate(${(-angle).toFixed(3)}deg)`;
       }
       if (innerRef.current) {
-        innerRef.current.style.transform = `translate(-50%, -50%) rotate(${(angle * 0.7).toFixed(3)}deg)`;
+        innerRef.current.style.transform = `rotate(${(angle * 0.7).toFixed(3)}deg)`;
       }
       raf = requestAnimationFrame(tick);
     };
@@ -94,23 +101,24 @@ export function Backdrop({ accent = "#34d399" }: { accent?: string }) {
       <div className="eim-bg-glow eim-bg-glow-a" />
       <div className="eim-bg-glow eim-bg-glow-b" />
       <div className="eim-bg-vignette" />
-      {/* Sigil above the vignette so its lines aren't dimmed. */}
-      {outer && (
-        <div
-          ref={outerRef}
-          className="eim-sigil"
-          style={layerStyle}
-          dangerouslySetInnerHTML={{ __html: outer }}
-        />
-      )}
-      {inner && (
-        <div
-          ref={innerRef}
-          className="eim-sigil"
-          style={layerStyle}
-          dangerouslySetInnerHTML={{ __html: inner }}
-        />
-      )}
+      {/* Sigil above the vignette so its lines aren't dimmed: ONE positioned
+          wrapper (geometry in .eim-sigil), two spinning layers inside. */}
+      <div className="eim-sigil" style={layerStyle}>
+        {outer && (
+          <div
+            ref={outerRef}
+            className="eim-sigil-layer"
+            dangerouslySetInnerHTML={{ __html: outer }}
+          />
+        )}
+        {inner && (
+          <div
+            ref={innerRef}
+            className="eim-sigil-layer"
+            dangerouslySetInnerHTML={{ __html: inner }}
+          />
+        )}
+      </div>
     </div>
   );
 }
