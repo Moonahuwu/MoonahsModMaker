@@ -98,7 +98,10 @@ fn digimod_fingerprint(dm: &DigimodCompile) -> String {
     }
     for s in &dm.sounds {
         key.push_str(&file_identity(&s.source_audio));
-        key.push_str(&format!("sound|{}|{:.2}\n", s.id, s.volume));
+        key.push_str(&format!(
+            "sound|{}|{:.2}|{:.3}|{:.3}|{:.2}|{:.3}|{:.3}\n",
+            s.id, s.volume, s.trim_start, s.trim_end, s.gain_db, s.fade_in, s.fade_out
+        ));
     }
     for v in &dm.merge_vpks {
         key.push_str("merge|");
@@ -399,28 +402,54 @@ pub fn compile_digimod(
     }
     // Sound library: any audio format -> wav source; the compiler makes the
     // vsnd_c. One file per library sound, shared by every entry using it.
+    // Trim/gain/fades ride the same render path the song pipeline uses.
     for s in dm.sounds.iter().filter(|s| !s.source_audio.is_empty()) {
         let id = sanitize_id(&s.id);
         let wav = content_root.join(format!("sounds/digi/{id}.wav"));
         if let Some(parent) = wav.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let exe = ffmpeg.unwrap_or("ffmpeg");
-        let out = crate::procutil::quiet(exe)
-            .args(["-y", "-i", &s.source_audio])
-            .arg(&wav)
-            .output();
-        match out {
-            Ok(o) if o.status.success() => to_compile.push(wav),
-            Ok(o) => {
-                report.soft_fail(
-                    format!("jumpscare sound: {id}"),
-                    String::from_utf8_lossy(&o.stderr).lines().rev().take(2).collect::<Vec<_>>().join(" | "),
-                );
-                all_ok = false;
+        let has_edit = s.trim_start > 0.0
+            || s.trim_end > s.trim_start
+            || s.gain_db != 0.0
+            || s.fade_in > 0.0
+            || s.fade_out > 0.0;
+        let result = if has_edit {
+            // Fades anchor to the clip end, so an open-ended trim needs the
+            // real source duration.
+            let end = if s.trim_end > s.trim_start {
+                s.trim_end
+            } else {
+                crate::audio::probe_duration(ffmpeg, &s.source_audio).unwrap_or(600.0)
+            };
+            crate::audio::render_to(
+                ffmpeg,
+                &s.source_audio,
+                s.trim_start,
+                end,
+                s.gain_db,
+                s.fade_in,
+                s.fade_out,
+                &wav.to_string_lossy(),
+            )
+        } else {
+            let exe = ffmpeg.unwrap_or("ffmpeg");
+            match crate::procutil::quiet(exe).args(["-y", "-i", &s.source_audio]).arg(&wav).output()
+            {
+                Ok(o) if o.status.success() => Ok(()),
+                Ok(o) => Err(String::from_utf8_lossy(&o.stderr)
+                    .lines()
+                    .rev()
+                    .take(2)
+                    .collect::<Vec<_>>()
+                    .join(" | ")),
+                Err(err) => Err(err.to_string()),
             }
+        };
+        match result {
+            Ok(()) => to_compile.push(wav),
             Err(err) => {
-                report.soft_fail(format!("jumpscare sound: {id}"), err.to_string());
+                report.soft_fail(format!("jumpscare sound: {id}"), err);
                 all_ok = false;
             }
         }

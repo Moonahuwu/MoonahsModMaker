@@ -191,6 +191,14 @@ export interface DigiSound {
   sourceAudio: string;
   /** Soundevent volume (Base.UI scale; the original mod used 0.1–5). */
   volume: number;
+  /** Clip start (seconds trimmed off the front). */
+  trimStart?: number;
+  /** Clip end in source seconds; 0 / <= start means "to the end". */
+  trimEnd?: number;
+  /** Render gain in dB (separate from the soundevent volume). */
+  gainDb?: number;
+  fadeIn?: number;
+  fadeOut?: number;
 }
 
 /** Jumpscares/Deaths tab config — generates the whole HUD mod on compile. */

@@ -329,6 +329,19 @@ pub struct DigiSound {
     /// Soundevent volume (Base.UI scale; the original mod used 0.1-5).
     #[serde(default = "default_digi_volume")]
     pub volume: f64,
+    /// Clip: seconds trimmed off the front.
+    #[serde(default)]
+    pub trim_start: f64,
+    /// Clip end (seconds into the source); <= trim_start means "to the end".
+    #[serde(default)]
+    pub trim_end: f64,
+    /// Gain in dB applied at render (separate from the soundevent volume).
+    #[serde(default)]
+    pub gain_db: f64,
+    #[serde(default)]
+    pub fade_in: f64,
+    #[serde(default)]
+    pub fade_out: f64,
 }
 
 #[derive(Debug, Clone, Deserialize)]

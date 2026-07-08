@@ -741,9 +741,18 @@ export default function App() {
           (project.digimod.mergeVpks?.length ?? 0) > 0))
     )
       out.push(JUMPSCARES);
-    out.push(CUSTOM_SERVER, MOD_COMBINER, REPLACE_SOUNDS);
+    // Custom Server is experimental (opt-in), but never hide a project that
+    // already carries gameplay edits.
+    if (
+      settings.experimentalServer ||
+      (project?.vdataOverrides?.length ?? 0) > 0 ||
+      (project?.globalOverrides?.length ?? 0) > 0 ||
+      (project?.worldOverrides?.length ?? 0) > 0
+    )
+      out.push(CUSTOM_SERVER);
+    out.push(MOD_COMBINER, REPLACE_SOUNDS);
     return out;
-  }, [project, settings.experimentalEffects, digimodOn]);
+  }, [project, settings.experimentalEffects, settings.experimentalServer, digimodOn]);
 
   // If the active tab vanishes (e.g. turning off an experimental feature while
   // viewing it), fall back to the first tab.
@@ -3432,6 +3441,7 @@ export default function App() {
             config={project?.digimod ?? DEFAULT_DIGIMOD}
             addonsDir={settings.addonsDir}
             helperPath={settings.vpkHelperPath}
+            ffmpegPath={settings.ffmpegPath}
             onChange={(next) => setProject((prev) => (prev ? { ...prev, digimod: next } : prev))}
           />
         ) : activeTab === POSTERS ? (

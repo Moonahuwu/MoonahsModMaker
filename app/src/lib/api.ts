@@ -133,6 +133,11 @@ export interface DigiSoundCompile {
   id: string;
   sourceAudio: string;
   volume: number;
+  trimStart: number;
+  trimEnd: number;
+  gainDb: number;
+  fadeIn: number;
+  fadeOut: number;
 }
 
 export interface DigiEntryCompile {

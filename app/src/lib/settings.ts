@@ -42,6 +42,10 @@ export interface Settings {
   /** Experimental: reveal the VFX/particle recolor feature — the Effects tab and
    *  the per-item effect section. Off by default (very WIP). */
   experimentalEffects: boolean;
+  /** Experimental: reveal the Custom Server tab (config editor / randomizer /
+   *  hosting). Off by default; the tab stays visible while a project already
+   *  carries gameplay edits so they can't get stranded. */
+  experimentalServer: boolean;
   /** Include UI-tab sound changes in the compiled build. Off by default — UI
    *  soundevent edits make broad menu changes that can break things. */
   includeUiSounds: boolean;
@@ -129,6 +133,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showExperimentalHeroes: false,
   compareByDefault: false,
   experimentalEffects: false,
+  experimentalServer: false,
   includeUiSounds: false,
   source2ViewerPath: "",
   includeGameplay: false,
@@ -354,6 +359,11 @@ export function buildCompileConfig(
               id: s.id,
               sourceAudio: s.sourceAudio,
               volume: s.volume,
+              trimStart: s.trimStart ?? 0,
+              trimEnd: s.trimEnd ?? 0,
+              gainDb: s.gainDb ?? 0,
+              fadeIn: s.fadeIn ?? 0,
+              fadeOut: s.fadeOut ?? 0,
             })),
             mergeVpks: digimod.mergeVpks ?? [],
           };

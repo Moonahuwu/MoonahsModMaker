@@ -173,6 +173,21 @@ export function SetupSection({
         <label className="mt-2 flex cursor-pointer items-center gap-2.5">
           <input
             type="checkbox"
+            checked={settings.experimentalServer}
+            onChange={(e) => update({ experimentalServer: e.target.checked })}
+            className="accent-amber-500"
+          />
+          <span className="text-xs font-medium text-zinc-300">
+            Custom Server (config editor / randomizer / hosting)
+          </span>
+        </label>
+        <p className="-mt-1 pl-6 text-[10px] text-zinc-600">
+          Show the Custom Server tab: gameplay config edits, the randomizer, one-click
+          hosting and the F8 in-game menu.
+        </p>
+        <label className="mt-2 flex cursor-pointer items-center gap-2.5">
+          <input
+            type="checkbox"
             checked={settings.showUnusedPosters}
             onChange={(e) => update({ showUnusedPosters: e.target.checked })}
             className="accent-amber-500"

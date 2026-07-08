@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { importDigimod, listUiMods, type UiModVpk } from "../lib/api";
+import { importDigimod, listUiMods, probeAudio, processAudio, type UiModVpk } from "../lib/api";
+import { videoThumb } from "../lib/videoThumbs";
 import { useToast } from "./Toaster";
 import type { DigiEntry, DigimodConfig, DigiSound } from "../types";
 
@@ -59,6 +60,53 @@ function makeId(path: string, existing: DigiEntry[]): string {
   return id;
 }
 
+/** Cached-still video preview: decodes real video only while hovered, so a
+ *  page of clips doesn't lag every visit (thumbnails persist per session). */
+function VideoPreview({ path }: { path: string }) {
+  const [thumb, setThumb] = useState<string | null | "pending">("pending");
+  const [hover, setHover] = useState(false);
+  useEffect(() => {
+    let live = true;
+    setThumb("pending");
+    videoThumb(path).then((t) => {
+      if (live) setThumb(t);
+    });
+    return () => {
+      live = false;
+    };
+  }, [path]);
+  // Capture failed (rare) — fall back to the always-on video.
+  if (thumb === null || hover) {
+    return (
+      <video
+        src={convertFileSrc(path)}
+        muted
+        loop
+        autoPlay
+        playsInline
+        onMouseLeave={() => setHover(false)}
+        className="h-full w-full object-cover"
+      />
+    );
+  }
+  return (
+    <div
+      onMouseEnter={() => setHover(true)}
+      className="relative h-full w-full cursor-pointer"
+      title="Hover to play"
+    >
+      {thumb === "pending" ? (
+        <div className="h-full w-full animate-pulse bg-zinc-900" />
+      ) : (
+        <img src={thumb} className="h-full w-full object-cover" alt="" />
+      )}
+      <span className="absolute inset-0 flex items-center justify-center">
+        <span className="rounded-full bg-black/55 px-2.5 py-1 text-sm text-white/90">▶</span>
+      </span>
+    </div>
+  );
+}
+
 /** Slider + number pair for the settings row. */
 function SettingSlider({
   label,
@@ -100,16 +148,57 @@ export function DigimodTab({
   config,
   addonsDir,
   helperPath,
+  ffmpegPath,
   onChange,
 }: {
   config: DigimodConfig;
   addonsDir: string;
   helperPath: string;
+  ffmpegPath: string;
   onChange: (next: DigimodConfig) => void;
 }) {
   const { push } = useToast();
   const patch = (p: Partial<DigimodConfig>) => onChange({ ...config, ...p });
   const sounds = config.sounds ?? [];
+
+  // Clip editor: which sound row is expanded + the shared preview player.
+  const [editSound, setEditSound] = useState<string | null>(null);
+  const [previewing, setPreviewing] = useState<string | null>(null);
+  const playerRef = useRef<HTMLAudioElement | null>(null);
+  useEffect(
+    () => () => {
+      playerRef.current?.pause();
+    },
+    [],
+  );
+
+  /** Play a sound the way it will ship: trims, gain, and fades applied. */
+  async function previewClip(s: DigiSound) {
+    playerRef.current?.pause();
+    setPreviewing(s.id);
+    try {
+      const end =
+        s.trimEnd && s.trimEnd > (s.trimStart ?? 0)
+          ? s.trimEnd
+          : (await probeAudio(s.sourceAudio, ffmpegPath || undefined)).duration;
+      const wav = await processAudio({
+        sourcePath: s.sourceAudio,
+        trimStart: s.trimStart ?? 0,
+        trimEnd: end,
+        gainDb: s.gainDb ?? 0,
+        fadeIn: s.fadeIn ?? 0,
+        fadeOut: s.fadeOut ?? 0,
+        ffmpegPath: ffmpegPath || undefined,
+      });
+      const audio = new Audio(convertFileSrc(wav));
+      playerRef.current = audio;
+      audio.onended = () => setPreviewing((p) => (p === s.id ? null : p));
+      await audio.play();
+    } catch (e) {
+      push("error", `Preview failed: ${e}`);
+      setPreviewing(null);
+    }
+  }
 
   // One-time migration from the pre-library shape: entries that carried
   // their own sourceAudio get it lifted into a shared sound.
@@ -320,14 +409,7 @@ export function DigimodTab({
             >
               <div className="relative aspect-video w-full overflow-hidden bg-zinc-900">
                 {e.kind === "video" ? (
-                  <video
-                    src={convertFileSrc(e.sourceMedia)}
-                    muted
-                    loop
-                    autoPlay
-                    playsInline
-                    className="h-full w-full object-cover"
-                  />
+                  <VideoPreview path={e.sourceMedia} />
                 ) : (
                   <img
                     src={convertFileSrc(e.sourceMedia)}
@@ -528,56 +610,114 @@ export function DigimodTab({
               const uses = [...config.scares, ...config.deaths].filter(
                 (e) => e.soundId === s.id,
               ).length;
+              const edited =
+                (s.trimStart ?? 0) > 0 ||
+                (s.trimEnd ?? 0) > (s.trimStart ?? 0) ||
+                (s.gainDb ?? 0) !== 0 ||
+                (s.fadeIn ?? 0) > 0 ||
+                (s.fadeOut ?? 0) > 0;
+              const num = (
+                label: string,
+                key: "trimStart" | "trimEnd" | "gainDb" | "fadeIn" | "fadeOut",
+                step: number,
+                min?: number,
+              ) => (
+                <label className="flex items-center gap-1 text-[11px] text-zinc-400">
+                  {label}
+                  <input
+                    type="number"
+                    step={step}
+                    min={min}
+                    value={s[key] ?? 0}
+                    onChange={(ev) =>
+                      updateSound(s.id, { [key]: Number(ev.target.value) || 0 })
+                    }
+                    className="w-16 rounded border border-zinc-700 bg-zinc-950 px-1 text-zinc-200"
+                  />
+                </label>
+              );
               return (
                 <div
                   key={s.id}
-                  className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2"
+                  className="rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2"
                 >
-                  <div className="min-w-0 flex-1">
-                    <input
-                      value={s.name}
-                      onChange={(ev) => updateSound(s.id, { name: ev.target.value })}
-                      className="w-full rounded border border-transparent bg-transparent px-1 text-xs font-semibold text-zinc-200 hover:border-zinc-700 focus:border-zinc-500 focus:outline-none"
-                    />
-                    <div
-                      className="truncate px-1 text-[10px] text-zinc-600"
-                      title={s.sourceAudio}
-                    >
-                      {baseName(s.sourceAudio)}
-                      {uses > 0 && (
-                        <span className="ml-2 text-emerald-400/80">
-                          used by {uses} video{uses === 1 ? "" : "s"}
-                        </span>
-                      )}
+                  <div className="flex items-center gap-2">
+                    <div className="min-w-0 flex-1">
+                      <input
+                        value={s.name}
+                        onChange={(ev) => updateSound(s.id, { name: ev.target.value })}
+                        className="w-full rounded border border-transparent bg-transparent px-1 text-xs font-semibold text-zinc-200 hover:border-zinc-700 focus:border-zinc-500 focus:outline-none"
+                      />
+                      <div
+                        className="truncate px-1 text-[10px] text-zinc-600"
+                        title={s.sourceAudio}
+                      >
+                        {baseName(s.sourceAudio)}
+                        {uses > 0 && (
+                          <span className="ml-2 text-emerald-400/80">
+                            used by {uses} video{uses === 1 ? "" : "s"}
+                          </span>
+                        )}
+                        {edited && <span className="ml-2 text-sky-300/80">clipped</span>}
+                      </div>
                     </div>
-                  </div>
-                  <audio
-                    src={convertFileSrc(s.sourceAudio)}
-                    controls
-                    preload="none"
-                    className="h-7 w-36 shrink-0"
-                  />
-                  <label className="flex shrink-0 items-center gap-1 text-[11px] text-zinc-500">
-                    vol
-                    <input
-                      type="number"
-                      step={0.5}
-                      min={0}
-                      max={10}
-                      value={s.volume}
-                      onChange={(ev) =>
-                        updateSound(s.id, { volume: Number(ev.target.value) || 3 })
-                      }
-                      className="w-12 rounded border border-zinc-700 bg-zinc-950 px-1 text-zinc-200"
+                    <audio
+                      src={convertFileSrc(s.sourceAudio)}
+                      controls
+                      preload="none"
+                      className="h-7 w-36 shrink-0"
                     />
-                  </label>
-                  <button
-                    onClick={() => removeSound(s.id)}
-                    title={uses > 0 ? `Unassigns ${uses} video(s)` : "Remove sound"}
-                    className="shrink-0 rounded px-1.5 text-xs text-red-400/80 hover:bg-red-500/10 hover:text-red-300"
-                  >
-                    ✕
-                  </button>
+                    <label className="flex shrink-0 items-center gap-1 text-[11px] text-zinc-500">
+                      vol
+                      <input
+                        type="number"
+                        step={0.5}
+                        min={0}
+                        max={10}
+                        value={s.volume}
+                        onChange={(ev) =>
+                          updateSound(s.id, { volume: Number(ev.target.value) || 3 })
+                        }
+                        className="w-12 rounded border border-zinc-700 bg-zinc-950 px-1 text-zinc-200"
+                      />
+                    </label>
+                    <button
+                      onClick={() => setEditSound(editSound === s.id ? null : s.id)}
+                      title="Trim / gain / fades"
+                      className={`shrink-0 rounded px-1.5 text-xs ${
+                        editSound === s.id || edited
+                          ? "bg-sky-500/15 text-sky-300"
+                          : "text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+                      }`}
+                    >
+                      ✂
+                    </button>
+                    <button
+                      onClick={() => removeSound(s.id)}
+                      title={uses > 0 ? `Unassigns ${uses} video(s)` : "Remove sound"}
+                      className="shrink-0 rounded px-1.5 text-xs text-red-400/80 hover:bg-red-500/10 hover:text-red-300"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  {editSound === s.id && (
+                    <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-md border border-zinc-800 bg-zinc-900/50 px-3 py-2">
+                      {num("start", "trimStart", 0.1, 0)}
+                      {num("end", "trimEnd", 0.1, 0)}
+                      {num("gain dB", "gainDb", 0.5)}
+                      {num("fade in", "fadeIn", 0.1, 0)}
+                      {num("fade out", "fadeOut", 0.1, 0)}
+                      <button
+                        onClick={() => void previewClip(s)}
+                        className="rounded bg-zinc-800 px-2.5 py-1 text-[11px] font-semibold text-zinc-200 hover:bg-zinc-700"
+                      >
+                        {previewing === s.id ? "▶ playing…" : "▶ Preview clip"}
+                      </button>
+                      <span className="text-[10px] text-zinc-600">
+                        seconds; end 0 = full length. This is what ships in the mod.
+                      </span>
+                    </div>
+                  )}
                 </div>
               );
             })}
