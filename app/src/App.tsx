@@ -3507,21 +3507,25 @@ export default function App() {
             <h2 className="bg-gradient-to-r from-zinc-50 to-zinc-400 bg-clip-text text-xl font-bold tracking-tight text-transparent">
               {TAB_LABELS[activeTab] ?? activeTab}
             </h2>
-            <p className="mt-1 text-sm text-zinc-500">
-              {activeTab === MOD_COMBINER
-                ? "Merge other mods' sounds into your compile — nothing of yours is removed."
-                : activeTab === REPLACE_SOUNDS
-                  ? "Replace any game sound directly by its file — no soundevents touched. Browse a category, preview, then drop in your audio."
-                  : activeTab === EFFECTS
-                    ? "Recolor any particle effect — hero abilities, item effects, and more. Preview the recolor live, then compile to apply."
-                    : activeTab === POSTERS
-                      ? "Replace the world's posters, signs, ghost signs, and graffiti with your own images — drop a PNG onto a region and compile."
-                      : activeTab === JUMPSCARES
-                        ? "Random jumpscares while you play + videos when you die — your DigiMaster mod, configured here and rebuilt on compile."
-                        : activeTab === UIMASTER
-                          ? "Edit the game's UI files directly — decompiled to source, compiled back into your mod. Very experimental."
-                          : "Your entries merge in — every other mod stays untouched."}
-            </p>
+            {/* Only the specialty tabs get a one-line explainer; the regular
+                sound tabs speak for themselves. */}
+            {(() => {
+              const sub =
+                activeTab === MOD_COMBINER
+                  ? "Merge other mods' sounds into your compile — nothing of yours is removed."
+                  : activeTab === REPLACE_SOUNDS
+                    ? "Replace any game sound directly by its file — no soundevents touched. Browse a category, preview, then drop in your audio."
+                    : activeTab === EFFECTS
+                      ? "Recolor any particle effect — hero abilities, item effects, and more. Preview the recolor live, then compile to apply."
+                      : activeTab === POSTERS
+                        ? "Replace the world's posters, signs, ghost signs, and graffiti with your own images — drop a PNG onto a region and compile."
+                        : activeTab === JUMPSCARES
+                          ? "Random jumpscares while you play + videos when you die — your DigiMaster mod, configured here and rebuilt on compile."
+                          : activeTab === UIMASTER
+                            ? "Edit the game's UI files directly — decompiled to source, compiled back into your mod. Very experimental."
+                            : null;
+              return sub ? <p className="mt-1 text-sm text-zinc-500">{sub}</p> : null;
+            })()}
           </div>
           {profiles.length > 0 && (
             <ProfileSwitcher
