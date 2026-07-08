@@ -4652,6 +4652,29 @@ pub fn list_ui_mods(addons_dir: String) -> Vec<UiModVpk> {
     out
 }
 
+/// Adopt an existing DigiMaster pak: parse its CONFIG + LIBRARY, pull every
+/// webm/image/sound out into app-data `digimod_media/`, and return an
+/// editable config for the Jumpscares tab. Async — extraction + decode of a
+/// dozen media files takes seconds.
+#[tauri::command]
+pub async fn import_digimod(
+    app: tauri::AppHandle,
+    helper_path: String,
+    vpk: String,
+) -> Result<crate::digimod::DigimodImport, String> {
+    use tauri::Manager;
+    let dest = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("digimod_media");
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::digimod::import_from_vpk(&helper_path, &vpk, &dest)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Which of `names` (case-insensitive exe names) are currently running.
 /// Powers the compile bar's "Deadlock / Source 2 Viewer is open" warning —
 /// both hold locks on the pak/addons that make compiles and installs fail

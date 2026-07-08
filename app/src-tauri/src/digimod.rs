@@ -510,9 +510,353 @@ pub fn compile_digimod(
     Ok((rels, true))
 }
 
+// ==========================================================================
+// IMPORT — adopt an existing DigiMaster pak into the tab: parse CONFIG +
+// LIBRARY out of the compiled digi_master.vjs_c (panorama resources embed
+// the source verbatim; VRF's FileExtract chokes on vjs_c, so raw extract +
+// text scan), pull each webm/vtex/vsnd out to real files, and hand back a
+// ready-to-edit config.
+// ==========================================================================
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DigimodImport {
+    pub rng_interval: u32,
+    pub scare_chance: u32,
+    pub death_chance: u32,
+    pub scares: Vec<ImportedEntry>,
+    pub deaths: Vec<ImportedEntry>,
+    /// Non-fatal per-entry problems (media missing from the pak etc.).
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportedEntry {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub source_media: String,
+    pub show: f64,
+    pub preset: String,
+    pub source_audio: Option<String>,
+    pub volume: f64,
+}
+
+/// First number after `key` (skipping the separator), e.g. `SCARE_CHANCE: 3`.
+fn num_after(hay: &str, key: &str) -> Option<f64> {
+    let at = hay.find(key)? + key.len();
+    let rest = &hay[at..];
+    let start = rest.find(|c: char| c.is_ascii_digit() || c == '-' || c == '.')?;
+    // Numbers here are always within a few chars of the key; a far-away hit
+    // means the key had no value and we matched something unrelated.
+    if start > 8 {
+        return None;
+    }
+    let rest = &rest[start..];
+    let end = rest
+        .find(|c: char| !c.is_ascii_digit() && c != '.' && c != '-')
+        .unwrap_or(rest.len());
+    rest[..end].parse().ok()
+}
+
+/// First quoted string after `key`, e.g. `src: "s2r://…"`. None for `null`.
+fn str_after(hay: &str, key: &str) -> Option<String> {
+    let at = hay.find(key)? + key.len();
+    let rest = &hay[at..];
+    let q1 = rest.find('"')?;
+    // `sound: null` — a null (or next field) before any quote means no value.
+    if rest[..q1].contains("null") || rest[..q1].contains(',') {
+        return None;
+    }
+    let rest = &rest[q1 + 1..];
+    let q2 = rest.find('"')?;
+    Some(rest[..q2].to_string())
+}
+
+/// Slice the `[ … ]` array following `key`, bracket-depth aware.
+fn array_after<'a>(hay: &'a str, key: &str) -> Option<&'a str> {
+    let at = hay.find(key)?;
+    let open = at + hay[at..].find('[')?;
+    let mut depth = 0usize;
+    for (i, c) in hay[open..].char_indices() {
+        match c {
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&hay[open..=open + i]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Split an array slice into its top-level `{ … }` object slices.
+fn objects_in(array: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    for (i, c) in array.char_indices() {
+        match c {
+            '{' => {
+                if depth == 0 {
+                    start = i;
+                }
+                depth += 1;
+            }
+            '}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    out.push(&array[start..=i]);
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// `s2r://panorama/videos/x.webm` → the path stored in the vpk index.
+fn src_to_internal(src: &str) -> String {
+    let p = src
+        .trim_start_matches("s2r://")
+        .trim_start_matches("file://{resources}/")
+        .trim_start_matches("file://");
+    let p = if p.starts_with("panorama/") || p.starts_with("sounds/") {
+        p.to_string()
+    } else {
+        format!("panorama/{p}")
+    };
+    // Compiled resources carry the _c suffix in the index (webms ship raw).
+    if p.ends_with(".vtex") || p.ends_with(".vsnd") { format!("{p}_c") } else { p }
+}
+
+/// One soundevent's (volume, first vsnd path) from decompiled KV3 text.
+fn event_info(kv3: &str, event: &str) -> Option<(f64, String)> {
+    let at = kv3.find(&format!("{event} = "))?;
+    let block = &kv3[at..kv3.len().min(at + 600)];
+    let volume = num_after(block, "volume").unwrap_or(3.0);
+    let vsnd = str_after(block, "vsnd_files")
+        .or_else(|| block.find("sounds/").map(|i| {
+            let rest = &block[i..];
+            rest[..rest.find(['"', '\n']).unwrap_or(rest.len())].to_string()
+        }))?;
+    Some((volume, vsnd))
+}
+
+/// Parse + extract a DigiMaster pak into an editable config. `dest_dir`
+/// receives the media files (webm/png/audio), one per entry.
+pub fn import_from_vpk(helper: &str, vpk: &str, dest_dir: &Path) -> Result<DigimodImport, String> {
+    std::fs::create_dir_all(dest_dir).map_err(|e| e.to_string())?;
+    let tmp = dest_dir.join(".import_tmp");
+    std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+
+    // The JS source rides verbatim inside the compiled resource.
+    let raw_js = tmp.join("digi_master.raw");
+    crate::vpk::extract(helper, vpk, "panorama/scripts/digi_master.vjs_c", &raw_js.to_string_lossy())
+        .map_err(|e| format!("no DigiMaster engine in this pak ({e})"))?;
+    let js = String::from_utf8_lossy(&std::fs::read(&raw_js).map_err(|e| e.to_string())?).into_owned();
+
+    // Sound events (volumes + vsnd paths) — optional, the pak may ship none.
+    let kv3 = {
+        let out = tmp.join("world_ambient_emitters.kv3");
+        crate::vpk::decompile_from_vpk(
+            helper,
+            vpk,
+            "soundevents/world_ambient_emitters.vsndevts_c",
+            &out.to_string_lossy(),
+        )
+        .ok()
+        .and_then(|_| std::fs::read_to_string(&out).ok())
+        .unwrap_or_default()
+    };
+
+    let mut warnings: Vec<String> = Vec::new();
+    let mut used_ids: Vec<String> = Vec::new();
+    let mut parse_list = |key: &str| -> Vec<ImportedEntry> {
+        let Some(array) = array_after(&js, key) else { return vec![] };
+        let mut out = Vec::new();
+        for obj in objects_in(array) {
+            let Some(src) = str_after(obj, "src") else { continue };
+            let name = str_after(obj, "name").unwrap_or_else(|| "entry".into());
+            let kind = if str_after(obj, "type").as_deref() == Some("image")
+                || src.ends_with(".vtex")
+                || src.ends_with(".png")
+            {
+                "image"
+            } else {
+                "video"
+            };
+            let mut id = sanitize_id(&name);
+            let mut n = 2;
+            while used_ids.contains(&id) {
+                id = format!("{}_{n}", sanitize_id(&name));
+                n += 1;
+            }
+            used_ids.push(id.clone());
+
+            // Media out of the pak: webms come out raw, vtex decodes to png.
+            let internal = src_to_internal(&src);
+            let source_media = if kind == "image" {
+                let png = dest_dir.join(format!("{id}.png"));
+                let raw = tmp.join(format!("{id}.vtex_c"));
+                crate::vpk::extract(helper, vpk, &internal, &raw.to_string_lossy())
+                    .and_then(|_| crate::vpk::texture_file(helper, &raw.to_string_lossy(), &png.to_string_lossy()))
+                    .map(|_| png)
+            } else {
+                let webm = dest_dir.join(format!("{id}.webm"));
+                crate::vpk::extract(helper, vpk, &internal, &webm.to_string_lossy()).map(|_| webm)
+            };
+            let source_media = match source_media {
+                Ok(p) => p.to_string_lossy().into_owned(),
+                Err(e) => {
+                    warnings.push(format!("{name}: media {internal} not recovered ({e})"));
+                    continue;
+                }
+            };
+
+            // Sound: event name -> vsnd path -> decode to playable audio.
+            let mut volume = 3.0;
+            let source_audio = str_after(obj, "sound").and_then(|event| {
+                let (vol, vsnd) = event_info(&kv3, &event)?;
+                volume = vol;
+                let base = dest_dir.join(format!("{id}_sound"));
+                match crate::vpk::decode(helper, vpk, &format!("{vsnd}_c"), &base.to_string_lossy()) {
+                    Ok(written) => written.lines().last().map(|l| l.trim().to_string()),
+                    Err(e) => {
+                        warnings.push(format!("{name}: sound {vsnd} not recovered ({e})"));
+                        None
+                    }
+                }
+            });
+
+            out.push(ImportedEntry {
+                id,
+                name,
+                kind: kind.into(),
+                source_media,
+                show: num_after(obj, "show").unwrap_or(1.0).max(0.1),
+                preset: match str_after(obj, "preset").as_deref() {
+                    Some("banner") => "banner".into(),
+                    _ => "fullscreen".into(),
+                },
+                source_audio,
+                volume,
+            });
+        }
+        out
+    };
+
+    let scares = parse_list("SCARES");
+    let deaths = parse_list("DEATHS");
+    let _ = std::fs::remove_dir_all(&tmp);
+    if scares.is_empty() && deaths.is_empty() {
+        return Err("no media entries found in this pak's DigiMaster library".into());
+    }
+    Ok(DigimodImport {
+        rng_interval: num_after(&js, "RNG_INTERVAL").unwrap_or(60.0) as u32,
+        scare_chance: num_after(&js, "SCARE_CHANCE").unwrap_or(3.0) as u32,
+        death_chance: num_after(&js, "DEATH_CHANCE").unwrap_or(100.0) as u32,
+        scares,
+        deaths,
+        warnings,
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::inject_hooks;
+    use super::{array_after, event_info, inject_hooks, num_after, objects_in, src_to_internal, str_after};
+
+    // Exact shape of the user's real pak03 JS (and of gen_js output).
+    const JS: &str = r#"var CONFIG = {
+    IS_ENABLED: true,
+    RNG_INTERVAL: 60,
+    SCARE_CHANCE: 3,
+    DEATH_CHANCE: 100,
+};
+var LIBRARY = {
+    SCARES: [
+        { name: "scare_1",  type: "video", src: "s2r://panorama/videos/scare_1.webm",  show: 0.8, sound: "Digi.Scare1", preset: "fullscreen" },
+        { name: "scare_img", type: "image", src: "s2r://panorama/images/digi/scare_1.vtex", show: 0.3, sound: null, preset: "fullscreen" },
+    ],
+    DEATHS: [
+        { name: "death_1",   type: "video", src: "s2r://panorama/videos/death_screen.webm",   show: 5.5, sound: "Digi.Death",    preset: "banner" },
+    ],
+};"#;
+
+    #[test]
+    fn config_numbers_parse() {
+        assert_eq!(num_after(JS, "RNG_INTERVAL"), Some(60.0));
+        assert_eq!(num_after(JS, "SCARE_CHANCE"), Some(3.0));
+        assert_eq!(num_after(JS, "DEATH_CHANCE"), Some(100.0));
+    }
+
+    #[test]
+    fn library_arrays_and_fields_parse() {
+        let scares = objects_in(array_after(JS, "SCARES").unwrap());
+        assert_eq!(scares.len(), 2);
+        assert_eq!(str_after(scares[0], "name").as_deref(), Some("scare_1"));
+        assert_eq!(str_after(scares[0], "sound").as_deref(), Some("Digi.Scare1"));
+        assert_eq!(num_after(scares[0], "show"), Some(0.8));
+        assert_eq!(str_after(scares[1], "sound"), None); // null sound
+        assert_eq!(str_after(scares[1], "type").as_deref(), Some("image"));
+        let deaths = objects_in(array_after(JS, "DEATHS").unwrap());
+        assert_eq!(deaths.len(), 1);
+        assert_eq!(str_after(deaths[0], "preset").as_deref(), Some("banner"));
+    }
+
+    #[test]
+    fn src_paths_map_to_vpk_internals() {
+        assert_eq!(src_to_internal("s2r://panorama/videos/scare_1.webm"), "panorama/videos/scare_1.webm");
+        assert_eq!(src_to_internal("s2r://panorama/images/digi/fuck.vtex"), "panorama/images/digi/fuck.vtex_c");
+        assert_eq!(src_to_internal("file://{resources}/videos/v.webm"), "panorama/videos/v.webm");
+    }
+
+    /// Real import against the user's installed v2 pak (needs the helper +
+    /// the pak on disk): cargo test -p app --lib -- --ignored e2e_import_digimod --nocapture
+    #[test]
+    #[ignore]
+    fn e2e_import_digimod_from_real_pak() {
+        let helper = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tools/vpk-helper/dist/vpk-helper.exe");
+        let pak = r"D:\SteamLibrary\steamapps\common\Deadlock\game\citadel\addons\pak03_dir.vpk";
+        if !std::path::Path::new(helper).exists() || !std::path::Path::new(pak).exists() {
+            eprintln!("skipping: helper or pak missing");
+            return;
+        }
+        let dest = std::env::temp_dir().join("eim_digimod_import_test");
+        let _ = std::fs::remove_dir_all(&dest);
+        let imp = super::import_from_vpk(helper, pak, &dest).expect("import failed");
+        eprintln!(
+            "interval={} scare%={} death%={} | {} scares, {} deaths, {} warnings",
+            imp.rng_interval, imp.scare_chance, imp.death_chance,
+            imp.scares.len(), imp.deaths.len(), imp.warnings.len()
+        );
+        for w in &imp.warnings {
+            eprintln!("  warn: {w}");
+        }
+        for e in imp.scares.iter().chain(imp.deaths.iter()) {
+            let media_ok = std::path::Path::new(&e.source_media).exists();
+            let audio_ok = e.source_audio.as_deref().map(|p| std::path::Path::new(p).exists());
+            eprintln!(
+                "  {} [{}] show={} preset={} vol={} media_ok={media_ok} audio={audio_ok:?}",
+                e.id, e.kind, e.show, e.preset, e.volume
+            );
+            assert!(media_ok, "media missing for {}", e.id);
+        }
+        assert!(!imp.scares.is_empty() && !imp.deaths.is_empty());
+    }
+
+    #[test]
+    fn event_info_reads_volume_and_first_vsnd() {
+        let kv3 = "{\n\tDigi.Scare1 = \n\t{\n\t\tbase = \"Base.UI\"\n\t\tvolume = 5.0\n\t\tvsnd_files = \"sounds/scare_1.vsnd\"\n\t}\n\tDigi.Scare3 = \n\t{\n\t\tvolume = 2.5\n\t\tvsnd_files = \n\t\t[\n\t\t\t\"sounds/scare_3.vsnd\",\n\t\t\t\"sounds/scare_5.vsnd\",\n\t\t]\n\t}\n}";
+        assert_eq!(event_info(kv3, "Digi.Scare1"), Some((5.0, "sounds/scare_1.vsnd".into())));
+        assert_eq!(event_info(kv3, "Digi.Scare3"), Some((2.5, "sounds/scare_3.vsnd".into())));
+        assert_eq!(event_info(kv3, "Digi.Nope"), None);
+    }
+
 
     // Shape of a VRF-recovered foreign hud mod's base_hud (a vanilla copy
     // plus that mod's own include + panel).

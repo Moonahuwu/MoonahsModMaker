@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { decompileVpkAll } from "../lib/api";
+import { decompileVpkAll, listUiMods, type UiModVpk } from "../lib/api";
 import type { Settings } from "../lib/settings";
+import type { DigimodConfig } from "../types";
 import { useToast } from "./Toaster";
 
 function baseName(p: string): string {
@@ -19,16 +20,56 @@ export function ImportedMods({
   settings,
   update,
   onImportPack,
+  digimod,
+  onDigimodChange,
 }: {
   settings: Settings;
   update: (patch: Partial<Settings>) => void;
   /** Scan a pack and open the import review for it. */
   onImportPack: (vpk: string) => void;
+  /** Jumpscares config — UI-mod merges live on it (they splice base_hud). */
+  digimod: DigimodConfig | null;
+  onDigimodChange: (next: DigimodConfig) => void;
 }) {
   const [draft, setDraft] = useState("");
   const [decompiling, setDecompiling] = useState(false);
   const { push } = useToast();
   const mods = settings.importedMods;
+
+  // HUD (base_hud-overriding) mods can't be bundled like regular packs — two
+  // base_huds can't coexist, so they get spliced instead (Jumpscares engine).
+  const [uiMods, setUiMods] = useState<UiModVpk[]>([]);
+  useEffect(() => {
+    if (!settings.addonsDir) return;
+    listUiMods(settings.addonsDir)
+      .then(setUiMods)
+      .catch(() => {});
+  }, [settings.addonsDir]);
+  const mergeVpks = digimod?.mergeVpks ?? [];
+  const toggleMerge = (path: string) => {
+    const base = digimod ?? {
+      rngInterval: 60,
+      scareChance: 3,
+      deathChance: 100,
+      scares: [],
+      deaths: [],
+    };
+    onDigimodChange({
+      ...base,
+      mergeVpks: mergeVpks.includes(path)
+        ? mergeVpks.filter((p) => p !== path)
+        : [...mergeVpks, path],
+    });
+  };
+  async function browseMergeVpk() {
+    const sel = await open({
+      multiple: false,
+      title: "Merge which UI mod (.vpk)?",
+      filters: [{ name: "VPK", extensions: ["vpk"] }],
+    });
+    if (typeof sel === "string" && !mergeVpks.includes(sel)) toggleMerge(sel);
+  }
+  const externalMerges = mergeVpks.filter((p) => !uiMods.some((m) => m.path === p));
 
   /** Utility: dump a whole vpk as decompiled sources (structure preserved). */
   async function decompileVpk() {
@@ -154,6 +195,82 @@ export function ImportedMods({
               </motion.div>
             ))}
           </AnimatePresence>
+        </div>
+      </div>
+
+      <div className="mt-5 border-t border-zinc-800 pt-4">
+        <div className="flex items-center gap-3">
+          <h3 className="text-sm font-semibold text-zinc-200">
+            Merge UI mods{mergeVpks.length > 0 ? ` (${mergeVpks.length})` : ""}
+          </h3>
+          <button
+            onClick={() => void browseMergeVpk()}
+            className="ml-auto rounded-md border border-zinc-700 px-3 py-1 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-white"
+          >
+            Browse for a vpk…
+          </button>
+        </div>
+        <p className="mt-1 text-xs text-zinc-500">
+          HUD mods (anything overriding the in-game HUD layout) can't be bundled like the
+          packs above — two HUDs can't coexist. Merging splices them together instead:
+          their HUD edits + your Jumpscares/Deaths ship as one. Installed HUD mods show up
+          here automatically.
+        </p>
+        <div className="mt-3 flex flex-col gap-1.5">
+          {uiMods.length === 0 && externalMerges.length === 0 && (
+            <span className="text-xs text-zinc-600">No HUD mods found in your addons.</span>
+          )}
+          {uiMods.map((m) =>
+            m.hasDigi ? (
+              <div
+                key={m.path}
+                className="flex items-center gap-2 rounded-md border border-zinc-800/60 px-3 py-1.5 text-xs text-zinc-600"
+                title={m.path}
+              >
+                <span className="truncate">{m.fileName}</span>
+                <span className="ml-auto shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-[10px]">
+                  DigiMaster pak — import it in the Jumpscares tab instead
+                </span>
+              </div>
+            ) : (
+              <label
+                key={m.path}
+                className="flex cursor-pointer items-center gap-2 rounded-md border border-zinc-700 bg-zinc-800/40 px-3 py-1.5 text-xs text-zinc-300 hover:border-zinc-500"
+                title={m.path}
+              >
+                <input
+                  type="checkbox"
+                  checked={mergeVpks.includes(m.path)}
+                  onChange={() => toggleMerge(m.path)}
+                  className="accent-emerald-500"
+                />
+                <span className="truncate">{m.fileName}</span>
+                {mergeVpks.includes(m.path) && (
+                  <span className="ml-auto shrink-0 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] text-emerald-300">
+                    merges on compile — disable the original pak after installing
+                  </span>
+                )}
+              </label>
+            ),
+          )}
+          {externalMerges.map((p) => (
+            <label
+              key={p}
+              className="flex cursor-pointer items-center gap-2 rounded-md border border-zinc-700 bg-zinc-800/40 px-3 py-1.5 text-xs text-zinc-300 hover:border-zinc-500"
+              title={p}
+            >
+              <input
+                type="checkbox"
+                checked
+                onChange={() => toggleMerge(p)}
+                className="accent-emerald-500"
+              />
+              <span className="truncate">{baseName(p)}</span>
+              <span className="ml-auto shrink-0 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] text-emerald-300">
+                merges on compile
+              </span>
+            </label>
+          ))}
         </div>
       </div>
 

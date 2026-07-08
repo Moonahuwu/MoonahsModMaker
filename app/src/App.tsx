@@ -3313,6 +3313,10 @@ export default function App() {
             settings={settings}
             update={updateSettings}
             onImportPack={startPackImport}
+            digimod={project?.digimod ?? null}
+            onDigimodChange={(next) =>
+              setProject((prev) => (prev ? { ...prev, digimod: next } : prev))
+            }
           />
         ) : activeTab === ITEMS ? (
           <ItemsTab
@@ -3426,8 +3430,8 @@ export default function App() {
         ) : activeTab === JUMPSCARES ? (
           <DigimodTab
             config={project?.digimod ?? DEFAULT_DIGIMOD}
-            accent="#ef4444"
             addonsDir={settings.addonsDir}
+            helperPath={settings.vpkHelperPath}
             onChange={(next) => setProject((prev) => (prev ? { ...prev, digimod: next } : prev))}
           />
         ) : activeTab === POSTERS ? (

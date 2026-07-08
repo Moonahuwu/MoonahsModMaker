@@ -123,6 +123,7 @@ pub fn run() {
             commands::running_processes,
             commands::digimod_detected,
             commands::list_ui_mods,
+            commands::import_digimod,
             commands::check_app_update,
             commands::open_in_viewer,
             commands::item_particles,

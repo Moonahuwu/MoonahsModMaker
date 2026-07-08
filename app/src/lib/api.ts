@@ -157,6 +157,33 @@ export function listUiMods(addonsDir: string): Promise<UiModVpk[]> {
   return invoke("list_ui_mods", { addonsDir });
 }
 
+/** An existing DigiMaster pak parsed back into an editable config: media is
+ *  extracted to real files in app-data, sounds decoded to playable audio. */
+export interface DigimodImport {
+  rngInterval: number;
+  scareChance: number;
+  deathChance: number;
+  scares: DigiEntryImported[];
+  deaths: DigiEntryImported[];
+  warnings: string[];
+}
+
+export interface DigiEntryImported {
+  id: string;
+  name: string;
+  kind: string;
+  sourceMedia: string;
+  show: number;
+  preset: string;
+  sourceAudio?: string | null;
+  volume: number;
+}
+
+/** Adopt an installed DigiMaster pak into the Jumpscares tab. */
+export function importDigimod(helperPath: string, vpk: string): Promise<DigimodImport> {
+  return invoke("import_digimod", { helperPath, vpk });
+}
+
 export interface PosterCompile {
   sheetId: string;
   materials: string[];
