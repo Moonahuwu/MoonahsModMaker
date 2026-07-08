@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { clearPushedUi, listUiFiles, pushUiFiles, readUiFile } from "../lib/api";
 import { buildCompileConfig, type Settings } from "../lib/settings";
 import { launchGame } from "../lib/api";
+import { layoutStyleIncludes } from "../lib/panorama";
+import { PanoramaPreview } from "./PanoramaPreview";
 import { useToast } from "./Toaster";
 import type { UiFileOverride } from "../types";
 
@@ -88,6 +90,78 @@ export function UiMasterTab({
   const [showVanilla, setShowVanilla] = useState(false);
   const [loading, setLoading] = useState(false);
   const loadSeq = useRef(0);
+
+  // Live preview: an approximate HTML render of the layout + its styles,
+  // re-fed (debounced) as you type. Styles preview against the layout with
+  // the same file stem (hud_paused.vcss_c ↔ hud_paused.vxml_c).
+  const [view, setView] = useState<"code" | "split" | "preview">("code");
+  const [debouncedText, setDebouncedText] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedText(text), 400);
+    return () => clearTimeout(t);
+  }, [text]);
+  const [preview, setPreview] = useState<{ xml: string; css: string[] } | null>(null);
+  const [previewNote, setPreviewNote] = useState<string | null>(null);
+  useEffect(() => {
+    if (!openRel || view === "code" || loading) return;
+    let live = true;
+    (async () => {
+      try {
+        const isXml = openRel.endsWith(".vxml_c");
+        let layoutXml = debouncedText;
+        if (!isXml) {
+          const stem = fileName(openRel).replace(/\.vcss_c$/, "");
+          const match = files.find((f) => f.endsWith(`/${stem}.vxml_c`) || fileName(f) === `${stem}.vxml_c`);
+          if (!match) {
+            if (live) {
+              setPreview(null);
+              setPreviewNote(
+                `No layout named ${stem}.vxml_c found to preview this style against — open a layout (.vxml_c) for a live preview.`,
+              );
+            }
+            return;
+          }
+          layoutXml =
+            overrides.find((o) => o.targetRel === match)?.text ??
+            (await cachedVanilla(helperPath, pakPath, match));
+        }
+        const rels = layoutStyleIncludes(layoutXml);
+        const css: string[] = [];
+        for (const rel of rels) {
+          if (!isXml && rel === openRel) {
+            css.push(debouncedText);
+            continue;
+          }
+          const ov = overrides.find((o) => o.targetRel === rel);
+          if (ov) {
+            css.push(ov.text);
+            continue;
+          }
+          if (files.includes(rel)) {
+            try {
+              css.push(await cachedVanilla(helperPath, pakPath, rel));
+            } catch {
+              /* skip unreadable includes */
+            }
+          }
+        }
+        // Editing a style the layout doesn't include (yet)? Apply it anyway.
+        if (!isXml && !rels.includes(openRel)) css.push(debouncedText);
+        if (live) {
+          setPreview({ xml: layoutXml, css });
+          setPreviewNote(null);
+        }
+      } catch (e) {
+        if (live) {
+          setPreview(null);
+          setPreviewNote(String(e));
+        }
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [openRel, debouncedText, view, files, overrides, helperPath, pakPath, loading]);
 
   useEffect(() => {
     if (!helperPath || !pakPath) return;
@@ -298,6 +372,21 @@ export function UiMasterTab({
                 </span>
               )}
               <div className="ml-auto flex shrink-0 items-center gap-2">
+                <span className="flex overflow-hidden rounded-lg border border-zinc-700">
+                  {(["code", "split", "preview"] as const).map((v) => (
+                    <button
+                      key={v}
+                      onClick={() => setView(v)}
+                      className={`px-2.5 py-1 text-xs capitalize ${
+                        view === v
+                          ? "bg-amber-500/20 font-semibold text-amber-200"
+                          : "text-zinc-400 hover:text-zinc-200"
+                      }`}
+                    >
+                      {v}
+                    </button>
+                  ))}
+                </span>
                 <button
                   onClick={() => setShowVanilla((v) => !v)}
                   className={`rounded-lg border px-2.5 py-1 text-xs ${
@@ -325,14 +414,16 @@ export function UiMasterTab({
               </div>
             </div>
             <div className="flex min-h-0 flex-1 gap-2">
-              <textarea
-                value={loading ? "decompiling…" : text}
-                onChange={(e) => setText(e.target.value)}
-                readOnly={loading}
-                spellCheck={false}
-                className="min-h-0 flex-1 resize-none rounded-xl border border-zinc-800 bg-zinc-950/80 p-3 font-mono text-[12px] leading-5 text-zinc-200 outline-none focus:border-amber-500/50"
-              />
-              {showVanilla && (
+              {view !== "preview" && (
+                <textarea
+                  value={loading ? "decompiling…" : text}
+                  onChange={(e) => setText(e.target.value)}
+                  readOnly={loading}
+                  spellCheck={false}
+                  className="min-h-0 flex-1 resize-none rounded-xl border border-zinc-800 bg-zinc-950/80 p-3 font-mono text-[12px] leading-5 text-zinc-200 outline-none focus:border-amber-500/50"
+                />
+              )}
+              {view === "code" && showVanilla && (
                 <textarea
                   value={vanilla ?? ""}
                   readOnly
@@ -340,6 +431,18 @@ export function UiMasterTab({
                   className="min-h-0 flex-1 resize-none rounded-xl border border-zinc-800 bg-zinc-900/60 p-3 font-mono text-[12px] leading-5 text-zinc-500 outline-none"
                 />
               )}
+              {view !== "code" &&
+                (previewNote ? (
+                  <div className="flex min-h-0 flex-1 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-900/40 p-6 text-center text-xs text-zinc-500">
+                    {previewNote}
+                  </div>
+                ) : preview ? (
+                  <PanoramaPreview xml={preview.xml} cssSources={preview.css} />
+                ) : (
+                  <div className="flex min-h-0 flex-1 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-900/40 text-xs text-zinc-600">
+                    building preview…
+                  </div>
+                ))}
             </div>
             <p className="text-[10px] text-zinc-600">
               Whole-file override: your version replaces the game's on compile. "Fix for
