@@ -84,6 +84,7 @@ import { useSettings, slotSoundFolder, sheetSiblingsKey, TOOLS_BUNDLE_URL } from
 import { songHash, overrideHash, effectHash, posterHash } from "./lib/songHash";
 import type { EffectOverride, EventProject, EventView, PosterOverride, Project, Song, SoundOverride } from "./types";
 import "./index.css";
+import "./App.css";
 
 const AUDIO_EXT = /\.(mp3|wav|flac|ogg|m4a|aac)$/i;
 const IMAGE_EXT = /\.(png|jpe?g|webp|bmp)$/i;
@@ -1090,6 +1091,11 @@ export default function App() {
   }
 
   useEffect(() => {
+    // Browser preview (no Tauri runtime): getCurrentWebview() throws and
+    // would unmount the whole app. Skipping native drag-drop lets the UI
+    // render at localhost:1420 in a plain browser for visual debugging —
+    // backend calls just no-op there.
+    if (!("__TAURI_INTERNALS__" in window)) return;
     const unlistenP = getCurrentWebview().onDragDropEvent((event) => {
       const p = event.payload;
       if (p.type === "enter" || p.type === "over") {
