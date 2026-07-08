@@ -100,20 +100,28 @@ export function HeroDetail({
           className="absolute inset-0 opacity-40"
           style={{ background: `linear-gradient(120deg, ${accent}55, ${accent2}22 55%, transparent 75%)` }}
         />
-        {/* The portrait itself, uncropped: full banner height on the right,
-            fading into the banner so it never looks cut off. */}
+        {/* The portrait, full banner height on the right with a hard slanted
+            cutoff (Deadlock's angular card language) instead of a soft fade. */}
         {backgroundSrc && (
-          <img
-            src={convertFileSrc(backgroundSrc)}
-            alt=""
+          <div
             aria-hidden
-            className="absolute bottom-0 right-0 h-full w-auto max-w-[45%] object-contain object-bottom"
-            style={{
-              maskImage: "linear-gradient(to left, black 60%, transparent 100%)",
-              WebkitMaskImage: "linear-gradient(to left, black 60%, transparent 100%)",
-              filter: `drop-shadow(0 0 18px ${accent}44)`,
-            }}
-          />
+            className="absolute inset-y-0 right-0 w-[42%]"
+            style={{ clipPath: "polygon(14% 0, 100% 0, 100% 100%, 0 100%)" }}
+          >
+            <img
+              src={convertFileSrc(backgroundSrc)}
+              alt=""
+              className="h-full w-full object-cover object-top"
+            />
+            {/* Accent-tinted slant edge: a skewed strip hugging the diagonal. */}
+            <div
+              className="absolute inset-y-0 left-0 w-[14%]"
+              style={{
+                background: `linear-gradient(to right, ${accent}66, transparent)`,
+                clipPath: "polygon(100% 0, 100% 4%, 4% 100%, 0 100%)",
+              }}
+            />
+          </div>
         )}
 
         <div className="relative flex flex-col gap-4 p-5">

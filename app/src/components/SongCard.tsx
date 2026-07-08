@@ -7,10 +7,17 @@ import type { Song } from "../types";
 import { Waveform } from "./Waveform";
 import { StockWaveform } from "./StockWaveform";
 
-const STATUS_BADGE: Record<string, { label: string; cls: string }> = {
+// Exception-based status: compiled is the normal state, so it gets only the
+// colored dot — badges are reserved for rows that still need a compile.
+const STATUS_BADGE: Record<string, { label: string; cls: string } | null> = {
   new: { label: "New", cls: "bg-emerald-500/10 text-emerald-300" },
-  compiled: { label: "Compiled", cls: "bg-sky-500/10 text-sky-300" },
+  compiled: null,
   stale: { label: "Out of date", cls: "bg-amber-500/10 text-amber-300" },
+};
+const STATUS_DOT: Record<string, string> = {
+  new: "bg-emerald-400",
+  compiled: "bg-sky-400/80",
+  stale: "bg-amber-400",
 };
 
 interface SongCardProps {
@@ -168,18 +175,18 @@ export function SongCard({
 
   const playIcon = state === "loading" ? "…" : state === "playing" ? "⏸" : state === "paused" ? "▶" : "▶";
 
-  // Compact one-liner shown in the collapsed row (length + gain/fades/loop).
+  // Compact one-liner for the collapsed row: just length + gain + loop —
+  // fades are editing detail, visible in the expanded view.
   const summary = [
     fmtTime(length),
-    `${song.gainDb > 0 ? "+" : ""}${song.gainDb}dB`,
-    song.fadeIn > 0 ? `in ${song.fadeIn.toFixed(1)}s` : null,
-    song.fadeOut > 0 ? `out ${song.fadeOut.toFixed(1)}s` : null,
+    song.gainDb !== 0 ? `${song.gainDb > 0 ? "+" : ""}${song.gainDb}dB` : null,
     song.looping ? "loop" : null,
   ]
     .filter(Boolean)
     .join(" · ");
 
-  const badge = STATUS_BADGE[songStatus(song)];
+  const status = songStatus(song);
+  const badge = STATUS_BADGE[status];
 
   return (
     <div className="group rounded-lg border border-zinc-700/60 bg-zinc-900/80 shadow-sm transition hover:border-zinc-600">
@@ -195,7 +202,10 @@ export function SongCard({
         >
           {expanded ? "▾" : "▸"}
         </button>
-        <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-400" />
+        <span
+          title={status === "compiled" ? "Compiled" : status === "stale" ? "Changed since last compile" : "Not compiled yet"}
+          className={`h-2 w-2 shrink-0 rounded-full ${STATUS_DOT[status]}`}
+        />
         <input
           value={song.label}
           onChange={(e) => onChange({ label: e.target.value })}
@@ -207,11 +217,13 @@ export function SongCard({
             {summary}
           </span>
         )}
-        <span
-          className={`shrink-0 rounded px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${badge.cls}`}
-        >
-          {badge.label}
-        </span>
+        {badge && (
+          <span
+            className={`shrink-0 rounded px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${badge.cls}`}
+          >
+            {badge.label}
+          </span>
+        )}
         <button
           onClick={playPause}
           disabled={state === "loading"}
