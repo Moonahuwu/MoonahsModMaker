@@ -193,24 +193,12 @@ button {
    low opacity so it reads as texture, never competes with content. */
 .eim-sigil {
   position: absolute;
-  left: 50%;
+  /* Right-of-center like the in-game loading screen (partially off the
+     right edge on wide windows). Transforms are driven from Backdrop.tsx. */
+  left: 78%;
   top: 50%;
-  width: 115vmin;
-  height: 115vmin;
+  width: 118vmin;
+  height: 118vmin;
   opacity: 0.17;
-}
-.eim-sigil-outer {
-  animation: eim-sigil-outer 360s linear infinite;
-}
-.eim-sigil-inner {
-  animation: eim-sigil-inner 480s linear infinite;
-}
-@keyframes eim-sigil-outer {
-  0%   { transform: translate(-50%, -50%) translateX(0) rotate(0deg); }
-  50%  { transform: translate(-50%, -50%) translateX(-5vmin) rotate(-180deg); }
-  100% { transform: translate(-50%, -50%) translateX(0) rotate(-360deg); }
-}
-@keyframes eim-sigil-inner {
-  0%   { transform: translate(-50%, -50%) rotate(0deg); }
-  100% { transform: translate(-50%, -50%) rotate(360deg); }
+  transform: translate(-50%, -50%);
 }
