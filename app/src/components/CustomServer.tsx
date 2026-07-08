@@ -177,7 +177,7 @@ export function CustomServer({
             ["global", "🌐 Global"],
             ["minions", "👹 Minions"],
             ["boxes", "📦 Boxes"],
-            ["powerups", "⚡ Powerups"],
+            ["powerups", "Powerups"],
           ] as const).map(([key, label]) => (
             <button
               key={key}

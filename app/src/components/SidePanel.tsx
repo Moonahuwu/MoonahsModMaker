@@ -1,7 +1,7 @@
 import { AnimatePresence, motion, Reorder, useDragControls } from "motion/react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { EventProject, EventView, Song } from "../types";
-import { copySound, useCopiedSound } from "../lib/soundClipboard";
+import { clearCopiedSound, copySound, useCopiedSound } from "../lib/soundClipboard";
 import { SongCard } from "./SongCard";
 
 /** One reorderable song row: drags only via the handle passed to its children. */
@@ -542,13 +542,20 @@ export function SidePanel({
           <span>Drop another .mp3 to add to {ev.side}</span>
         )}
         {copied && (
-          <div className="mt-1.5">
+          <div className="mt-1.5 inline-flex items-center overflow-hidden rounded-lg border border-emerald-500/40">
             <button
               onClick={() => onPasteSong(ev.id)}
               title={copied.sourceMp3}
-              className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-semibold text-emerald-300 transition hover:bg-emerald-500/20"
+              className="bg-emerald-500/10 px-2.5 py-1 text-[11px] font-semibold text-emerald-300 transition hover:bg-emerald-500/20"
             >
-              📋 Paste "{copied.label}"
+              Paste "{copied.label}"
+            </button>
+            <button
+              onClick={clearCopiedSound}
+              title="Clear the copied track (hides this everywhere)"
+              className="border-l border-emerald-500/40 bg-emerald-500/5 px-1.5 py-1 text-[11px] text-emerald-400/70 transition hover:bg-red-500/15 hover:text-red-300"
+            >
+              ✕
             </button>
           </div>
         )}

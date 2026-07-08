@@ -25,6 +25,12 @@ export function copySound(c: CopiedSound) {
   subs.forEach((f) => f());
 }
 
+/** Clear the clipboard (hides every paste chip). */
+export function clearCopiedSound() {
+  current = null;
+  subs.forEach((f) => f());
+}
+
 export function getCopiedSound(): CopiedSound | null {
   return current;
 }

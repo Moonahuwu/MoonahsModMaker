@@ -237,7 +237,7 @@ export function UiMasterTab({
           top-priority loose search path — outranks addons AND pak01). */}
       <div className="flex flex-wrap items-center gap-3 rounded-xl border border-amber-500/25 bg-amber-500/5 px-4 py-2.5">
         <div className="min-w-[16rem] flex-1">
-          <span className="text-sm font-semibold text-amber-200">⚡ Test in game</span>
+          <span className="text-sm font-semibold text-amber-200">Test in game</span>
           <p className="text-[11px] leading-4 text-zinc-500">
             Pushes your edits loose into <span className="font-mono">citadel/eim_dev/</span>{" "}
             (mounted top-priority in gameinfo) — no vpk, no install. Restart the game (or
@@ -272,7 +272,7 @@ export function UiMasterTab({
           title="Remove everything pushed to grimoire (game back to stock)"
           className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-400 hover:border-red-400/60 hover:text-red-300"
         >
-          🧹 Remove pushed
+          Remove pushed
         </button>
       </div>
 
@@ -347,7 +347,6 @@ export function UiMasterTab({
         {openRel === null ? (
           <div className="flex flex-1 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-900/40">
             <div className="max-w-md p-6 text-center text-sm text-zinc-500">
-              <p className="mb-2 text-2xl">🎛</p>
               <p>
                 Pick a layout (<span className="font-mono text-xs">.vxml_c</span>) or style
                 (<span className="font-mono text-xs">.vcss_c</span>) on the left — it

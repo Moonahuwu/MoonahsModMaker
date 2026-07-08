@@ -103,8 +103,8 @@ function VideoPreview({ path, ffmpegPath }: { path: string; ffmpegPath?: string 
       {thumb === "pending" ? (
         <div className="h-full w-full animate-pulse bg-zinc-900" />
       ) : thumb === null ? (
-        <div className="flex h-full w-full items-center justify-center bg-zinc-900 text-2xl">
-          🎬
+        <div className="flex h-full w-full items-center justify-center bg-zinc-900 text-[11px] text-zinc-600">
+          no preview
         </div>
       ) : (
         <img src={thumb} className="h-full w-full object-cover" alt="" />
@@ -519,7 +519,7 @@ export function DigimodTab({
                   </span>
                 </div>
                 <label className="flex items-center gap-1.5 text-[11px] text-zinc-500">
-                  🔊
+                  <span className="shrink-0">Sound</span>
                   <select
                     value={e.soundId ?? ""}
                     onChange={(ev) => {
@@ -735,7 +735,7 @@ export function DigimodTab({
                           : "text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
                       }`}
                     >
-                      ✂
+                      Clip
                     </button>
                     <button
                       onClick={() => removeSound(s.id)}
