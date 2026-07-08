@@ -198,6 +198,39 @@ fn ensure_addons_searchpath(addons_dir: &Path) -> Result<(bool, String), String>
     Ok((true, "added citadel/addons search path".into()))
 }
 
+/// Ensure `gameinfo.gi` (inside `citadel_dir`) mounts `citadel/<rel>` as a
+/// loose search path, inserted right after the SearchPaths `{` — i.e. TOP
+/// priority, above addons and the paks. Idempotent, backs gameinfo up first.
+/// Used by the UI Master dev push (`citadel/eim_dev`) — deliberately OUR own
+/// dir: other launchers (e.g. GRIMOIRE) inject their own the same way, and
+/// we stay out of theirs.
+pub(crate) fn ensure_citadel_searchpath(citadel_dir: &Path, rel: &str) -> Result<bool, String> {
+    let gameinfo = citadel_dir.join("gameinfo.gi");
+    let text = std::fs::read_to_string(&gameinfo)
+        .map_err(|e| format!("reading {}: {e}", gameinfo.display()))?;
+    let needle = format!("citadel/{rel}");
+    if text.to_lowercase().contains(&needle.to_lowercase()) {
+        return Ok(false);
+    }
+    let lower = text.to_lowercase();
+    let sp = lower.find("searchpaths").ok_or("no SearchPaths block in gameinfo.gi")?;
+    let brace = text[sp..]
+        .find('{')
+        .map(|i| sp + i)
+        .ok_or("malformed SearchPaths block (no '{')")?;
+    let insert_at = brace + 1;
+    let mut patched = String::with_capacity(text.len() + 48);
+    patched.push_str(&text[..insert_at]);
+    patched.push_str(&format!("\n\t\t\tGame\t\t\t\t{needle}"));
+    patched.push_str(&text[insert_at..]);
+    let bak = gameinfo.with_extension("gi.eim.bak");
+    if !bak.exists() {
+        std::fs::copy(&gameinfo, &bak).map_err(|e| format!("backing up gameinfo.gi: {e}"))?;
+    }
+    std::fs::write(&gameinfo, patched).map_err(|e| format!("writing gameinfo.gi: {e}"))?;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -165,9 +165,9 @@ export function UiMasterTab({
         <div className="min-w-[16rem] flex-1">
           <span className="text-sm font-semibold text-amber-200">⚡ Test in game</span>
           <p className="text-[11px] leading-4 text-zinc-500">
-            Pushes your edits loose into <span className="font-mono">citadel/grimoire/</span> —
-            no vpk, no install. Restart the game (or rejoin the map) to see them; sandbox
-            is the fastest way to check HUD changes.
+            Pushes your edits loose into <span className="font-mono">citadel/eim_dev/</span>{" "}
+            (mounted top-priority in gameinfo) — no vpk, no install. Restart the game (or
+            rejoin the map) to see them; sandbox is the fastest way to check HUD changes.
           </p>
         </div>
         {pushedN !== null && (

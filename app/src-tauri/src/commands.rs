@@ -4835,11 +4835,12 @@ pub async fn read_ui_file(
 }
 
 /// UI Master phase-2 spike: compile the current UI edits and copy them LOOSE
-/// into `game/citadel/grimoire/` — the TOP-priority search path in
-/// gameinfo.gi (above addons and pak01), so a running/next-boot game reads
-/// our files instead of the pak's. No vpk build, no install: the fastest
-/// possible iteration loop. A manifest records every pushed file so
-/// `clear_pushed_ui` can cleanly undo the whole experiment.
+/// into our own `game/citadel/eim_dev/` dir, mounted as a TOP-priority
+/// search path in gameinfo.gi (above addons and pak01) — so a running/
+/// next-boot game reads our files instead of the pak's. No vpk build, no
+/// install: the fastest possible iteration loop. A manifest records every
+/// pushed file so `clear_pushed_ui` can cleanly undo the whole experiment.
+/// (Same search-path trick other launchers use — but in OUR dir, not theirs.)
 #[tauri::command]
 pub async fn push_ui_files(
     config: CompileConfig,
@@ -4867,8 +4868,10 @@ pub async fn push_ui_files(
                 .join(" | ");
             return Err(why);
         }
-        let grimoire = std::path::Path::new(&citadel_dir).join("grimoire");
-        let manifest_path = grimoire.join(".eim_pushed.json");
+        let citadel = std::path::Path::new(&citadel_dir);
+        crate::install::ensure_citadel_searchpath(citadel, "eim_dev")?;
+        let dev_dir = citadel.join("eim_dev");
+        let manifest_path = dev_dir.join(".eim_pushed.json");
         // Union with anything pushed earlier so removal cleans everything.
         let mut pushed: Vec<String> = std::fs::read_to_string(&manifest_path)
             .ok()
@@ -4876,7 +4879,7 @@ pub async fn push_ui_files(
             .unwrap_or_default();
         for rel in &rels {
             let src = std::path::Path::new(&config.compiled_root).join(rel);
-            let dest = grimoire.join(rel);
+            let dest = dev_dir.join(rel);
             if let Some(parent) = dest.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
             }
@@ -4893,27 +4896,28 @@ pub async fn push_ui_files(
     .map_err(|e| e.to_string())?
 }
 
-/// Remove every UI file `push_ui_files` placed in grimoire (manifest-driven;
-/// nothing else in there is touched). Returns how many files were removed.
+/// Remove every UI file `push_ui_files` placed in eim_dev (manifest-driven;
+/// nothing else in there is touched). The search-path entry stays — an empty
+/// dir is inert. Returns how many files were removed.
 #[tauri::command]
 pub async fn clear_pushed_ui(citadel_dir: String) -> Result<u32, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let grimoire = std::path::Path::new(&citadel_dir).join("grimoire");
-        let manifest_path = grimoire.join(".eim_pushed.json");
+        let dev_dir = std::path::Path::new(&citadel_dir).join("eim_dev");
+        let manifest_path = dev_dir.join(".eim_pushed.json");
         let pushed: Vec<String> = std::fs::read_to_string(&manifest_path)
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())
             .unwrap_or_default();
         let mut removed = 0u32;
         for rel in &pushed {
-            let p = grimoire.join(rel);
+            let p = dev_dir.join(rel);
             if std::fs::remove_file(&p).is_ok() {
                 removed += 1;
             }
-            // Prune now-empty dirs up to grimoire itself (best-effort).
+            // Prune now-empty dirs up to eim_dev itself (best-effort).
             let mut dir = p.parent().map(|d| d.to_path_buf());
             while let Some(d) = dir {
-                if d == grimoire || std::fs::remove_dir(&d).is_err() {
+                if d == dev_dir || std::fs::remove_dir(&d).is_err() {
                     break;
                 }
                 dir = d.parent().map(|x| x.to_path_buf());
