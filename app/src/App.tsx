@@ -604,6 +604,25 @@ export default function App() {
     });
     if (typeof picked !== "string") return;
     const id = `heroimg_${selectedHero}_${img.kind}`;
+    // Slots without known dimensions (name logo, ability icons) take the
+    // user art's own size so nothing gets squashed to a square.
+    let w = img.width;
+    let h = img.height;
+    if (!w || !h) {
+      try {
+        const dims = await new Promise<{ w: number; h: number }>((resolve, reject) => {
+          const el = new Image();
+          el.onload = () => resolve({ w: el.naturalWidth, h: el.naturalHeight });
+          el.onerror = reject;
+          el.src = convertFileSrc(picked);
+        });
+        w = dims.w;
+        h = dims.h;
+      } catch {
+        w = w || 512;
+        h = h || 512;
+      }
+    }
     setProject((prev) =>
       prev
         ? {
@@ -615,8 +634,8 @@ export default function App() {
                 name: `${selectedHeroInfo?.displayName ?? selectedHero} — ${img.kind}`,
                 targetVtexc: img.target,
                 sourceImage: picked,
-                width: img.width || 512,
-                height: img.height || 512,
+                width: w || 512,
+                height: h || 512,
                 hue: 0,
                 enabled: true,
               },

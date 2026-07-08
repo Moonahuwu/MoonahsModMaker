@@ -604,6 +604,8 @@ export interface HeroAbility {
   slot: number;
   ability: string;
   iconPath: string | null;
+  /** Compiled .vtex_c the game references — IconMod target for a custom icon. */
+  iconTarget?: string | null;
   sounds: HeroAbilitySound[];
 }
 

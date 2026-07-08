@@ -2182,6 +2182,32 @@ fn icons_fingerprint(cfg: &CompileConfig) -> String {
 
 /// Returns the staging list + whether any real work happened (false = the
 /// stamp matched and everything was skipped).
+/// Minimal base64 (no dep): embeds a rendered PNG into an SVG wrapper for
+/// `.vsvg_c` targets (the hero name logos).
+fn b64(data: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = u32::from_be_bytes([0, b[0], b[1], b[2]]);
+        out.push(T[(n >> 18 & 63) as usize] as char);
+        out.push(T[(n >> 12 & 63) as usize] as char);
+        out.push(if chunk.len() > 1 { T[(n >> 6 & 63) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 2 { T[(n & 63) as usize] as char } else { '=' });
+    }
+    out
+}
+
+/// Compiled-output rel for icon slot `i`: svg targets compile `icon_i.svg` →
+/// `icon_i.vsvg_c`; raster targets ride the png list → `icon_i_png.vtex_c`.
+fn icon_out_rel(i: usize, target: &str) -> String {
+    if target.ends_with(".vsvg_c") {
+        format!("panorama/images/eim_icons/icon_{i}.vsvg_c")
+    } else {
+        format!("panorama/images/eim_icons/icon_{i}_png.vtex_c")
+    }
+}
+
 fn compile_icon_mods(
     cfg: &CompileConfig,
     content_root: &Path,
@@ -2206,10 +2232,9 @@ fn compile_icon_mods(
             .iter()
             .enumerate()
             .map(|(i, m)| {
-                (
-                    m.target_vtexc.trim_matches('/').to_string(),
-                    compiled_root.join(format!("panorama/images/eim_icons/icon_{i}_png.vtex_c")),
-                )
+                let rel = m.target_vtexc.trim_matches('/').to_string();
+                let out = compiled_root.join(icon_out_rel(i, &rel));
+                (rel, out)
             })
             .collect();
         if produced.iter().all(|(_, p)| p.exists()) {
@@ -2233,9 +2258,32 @@ fn compile_icon_mods(
             all_ok = false;
             continue;
         }
-        list.push_str(&format!("\t\tpanorama:\"file://{{images}}/eim_icons/icon_{i}.png\",\n"));
-        let out_c = compiled_root.join(format!("panorama/images/eim_icons/icon_{i}_png.vtex_c"));
-        produced.push((m.target_vtexc.trim_matches('/').to_string(), out_c));
+        let rel = m.target_vtexc.trim_matches('/').to_string();
+        if rel.ends_with(".vsvg_c") {
+            // SVG target (hero name logo): wrap the rendered PNG in an
+            // <image> svg — the image list compiles .svg straight to .vsvg_c.
+            let data = match std::fs::read(&png) {
+                Ok(d) => d,
+                Err(e) => {
+                    report.soft_fail(format!("read icon: {label}"), e.to_string());
+                    all_ok = false;
+                    continue;
+                }
+            };
+            let svg = format!(
+                "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"{w}\" height=\"{h}\" viewBox=\"0 0 {w} {h}\"><image width=\"{w}\" height=\"{h}\" xlink:href=\"data:image/png;base64,{}\"/></svg>",
+                b64(&data)
+            );
+            if let Err(e) = std::fs::write(icons_dir.join(format!("icon_{i}.svg")), svg) {
+                report.soft_fail(format!("write icon svg: {label}"), e.to_string());
+                all_ok = false;
+                continue;
+            }
+            list.push_str(&format!("\t\tpanorama:\"file://{{images}}/eim_icons/icon_{i}.svg\",\n"));
+        } else {
+            list.push_str(&format!("\t\tpanorama:\"file://{{images}}/eim_icons/icon_{i}.png\",\n"));
+        }
+        produced.push((rel.clone(), compiled_root.join(icon_out_rel(i, &rel))));
     }
     report.ok_step("scale icons", format!("{} icon(s)", produced.len()));
 

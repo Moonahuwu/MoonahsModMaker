@@ -12,7 +12,35 @@ const IMAGE_KIND_LABELS: Record<string, string> = {
   mm: "Minimap icon",
   background: "Menu background",
   logo: "Name logo",
+  ability1: "Ability 1 icon",
+  ability2: "Ability 2 icon",
+  ability3: "Ability 3 icon",
+  ability4: "Ability 4 icon",
 };
+
+/** Ability-icon art is an alpha shape (often black fill) — render it the way
+ *  the game does: as a mask washed with a solid color. */
+function WashedIcon({ src, className, color = "#e4e4e7" }: { src: string; className?: string; color?: string }) {
+  const mask = `url("${src}")`;
+  return (
+    <span
+      aria-hidden
+      className={className}
+      style={{
+        display: "inline-block",
+        backgroundColor: color,
+        WebkitMaskImage: mask,
+        maskImage: mask,
+        WebkitMaskSize: "contain",
+        maskSize: "contain",
+        WebkitMaskRepeat: "no-repeat",
+        maskRepeat: "no-repeat",
+        WebkitMaskPosition: "center",
+        maskPosition: "center",
+      }}
+    />
+  );
+}
 
 /**
  * Per-hero menu: a background banner (the hero's card art) with the hero name,
@@ -72,6 +100,21 @@ export function HeroDetail({
 }) {
   const active = abilities?.find((a) => a.ability === selectedAbility) ?? null;
   const contentOf = (name: string) => (hasContent ? hasContent(name) : false);
+  // The images grid also offers the 4 ability icons (same IconMod pipeline);
+  // width 0 = "use the pick handler's default size".
+  const allImages: HeroImage[] = [
+    ...(images ?? []),
+    ...(abilities ?? [])
+      .filter((a) => a.iconTarget && a.iconPath)
+      .map((a) => ({
+        kind: `ability${a.slot}`,
+        target: a.iconTarget!,
+        preview: a.iconPath!,
+        width: 0,
+        height: 0,
+        svg: false,
+      })),
+  ];
   const activeSounds = active
     ? modifiedOnly
       ? active.sounds.filter((s) => contentOf(s.eventName))
@@ -177,11 +220,7 @@ export function HeroDetail({
                     }`}
                   >
                     {a.iconPath ? (
-                      <img
-                        src={convertFileSrc(a.iconPath)}
-                        alt={a.ability}
-                        className="h-11 w-11 object-contain"
-                      />
+                      <WashedIcon src={convertFileSrc(a.iconPath)} className="h-11 w-11" />
                     ) : (
                       <span className="text-lg font-bold text-zinc-400">{a.slot}</span>
                     )}
@@ -200,8 +239,9 @@ export function HeroDetail({
       </div>
 
       {/* Replaceable hero images: portrait cards, icons, minimap, background,
-          logo. Each vtex slot works exactly like a custom item icon. */}
-      {images && images.length > 0 && (
+          logo, and the 4 ability icons. Each vtex slot works exactly like a
+          custom item icon. */}
+      {allImages.length > 0 && (
         <details className="mt-5 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
           <summary className="cursor-pointer text-sm font-semibold text-zinc-200">
             ▦ Hero images
@@ -215,7 +255,7 @@ export function HeroDetail({
             )}
           </summary>
           <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-            {images.map((img) => {
+            {allImages.map((img) => {
               const custom = customImages[img.kind];
               return (
                 <div
@@ -224,12 +264,19 @@ export function HeroDetail({
                   style={custom ? { borderColor: "#34d39966" } : undefined}
                 >
                   <div className="relative h-24 overflow-hidden rounded bg-zinc-900">
-                    <img
-                      src={convertFileSrc(img.preview)}
-                      className="absolute inset-0 h-full w-full object-contain p-1"
-                      style={custom?.enabled ? { opacity: 0.25 } : undefined}
-                      alt=""
-                    />
+                    {img.kind.startsWith("ability") ? (
+                      <WashedIcon
+                        src={convertFileSrc(img.preview)}
+                        className="absolute inset-1 h-[calc(100%-8px)] w-[calc(100%-8px)]"
+                      />
+                    ) : (
+                      <img
+                        src={convertFileSrc(img.preview)}
+                        className="absolute inset-0 h-full w-full object-contain p-1"
+                        style={custom?.enabled ? { opacity: 0.25 } : undefined}
+                        alt=""
+                      />
+                    )}
                     {custom?.enabled && (
                       <img
                         src={convertFileSrc(custom.src)}
@@ -247,14 +294,7 @@ export function HeroDetail({
                         </span>
                       )}
                     </span>
-                    {img.svg ? (
-                      <span
-                        className="shrink-0 text-[9px] text-zinc-600"
-                        title="The name logo is an SVG — replacement coming later"
-                      >
-                        svg
-                      </span>
-                    ) : custom ? (
+                    {custom ? (
                       <span className="flex shrink-0 gap-1">
                         <button
                           onClick={() => onPickImage(img)}

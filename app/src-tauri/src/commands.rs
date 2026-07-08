@@ -1401,6 +1401,10 @@ pub struct HeroAbility {
     pub ability: String,
     /// Decoded icon PNG path (frontend wraps with convertFileSrc).
     pub icon_path: Option<String>,
+    /// The compiled `.vtex_c` the game references — the override target for
+    /// a custom ability icon (IconMod), when known.
+    #[serde(default)]
+    pub icon_target: Option<String>,
     /// The distinct sound events this ability triggers.
     pub sounds: Vec<HeroAbilitySound>,
 }
@@ -2732,7 +2736,7 @@ pub fn hero_detail(
     // Serve the cached per-hero detail unless a refresh was requested. The `v6`
     // marker invalidates caches built before ability folding + own-file
     // ownership filtering.
-    let detail_cache = base.join(format!("detail_v6_{codename}.json"));
+    let detail_cache = base.join(format!("detail_v7_{codename}.json"));
     if !refresh.unwrap_or(false) {
         if let Ok(text) = std::fs::read_to_string(&detail_cache) {
             if let Ok(cached) = serde_json::from_str::<Vec<HeroAbility>>(&text) {
@@ -2798,7 +2802,7 @@ pub fn hero_detail(
         event: String,
         stem: String,
     }
-    let mut raw: Vec<(u32, String, Option<String>, Vec<RawSound>)> = Vec::new();
+    let mut raw: Vec<(u32, String, Option<String>, Option<String>, Vec<RawSound>)> = Vec::new();
     let mut stem_freq: std::collections::BTreeMap<String, usize> = Default::default();
     for (slot, ability) in bound {
         let def = ability_map.get(&ability);
@@ -2807,6 +2811,7 @@ pub fn hero_detail(
             .map(|i| icon_dir.join(format!("{}.png", stem_of(i))))
             .filter(|p| p.exists())
             .map(|p| p.to_string_lossy().into_owned());
+        let icon_target = def.and_then(|d| d.icon_internal.clone());
         let mut seen = std::collections::HashSet::new();
         let mut sounds = Vec::new();
         if let Some(d) = def {
@@ -2822,7 +2827,7 @@ pub fn hero_detail(
                 }
             }
         }
-        raw.push((slot, ability, icon_path, sounds));
+        raw.push((slot, ability, icon_path, icon_target, sounds));
     }
 
     // Ownership: the hero's own file(s) = the codename's file plus the stem
@@ -2839,7 +2844,7 @@ pub fn hero_detail(
     }
 
     let mut out = Vec::new();
-    for (slot, ability, icon_path, sounds) in raw {
+    for (slot, ability, icon_path, icon_target, sounds) in raw {
         let sounds = sounds
             .into_iter()
             .filter(|s| own_stems.contains(&s.stem))
@@ -2850,7 +2855,7 @@ pub fn hero_detail(
                 label: s.label,
             })
             .collect();
-        out.push(HeroAbility { slot, ability, icon_path, sounds });
+        out.push(HeroAbility { slot, ability, icon_path, icon_target, sounds });
     }
 
     // The vdata only references a handful of events per ability (cast, hit
