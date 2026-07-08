@@ -849,6 +849,12 @@ export default function App() {
   // Which parent categories are collapsed (default: all expanded).
   const [collapsedCats, setCollapsedCats] = useState<Set<string>>(new Set());
 
+  // Sidebar width: user-adjustable via the drag handle (persists locally).
+  const [sidebarW, setSidebarW] = useState<number>(() => {
+    const saved = Number(localStorage.getItem("eim:sidebarW"));
+    return Number.isFinite(saved) && saved >= 176 && saved <= 420 ? saved : 208;
+  });
+
   const hydrated = useRef(false);
 
   // Bootstrap profiles once settings (which hold the active-profile name) load.
@@ -3325,12 +3331,41 @@ export default function App() {
           animation when it lands. */}
       <Backdrop accent={accentFor({ group: activeTab, side: "" })} />
       {/* Left sidebar: brand + tabs — fixed, never scrolls. Opaque so the
-          backdrop animation only shows through the main content area. */}
+          backdrop animation only shows through the main content area.
+          Width is user-adjustable via the drag handle on its right edge. */}
       <aside
-        className={`relative flex h-screen w-52 shrink-0 flex-col gap-1 border-r border-zinc-800 bg-zinc-950 p-4${
+        style={{ width: sidebarW }}
+        className={`relative z-30 flex h-screen shrink-0 flex-col gap-1 border-r border-zinc-800 bg-zinc-950 p-4${
           booted ? "" : " eim-boot-aside"
         }`}
       >
+        {/* Resize handle: drag to adjust, double-click to reset. */}
+        <div
+          onMouseDown={(e) => {
+            e.preventDefault();
+            const startX = e.clientX;
+            const startW = sidebarW;
+            const move = (ev: MouseEvent) => {
+              setSidebarW(Math.min(420, Math.max(176, startW + ev.clientX - startX)));
+            };
+            const up = () => {
+              window.removeEventListener("mousemove", move);
+              window.removeEventListener("mouseup", up);
+              setSidebarW((w) => {
+                localStorage.setItem("eim:sidebarW", String(w));
+                return w;
+              });
+            };
+            window.addEventListener("mousemove", move);
+            window.addEventListener("mouseup", up);
+          }}
+          onDoubleClick={() => {
+            setSidebarW(208);
+            localStorage.setItem("eim:sidebarW", "208");
+          }}
+          title="Drag to resize the sidebar (double-click to reset)"
+          className="absolute -right-1 top-0 z-40 h-full w-2 cursor-col-resize transition-colors hover:bg-emerald-500/25 active:bg-emerald-500/40"
+        />
         <div className={`mb-2${bootCls}`} style={bootStyle(0)}>
           <h1 className="text-sm font-bold uppercase tracking-wider text-zinc-300">
             Moonah's
