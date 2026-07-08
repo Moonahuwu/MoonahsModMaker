@@ -3367,10 +3367,13 @@ export default function App() {
           className="absolute -right-1 top-0 z-40 h-full w-2 cursor-col-resize transition-colors hover:bg-emerald-500/25 active:bg-emerald-500/40"
         />
         <div className={`mb-2${bootCls}`} style={bootStyle(0)}>
-          <h1 className="text-sm font-bold uppercase tracking-wider text-zinc-300">
-            Moonah's
-          </h1>
-          <p className="text-[11px] text-zinc-600">Mod Maker</p>
+          <img
+            src="/MMMlogo.svg"
+            alt="Moonah's Mod Maker"
+            title="Moonah's Mod Maker"
+            className="h-16 w-auto max-w-full"
+            draggable={false}
+          />
         </div>
         {/* "Modified only": hide everything without your changes for quick nav. */}
         <button
