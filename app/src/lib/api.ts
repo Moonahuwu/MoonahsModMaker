@@ -917,11 +917,18 @@ export interface AppUpdate {
   current: string;
   latest: string;
   url: string;
+  /** Direct installer download when the release ships one (one-click path). */
+  setupAsset?: string | null;
 }
 
 /** Newer GitHub release, or null when up to date / offline. */
 export function checkAppUpdate(): Promise<AppUpdate | null> {
   return invoke("check_app_update");
+}
+
+/** One-click update: downloads the installer, launches it, exits the app. */
+export function installAppUpdate(setupUrl: string): Promise<void> {
+  return invoke("install_app_update", { setupUrl });
 }
 
 export interface HeroImage {

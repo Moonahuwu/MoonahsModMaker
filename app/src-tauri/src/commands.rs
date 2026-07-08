@@ -4953,40 +4953,91 @@ pub struct AppUpdate {
     pub current: String,
     pub latest: String,
     pub url: String,
+    /// Direct download URL of the release's NSIS installer asset, when one is
+    /// attached — enables one-click "Install now" (else fall back to `url`).
+    pub setup_asset: Option<String>,
 }
 
 /// Check GitHub for a newer release. Returns None when up to date (or the
-/// check fails — never nag on network errors).
+/// check fails — never nag on network errors). Async is load-bearing: the
+/// curl can block up to 10s and must never sit on the UI thread at launch.
 #[tauri::command]
-pub fn check_app_update() -> Option<AppUpdate> {
-    let current = env!("CARGO_PKG_VERSION").to_string();
-    let out = crate::procutil::quiet(r"C:\Windows\System32\curl.exe")
-        .args([
-            "-s",
-            "-m",
-            "10",
-            "-H",
-            "User-Agent: MoonahsModMaker",
-            "https://api.github.com/repos/Moonahuwu/MoonahsModMaker/releases/latest",
-        ])
-        .output()
-        .ok()?;
-    let body: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
-    let tag = body.get("tag_name")?.as_str()?;
-    let latest = tag.trim_start_matches('v').to_string();
-    // Tool releases (tools-v2 etc.) aren't app versions — require digits+dots.
-    if latest.is_empty() || !latest.chars().all(|c| c.is_ascii_digit() || c == '.') {
-        return None;
-    }
-    if latest == current {
-        return None;
-    }
-    let url = body
-        .get("html_url")
-        .and_then(|u| u.as_str())
-        .unwrap_or("https://github.com/Moonahuwu/MoonahsModMaker/releases")
-        .to_string();
-    Some(AppUpdate { current, latest, url })
+pub async fn check_app_update() -> Option<AppUpdate> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let current = env!("CARGO_PKG_VERSION").to_string();
+        let out = crate::procutil::quiet(r"C:\Windows\System32\curl.exe")
+            .args([
+                "-s",
+                "-m",
+                "10",
+                "-H",
+                "User-Agent: MoonahsModMaker",
+                "https://api.github.com/repos/Moonahuwu/MoonahsModMaker/releases/latest",
+            ])
+            .output()
+            .ok()?;
+        let body: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+        let tag = body.get("tag_name")?.as_str()?;
+        let latest = tag.trim_start_matches('v').to_string();
+        // Tool releases (tools-v2 etc.) aren't app versions — require digits+dots.
+        if latest.is_empty() || !latest.chars().all(|c| c.is_ascii_digit() || c == '.') {
+            return None;
+        }
+        if latest == current {
+            return None;
+        }
+        let url = body
+            .get("html_url")
+            .and_then(|u| u.as_str())
+            .unwrap_or("https://github.com/Moonahuwu/MoonahsModMaker/releases")
+            .to_string();
+        // Prefer the NSIS setup exe among the release assets (one-click path).
+        let setup_asset = body
+            .get("assets")
+            .and_then(|a| a.as_array())
+            .and_then(|assets| {
+                assets.iter().find_map(|a| {
+                    let name = a.get("name")?.as_str()?.to_lowercase();
+                    if name.ends_with(".exe") && name.contains("setup") {
+                        Some(a.get("browser_download_url")?.as_str()?.to_string())
+                    } else {
+                        None
+                    }
+                })
+            });
+        Some(AppUpdate { current, latest, url, setup_asset })
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// One-click update: download the release's installer to temp, launch it,
+/// and exit the app (NSIS can't replace a running exe). The installer takes
+/// it from there.
+#[tauri::command]
+pub async fn install_app_update(app: tauri::AppHandle, setup_url: String) -> Result<(), String> {
+    let dest = std::env::temp_dir().join("moonahs_mod_maker_update_setup.exe");
+    let dest2 = dest.clone();
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+        let out = crate::procutil::quiet(r"C:\Windows\System32\curl.exe")
+            .args(["-sL", "-m", "300", "-H", "User-Agent: MoonahsModMaker", "-o"])
+            .arg(&dest2)
+            .arg(&setup_url)
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !out.status.success() || dest2.metadata().map(|m| m.len() < 1_000_000).unwrap_or(true) {
+            return Err("download failed (or the file looks too small to be the installer)".into());
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    std::process::Command::new(&dest)
+        .spawn()
+        .map_err(|e| format!("launching installer: {e}"))?;
+    app.exit(0);
+    Ok(())
 }
 
 #[derive(serde::Serialize)]

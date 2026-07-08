@@ -34,6 +34,7 @@ import {
   heroImages,
   checkAppUpdate,
   digimodDetected,
+  installAppUpdate,
   type AppUpdate,
   type HeroImage,
   type ImportEvent,
@@ -3144,14 +3145,36 @@ export default function App() {
               .filter((e) => e.group === g)
               .reduce((n, e) => n + e.songs.length, 0);
 
-  // Quiet update check: one call on launch; a small chip appears when a newer
-  // release exists (never nags on network errors).
+  // Update check on launch: when a newer release exists, a prompt offers
+  // one-click install (download installer → run → app exits); the sidebar
+  // chip stays available if dismissed. Never nags on network errors.
   const [appUpdate, setAppUpdate] = useState<AppUpdate | null>(null);
+  const [updatePromptOpen, setUpdatePromptOpen] = useState(false);
+  const [updating, setUpdating] = useState(false);
   useEffect(() => {
     checkAppUpdate()
-      .then(setAppUpdate)
+      .then((u) => {
+        setAppUpdate(u);
+        if (u) setUpdatePromptOpen(true);
+      })
       .catch(() => {});
   }, []);
+  async function runAppUpdate() {
+    if (!appUpdate) return;
+    if (!appUpdate.setupAsset) {
+      void openUrl(appUpdate.url);
+      return;
+    }
+    setUpdating(true);
+    try {
+      // On success the app exits and the installer takes over.
+      await installAppUpdate(appUpdate.setupAsset);
+    } catch (e) {
+      push("error", `Update failed: ${e} — opening the release page instead`);
+      void openUrl(appUpdate.url);
+      setUpdating(false);
+    }
+  }
 
   // Boot animation: on a fresh launch the sidebar slides open and its entries
   // cascade in. `booted` flips once the show is over so later re-renders
@@ -3366,8 +3389,8 @@ export default function App() {
           </button>
           {appUpdate ? (
             <button
-              onClick={() => void openUrl(appUpdate.url)}
-              title={`You have v${appUpdate.current} — open the v${appUpdate.latest} release`}
+              onClick={() => setUpdatePromptOpen(true)}
+              title={`You have v${appUpdate.current} — v${appUpdate.latest} is out`}
               className="rounded bg-violet-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-violet-300 transition hover:bg-violet-500/25"
             >
               ⬆ v{appUpdate.latest} available
@@ -3746,6 +3769,45 @@ export default function App() {
           onDownloadTools={downloadToolsBundle}
           onDone={() => updateSettings({ firstRunDone: true })}
         />
+      )}
+
+      {/* Update prompt: shown once per launch when a newer release exists. */}
+      {updatePromptOpen && appUpdate && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="w-[26rem] rounded-2xl border border-violet-500/30 bg-zinc-950 p-5 shadow-2xl">
+            <h3 className="text-base font-bold text-zinc-100">⬆ Update available</h3>
+            <p className="mt-1 text-sm text-zinc-400">
+              Moonahs Mod Maker <span className="font-semibold text-violet-300">v{appUpdate.latest}</span>{" "}
+              is out — you have v{appUpdate.current}.
+            </p>
+            <p className="mt-2 text-[11px] text-zinc-600">
+              {appUpdate.setupAsset
+                ? '"Install now" downloads the new installer and runs it — the app closes itself; your projects and settings are kept.'
+                : "This release has no installer attached, so the release page opens in your browser instead."}
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                onClick={() => setUpdatePromptOpen(false)}
+                className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-400 transition hover:text-zinc-200"
+              >
+                Later
+              </button>
+              <button
+                onClick={() => void openUrl(appUpdate.url)}
+                className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 transition hover:border-zinc-500"
+              >
+                What's new
+              </button>
+              <button
+                onClick={() => void runAppUpdate()}
+                disabled={updating}
+                className="rounded-lg bg-violet-500 px-3.5 py-1.5 text-xs font-semibold text-white transition hover:bg-violet-400 disabled:opacity-50"
+              >
+                {updating ? "Downloading…" : appUpdate.setupAsset ? "Install now" : "Open release page"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Mod-import review: pick what to bring in from a scanned pack. */}

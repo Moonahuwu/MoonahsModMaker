@@ -130,6 +130,7 @@ pub fn run() {
             commands::read_ui_file,
             commands::push_ui_files,
             commands::clear_pushed_ui,
+            commands::install_app_update,
             commands::check_app_update,
             commands::open_in_viewer,
             commands::item_particles,
