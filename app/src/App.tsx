@@ -3371,7 +3371,7 @@ export default function App() {
             src="/MMMlogo.svg"
             alt="Moonah's Mod Maker"
             title="Moonah's Mod Maker"
-            className="h-16 w-auto max-w-full"
+            className="mx-auto h-16 w-auto max-w-full"
             draggable={false}
           />
         </div>
