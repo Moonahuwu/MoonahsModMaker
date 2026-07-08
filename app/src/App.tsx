@@ -176,7 +176,7 @@ const TAB_LABELS: Record<string, string> = {
   npcs: "NPCs",
   [UNSORTED]: "Misc / Unsorted",
   [ITEMS]: "Items",
-  [REPLACE_SOUNDS]: "Replace Sounds",
+  [REPLACE_SOUNDS]: "All Sounds",
   [EFFECTS]: "Effects",
   [POSTERS]: "Wall Art",
   [JUMPSCARES]: "Jumpscares",
@@ -204,10 +204,13 @@ const TAB_CATEGORIES: { label: string; tabs: string[] }[] = [
   { label: "Game SFX", tabs: ["gameplay", "combat", "mapsfx", "ambience", "npcs"] },
 ];
 
-/** The ♪ "Sound" master header: every sound-event category/tab nests under it. */
+/** The ♪ "Sound" master header: every sound-event category/tab nests under
+ *  it, with the loose-file browser (All Sounds) as the catch-all at the
+ *  bottom — child order follows the `tabs` array, and that one is pushed
+ *  last. */
 const SOUND_MASTER = "Sound";
 const SOUND_MASTER_CATEGORIES = ["In-game", "Match", "Game SFX"];
-const SOUND_MASTER_TABS = ["ui", UNSORTED];
+const SOUND_MASTER_TABS = ["ui", UNSORTED, REPLACE_SOUNDS];
 
 /** Tabs an auto-discovered/imported slot can be manually moved between. The
  *  id-keyed drill-in tabs (Heroes, Items) are excluded — their UIs render
