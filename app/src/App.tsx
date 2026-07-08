@@ -3366,7 +3366,7 @@ export default function App() {
           title="Drag to resize the sidebar (double-click to reset)"
           className="absolute -right-1 top-0 z-40 h-full w-2 cursor-col-resize transition-colors hover:bg-emerald-500/25 active:bg-emerald-500/40"
         />
-        <div className={`mb-2${bootCls}`} style={bootStyle(0)}>
+        <div className={`my-3 mb-4${bootCls}`} style={bootStyle(0)}>
           <img
             src="/MMMlogo.svg"
             alt="Moonah's Mod Maker"
@@ -3375,20 +3375,6 @@ export default function App() {
             draggable={false}
           />
         </div>
-        {/* "Modified only": hide everything without your changes for quick nav. */}
-        <button
-          onClick={() => setModifiedOnly((v) => !v)}
-          title="Show only the tabs, heroes, items and slots that carry your changes"
-          style={bootStyle(1)}
-          className={`mb-2 flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium transition${bootCls} ${
-            modifiedOnly
-              ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-300"
-              : "border-zinc-800 text-zinc-500 hover:border-zinc-600 hover:text-zinc-300"
-          }`}
-        >
-          <span className="text-[10px]">{modifiedOnly ? "◉" : "○"}</span>
-          Modified only
-        </button>
         <nav className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
           {navItems.map((item, navIdx) => {
             if (item.type === "tab") {
@@ -3530,6 +3516,20 @@ export default function App() {
               return sub ? <p className="mt-1 text-sm text-zinc-500">{sub}</p> : null;
             })()}
           </div>
+          <div className="flex shrink-0 items-center gap-2">
+            {/* "Modified only": hide everything without your changes. */}
+            <button
+              onClick={() => setModifiedOnly((v) => !v)}
+              title="Show only the tabs, heroes, items and slots that carry your changes"
+              className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
+                modifiedOnly
+                  ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-300"
+                  : "border-zinc-800 text-zinc-500 hover:border-zinc-600 hover:text-zinc-300"
+              }`}
+            >
+              <span className="text-[10px]">{modifiedOnly ? "◉" : "○"}</span>
+              Modified only
+            </button>
           {profiles.length > 0 && (
             <ProfileSwitcher
               profiles={profiles}
@@ -3543,6 +3543,7 @@ export default function App() {
               onDelete={() => void deleteActiveProfile()}
             />
           )}
+          </div>
         </header>
 
         {/* Tab content, keyed so switching tabs fades the new content in. */}
