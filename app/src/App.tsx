@@ -755,7 +755,7 @@ export default function App() {
 
   // Fresh tab = fresh scroll position. (Playing audio stops via each player's
   // unmount cleanup when the old tab's content unmounts.)
-  const mainRef = useRef<HTMLElement | null>(null);
+  const mainRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     mainRef.current?.scrollTo({ top: 0 });
   }, [activeTab]);
@@ -3265,9 +3265,12 @@ export default function App() {
         </div>
       </aside>
 
-      {/* Main content — the only scrollable pane (relative so it paints above
-          the fixed backdrop layer) */}
-      <main ref={mainRef} className="relative flex h-screen flex-1 flex-col gap-5 overflow-y-auto p-6 pb-4">
+      {/* Main content: a fixed-height column — the tab content scrolls in the
+          inner pane and the CompileBar is a real (non-scrolling) footer, so
+          there's no sticky/negative-margin gap under it. (relative so it
+          paints above the fixed backdrop layer) */}
+      <main className="relative flex h-screen min-w-0 flex-1 flex-col">
+        <div ref={mainRef} className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto p-6 pb-4">
         <header className="flex items-start justify-between gap-4">
           <div>
             <h2 className="bg-gradient-to-r from-zinc-50 to-zinc-400 bg-clip-text text-xl font-bold tracking-tight text-transparent">
@@ -3587,6 +3590,7 @@ export default function App() {
         </motion.div>
 
         <div className="flex-1" />
+        </div>
 
         {project && (
           <CompileBar

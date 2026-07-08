@@ -527,7 +527,7 @@ export function CompileBar({
   return (
     // -mx-6/-mb-4 cancel <main>'s padding so the bar runs edge-to-edge with no
     // see-through gap beneath it when scrolled to the bottom.
-    <div className="sticky bottom-0 z-30 -mx-6 -mb-4 mt-2 border-t border-zinc-800 bg-zinc-950/85 px-6 py-3 backdrop-blur">
+    <div className="z-30 shrink-0 border-t border-zinc-800 bg-zinc-950/85 px-6 py-3 backdrop-blur">
       {/* Partial export picker. */}
       <AnimatePresence>
         {exportOpen && (
