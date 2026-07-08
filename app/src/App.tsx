@@ -3284,7 +3284,13 @@ export default function App() {
           }`}
         >
           <span className="flex items-center gap-1.5">
-            <span className="text-[9px] text-zinc-600">{collapsed ? "▶" : "▼"}</span>
+            <span
+              className={`text-[9px] text-zinc-600 transition-transform duration-200 ${
+                collapsed ? "" : "rotate-90"
+              }`}
+            >
+              ▶
+            </span>
             {item.label}
           </span>
           {catCount > 0 && (
@@ -3293,11 +3299,21 @@ export default function App() {
             </span>
           )}
         </button>
-        {!collapsed && (
-          <div className="ml-3 flex flex-col gap-1 border-l border-zinc-800/70 pl-1.5">
-            {memberTabs.map((t) => renderTabButton(t, true))}
-          </div>
-        )}
+        <AnimatePresence initial={false}>
+          {!collapsed && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.18, ease: "easeOut" }}
+              className="overflow-hidden"
+            >
+              <div className="ml-3 flex flex-col gap-1 border-l border-zinc-800/70 pl-1.5">
+                {memberTabs.map((t) => renderTabButton(t, true))}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     );
   };
@@ -3374,7 +3390,13 @@ export default function App() {
                   }`}
                 >
                   <span className="flex items-center gap-1.5">
-                    <span className="text-[9px] text-sky-500/80">{collapsed ? "▶" : "▼"}</span>
+                    <span
+                      className={`text-[9px] text-sky-500/80 transition-transform duration-200 ${
+                        collapsed ? "" : "rotate-90"
+                      }`}
+                    >
+                      ▶
+                    </span>
                     <span className="text-[13px] leading-none text-sky-300">♪</span>
                     {item.label}
                   </span>
@@ -3384,18 +3406,28 @@ export default function App() {
                     </span>
                   )}
                 </button>
-                {!collapsed && (
-                  <div className="ml-3 flex flex-col gap-1 border-l border-sky-500/25 pl-1.5">
-                    {item.items.map((c) =>
-                      c.type === "tab" ? (
-                        (!modifiedOnly || groupModified(c.key) || c.key === activeTab) &&
-                          renderTabButton(c.key, true)
-                      ) : (
-                        renderCategory(c)
-                      ),
-                    )}
-                  </div>
-                )}
+                <AnimatePresence initial={false}>
+                  {!collapsed && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: "auto", opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={{ duration: 0.2, ease: "easeOut" }}
+                      className="overflow-hidden"
+                    >
+                      <div className="ml-3 flex flex-col gap-1 border-l border-sky-500/25 pl-1.5">
+                        {item.items.map((c) =>
+                          c.type === "tab" ? (
+                            (!modifiedOnly || groupModified(c.key) || c.key === activeTab) &&
+                              renderTabButton(c.key, true)
+                          ) : (
+                            renderCategory(c)
+                          ),
+                        )}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
             );
           })}

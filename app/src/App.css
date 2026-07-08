@@ -9,8 +9,8 @@
   width: 70vmax;
   height: 70vmax;
   border-radius: 9999px;
-  filter: blur(90px);
-  opacity: 0.04;
+  filter: blur(110px);
+  opacity: 0.022;
 }
 .eim-bg-glow-a {
   background: #8b5cf6;
