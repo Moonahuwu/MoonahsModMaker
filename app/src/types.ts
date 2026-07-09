@@ -35,13 +35,19 @@ export interface LibraryItem {
   addedAt: string;
 }
 
-/** One extra track mixed under a song at render time: plays from the clip's
- *  start at its own volume, cut to the clip's length. The sound event and its
+/** One extra track mixed under a song at render time, timeline-style: its
+ *  own clip window within the source, placed `offset` seconds into the bite,
+ *  at its own volume - cut to the bite's length. The sound event and its
  *  pool are untouched - layers are baked into the one rendered audio file. */
 export interface SongLayer {
   id: string;
   sourceAudio: string;
   gainDb: number;
+  /** Seconds into the bite where this layer starts playing (default 0). */
+  offset?: number;
+  /** Clip window within the source; end <= start means "to the file's end". */
+  trimStart?: number;
+  trimEnd?: number;
 }
 
 export interface Song {

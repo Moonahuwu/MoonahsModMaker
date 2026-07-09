@@ -35,15 +35,26 @@ pub struct ProcessReq {
     pub ffmpeg_path: Option<String>,
 }
 
-/// One extra track mixed into a clip: plays from the clip's start at its own
-/// volume, cut to the base clip's length. The events file never sees layers -
-/// they're baked into the single rendered audio file.
+/// One extra track mixed into a clip, timeline-style: its own clip window
+/// (`trim_start`..`trim_end` within the source), placed `offset` seconds into
+/// the bite, at its own volume - all cut to the base clip's length. The
+/// events file never sees layers; they're baked into the single rendered
+/// audio file.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Layer {
     pub source_audio: String,
     #[serde(default)]
     pub gain_db: f64,
+    /// Seconds into the bite where this layer starts playing.
+    #[serde(default)]
+    pub offset: f64,
+    /// Clip window within the layer's source. `trim_end <= trim_start` means
+    /// "to the end of the file".
+    #[serde(default)]
+    pub trim_start: f64,
+    #[serde(default)]
+    pub trim_end: f64,
 }
 
 fn staging_dir() -> PathBuf {
@@ -85,9 +96,12 @@ fn fades_af(duration: f64, fade_in: f64, fade_out: f64) -> String {
 
 /// The `-filter_complex` graph for a layered clip. Every input is normalized
 /// to one format first (amix does NOT resample mismatched inputs), given its
-/// own volume, then mixed cut to the BASE clip's length (`duration=first`,
-/// input 0 is trimmed by `-ss`/`-t`). `normalize=0` keeps levels as-is instead
-/// of amix's default divide-by-N ducking; fades run on the finished mix.
+/// own volume, shifted to its timeline position (`adelay` - ms are exact
+/// because the resample to 48k comes first), then mixed cut to the BASE
+/// clip's length (`duration=first`; input 0 is trimmed by `-ss`/`-t`, each
+/// layer's clip window by its own input `-ss`/`-t`). `normalize=0` keeps
+/// levels as-is instead of amix's default divide-by-N ducking; fades run on
+/// the finished mix.
 fn mix_graph(gain_db: f64, duration: f64, fade_in: f64, fade_out: f64, layers: &[Layer]) -> String {
     let fmt_in = "aresample=48000,aformat=channel_layouts=stereo";
     let mut graph = String::new();
@@ -95,7 +109,17 @@ fn mix_graph(gain_db: f64, duration: f64, fade_in: f64, fade_out: f64, layers: &
     graph.push_str(&format!("[0:a]{fmt_in},volume={gain_db}dB[a0];"));
     pads.push_str("[a0]");
     for (i, l) in layers.iter().enumerate() {
-        graph.push_str(&format!("[{}:a]{fmt_in},volume={}dB[a{}];", i + 1, l.gain_db, i + 1));
+        let delay = if l.offset > 0.0 {
+            format!(",adelay={}:all=1", (l.offset * 1000.0).round() as i64)
+        } else {
+            String::new()
+        };
+        graph.push_str(&format!(
+            "[{}:a]{fmt_in},volume={}dB{delay}[a{}];",
+            i + 1,
+            l.gain_db,
+            i + 1
+        ));
         pads.push_str(&format!("[a{}]", i + 1));
     }
     graph.push_str(&format!(
@@ -185,7 +209,15 @@ pub fn render_to(
         // first INPUT stream, so the base must already be cut to the trim
         // window or the mix would run to the file's end.
         cmd.args(["-t", &fmt(duration), "-i", source]);
+        // Each layer's clip window rides as ITS input's options (input options
+        // only apply to the -i that follows them).
         for l in layers {
+            if l.trim_start > 0.0 {
+                cmd.args(["-ss", &fmt(l.trim_start)]);
+            }
+            if l.trim_end > l.trim_start {
+                cmd.args(["-t", &fmt(l.trim_end - l.trim_start)]);
+            }
             cmd.args(["-i", &l.source_audio]);
         }
         cmd.args([
@@ -216,7 +248,12 @@ pub fn process(req: &ProcessReq) -> Result<String, String> {
     let layers_key: String = req
         .layers
         .iter()
-        .map(|l| format!("{}@{}", l.source_audio, l.gain_db))
+        .map(|l| {
+            format!(
+                "{}@{}@{}@{}@{}",
+                l.source_audio, l.gain_db, l.offset, l.trim_start, l.trim_end
+            )
+        })
         .collect::<Vec<_>>()
         .join(",");
     let key = format!(

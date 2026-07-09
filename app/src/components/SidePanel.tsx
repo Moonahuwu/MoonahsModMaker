@@ -209,6 +209,7 @@ export function SidePanel({
   onPasteSong,
   onAddFiles,
   onFindOnline,
+  registerSongEl,
 }: {
   ev: EventProject;
   view: EventView | undefined;
@@ -242,6 +243,9 @@ export function SidePanel({
   onAddFiles: (slotId: string) => void;
   /** Right half: jump to the GameBanana tab searching for this sound. */
   onFindOnline: (ev: EventProject) => void;
+  /** Registers each song's EXPANDED card body for drop targeting (audio
+   *  dropped on an open card becomes a layer of that track). */
+  registerSongEl?: (songId: string, el: HTMLElement | null) => void;
 }) {
   const copied = useCopiedSound();
   const [stockUrl, setStockUrl] = useState<string | null>(null);
@@ -522,6 +526,7 @@ export function SidePanel({
                   stockErr={stockErr}
                   onLoadStock={() => void loadStock(true)}
                   compareDefault={compareByDefault}
+                  bodyRef={(el) => registerSongEl?.(s.id, el)}
                 />
               )}
             </DraggableSong>

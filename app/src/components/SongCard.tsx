@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { processAudio } from "../lib/api";
+import { probeAudio, processAudio } from "../lib/api";
 import { songStatus } from "../lib/songHash";
 import type { Song, SongLayer } from "../types";
 import { Waveform } from "./Waveform";
@@ -11,6 +11,11 @@ import { StockWaveform } from "./StockWaveform";
 const AUDIO_FILTERS = [
   { name: "Audio", extensions: ["mp3", "wav", "flac", "ogg", "m4a", "aac"] },
 ];
+
+/** Round to 10ms - keeps dragged values (and the JSON they save to) tidy. */
+function snap(v: number): number {
+  return Math.round(v * 100) / 100;
+}
 
 // Exception-based status: compiled is the normal state, so it gets only the
 // colored dot — badges are reserved for rows that still need a compile.
@@ -52,6 +57,9 @@ interface SongCardProps {
   onLoadStock: () => void;
   /** Open the compare panel by default (from settings). */
   compareDefault: boolean;
+  /** Registers the EXPANDED body element - the window drop handler uses it so
+   *  audio dropped on an open card lands as a layer, not a new track. */
+  bodyRef?: (el: HTMLElement | null) => void;
 }
 
 function fmtTime(s: number): string {
@@ -79,6 +87,7 @@ export function SongCard({
   stockErr,
   onLoadStock,
   compareDefault,
+  bodyRef,
 }: SongCardProps) {
   const [state, setState] = useState<PlayState>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -110,7 +119,12 @@ export function SongCard({
   const length = Math.max(0, song.trimEnd - song.trimStart);
   // Layers with a file picked - what the preview mixes and the compile ships.
   const activeLayers = (song.layers ?? []).filter((l) => l.sourceAudio);
-  const layersKey = activeLayers.map((l) => `${l.sourceAudio}@${l.gainDb}`).join(",");
+  const layersKey = activeLayers
+    .map(
+      (l) =>
+        `${l.sourceAudio}@${l.gainDb}@${l.offset ?? 0}@${l.trimStart ?? 0}@${l.trimEnd ?? 0}`,
+    )
+    .join(",");
   const paramKey = `${song.sourceMp3}|${song.trimStart}|${song.trimEnd}|${song.gainDb}|${song.fadeIn}|${song.fadeOut}|${layersKey}`;
 
   // Keep the rename draft in sync if soundName changes elsewhere.
@@ -152,7 +166,13 @@ export function SongCard({
         gainDb: song.gainDb,
         fadeIn: song.fadeIn,
         fadeOut: song.fadeOut,
-        layers: activeLayers.map((l) => ({ sourceAudio: l.sourceAudio, gainDb: l.gainDb })),
+        layers: activeLayers.map((l) => ({
+          sourceAudio: l.sourceAudio,
+          gainDb: l.gainDb,
+          offset: l.offset ?? 0,
+          trimStart: l.trimStart ?? 0,
+          trimEnd: l.trimEnd ?? 0,
+        })),
         ffmpegPath,
       });
       const audio = new Audio(convertFileSrc(outPath));
@@ -209,6 +229,9 @@ export function SongCard({
       id: crypto.randomUUID(),
       sourceAudio: f,
       gainDb: 0,
+      offset: 0,
+      trimStart: 0,
+      trimEnd: 0,
     }));
     onChange({ layers: [...(song.layers ?? []), ...added] });
   }
@@ -221,6 +244,90 @@ export function SongCard({
 
   function removeLayer(id: string) {
     onChange({ layers: (song.layers ?? []).filter((l) => l.id !== id) });
+  }
+
+  // ---- Layer timeline ----
+  // Source durations, probed once per layer (needed to size blocks and to
+  // clamp the right-edge trim).
+  const [layerDurs, setLayerDurs] = useState<Record<string, number>>({});
+  const probed = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    for (const l of song.layers ?? []) {
+      if (!l.sourceAudio || probed.current.has(l.id)) continue;
+      probed.current.add(l.id);
+      probeAudio(l.sourceAudio, ffmpegPath)
+        .then((info) => setLayerDurs((d) => ({ ...d, [l.id]: info.duration })))
+        .catch(() => setLayerDurs((d) => ({ ...d, [l.id]: 0 })));
+    }
+  }, [song.layers, ffmpegPath]);
+
+  // The bite's timeline: the base track's trimmed length.
+  const clipLen = Math.max(0.1, length);
+  /** A layer's effective clip window (end falls back to its file's length). */
+  function layerWin(l: SongLayer): { ts: number; te: number; dur: number } {
+    const dur = layerDurs[l.id] ?? 0;
+    const ts = Math.max(0, l.trimStart ?? 0);
+    const rawTe = l.trimEnd ?? 0;
+    const te = rawTe > ts ? rawTe : dur > 0 ? dur : Math.min(clipLen, ts + clipLen);
+    return { ts, te: Math.max(ts + 0.05, te), dur };
+  }
+
+  // One drag at a time: move the block, or trim either edge. Values write
+  // straight into the layer via onChange; `orig` keeps the drag anchored.
+  const drag = useRef<{
+    id: string;
+    mode: "move" | "l" | "r";
+    startX: number;
+    pxPerSec: number;
+    orig: { offset: number; ts: number; te: number; dur: number };
+  } | null>(null);
+
+  function beginDrag(
+    e: React.PointerEvent,
+    l: SongLayer,
+    mode: "move" | "l" | "r",
+  ) {
+    e.preventDefault();
+    e.stopPropagation();
+    const lane = (e.currentTarget as HTMLElement).closest("[data-lane]");
+    const w = lane?.clientWidth ?? 1;
+    const { ts, te, dur } = layerWin(l);
+    drag.current = {
+      id: l.id,
+      mode,
+      startX: e.clientX,
+      pxPerSec: w / clipLen,
+      orig: { offset: Math.max(0, l.offset ?? 0), ts, te, dur },
+    };
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  }
+
+  function onDragMove(e: React.PointerEvent) {
+    const d = drag.current;
+    if (!d) return;
+    const dsec = (e.clientX - d.startX) / d.pxPerSec;
+    const { offset, ts, te, dur } = d.orig;
+    if (d.mode === "move") {
+      updateLayer(d.id, {
+        offset: snap(Math.min(Math.max(0, offset + dsec), Math.max(0, clipLen - 0.05))),
+      });
+    } else if (d.mode === "l") {
+      // In-point trim: content stays anchored on the timeline, so the offset
+      // shifts by the same amount (exactly like edge-trimming in an editor).
+      const lo = -Math.min(ts, offset);
+      const hi = te - ts - 0.05;
+      const dd = Math.min(Math.max(dsec, lo), hi);
+      updateLayer(d.id, { trimStart: snap(ts + dd), offset: snap(offset + dd) });
+    } else {
+      const max = dur > 0 ? dur : te + Math.max(0, dsec) + 1;
+      updateLayer(d.id, {
+        trimEnd: snap(Math.min(Math.max(te + dsec, ts + 0.05), max)),
+      });
+    }
+  }
+
+  function endDrag() {
+    drag.current = null;
   }
 
   const status = songStatus(song);
@@ -316,7 +423,7 @@ export function SongCard({
             transition={{ duration: 0.18 }}
             className="overflow-hidden"
           >
-            <div className="px-3.5 pb-3.5">
+            <div ref={bodyRef} className="px-3.5 pb-3.5">
               {/* Filename (drives the .vsnd / .vsnd_c / soundevent reference) */}
               <div className="mb-2.5 flex items-center gap-1 pl-1 font-mono text-[11px] text-zinc-500">
                 <span className="text-zinc-600">{soundFolder}/</span>
@@ -533,45 +640,110 @@ export function SongCard({
                   </button>
                 </div>
                 {(song.layers ?? []).length > 0 && (
-                  <div className="mt-2 flex flex-col gap-1.5">
-                    {(song.layers ?? []).map((l) => (
-                      <div
-                        key={l.id}
-                        className="flex items-center gap-3 rounded-md border border-zinc-800 bg-zinc-950/40 px-2.5 py-1.5"
-                      >
-                        <span
-                          className="min-w-0 flex-1 truncate text-[11px] text-zinc-300"
-                          title={l.sourceAudio}
+                  <div className="mt-2 rounded-lg border border-zinc-800 bg-zinc-950/40 p-2">
+                    {/* Reference lane: the base track = the whole bite. */}
+                    <div className="mb-1.5 flex items-center gap-2">
+                      <div className="w-40 shrink-0" />
+                      <div className="relative h-4 min-w-0 flex-1 overflow-hidden rounded bg-zinc-900">
+                        <div
+                          className="absolute inset-0 rounded border border-emerald-500/25 bg-emerald-500/10"
+                          title={`${song.label} - the full sound bite (${clipLen.toFixed(2)}s)`}
                         >
-                          {l.sourceAudio.split(/[\\/]/).pop()}
-                        </span>
-                        <label className="flex shrink-0 items-center gap-2 text-xs text-zinc-400">
-                          <span className="text-[11px] text-zinc-500">Gain</span>
-                          <input
-                            type="range"
-                            min={-24}
-                            max={12}
-                            step={0.5}
-                            value={l.gainDb}
-                            onChange={(e) =>
-                              updateLayer(l.id, { gainDb: Number(e.target.value) })
-                            }
-                            className="w-24 accent-emerald-500"
-                          />
-                          <span className="w-14 text-right tabular-nums text-[11px] text-zinc-300">
-                            {l.gainDb > 0 ? "+" : ""}
-                            {l.gainDb}dB
+                          <span className="block truncate px-1.5 text-[9px] leading-4 text-emerald-300/60">
+                            {song.label || "this track"}
                           </span>
-                        </label>
-                        <button
-                          onClick={() => removeLayer(l.id)}
-                          aria-label="Remove layer"
-                          className="shrink-0 rounded p-0.5 text-zinc-500 transition hover:bg-red-950/40 hover:text-red-300"
-                        >
-                          ✕
-                        </button>
+                        </div>
                       </div>
-                    ))}
+                    </div>
+                    {(song.layers ?? []).map((l) => {
+                      const { ts, te } = layerWin(l);
+                      const len = te - ts;
+                      const off = Math.max(0, l.offset ?? 0);
+                      const leftPct = Math.min(100, (off / clipLen) * 100);
+                      const widthPct = Math.max(
+                        1.5,
+                        Math.min(100 - leftPct, (len / clipLen) * 100),
+                      );
+                      return (
+                        <div key={l.id} className="mb-1.5 flex items-center gap-2 last:mb-0">
+                          {/* Left rail: name, gain, remove. */}
+                          <div className="w-40 shrink-0">
+                            <div className="flex items-center gap-1">
+                              <span
+                                className="min-w-0 flex-1 truncate text-[10px] text-zinc-400"
+                                title={l.sourceAudio}
+                              >
+                                {l.sourceAudio.split(/[\\/]/).pop()}
+                              </span>
+                              <button
+                                onClick={() => removeLayer(l.id)}
+                                aria-label="Remove layer"
+                                className="shrink-0 rounded p-0.5 text-zinc-600 transition hover:bg-red-950/40 hover:text-red-300"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <input
+                                type="range"
+                                min={-24}
+                                max={12}
+                                step={0.5}
+                                value={l.gainDb}
+                                onChange={(e) =>
+                                  updateLayer(l.id, { gainDb: Number(e.target.value) })
+                                }
+                                title="Layer volume"
+                                className="h-1 min-w-0 flex-1 accent-emerald-500"
+                              />
+                              <span className="w-11 shrink-0 text-right text-[9px] tabular-nums text-zinc-500">
+                                {l.gainDb > 0 ? "+" : ""}
+                                {l.gainDb}dB
+                              </span>
+                            </div>
+                          </div>
+                          {/* Lane: drag the block to place it, edges to trim. */}
+                          <div
+                            data-lane
+                            className="relative h-9 min-w-0 flex-1 overflow-hidden rounded bg-zinc-900"
+                          >
+                            <div
+                              onPointerDown={(e) => beginDrag(e, l, "move")}
+                              onPointerMove={onDragMove}
+                              onPointerUp={endDrag}
+                              title={`starts ${off.toFixed(2)}s into the bite - clip ${ts.toFixed(2)}-${te.toFixed(2)}s - drag to move, edges to trim`}
+                              className="absolute inset-y-0.5 flex cursor-grab touch-none items-center overflow-hidden rounded border border-sky-500/40 bg-sky-500/15 active:cursor-grabbing"
+                              style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
+                            >
+                              <span
+                                onPointerDown={(e) => beginDrag(e, l, "l")}
+                                onPointerMove={onDragMove}
+                                onPointerUp={endDrag}
+                                className="h-full w-1.5 shrink-0 cursor-ew-resize touch-none bg-sky-400/50 transition hover:bg-sky-300"
+                              />
+                              <span className="pointer-events-none min-w-0 flex-1 truncate px-1 text-[9px] text-sky-200/80">
+                                {len.toFixed(1)}s
+                              </span>
+                              <span
+                                onPointerDown={(e) => beginDrag(e, l, "r")}
+                                onPointerMove={onDragMove}
+                                onPointerUp={endDrag}
+                                className="h-full w-1.5 shrink-0 cursor-ew-resize touch-none bg-sky-400/50 transition hover:bg-sky-300"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {/* Time ruler for the bite. */}
+                    <div className="flex items-center gap-2">
+                      <div className="w-40 shrink-0" />
+                      <div className="flex min-w-0 flex-1 justify-between text-[9px] tabular-nums text-zinc-600">
+                        <span>0s</span>
+                        <span>{(clipLen / 2).toFixed(1)}s</span>
+                        <span>{clipLen.toFixed(1)}s</span>
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>

@@ -354,7 +354,13 @@ export function buildCompileConfig(
       looping: song.looping,
       layers: (song.layers ?? [])
         .filter((l) => l.sourceAudio)
-        .map((l) => ({ sourceAudio: l.sourceAudio, gainDb: l.gainDb })),
+        .map((l) => ({
+          sourceAudio: l.sourceAudio,
+          gainDb: l.gainDb,
+          offset: l.offset ?? 0,
+          trimStart: l.trimStart ?? 0,
+          trimEnd: l.trimEnd ?? 0,
+        })),
       currentHash: songHash(song),
       lastCompiledHash: song.lastCompiledHash,
     })),

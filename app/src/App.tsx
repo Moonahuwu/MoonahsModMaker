@@ -82,7 +82,7 @@ import { ProfileSwitcher } from "./components/ProfileSwitcher";
 import { useToast } from "./components/Toaster";
 import { useSettings, slotSoundFolder, sheetSiblingsKey, TOOLS_BUNDLE_URL } from "./lib/settings";
 import { songHash, overrideHash, effectHash, posterHash } from "./lib/songHash";
-import type { EffectOverride, EventProject, EventView, PosterOverride, Project, Song, SoundOverride } from "./types";
+import type { EffectOverride, EventProject, EventView, PosterOverride, Project, Song, SongLayer, SoundOverride } from "./types";
 import { GameBananaBrowser } from "./components/GameBananaBrowser";
 import { LibraryTab } from "./components/LibraryTab";
 import "./index.css";
@@ -709,6 +709,9 @@ export default function App() {
   );
   // Set by the Sound Library tab so audio dropped there is shelved, not slotted.
   const libraryDropRef = useRef<((paths: string[]) => void) | null>(null);
+  // Expanded song-card bodies: audio dropped on an OPEN card becomes a layer
+  // of that track instead of a new track in the slot.
+  const songEls = useRef<Record<string, HTMLElement | null>>({});
   // A slot's "Find on GameBanana": the search the browser tab runs on open.
   // `sounds` locks it to GameBanana's dedicated sound-mod section.
   const [gbSeed, setGbSeed] = useState<{ query: string; sounds: boolean } | null>(null);
@@ -1169,11 +1172,30 @@ export default function App() {
           }
         }
 
-        // Dropped audio → the library shelf when that tab is open, else the
-        // slot under the cursor.
+        // Dropped audio → the library shelf when that tab is open, an OPEN
+        // song card under the cursor (added as layers of that track), else
+        // the slot under the cursor (new tracks).
         if (audio.length > 0) {
+          const dpr = window.devicePixelRatio || 1;
+          const hitSong = (() => {
+            for (const [cx, cy] of [
+              [p.position.x, p.position.y],
+              [p.position.x / dpr, p.position.y / dpr],
+            ]) {
+              for (const [id, el] of Object.entries(songEls.current)) {
+                if (!el || !el.isConnected) continue;
+                const r = el.getBoundingClientRect();
+                if (cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.bottom) {
+                  return id;
+                }
+              }
+            }
+            return null;
+          })();
           if (activeTabRef.current === LIBRARY && libraryDropRef.current) {
             libraryDropRef.current(audio);
+          } else if (hitSong) {
+            addLayersToSong(hitSong, audio);
           } else if (side) {
             for (const path of audio) void addSong(side, path);
           } else {
@@ -3136,6 +3158,41 @@ export default function App() {
     for (const p of Array.isArray(sel) ? sel : [sel]) void addSong(slotId, p);
   }
 
+  // Audio dropped on an OPEN song card: mix in as timeline layers of that
+  // track (events/pools untouched - layers bake into the one rendered file).
+  function addLayersToSong(songId: string, paths: string[]) {
+    const proj = projectRef.current;
+    const song = proj?.events
+      .flatMap((ev) => ev.songs)
+      .find((s) => s.id === songId);
+    if (!song) return;
+    const added: SongLayer[] = paths.map((f) => ({
+      id: crypto.randomUUID(),
+      sourceAudio: f,
+      gainDb: 0,
+      offset: 0,
+      trimStart: 0,
+      trimEnd: 0,
+    }));
+    setProject((prev) =>
+      prev
+        ? {
+            ...prev,
+            events: prev.events.map((ev) => ({
+              ...ev,
+              songs: ev.songs.map((s) =>
+                s.id === songId ? { ...s, layers: [...(s.layers ?? []), ...added] } : s,
+              ),
+            })),
+          }
+        : prev,
+    );
+    push(
+      "success",
+      `Added ${added.length} layer${added.length > 1 ? "s" : ""} to "${song.label || song.soundName}" - they play together`,
+    );
+  }
+
   // The split-button's right half: jump to GameBanana searching for this
   // sound - locked to the site's dedicated Sounds section (it's a sound slot,
   // so skins/HUDs are never what you want). Hero/item names are the reliable
@@ -3185,6 +3242,7 @@ export default function App() {
       missingRefs={missingSoundRefs}
       onAddFiles={(slotId) => void addSlotFiles(slotId)}
       onFindOnline={findSoundOnline}
+      registerSongEl={(songId, el) => (songEls.current[songId] = el)}
     />
   );
 

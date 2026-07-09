@@ -17,8 +17,19 @@ export interface ProcessReq {
   fadeIn: number;
   fadeOut: number;
   /** Extra tracks mixed under the clip - preview matches the compile exactly. */
-  layers?: { sourceAudio: string; gainDb: number }[];
+  layers?: LayerCompile[];
   ffmpegPath?: string;
+}
+
+/** A layer as the renderer sees it (see SongLayer for the editable form). */
+export interface LayerCompile {
+  sourceAudio: string;
+  gainDb: number;
+  /** Seconds into the bite where the layer starts. */
+  offset: number;
+  /** Clip window within the source; end <= start = to the file's end. */
+  trimStart: number;
+  trimEnd: number;
 }
 
 // (looping is carried on Song/SongCompile, not preview ProcessReq)
@@ -71,7 +82,7 @@ export interface SongCompile {
   fadeOut: number;
   looping: boolean;
   /** Extra tracks mixed under this one at render (events never see layers). */
-  layers?: { sourceAudio: string; gainDb: number }[];
+  layers?: LayerCompile[];
   /** Fingerprint of the current params; matches the skip check in the backend. */
   currentHash: string;
   /** Hash recorded after the last successful compile (null = never compiled). */

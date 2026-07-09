@@ -29,7 +29,14 @@ export function songHash(song: Song): string {
     // Only present when layers exist so every pre-layers track's hash (and
     // thus its compiled status) is preserved byte-for-byte.
     ...(layers.length
-      ? [layers.map((l) => `${l.sourceAudio}@${l.gainDb}`).join(",")]
+      ? [
+          layers
+            .map(
+              (l) =>
+                `${l.sourceAudio}@${l.gainDb}@${l.offset ?? 0}@${l.trimStart ?? 0}@${l.trimEnd ?? 0}`,
+            )
+            .join(","),
+        ]
       : []),
   ].join("|");
 }
