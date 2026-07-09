@@ -5073,83 +5073,91 @@ pub async fn gamebanana_mod_info(
     vpk_path: Option<String>,
 ) -> Result<GbModInfo, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let mod_id = parse_gamebanana_mod_id(&page_url).ok_or(
-            "that doesn't look like a GameBanana mod link (expected gamebanana.com/mods/<number>)",
-        )?;
-        let api = format!("https://gamebanana.com/apiv11/Mod/{mod_id}/ProfilePage");
-        let out = crate::procutil::quiet(r"C:\Windows\System32\curl.exe")
-            .args(["-s", "-m", "15", "-H", "User-Agent: MoonahsModMaker", &api])
-            .output()
-            .map_err(|e| format!("launching curl: {e}"))?;
-        let no_data =
-            "GameBanana didn't return mod data (bad link, hidden page, or no internet)";
-        let body: serde_json::Value =
-            serde_json::from_slice(&out.stdout).map_err(|_| no_data.to_string())?;
-        let s = |v: &serde_json::Value, k: &str| -> String {
-            v.get(k).and_then(|x| x.as_str()).unwrap_or_default().to_string()
-        };
-        let name = s(&body, "_sName");
-        if name.is_empty() {
-            return Err(no_data.into());
-        }
-        let submitter = body.get("_aSubmitter").cloned().unwrap_or_default();
-        // _aCredits comes grouped: [{_sGroupName, _aAuthors: [{_sName, _sRole,
-        // _sProfileUrl (members) | _sUrl (external)}]}]. Handle a flat author
-        // entry too in case the API serves ungrouped shapes.
-        let mut credits: Vec<GbCredit> = Vec::new();
-        let mut push_author = |a: &serde_json::Value, group: &str| {
-            let n = s(a, "_sName");
-            if n.is_empty() {
-                return;
-            }
-            let role = match s(a, "_sRole") {
-                r if r.is_empty() => group.to_string(),
-                r => r,
-            };
-            let url = match s(a, "_sProfileUrl") {
-                u if u.is_empty() => s(a, "_sUrl"),
-                u => u,
-            };
-            credits.push(GbCredit { name: n, role, url });
-        };
-        if let Some(groups) = body.get("_aCredits").and_then(|c| c.as_array()) {
-            for g in groups {
-                if let Some(authors) = g.get("_aAuthors").and_then(|a| a.as_array()) {
-                    let group = s(g, "_sGroupName");
-                    for a in authors {
-                        push_author(a, &group);
-                    }
-                } else {
-                    push_author(g, "");
-                }
-            }
-        }
-        let md5_verified = vpk_path
-            .as_deref()
-            .filter(|p| !p.is_empty())
-            .and_then(file_md5)
-            .map(|local| {
-                body.get("_aFiles")
-                    .and_then(|f| f.as_array())
-                    .is_some_and(|files| {
-                        files
-                            .iter()
-                            .any(|f| s(f, "_sMd5Checksum").eq_ignore_ascii_case(&local))
-                    })
-            })
-            .unwrap_or(false);
-        Ok(GbModInfo {
-            mod_id,
-            page_url: format!("https://gamebanana.com/mods/{mod_id}"),
-            name,
-            author: s(&submitter, "_sName"),
-            author_url: s(&submitter, "_sProfileUrl"),
-            credits,
-            md5_verified,
-        })
+        gb_mod_info_blocking(&page_url, vpk_path.as_deref())
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// GET a GameBanana apiv11 URL and parse the JSON.
+fn gb_fetch_json(url: &str) -> Result<serde_json::Value, String> {
+    let out = crate::procutil::quiet(r"C:\Windows\System32\curl.exe")
+        .args(["-s", "-m", "15", "-H", "User-Agent: MoonahsModMaker", url])
+        .output()
+        .map_err(|e| format!("launching curl: {e}"))?;
+    serde_json::from_slice(&out.stdout)
+        .map_err(|_| "GameBanana didn't answer (no internet, or the API changed)".to_string())
+}
+
+fn gb_str(v: &serde_json::Value, k: &str) -> String {
+    v.get(k).and_then(|x| x.as_str()).unwrap_or_default().to_string()
+}
+
+fn gb_mod_info_blocking(page_url: &str, vpk_path: Option<&str>) -> Result<GbModInfo, String> {
+    let mod_id = parse_gamebanana_mod_id(page_url).ok_or(
+        "that doesn't look like a GameBanana mod link (expected gamebanana.com/mods/<number>)",
+    )?;
+    let body = gb_fetch_json(&format!(
+        "https://gamebanana.com/apiv11/Mod/{mod_id}/ProfilePage"
+    ))?;
+    let name = gb_str(&body, "_sName");
+    if name.is_empty() {
+        return Err("GameBanana didn't return mod data (bad link, hidden page, or no internet)".into());
+    }
+    let submitter = body.get("_aSubmitter").cloned().unwrap_or_default();
+    // _aCredits comes grouped: [{_sGroupName, _aAuthors: [{_sName, _sRole,
+    // _sProfileUrl (members) | _sUrl (external)}]}]. Handle a flat author
+    // entry too in case the API serves ungrouped shapes.
+    let mut credits: Vec<GbCredit> = Vec::new();
+    let mut push_author = |a: &serde_json::Value, group: &str| {
+        let n = gb_str(a, "_sName");
+        if n.is_empty() {
+            return;
+        }
+        let role = match gb_str(a, "_sRole") {
+            r if r.is_empty() => group.to_string(),
+            r => r,
+        };
+        let url = match gb_str(a, "_sProfileUrl") {
+            u if u.is_empty() => gb_str(a, "_sUrl"),
+            u => u,
+        };
+        credits.push(GbCredit { name: n, role, url });
+    };
+    if let Some(groups) = body.get("_aCredits").and_then(|c| c.as_array()) {
+        for g in groups {
+            if let Some(authors) = g.get("_aAuthors").and_then(|a| a.as_array()) {
+                let group = gb_str(g, "_sGroupName");
+                for a in authors {
+                    push_author(a, &group);
+                }
+            } else {
+                push_author(g, "");
+            }
+        }
+    }
+    let md5_verified = vpk_path
+        .filter(|p| !p.is_empty())
+        .and_then(file_md5)
+        .map(|local| {
+            body.get("_aFiles")
+                .and_then(|f| f.as_array())
+                .is_some_and(|files| {
+                    files
+                        .iter()
+                        .any(|f| gb_str(f, "_sMd5Checksum").eq_ignore_ascii_case(&local))
+                })
+        })
+        .unwrap_or(false);
+    Ok(GbModInfo {
+        mod_id,
+        page_url: format!("https://gamebanana.com/mods/{mod_id}"),
+        name,
+        author: gb_str(&submitter, "_sName"),
+        author_url: gb_str(&submitter, "_sProfileUrl"),
+        credits,
+        md5_verified,
+    })
 }
 
 /// Accepts a full mod URL (`https://gamebanana.com/mods/623518`, extra path or
@@ -5179,6 +5187,293 @@ fn file_md5(path: &str) -> Option<String> {
         .nth(1)
         .map(|l| l.replace(' ', "").trim().to_lowercase())
         .filter(|h| h.len() == 32 && h.chars().all(|c| c.is_ascii_hexdigit()))
+}
+
+const GB_DEADLOCK_GAME_ID: u32 = 20948;
+
+/// Minimal percent-encoding for a search string in a query param.
+fn gb_urlencode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+#[derive(serde::Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct GbSearchItem {
+    pub mod_id: u64,
+    pub name: String,
+    pub author: String,
+    pub category: String,
+    pub page_url: String,
+    /// 220px preview image on GameBanana's CDN; "" when the mod has none.
+    pub thumb_url: String,
+    pub likes: u64,
+    pub views: u64,
+    /// The page carries content ratings (nudity etc.) - hidden by default.
+    pub nsfw: bool,
+}
+
+#[derive(serde::Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct GbSearchPage {
+    pub items: Vec<GbSearchItem>,
+    /// False while more pages exist (drives "Load more").
+    pub is_complete: bool,
+}
+
+/// Browse Deadlock mods on GameBanana: the game's submission feed when the
+/// query is empty, the site search scoped to Deadlock otherwise.
+#[tauri::command]
+pub async fn gamebanana_search(query: String, page: u32) -> Result<GbSearchPage, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let q = query.trim().to_string();
+        let page = page.max(1);
+        let url = if q.is_empty() {
+            format!(
+                "https://gamebanana.com/apiv11/Game/{GB_DEADLOCK_GAME_ID}/Subfeed?_nPage={page}&_sSort=default&_csvModelInclusions=Mod"
+            )
+        } else {
+            format!(
+                "https://gamebanana.com/apiv11/Util/Search/Results?_sModelName=Mod&_sOrder=best_match&_idGameRow={GB_DEADLOCK_GAME_ID}&_sSearchString={}&_nPage={page}",
+                gb_urlencode(&q)
+            )
+        };
+        let body = gb_fetch_json(&url)?;
+        let empty = vec![];
+        let records = body.get("_aRecords").and_then(|r| r.as_array()).unwrap_or(&empty);
+        let items = records
+            .iter()
+            .filter_map(|r| {
+                let mod_id = r.get("_idRow")?.as_u64()?;
+                let name = gb_str(r, "_sName");
+                if name.is_empty() {
+                    return None;
+                }
+                let thumb_url = r
+                    .pointer("/_aPreviewMedia/_aImages/0")
+                    .map(|i| {
+                        let base = gb_str(i, "_sBaseUrl");
+                        let f = match gb_str(i, "_sFile220") {
+                            t if t.is_empty() => gb_str(i, "_sFile"),
+                            t => t,
+                        };
+                        if base.is_empty() || f.is_empty() {
+                            String::new()
+                        } else {
+                            format!("{base}/{f}")
+                        }
+                    })
+                    .unwrap_or_default();
+                Some(GbSearchItem {
+                    mod_id,
+                    name,
+                    author: r.get("_aSubmitter").map(|s| gb_str(s, "_sName")).unwrap_or_default(),
+                    category: r
+                        .get("_aRootCategory")
+                        .map(|c| gb_str(c, "_sName"))
+                        .unwrap_or_default(),
+                    page_url: match gb_str(r, "_sProfileUrl") {
+                        u if u.is_empty() => format!("https://gamebanana.com/mods/{mod_id}"),
+                        u => u,
+                    },
+                    thumb_url,
+                    likes: r.get("_nLikeCount").and_then(|v| v.as_u64()).unwrap_or(0),
+                    views: r.get("_nViewCount").and_then(|v| v.as_u64()).unwrap_or(0),
+                    nsfw: r
+                        .get("_bHasContentRatings")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                })
+            })
+            .collect();
+        Ok(GbSearchPage {
+            items,
+            is_complete: body
+                .pointer("/_aMetadata/_bIsComplete")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[derive(serde::Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct GbFile {
+    pub name: String,
+    pub size: u64,
+    pub download_url: String,
+    pub download_count: u64,
+    pub description: String,
+}
+
+/// The downloadable files on a mod page (a page can ship several variants).
+#[tauri::command]
+pub async fn gamebanana_files(mod_id: u64) -> Result<Vec<GbFile>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let body = gb_fetch_json(&format!(
+            "https://gamebanana.com/apiv11/Mod/{mod_id}/ProfilePage"
+        ))?;
+        let empty = vec![];
+        Ok(body
+            .get("_aFiles")
+            .and_then(|f| f.as_array())
+            .unwrap_or(&empty)
+            .iter()
+            .filter_map(|f| {
+                let download_url = gb_str(f, "_sDownloadUrl");
+                if download_url.is_empty() {
+                    return None;
+                }
+                Some(GbFile {
+                    name: gb_str(f, "_sFile"),
+                    size: f.get("_nFilesize").and_then(|v| v.as_u64()).unwrap_or(0),
+                    download_url,
+                    download_count: f.get("_nDownloadCount").and_then(|v| v.as_u64()).unwrap_or(0),
+                    description: gb_str(f, "_sDescription"),
+                })
+            })
+            .collect())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[derive(serde::Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct GbDownloadResult {
+    /// Mountable `_dir.vpk`s found in the download (multi-part `_NNN.vpk`
+    /// archives are data-only and skipped).
+    pub vpks: Vec<String>,
+    /// The mod page's attribution info - the archive we just pulled is hashed
+    /// against the page's MD5s, so `md5_verified` is true on a clean download.
+    pub info: GbModInfo,
+}
+
+/// Download a mod file through GameBanana's own download URL (counts on the
+/// author's download stats), unpack it, and return the vpk(s) inside.
+#[tauri::command]
+pub async fn gamebanana_download(
+    app: tauri::AppHandle,
+    mod_id: u64,
+    download_url: String,
+    file_name: String,
+) -> Result<GbDownloadResult, String> {
+    use tauri::Manager;
+    let dest_root = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("gb_downloads");
+    tauri::async_runtime::spawn_blocking(move || {
+        let safe_name = file_name.replace(['/', '\\'], "_");
+        let lower = safe_name.to_lowercase();
+        if lower.ends_with(".rar") || lower.ends_with(".7z") {
+            return Err(
+                "that file is a .rar/.7z archive - download it from the mod page and drop the .vpk onto this window instead".into(),
+            );
+        }
+        // Fresh dir per mod so an older version's files can't mix in.
+        let dir = dest_root.join(mod_id.to_string());
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        // Windows-native curl/tar (see download_tools for why not bare names).
+        let sys32 = std::env::var("WINDIR")
+            .map(|w| std::path::PathBuf::from(w).join("System32"))
+            .unwrap_or_else(|_| std::path::PathBuf::from(r"C:\Windows\System32"));
+        let pick = |name: &str| -> String {
+            let native = sys32.join(format!("{name}.exe"));
+            if native.exists() {
+                native.to_string_lossy().into_owned()
+            } else {
+                name.to_string()
+            }
+        };
+        let dest = dir.join(&safe_name);
+        let out = crate::procutil::quiet(pick("curl"))
+            .args([
+                "-L",
+                "--fail",
+                "-sS",
+                "-m",
+                "600",
+                "-H",
+                "User-Agent: MoonahsModMaker",
+                "-o",
+                &dest.to_string_lossy(),
+                &download_url,
+            ])
+            .output()
+            .map_err(|e| format!("launching curl: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "download failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+        // Verify the pull against the page BEFORE unpacking.
+        let info = gb_mod_info_blocking(&mod_id.to_string(), Some(&dest.to_string_lossy()))?;
+        if lower.ends_with(".zip") {
+            let out = crate::procutil::quiet(pick("tar"))
+                .args(["-xf", &dest.to_string_lossy(), "-C", &dir.to_string_lossy()])
+                .output()
+                .map_err(|e| format!("launching tar: {e}"))?;
+            if !out.status.success() {
+                return Err(format!(
+                    "unpack failed: {}",
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ));
+            }
+            let _ = std::fs::remove_file(&dest);
+        }
+        let mut vpks: Vec<String> = Vec::new();
+        find_dir_vpks(&dir, &mut vpks);
+        vpks.sort();
+        if vpks.is_empty() {
+            return Err(
+                "downloaded fine, but there's no .vpk inside - this doesn't look like a pak mod".into(),
+            );
+        }
+        Ok(GbDownloadResult { vpks, info })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Collect mountable vpks under `dir`: `*_dir.vpk`, or plain `*.vpk` that
+/// aren't numbered data parts (`_NNN.vpk`).
+fn find_dir_vpks(dir: &std::path::Path, out: &mut Vec<String>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            find_dir_vpks(&p, out);
+            continue;
+        }
+        let name = p.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
+        if !name.ends_with(".vpk") {
+            continue;
+        }
+        let is_numbered_part = name
+            .strip_suffix(".vpk")
+            .and_then(|s| s.rsplit_once('_'))
+            .map(|(_, tail)| tail.len() == 3 && tail.chars().all(|c| c.is_ascii_digit()))
+            .unwrap_or(false);
+        if name.ends_with("_dir.vpk") || !is_numbered_part {
+            out.push(p.to_string_lossy().into_owned());
+        }
+    }
 }
 
 #[derive(serde::Serialize)]
@@ -5447,5 +5742,43 @@ mod tests {
         assert!(!info.author.is_empty());
         assert!(!info.credits.is_empty(), "this mod's page lists credits");
         assert!(!info.md5_verified);
+    }
+
+    /// Live API hit (network): feed browse + scoped search + file listing.
+    #[test]
+    #[ignore]
+    fn live_gamebanana_search_and_files() {
+        let feed = tauri::async_runtime::block_on(gamebanana_search(String::new(), 1))
+            .expect("feed should load");
+        assert!(feed.items.len() >= 10, "the Deadlock feed has pages of mods");
+        assert!(!feed.is_complete);
+        assert!(feed.items.iter().any(|i| !i.thumb_url.is_empty()));
+
+        let hits = tauri::async_runtime::block_on(gamebanana_search("music".into(), 1))
+            .expect("search should load");
+        assert!(!hits.items.is_empty(), "searching music finds sound mods");
+
+        let files = tauri::async_runtime::block_on(gamebanana_files(623518))
+            .expect("files should load");
+        assert!(!files.is_empty());
+        assert!(files[0].download_url.starts_with("https://"));
+    }
+
+    #[test]
+    fn urlencode_and_vpk_part_filter() {
+        assert_eq!(gb_urlencode("crazy frog + rem"), "crazy%20frog%20%2B%20rem");
+        let dir = std::env::temp_dir().join("eim_vpk_scan_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        for f in ["pak01_dir.vpk", "pak01_000.vpk", "sub/loose.vpk", "readme.txt"] {
+            std::fs::write(dir.join(f), "x").unwrap();
+        }
+        let mut found = Vec::new();
+        find_dir_vpks(&dir, &mut found);
+        found.sort();
+        assert_eq!(found.len(), 2, "dir vpk + loose vpk, no numbered part: {found:?}");
+        assert!(found[0].ends_with("pak01_dir.vpk"));
+        assert!(found[1].ends_with("loose.vpk"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

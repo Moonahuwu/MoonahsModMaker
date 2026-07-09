@@ -966,6 +966,62 @@ export function gamebananaModInfo(pageUrl: string, vpkPath?: string): Promise<Gb
   return invoke("gamebanana_mod_info", { pageUrl, vpkPath: vpkPath ?? null });
 }
 
+export interface GbSearchItem {
+  modId: number;
+  name: string;
+  author: string;
+  category: string;
+  pageUrl: string;
+  /** 220px preview on GameBanana's CDN; "" when the mod has none. */
+  thumbUrl: string;
+  likes: number;
+  views: number;
+  /** Page carries content ratings (mature) - hidden unless opted in. */
+  nsfw: boolean;
+}
+
+export interface GbSearchPage {
+  items: GbSearchItem[];
+  /** False while more pages exist (drives "Load more"). */
+  isComplete: boolean;
+}
+
+/** Browse Deadlock mods on GameBanana: the submission feed when `query` is
+ *  empty, the site search scoped to Deadlock otherwise. */
+export function gamebananaSearch(query: string, page: number): Promise<GbSearchPage> {
+  return invoke("gamebanana_search", { query, page });
+}
+
+export interface GbFile {
+  name: string;
+  size: number;
+  downloadUrl: string;
+  downloadCount: number;
+  description: string;
+}
+
+/** The downloadable files on a mod page (a page can ship several variants). */
+export function gamebananaFiles(modId: number): Promise<GbFile[]> {
+  return invoke("gamebanana_files", { modId });
+}
+
+export interface GbDownloadResult {
+  /** Mountable `_dir.vpk`s found inside the download. */
+  vpks: string[];
+  /** Page attribution; md5Verified is true on a clean download. */
+  info: GbModInfo;
+}
+
+/** Download through GameBanana's own URL (counts on the author's stats),
+ *  unpack, and return the vpk(s) inside. */
+export function gamebananaDownload(
+  modId: number,
+  downloadUrl: string,
+  fileName: string,
+): Promise<GbDownloadResult> {
+  return invoke("gamebanana_download", { modId, downloadUrl, fileName });
+}
+
 export interface HeroImage {
   /** card | card_critical | card_gloat | vertical | sm | mm | background | logo */
   kind: string;

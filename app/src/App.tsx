@@ -83,6 +83,7 @@ import { useToast } from "./components/Toaster";
 import { useSettings, slotSoundFolder, sheetSiblingsKey, TOOLS_BUNDLE_URL } from "./lib/settings";
 import { songHash, overrideHash, effectHash, posterHash } from "./lib/songHash";
 import type { EffectOverride, EventProject, EventView, PosterOverride, Project, Song, SoundOverride } from "./types";
+import { GameBananaBrowser } from "./components/GameBananaBrowser";
 import "./index.css";
 import "./App.css";
 
@@ -91,6 +92,8 @@ const IMAGE_EXT = /\.(png|jpe?g|webp|bmp)$/i;
 const DEFAULT_GAIN_DB = 6;
 
 const MOD_COMBINER = "modcombiner";
+/** Browse + one-click download Deadlock mods from GameBanana. */
+const GAMEBANANA = "gamebanana";
 /** Special always-present tab for shop items (scaffold; sounds wired later). */
 const ITEMS = "items";
 /** Special always-present tab for loose-file sound replacement (any game sound). */
@@ -185,6 +188,7 @@ const TAB_LABELS: Record<string, string> = {
   [UIMASTER]: "UI Master",
   [CUSTOM_SERVER]: "Custom Server",
   [MOD_COMBINER]: "Mod combiner",
+  [GAMEBANANA]: "GameBanana",
 };
 
 /** Canonical sidebar order: Heroes (+Items) on top, curated categories next,
@@ -536,6 +540,7 @@ function accentFor(ev: { group: string; side: string }): string {
   if (ev.group === JUMPSCARES) return "#ef4444"; // red (spooky)
   if (ev.group === UIMASTER) return "#f59e0b"; // amber (experimental UI editing)
   if (ev.group === CUSTOM_SERVER) return "#38bdf8"; // sky (server)
+  if (ev.group === GAMEBANANA) return "#eab308"; // GameBanana yellow
   return "#e0564f"; // heroes
 }
 
@@ -778,7 +783,7 @@ export default function App() {
     // Custom Server is experimental: the toggle is authoritative (gameplay
     // edits only compile behind the separate includeGameplay option anyway).
     if (settings.experimentalServer) out.push(CUSTOM_SERVER);
-    out.push(MOD_COMBINER, REPLACE_SOUNDS);
+    out.push(GAMEBANANA, MOD_COMBINER, REPLACE_SOUNDS);
     return out;
   }, [
     project,
@@ -3596,6 +3601,18 @@ export default function App() {
             onDigimodChange={(next) =>
               setProject((prev) => (prev ? { ...prev, digimod: next } : prev))
             }
+          />
+        ) : activeTab === GAMEBANANA ? (
+          <GameBananaBrowser
+            settings={settings}
+            update={updateSettings}
+            onImportPack={startPackImport}
+            onBundleMany={(vpks) => {
+              const cur = settingsRef.current.importedMods;
+              const next = [...cur];
+              for (const v of vpks) if (!next.includes(v)) next.push(v);
+              updateSettings({ importedMods: next });
+            }}
           />
         ) : activeTab === ITEMS ? (
           <ItemsTab
