@@ -3455,7 +3455,6 @@ export default function App() {
                     >
                       ▶
                     </span>
-                    <span className="text-[13px] leading-none text-sky-300">♪</span>
                     {item.label}
                   </span>
                   {soundCount > 0 && (
