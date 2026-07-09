@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { CompileConfig, EffectCompile, EventCompile, GbModInfo, GlobalCompile, IconCompile, PosterCompile, SoundOverrideCompile, VdataCompile, WorldCompile } from "./api";
 import { loadSettings, saveSettings } from "./api";
-import type { DigimodConfig, EffectOverride, EventProject, PosterOverride, SoundOverride, UiFileOverride } from "../types";
+import type { DigimodConfig, EffectOverride, EventProject, LibraryItem, PosterOverride, SoundOverride, UiFileOverride } from "../types";
 import { songHash, overrideHash, effectHash, posterHash } from "./songHash";
 
 // User-facing settings. We derive the verbose CompileConfig paths from a CSDK
@@ -30,6 +30,9 @@ export interface Settings {
   /** Write a credits.txt next to the combined build - attribution for the
    *  bundled mods, ready to paste into a release description. */
   writeCreditsFile: boolean;
+  /** The sound library: audio files copied into app-data `library/` for easy
+   *  reuse across slots (drop them in, copy out via the sound clipboard). */
+  soundLibrary: LibraryItem[];
   /** Deadlock's `game/citadel/addons` folder — where installs are copied. */
   addonsDir: string;
   /** After a successful compile, also install the .vpk into the game. */
@@ -137,6 +140,7 @@ export const DEFAULT_SETTINGS: Settings = {
   importedModExcludes: {},
   importedModCredits: {},
   writeCreditsFile: true,
+  soundLibrary: [],
   addonsDir:
     "D:/SteamLibrary/steamapps/common/Deadlock/game/citadel/addons",
   installAfterCompile: false,

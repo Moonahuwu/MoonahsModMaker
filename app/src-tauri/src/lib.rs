@@ -136,6 +136,8 @@ pub fn run() {
             commands::gamebanana_search,
             commands::gamebanana_files,
             commands::gamebanana_download,
+            commands::library_add,
+            commands::library_remove,
             commands::open_in_viewer,
             commands::item_particles,
             commands::item_roster,

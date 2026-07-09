@@ -1022,6 +1022,16 @@ export function gamebananaDownload(
   return invoke("gamebanana_download", { modId, downloadUrl, fileName });
 }
 
+/** Copy an audio file into the app-data sound library; returns the copy. */
+export function libraryAdd(sourcePath: string): Promise<{ path: string; name: string }> {
+  return invoke("library_add", { sourcePath });
+}
+
+/** Delete a sound's library copy (refuses paths outside the library dir). */
+export function libraryRemove(path: string): Promise<void> {
+  return invoke("library_remove", { path });
+}
+
 export interface HeroImage {
   /** card | card_critical | card_gloat | vertical | sm | mm | background | logo */
   kind: string;

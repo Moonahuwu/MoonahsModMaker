@@ -5449,6 +5449,70 @@ pub async fn gamebanana_download(
     .map_err(|e| e.to_string())?
 }
 
+#[derive(serde::Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryFile {
+    pub path: String,
+    pub name: String,
+}
+
+/// Copy an audio file into the app-data sound library (`library/`) so it
+/// stays usable after the original moves/deletes. Collision-safe naming.
+#[tauri::command]
+pub async fn library_add(app: tauri::AppHandle, source_path: String) -> Result<LibraryFile, String> {
+    use tauri::Manager;
+    let lib = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("library");
+    tauri::async_runtime::spawn_blocking(move || {
+        std::fs::create_dir_all(&lib).map_err(|e| e.to_string())?;
+        let src = std::path::Path::new(&source_path);
+        let stem = src
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .filter(|s| !s.is_empty())
+            .ok_or("that path has no file name")?;
+        let ext = src
+            .extension()
+            .map(|e| e.to_string_lossy().to_lowercase())
+            .unwrap_or_else(|| "mp3".into());
+        let mut dest = lib.join(format!("{stem}.{ext}"));
+        let mut n = 2;
+        while dest.exists() {
+            dest = lib.join(format!("{stem}_{n}.{ext}"));
+            n += 1;
+        }
+        std::fs::copy(src, &dest).map_err(|e| format!("copying into the library: {e}"))?;
+        Ok(LibraryFile {
+            path: dest.to_string_lossy().into_owned(),
+            name: stem,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Delete a library copy. Refuses paths outside app-data `library/` so a bad
+/// caller can't delete arbitrary files.
+#[tauri::command]
+pub async fn library_remove(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    use tauri::Manager;
+    let lib = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("library");
+    let p = std::path::PathBuf::from(&path);
+    if !p.starts_with(&lib) {
+        return Err("not a library file".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || std::fs::remove_file(&p).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// Collect mountable vpks under `dir`: `*_dir.vpk`, or plain `*.vpk` that
 /// aren't numbered data parts (`_NNN.vpk`).
 fn find_dir_vpks(dir: &std::path::Path, out: &mut Vec<String>) {

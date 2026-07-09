@@ -21,6 +21,20 @@ export interface DerivedPaths {
 export type OutputMode = "folder" | "vpk";
 export type DurationMode = "auto" | "manual";
 
+/** One sound in the app-wide library: a file copied into app-data so it
+ *  survives the original moving. Reused across slots via the sound clipboard. */
+export interface LibraryItem {
+  id: string;
+  /** Display name (defaults to the file stem; editable). */
+  name: string;
+  /** The library copy's absolute path (inside app-data `library/`). */
+  path: string;
+  /** Where it came from, for the row's subtitle ("dropped in", a mod name…). */
+  source: string;
+  /** ISO date the sound was added. */
+  addedAt: string;
+}
+
 /** One extra track mixed under a song at render time: plays from the clip's
  *  start at its own volume, cut to the clip's length. The sound event and its
  *  pool are untouched - layers are baked into the one rendered audio file. */

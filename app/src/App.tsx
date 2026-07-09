@@ -84,6 +84,7 @@ import { useSettings, slotSoundFolder, sheetSiblingsKey, TOOLS_BUNDLE_URL } from
 import { songHash, overrideHash, effectHash, posterHash } from "./lib/songHash";
 import type { EffectOverride, EventProject, EventView, PosterOverride, Project, Song, SoundOverride } from "./types";
 import { GameBananaBrowser } from "./components/GameBananaBrowser";
+import { LibraryTab } from "./components/LibraryTab";
 import "./index.css";
 import "./App.css";
 
@@ -94,6 +95,8 @@ const DEFAULT_GAIN_DB = 6;
 const MOD_COMBINER = "modcombiner";
 /** Browse + one-click download Deadlock mods from GameBanana. */
 const GAMEBANANA = "gamebanana";
+/** The sound library: reusable audio files kept in app-data. */
+const LIBRARY = "library";
 /** Special always-present tab for shop items (scaffold; sounds wired later). */
 const ITEMS = "items";
 /** Special always-present tab for loose-file sound replacement (any game sound). */
@@ -189,6 +192,7 @@ const TAB_LABELS: Record<string, string> = {
   [CUSTOM_SERVER]: "Custom Server",
   [MOD_COMBINER]: "Mod combiner",
   [GAMEBANANA]: "GameBanana",
+  [LIBRARY]: "Sound Library",
 };
 
 /** Canonical sidebar order: Heroes (+Items) on top, curated categories next,
@@ -216,7 +220,7 @@ const TAB_CATEGORIES: { label: string; tabs: string[] }[] = [
  *  last. */
 const SOUND_MASTER = "Sounds";
 const SOUND_MASTER_CATEGORIES = ["In-game", "Match", "Game SFX"];
-const SOUND_MASTER_TABS = ["ui", UNSORTED, REPLACE_SOUNDS];
+const SOUND_MASTER_TABS = ["ui", UNSORTED, LIBRARY, REPLACE_SOUNDS];
 
 /** Tabs an auto-discovered/imported slot can be manually moved between. The
  *  id-keyed drill-in tabs (Heroes, Items) are excluded — their UIs render
@@ -541,6 +545,7 @@ function accentFor(ev: { group: string; side: string }): string {
   if (ev.group === UIMASTER) return "#f59e0b"; // amber (experimental UI editing)
   if (ev.group === CUSTOM_SERVER) return "#38bdf8"; // sky (server)
   if (ev.group === GAMEBANANA) return "#eab308"; // GameBanana yellow
+  if (ev.group === LIBRARY) return "#93c5fd"; // light blue (library shelf)
   return "#e0564f"; // heroes
 }
 
@@ -702,6 +707,8 @@ export default function App() {
   const posterDropRef = useRef<((paths: string[], cssX: number, cssY: number) => boolean) | null>(
     null,
   );
+  // Set by the Sound Library tab so audio dropped there is shelved, not slotted.
+  const libraryDropRef = useRef<((paths: string[]) => void) | null>(null);
 
   // ---- Startup game-data preload ----------------------------------------
   // Warm every tab's data (rosters, the sound index, then each hero's detail
@@ -783,7 +790,7 @@ export default function App() {
     // Custom Server is experimental: the toggle is authoritative (gameplay
     // edits only compile behind the separate includeGameplay option anyway).
     if (settings.experimentalServer) out.push(CUSTOM_SERVER);
-    out.push(GAMEBANANA, MOD_COMBINER, REPLACE_SOUNDS);
+    out.push(GAMEBANANA, MOD_COMBINER, LIBRARY, REPLACE_SOUNDS);
     return out;
   }, [
     project,
@@ -1159,9 +1166,12 @@ export default function App() {
           }
         }
 
-        // Dropped audio → add to the slot under the cursor.
+        // Dropped audio → the library shelf when that tab is open, else the
+        // slot under the cursor.
         if (audio.length > 0) {
-          if (side) {
+          if (activeTabRef.current === LIBRARY && libraryDropRef.current) {
+            libraryDropRef.current(audio);
+          } else if (side) {
             for (const path of audio) void addSong(side, path);
           } else {
             push("error", "Drop the .mp3 onto a track slot");
@@ -3613,6 +3623,13 @@ export default function App() {
               for (const v of vpks) if (!next.includes(v)) next.push(v);
               updateSettings({ importedMods: next });
             }}
+          />
+        ) : activeTab === LIBRARY ? (
+          <LibraryTab
+            settings={settings}
+            update={updateSettings}
+            ffmpegPath={settings.ffmpegPath || undefined}
+            dropRef={libraryDropRef}
           />
         ) : activeTab === ITEMS ? (
           <ItemsTab
