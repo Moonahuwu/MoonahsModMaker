@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { decompileVpkAll, type UiModVpk } from "../lib/api";
+import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { decompileVpkAll, gamebananaModInfo, type UiModVpk } from "../lib/api";
 import { cListUiMods } from "../lib/dataCache";
-import type { Settings } from "../lib/settings";
+import { buildCreditsText, type Settings } from "../lib/settings";
 import type { DigimodConfig } from "../types";
 import { useToast } from "./Toaster";
 
@@ -36,6 +36,45 @@ export function ImportedMods({
   const [decompiling, setDecompiling] = useState(false);
   const { push } = useToast();
   const mods = settings.importedMods;
+
+  // GameBanana attribution: link a bundled vpk to its mod page so releases
+  // can credit everyone (author + the page's credits list).
+  const credits = settings.importedModCredits ?? {};
+  const [gbInput, setGbInput] = useState<Record<string, string>>({});
+  const [gbBusy, setGbBusy] = useState<string | null>(null);
+
+  async function fetchCredits(m: string) {
+    const url = (gbInput[m] ?? "").trim();
+    if (!url) return;
+    setGbBusy(m);
+    try {
+      const info = await gamebananaModInfo(url, m);
+      update({ importedModCredits: { ...credits, [m]: info } });
+      push(
+        "success",
+        `Linked "${info.name}"${info.author ? ` by ${info.author}` : ""}${info.md5Verified ? " - file verified" : ""}`,
+      );
+    } catch (e) {
+      push("error", `Couldn't fetch that page: ${e}`);
+    } finally {
+      setGbBusy(null);
+    }
+  }
+
+  function unlinkCredits(m: string) {
+    const next = { ...credits };
+    delete next[m];
+    update({ importedModCredits: next });
+  }
+
+  async function copyCredits() {
+    try {
+      await navigator.clipboard.writeText(buildCreditsText(settings));
+      push("success", "Credits copied - paste them into your release description");
+    } catch (e) {
+      push("error", `Couldn't copy: ${e}`);
+    }
+  }
 
   // HUD (base_hud-overriding) mods can't be bundled like regular packs — two
   // base_huds can't coexist, so they get spliced instead (Jumpscares engine).
@@ -100,10 +139,16 @@ export function ImportedMods({
   }
 
   function remove(p: string) {
-    // Drop the pack AND its remembered file deselections.
+    // Drop the pack AND its remembered file deselections + attribution.
     const excludes = { ...(settings.importedModExcludes ?? {}) };
     delete excludes[p];
-    update({ importedMods: mods.filter((m) => m !== p), importedModExcludes: excludes });
+    const nextCredits = { ...credits };
+    delete nextCredits[p];
+    update({
+      importedMods: mods.filter((m) => m !== p),
+      importedModExcludes: excludes,
+      importedModCredits: nextCredits,
+    });
   }
 
   function addPath() {
@@ -157,46 +202,125 @@ export function ImportedMods({
         <p className="mt-1 text-xs text-zinc-500">
           These packs' files ride along in every <span className="font-mono">combined/</span>{" "}
           build - including sounds that replace originals by filename. Remove one to stop
-          bundling it (any tracks you imported from it stay in your tabs).
+          bundling it (any tracks you imported from it stay in your tabs). Releasing your
+          pack online? Link each mod's GameBanana page so everyone gets credited.
         </p>
         <div className="mt-3 flex flex-col gap-1.5">
           {mods.length === 0 && (
             <span className="text-xs text-zinc-600">Nothing bundled yet.</span>
           )}
           <AnimatePresence initial={false}>
-            {mods.map((m) => (
-              <motion.div
-                key={m}
-                layout
-                initial={{ opacity: 0, x: -6 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -6 }}
-                className="flex items-center justify-between rounded-md border border-zinc-700 bg-zinc-800/40 px-3 py-1.5 text-xs"
-              >
-                <span className="truncate text-zinc-300" title={m}>
-                  {baseName(m)}
-                  <span className="ml-2 text-zinc-600">{m}</span>
-                </span>
-                <span className="ml-2 flex shrink-0 items-center gap-1">
-                  <button
-                    onClick={() => onImportPack(m)}
-                    title="Re-open the import review for this pack"
-                    className="rounded px-1.5 py-0.5 text-zinc-500 transition hover:bg-zinc-700/60 hover:text-zinc-200"
-                  >
-                    review
-                  </button>
-                  <button
-                    onClick={() => remove(m)}
-                    className="rounded p-0.5 text-zinc-500 transition hover:bg-red-950/40 hover:text-red-300"
-                    aria-label="Remove bundled mod"
-                  >
-                    ✕
-                  </button>
-                </span>
-              </motion.div>
-            ))}
+            {mods.map((m) => {
+              const info = credits[m];
+              return (
+                <motion.div
+                  key={m}
+                  layout
+                  initial={{ opacity: 0, x: -6 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -6 }}
+                  className="rounded-md border border-zinc-700 bg-zinc-800/40 px-3 py-1.5 text-xs"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="truncate text-zinc-300" title={m}>
+                      {baseName(m)}
+                      <span className="ml-2 text-zinc-600">{m}</span>
+                    </span>
+                    <span className="ml-2 flex shrink-0 items-center gap-1">
+                      <button
+                        onClick={() => onImportPack(m)}
+                        title="Re-open the import review for this pack"
+                        className="rounded px-1.5 py-0.5 text-zinc-500 transition hover:bg-zinc-700/60 hover:text-zinc-200"
+                      >
+                        review
+                      </button>
+                      <button
+                        onClick={() => remove(m)}
+                        className="rounded p-0.5 text-zinc-500 transition hover:bg-red-950/40 hover:text-red-300"
+                        aria-label="Remove bundled mod"
+                      >
+                        ✕
+                      </button>
+                    </span>
+                  </div>
+                  {info ? (
+                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-zinc-500">
+                      <button
+                        onClick={() => void openUrl(info.pageUrl)}
+                        title={info.pageUrl}
+                        className="text-emerald-400/90 hover:underline"
+                      >
+                        {info.name}
+                      </button>
+                      <span>by {info.author || "unknown"}</span>
+                      {info.md5Verified && (
+                        <span
+                          title="This file's checksum matches the GameBanana page's download"
+                          className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] text-emerald-300"
+                        >
+                          file verified
+                        </span>
+                      )}
+                      {info.credits.length > 0 && (
+                        <span
+                          title={info.credits
+                            .map((c) => `${c.name}${c.role ? ` (${c.role})` : ""}`)
+                            .join(", ")}
+                        >
+                          +{info.credits.length} credited
+                        </span>
+                      )}
+                      <button
+                        onClick={() => unlinkCredits(m)}
+                        className="text-zinc-600 transition hover:text-zinc-300"
+                      >
+                        unlink
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="mt-1.5 flex items-center gap-1.5">
+                      <input
+                        value={gbInput[m] ?? ""}
+                        onChange={(e) => setGbInput((g) => ({ ...g, [m]: e.target.value }))}
+                        onKeyDown={(e) => e.key === "Enter" && void fetchCredits(m)}
+                        placeholder="GameBanana page URL, links the author + credits…"
+                        spellCheck={false}
+                        className="flex-1 rounded border border-zinc-800 bg-zinc-950/60 px-2 py-1 text-[11px] text-zinc-300 outline-none placeholder:text-zinc-600 focus:border-emerald-500/70"
+                      />
+                      <button
+                        onClick={() => void fetchCredits(m)}
+                        disabled={gbBusy === m || !(gbInput[m] ?? "").trim()}
+                        className="rounded border border-zinc-700 px-2.5 py-1 text-[11px] text-zinc-300 transition hover:border-emerald-500/70 hover:text-white disabled:opacity-40"
+                      >
+                        {gbBusy === m ? "Fetching…" : "Link"}
+                      </button>
+                    </div>
+                  )}
+                </motion.div>
+              );
+            })}
           </AnimatePresence>
         </div>
+        {mods.length > 0 && (
+          <div className="mt-3 flex items-center gap-3">
+            <label className="flex cursor-pointer items-center gap-2 text-xs text-zinc-400">
+              <input
+                type="checkbox"
+                checked={settings.writeCreditsFile}
+                onChange={(e) => update({ writeCreditsFile: e.target.checked })}
+                className="accent-emerald-500"
+              />
+              Write a credits.txt next to the combined build
+            </label>
+            <button
+              onClick={() => void copyCredits()}
+              title="Copy the attribution list for your release description"
+              className="ml-auto rounded-md border border-zinc-700 px-3 py-1 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-white"
+            >
+              Copy credits
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="mt-5 border-t border-zinc-800 pt-4">

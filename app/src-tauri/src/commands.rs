@@ -5037,6 +5037,150 @@ pub async fn install_app_update(app: tauri::AppHandle, setup_url: String) -> Res
     Ok(())
 }
 
+#[derive(serde::Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct GbCredit {
+    pub name: String,
+    /// Their contribution ("Objective damage + base"); may be empty.
+    pub role: String,
+    /// GameBanana profile or external URL; may be empty.
+    pub url: String,
+}
+
+/// A GameBanana mod page's attribution info, fetched for a bundled mod so a
+/// released combined pack can credit everyone (Mod Combiner tab).
+#[derive(serde::Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct GbModInfo {
+    pub mod_id: u64,
+    pub page_url: String,
+    pub name: String,
+    pub author: String,
+    pub author_url: String,
+    pub credits: Vec<GbCredit>,
+    /// True when the local vpk's MD5 matches one of the page's release files.
+    /// Best effort: most downloads are zips around the vpk, so a non-match
+    /// proves nothing and stays a quiet false.
+    pub md5_verified: bool,
+}
+
+/// Fetch a GameBanana mod page's name/author/credits via the site's own JSON
+/// API (apiv11, same one Deadlock Mod Manager uses). `vpk_path`, when given,
+/// is hashed and checked against the page's release-file MD5s.
+#[tauri::command]
+pub async fn gamebanana_mod_info(
+    page_url: String,
+    vpk_path: Option<String>,
+) -> Result<GbModInfo, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mod_id = parse_gamebanana_mod_id(&page_url).ok_or(
+            "that doesn't look like a GameBanana mod link (expected gamebanana.com/mods/<number>)",
+        )?;
+        let api = format!("https://gamebanana.com/apiv11/Mod/{mod_id}/ProfilePage");
+        let out = crate::procutil::quiet(r"C:\Windows\System32\curl.exe")
+            .args(["-s", "-m", "15", "-H", "User-Agent: MoonahsModMaker", &api])
+            .output()
+            .map_err(|e| format!("launching curl: {e}"))?;
+        let no_data =
+            "GameBanana didn't return mod data (bad link, hidden page, or no internet)";
+        let body: serde_json::Value =
+            serde_json::from_slice(&out.stdout).map_err(|_| no_data.to_string())?;
+        let s = |v: &serde_json::Value, k: &str| -> String {
+            v.get(k).and_then(|x| x.as_str()).unwrap_or_default().to_string()
+        };
+        let name = s(&body, "_sName");
+        if name.is_empty() {
+            return Err(no_data.into());
+        }
+        let submitter = body.get("_aSubmitter").cloned().unwrap_or_default();
+        // _aCredits comes grouped: [{_sGroupName, _aAuthors: [{_sName, _sRole,
+        // _sProfileUrl (members) | _sUrl (external)}]}]. Handle a flat author
+        // entry too in case the API serves ungrouped shapes.
+        let mut credits: Vec<GbCredit> = Vec::new();
+        let mut push_author = |a: &serde_json::Value, group: &str| {
+            let n = s(a, "_sName");
+            if n.is_empty() {
+                return;
+            }
+            let role = match s(a, "_sRole") {
+                r if r.is_empty() => group.to_string(),
+                r => r,
+            };
+            let url = match s(a, "_sProfileUrl") {
+                u if u.is_empty() => s(a, "_sUrl"),
+                u => u,
+            };
+            credits.push(GbCredit { name: n, role, url });
+        };
+        if let Some(groups) = body.get("_aCredits").and_then(|c| c.as_array()) {
+            for g in groups {
+                if let Some(authors) = g.get("_aAuthors").and_then(|a| a.as_array()) {
+                    let group = s(g, "_sGroupName");
+                    for a in authors {
+                        push_author(a, &group);
+                    }
+                } else {
+                    push_author(g, "");
+                }
+            }
+        }
+        let md5_verified = vpk_path
+            .as_deref()
+            .filter(|p| !p.is_empty())
+            .and_then(file_md5)
+            .map(|local| {
+                body.get("_aFiles")
+                    .and_then(|f| f.as_array())
+                    .is_some_and(|files| {
+                        files
+                            .iter()
+                            .any(|f| s(f, "_sMd5Checksum").eq_ignore_ascii_case(&local))
+                    })
+            })
+            .unwrap_or(false);
+        Ok(GbModInfo {
+            mod_id,
+            page_url: format!("https://gamebanana.com/mods/{mod_id}"),
+            name,
+            author: s(&submitter, "_sName"),
+            author_url: s(&submitter, "_sProfileUrl"),
+            credits,
+            md5_verified,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Accepts a full mod URL (`https://gamebanana.com/mods/623518`, extra path or
+/// query tolerated) or a bare numeric id.
+fn parse_gamebanana_mod_id(input: &str) -> Option<u64> {
+    let t = input.trim();
+    if let Ok(n) = t.parse::<u64>() {
+        return Some(n);
+    }
+    let rest = &t[t.find("/mods/")? + "/mods/".len()..];
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
+}
+
+/// MD5 of a file via Windows' built-in certutil (no hash crate needed). The
+/// hash is on the second output line; older Windows spaces the hex pairs.
+fn file_md5(path: &str) -> Option<String> {
+    let out = crate::procutil::quiet(r"C:\Windows\System32\certutil.exe")
+        .args(["-hashfile", path, "MD5"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .nth(1)
+        .map(|l| l.replace(' ', "").trim().to_lowercase())
+        .filter(|h| h.len() == 32 && h.chars().all(|c| c.is_ascii_hexdigit()))
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HeroImage {
@@ -5255,4 +5399,53 @@ pub async fn hero_images(app: tauri::AppHandle, helper_path: String, pak_path: S
     tauri::async_runtime::spawn_blocking(move || hero_images_impl(app, helper_path, pak_path, codename, display_stem))
         .await
         .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gamebanana_id_parsing() {
+        assert_eq!(parse_gamebanana_mod_id("623518"), Some(623518));
+        assert_eq!(
+            parse_gamebanana_mod_id("https://gamebanana.com/mods/623518"),
+            Some(623518)
+        );
+        assert_eq!(
+            parse_gamebanana_mod_id("  gamebanana.com/mods/623518?tab=files  "),
+            Some(623518)
+        );
+        assert_eq!(parse_gamebanana_mod_id("https://gamebanana.com/tools/20646"), None);
+        assert_eq!(parse_gamebanana_mod_id("not a url"), None);
+        assert_eq!(parse_gamebanana_mod_id("https://gamebanana.com/mods/"), None);
+    }
+
+    #[test]
+    fn file_md5_via_certutil() {
+        let tmp = std::env::temp_dir().join("eim_md5_test.txt");
+        std::fs::write(&tmp, "hello").unwrap();
+        assert_eq!(
+            file_md5(&tmp.to_string_lossy()),
+            Some("5d41402abc4b2a76b9719d911017c592".into())
+        );
+        let _ = std::fs::remove_file(&tmp);
+        assert_eq!(file_md5("C:/nope/does_not_exist.vpk"), None);
+    }
+
+    /// Live API hit (network): `cargo test -p app --lib -- --ignored live_gamebanana`.
+    #[test]
+    #[ignore]
+    fn live_gamebanana_mod_info() {
+        let info = tauri::async_runtime::block_on(gamebanana_mod_info(
+            "https://gamebanana.com/mods/623518".into(),
+            None,
+        ))
+        .expect("fetch should succeed");
+        assert_eq!(info.mod_id, 623518);
+        assert!(!info.name.is_empty());
+        assert!(!info.author.is_empty());
+        assert!(!info.credits.is_empty(), "this mod's page lists credits");
+        assert!(!info.md5_verified);
+    }
 }

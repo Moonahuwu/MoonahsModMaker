@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { CompileConfig, EffectCompile, EventCompile, GlobalCompile, IconCompile, PosterCompile, SoundOverrideCompile, VdataCompile, WorldCompile } from "./api";
+import type { CompileConfig, EffectCompile, EventCompile, GbModInfo, GlobalCompile, IconCompile, PosterCompile, SoundOverrideCompile, VdataCompile, WorldCompile } from "./api";
 import { loadSettings, saveSettings } from "./api";
 import type { DigimodConfig, EffectOverride, EventProject, PosterOverride, SoundOverride, UiFileOverride } from "../types";
 import { songHash, overrideHash, effectHash, posterHash } from "./songHash";
@@ -23,6 +23,13 @@ export interface Settings {
   /** Per-mod files DESELECTED in the import review (mod vpk path → raw internal
    *  paths like `sounds/x.vsnd_c`): dropped from the combined stage on compile. */
   importedModExcludes: Record<string, string[]>;
+  /** GameBanana attribution per bundled mod (vpk path → fetched page info).
+   *  Keyed by path like importedModExcludes: it's a property of the file, so
+   *  it survives profile switches. */
+  importedModCredits: Record<string, GbModInfo>;
+  /** Write a credits.txt next to the combined build - attribution for the
+   *  bundled mods, ready to paste into a release description. */
+  writeCreditsFile: boolean;
   /** Deadlock's `game/citadel/addons` folder — where installs are copied. */
   addonsDir: string;
   /** After a successful compile, also install the .vpk into the game. */
@@ -128,6 +135,8 @@ export const DEFAULT_SETTINGS: Settings = {
   vpkName: "pak01_dir.vpk",
   importedMods: [],
   importedModExcludes: {},
+  importedModCredits: {},
+  writeCreditsFile: true,
   addonsDir:
     "D:/SteamLibrary/steamapps/common/Deadlock/game/citadel/addons",
   installAfterCompile: false,
@@ -217,6 +226,35 @@ export function slotSoundFolder(
   const i = ev.stockEntry.lastIndexOf("/");
   if (i > 0) return ev.stockEntry.slice(0, i);
   return ev.group === "intro" ? globalFolder : `sounds/eim/${ev.group}`;
+}
+
+/** Human-readable attribution for the bundled mods: GameBanana page info when
+ *  one is linked, the bare file name otherwise. Feeds combined/credits.txt and
+ *  the "Copy credits" button. Empty string when nothing is bundled. */
+export function buildCreditsText(s: Settings): string {
+  if (s.importedMods.length === 0) return "";
+  const blocks = s.importedMods.map((m) => {
+    const info = s.importedModCredits?.[m];
+    if (!info) {
+      const base = m.split(/[\\/]/).pop() ?? m;
+      return `- ${base} (no GameBanana page linked)`;
+    }
+    const lines = [
+      `- ${info.name}${info.author ? ` by ${info.author}` : ""}`,
+      `  ${info.pageUrl}`,
+    ];
+    for (const c of info.credits) {
+      lines.push(
+        `  credit: ${c.name}${c.role ? ` (${c.role})` : ""}${c.url ? ` - ${c.url}` : ""}`,
+      );
+    }
+    return lines.join("\n");
+  });
+  return [
+    "This pack bundles the following mods. All credit to their authors.",
+    "",
+    blocks.join("\n\n"),
+  ].join("\n");
 }
 
 /** The compiled .vpk to install: the `combined/` variant when mods are imported
@@ -332,6 +370,7 @@ export function buildCompileConfig(
     skipCompile,
     importedMods: s.importedMods,
     importedModExcludes: s.importedModExcludes ?? {},
+    creditsText: s.writeCreditsFile ? buildCreditsText(s) || undefined : undefined,
     events: eventCompiles,
     iconMods: iconCompiles,
     soundOverrides: overrideCompiles,

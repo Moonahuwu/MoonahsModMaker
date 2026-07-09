@@ -168,6 +168,11 @@ pub struct CompileConfig {
     /// at the game's own paths (whole-file overrides). Experimental.
     #[serde(default)]
     pub ui_overrides: Vec<UiFileCompile>,
+    /// Attribution for the bundled mods (GameBanana credits), written next to
+    /// the combined artifact as `credits.txt` so a release can ship or paste
+    /// it. None or blank = no file.
+    #[serde(default)]
+    pub credits_text: Option<String>,
 }
 
 /// One edited panorama file (UI Master): the compiled internal path it
@@ -3380,6 +3385,22 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                 Err(e) => return report.fail(format!("[{}] pack vpk", v.name), e),
             }
         }
+        // Attribution rides NEXT TO the combined artifact, not inside the vpk:
+        // it's for the human uploading the pack, not the game. Kept in sync
+        // even on removal so a stale credits.txt can't misattribute.
+        if v.with_imported {
+            let credits_file = output_dir.join(v.name).join("credits.txt");
+            match cfg.credits_text.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+                Some(t) => {
+                    if let Err(e) = std::fs::write(&credits_file, format!("{t}\n")) {
+                        report.soft_fail("write credits.txt", e.to_string());
+                    }
+                }
+                None => {
+                    let _ = std::fs::remove_file(&credits_file);
+                }
+            }
+        }
         // Variant fully built — record what it was built from so the next
         // run's whole-variant skip can trust it.
         let _ = std::fs::write(&stamp_file, &build_stamp);
@@ -3865,6 +3886,7 @@ mod tests {
             poster_overrides: vec![],
             digimod: None,
             ui_overrides: ui,
+            credits_text: None,
         };
         let mut report = CompileReport::new();
         let (rels, dirty) =
@@ -3950,6 +3972,7 @@ mod tests {
             poster_overrides: vec![],
             digimod: None,
             ui_overrides: vec![],
+            credits_text: None,
         };
 
         let report = run(&cfg);
@@ -4034,6 +4057,7 @@ mod tests {
             poster_overrides: vec![],
             digimod: None,
             ui_overrides: vec![],
+            credits_text: None,
         };
 
         let report = run(&cfg);
@@ -4144,6 +4168,7 @@ mod tests {
             world_overrides: vec![],
             digimod: None,
             ui_overrides: vec![],
+            credits_text: None,
             poster_overrides: vec![PosterCompile {
                 sheet_id: "posters_bodega_comp1".into(),
                 materials: vec!["materials/overlays/posters_bodega_comp1.vmat".into()],

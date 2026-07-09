@@ -108,6 +108,8 @@ export interface CompileConfig {
   skipCompile: boolean;
   importedMods: string[];
   importedModExcludes?: Record<string, string[]>;
+  /** Attribution for bundled mods - written as combined/credits.txt when set. */
+  creditsText?: string;
   events: EventCompile[];
   iconMods?: IconCompile[];
   soundOverrides?: SoundOverrideCompile[];
@@ -931,6 +933,33 @@ export function checkAppUpdate(): Promise<AppUpdate | null> {
 /** One-click update: downloads the installer, launches it, exits the app. */
 export function installAppUpdate(setupUrl: string): Promise<void> {
   return invoke("install_app_update", { setupUrl });
+}
+
+export interface GbCredit {
+  name: string;
+  /** Their contribution; may be empty. */
+  role: string;
+  /** GameBanana profile or external URL; may be empty. */
+  url: string;
+}
+
+/** A GameBanana mod page's attribution info (Mod Combiner credits). */
+export interface GbModInfo {
+  modId: number;
+  pageUrl: string;
+  name: string;
+  author: string;
+  authorUrl: string;
+  credits: GbCredit[];
+  /** The local vpk's MD5 matched one of the page's release files. Best
+   *  effort: downloads are often zips, so false proves nothing. */
+  md5Verified: boolean;
+}
+
+/** Fetch a GameBanana mod page's name/author/credits for attribution.
+ *  `vpkPath`, when given, is hashed against the page's release files. */
+export function gamebananaModInfo(pageUrl: string, vpkPath?: string): Promise<GbModInfo> {
+  return invoke("gamebanana_mod_info", { pageUrl, vpkPath: vpkPath ?? null });
 }
 
 export interface HeroImage {

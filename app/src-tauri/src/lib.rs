@@ -132,6 +132,7 @@ pub fn run() {
             commands::clear_pushed_ui,
             commands::install_app_update,
             commands::check_app_update,
+            commands::gamebanana_mod_info,
             commands::open_in_viewer,
             commands::item_particles,
             commands::item_roster,
