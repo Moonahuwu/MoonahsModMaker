@@ -543,6 +543,25 @@ export function CompileBar({
     // -mx-6/-mb-4 cancel <main>'s padding so the bar runs edge-to-edge with no
     // see-through gap beneath it when scrolled to the bottom.
     <div className="relative z-30 shrink-0 border-t border-zinc-800 bg-zinc-950/85 px-6 py-3 backdrop-blur">
+      {/* The compile crew: rem leads, chudlings follow, hopping in a wave.
+          They stroll on top of the bar while a compile runs. */}
+      {running && (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute -top-9 right-10 flex items-end gap-2.5 opacity-90"
+        >
+          <span className="eim-crew-walk">
+            <img src="/loading/rem.svg" alt="" className="h-9 w-auto" />
+          </span>
+          {[0, 1, 2].map((i) => (
+            <span key={i} className="eim-crew-jump" style={{ animationDelay: `${1.2 + i * 0.3}s` }}>
+              <span className="eim-crew-walk" style={{ animationDelay: `${0.15 + i * 0.2}s` }}>
+                <img src="/loading/chudling.svg" alt="" className="h-5 w-auto" />
+              </span>
+            </span>
+          ))}
+        </div>
+      )}
       {/* Compile progress: a slim bar along the footer's bottom edge. */}
       {pct !== null && (
         <div className="absolute inset-x-0 bottom-0 h-[3px] overflow-hidden">

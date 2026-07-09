@@ -94,3 +94,24 @@
   position: absolute;
   inset: 0;
 }
+
+/* ---- Compile crew (CompileBar): rem + chudlings stroll on the bar while a
+   compile runs. Two nested layers per chudling because both animations own
+   `transform`: the outer span jumps (staggered 0.3s apart = the wave), the
+   inner span does the walk bob. */
+.eim-crew-walk {
+  display: inline-block;
+  animation: eim-crew-walk 0.65s ease-in-out infinite alternate;
+}
+@keyframes eim-crew-walk {
+  from { transform: translateY(0) rotate(-2.5deg); }
+  to { transform: translateY(-2px) rotate(2.5deg); }
+}
+.eim-crew-jump {
+  display: inline-block;
+  animation: eim-crew-jump 3s ease-in-out infinite;
+}
+@keyframes eim-crew-jump {
+  0%, 64%, 78%, 100% { transform: translateY(0); }
+  71% { transform: translateY(-10px); }
+}
