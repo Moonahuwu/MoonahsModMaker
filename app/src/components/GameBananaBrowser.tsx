@@ -39,7 +39,7 @@ export function GameBananaBrowser({
   update,
   onImportPack,
   onBundleMany,
-  seedQuery,
+  seed,
   onSeedConsumed,
 }: {
   settings: Settings;
@@ -48,8 +48,9 @@ export function GameBananaBrowser({
   onImportPack: (vpk: string) => void;
   /** A download held several vpks: add them all to the bundle list. */
   onBundleMany: (vpks: string[]) => void;
-  /** A slot's "Find on GameBanana" jump: search this immediately on open. */
-  seedQuery?: string | null;
+  /** A slot's "Find on GameBanana" jump: search this immediately on open.
+   *  `sounds` locks the browser to the Sound submission type. */
+  seed?: { query: string; sounds: boolean } | null;
   onSeedConsumed?: () => void;
 }) {
   const { push } = useToast();
@@ -57,6 +58,8 @@ export function GameBananaBrowser({
   // The query the current results belong to (typing doesn't re-search).
   const [activeQuery, setActiveQuery] = useState("");
   const [sort, setSort] = useState("relevance");
+  // GameBanana submission type: sound mods are their own section on the site.
+  const [model, setModel] = useState<"Mod" | "Sound">("Mod");
   const [items, setItems] = useState<GbSearchItem[]>([]);
   const [page, setPage] = useState(1);
   const [complete, setComplete] = useState(true);
@@ -67,11 +70,11 @@ export function GameBananaBrowser({
   const [filesFor, setFilesFor] = useState<{ modId: number; files: GbFile[] } | null>(null);
   const [busy, setBusy] = useState<number | null>(null);
 
-  async function load(q: string, p: number, append: boolean, s = sort) {
+  async function load(q: string, p: number, append: boolean, s = sort, m = model) {
     setLoading(true);
     setError(null);
     try {
-      const res = await gamebananaSearch(q, p, s);
+      const res = await gamebananaSearch(q, p, s, m);
       setItems((prev) => (append ? [...prev, ...res.items] : res.items));
       setComplete(res.isComplete);
       setPage(p);
@@ -86,24 +89,27 @@ export function GameBananaBrowser({
   // First open with nothing pending: show the game's feed. (A pending seed is
   // handled by the effect below, which also runs on mount.)
   useEffect(() => {
-    if (!seedQuery) void load("", 1, false);
+    if (!seed) void load("", 1, false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // A slot's "Find on GameBanana" jump - on mount, or while already open.
+  // Sound slots search the Sound section only ("just sounds, nothing else").
   useEffect(() => {
-    if (!seedQuery) return;
-    setQuery(seedQuery);
-    void load(seedQuery, 1, false);
+    if (!seed) return;
+    const m = seed.sounds ? "Sound" : "Mod";
+    setModel(m);
+    setQuery(seed.query);
+    void load(seed.query, 1, false, sort, m);
     onSeedConsumed?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [seedQuery]);
+  }, [seed]);
 
   async function getMod(item: GbSearchItem) {
     setBusy(item.modId);
     setFilesFor(null);
     try {
-      const files = await gamebananaFiles(item.modId);
+      const files = await gamebananaFiles(item.modId, item.model);
       if (files.length === 0) {
         push("error", "That page has no downloadable files");
         return;
@@ -125,7 +131,7 @@ export function GameBananaBrowser({
     setFilesFor(null);
     push("info", `Downloading "${item.name}"…`);
     try {
-      const res = await gamebananaDownload(item.modId, file.downloadUrl, file.name);
+      const res = await gamebananaDownload(item.modId, file.downloadUrl, file.name, item.model);
       // Credits attach to every vpk from this page - the whole point.
       const credits = { ...(settings.importedModCredits ?? {}) };
       for (const v of res.vpks) credits[v] = res.info;
@@ -193,6 +199,30 @@ export function GameBananaBrowser({
       </div>
 
       <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11px] text-zinc-500">
+        <div className="flex items-center overflow-hidden rounded-md border border-zinc-700">
+          {(["Mod", "Sound"] as const).map((m) => (
+            <button
+              key={m}
+              onClick={() => {
+                if (m === model) return;
+                setModel(m);
+                void load(activeQuery, 1, false, sort, m);
+              }}
+              title={
+                m === "Sound"
+                  ? "GameBanana's dedicated sound-mod section"
+                  : "Everything: skins, HUDs, sounds…"
+              }
+              className={`px-2.5 py-0.5 transition ${
+                model === m
+                  ? "bg-yellow-500/15 font-medium text-yellow-300"
+                  : "text-zinc-500 hover:text-zinc-300"
+              }`}
+            >
+              {m === "Mod" ? "Mods" : "Sounds"}
+            </button>
+          ))}
+        </div>
         <div
           className="flex items-center gap-1"
           title={
@@ -241,7 +271,7 @@ export function GameBananaBrowser({
         <AnimatePresence initial={false}>
           {visible.map((item) => (
             <motion.div
-              key={`${item.modId}-${activeQuery}`}
+              key={`${item.model}-${item.modId}-${activeQuery}`}
               layout
               initial={{ opacity: 0, y: 4 }}
               animate={{ opacity: 1, y: 0 }}

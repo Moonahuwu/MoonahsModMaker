@@ -5073,7 +5073,10 @@ pub async fn gamebanana_mod_info(
     vpk_path: Option<String>,
 ) -> Result<GbModInfo, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        gb_mod_info_blocking(&page_url, vpk_path.as_deref())
+        let (model, id) = parse_gamebanana_ref(&page_url).ok_or(
+            "that doesn't look like a GameBanana link (expected gamebanana.com/mods/<number> or /sounds/<number>)",
+        )?;
+        gb_mod_info_blocking(&model, id, vpk_path.as_deref())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -5093,12 +5096,11 @@ fn gb_str(v: &serde_json::Value, k: &str) -> String {
     v.get(k).and_then(|x| x.as_str()).unwrap_or_default().to_string()
 }
 
-fn gb_mod_info_blocking(page_url: &str, vpk_path: Option<&str>) -> Result<GbModInfo, String> {
-    let mod_id = parse_gamebanana_mod_id(page_url).ok_or(
-        "that doesn't look like a GameBanana mod link (expected gamebanana.com/mods/<number>)",
-    )?;
+/// `model` is a GameBanana submission type: "Mod" or "Sound" (Deadlock's sound
+/// mods are their own model on the site, ~as many as all Mods combined).
+fn gb_mod_info_blocking(model: &str, mod_id: u64, vpk_path: Option<&str>) -> Result<GbModInfo, String> {
     let body = gb_fetch_json(&format!(
-        "https://gamebanana.com/apiv11/Mod/{mod_id}/ProfilePage"
+        "https://gamebanana.com/apiv11/{model}/{mod_id}/ProfilePage"
     ))?;
     let name = gb_str(&body, "_sName");
     if name.is_empty() {
@@ -5151,7 +5153,10 @@ fn gb_mod_info_blocking(page_url: &str, vpk_path: Option<&str>) -> Result<GbModI
         .unwrap_or(false);
     Ok(GbModInfo {
         mod_id,
-        page_url: format!("https://gamebanana.com/mods/{mod_id}"),
+        page_url: format!(
+            "https://gamebanana.com/{}/{mod_id}",
+            if model == "Sound" { "sounds" } else { "mods" }
+        ),
         name,
         author: gb_str(&submitter, "_sName"),
         author_url: gb_str(&submitter, "_sProfileUrl"),
@@ -5160,16 +5165,22 @@ fn gb_mod_info_blocking(page_url: &str, vpk_path: Option<&str>) -> Result<GbModI
     })
 }
 
-/// Accepts a full mod URL (`https://gamebanana.com/mods/623518`, extra path or
-/// query tolerated) or a bare numeric id.
-fn parse_gamebanana_mod_id(input: &str) -> Option<u64> {
+/// Accepts a full GameBanana URL (`https://gamebanana.com/mods/623518` or
+/// `/sounds/87058`, extra path or query tolerated) or a bare numeric id
+/// (treated as a Mod). Returns the (model, id) pair.
+fn parse_gamebanana_ref(input: &str) -> Option<(String, u64)> {
     let t = input.trim();
     if let Ok(n) = t.parse::<u64>() {
-        return Some(n);
+        return Some(("Mod".into(), n));
     }
-    let rest = &t[t.find("/mods/")? + "/mods/".len()..];
+    let (model, marker) = if t.contains("/sounds/") {
+        ("Sound", "/sounds/")
+    } else {
+        ("Mod", "/mods/")
+    };
+    let rest = &t[t.find(marker)? + marker.len()..];
     let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-    digits.parse().ok()
+    digits.parse().ok().map(|n| (model.into(), n))
 }
 
 /// MD5 of a file via Windows' built-in certutil (no hash crate needed). The
@@ -5209,6 +5220,9 @@ fn gb_urlencode(s: &str) -> String {
 #[serde(rename_all = "camelCase")]
 pub struct GbSearchItem {
     pub mod_id: u64,
+    /// The submission type this item belongs to ("Mod" | "Sound") - files and
+    /// downloads must be fetched against the same model.
+    pub model: String,
     pub name: String,
     pub author: String,
     pub category: String,
@@ -5231,17 +5245,23 @@ pub struct GbSearchPage {
 
 /// Browse Deadlock mods on GameBanana: the game's submission feed when the
 /// query is empty, the site search scoped to Deadlock otherwise. `sort`
-/// ("downloads" | "likes" | "new") reorders the BROWSE feed via Mod/Index;
-/// query searches are always relevance-ranked by the site.
+/// ("downloads" | "likes" | "new") reorders the BROWSE feed via {model}/Index;
+/// query searches are always relevance-ranked by the site. `model` picks the
+/// submission type: "Mod" (default) or "Sound" (sound mods only).
 #[tauri::command]
 pub async fn gamebanana_search(
     query: String,
     page: u32,
     sort: Option<String>,
+    model: Option<String>,
 ) -> Result<GbSearchPage, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let q = query.trim().to_string();
         let page = page.max(1);
+        let model = match model.as_deref() {
+            Some("Sound") => "Sound",
+            _ => "Mod",
+        };
         let index_sort = match sort.as_deref() {
             Some("downloads") => Some("Generic_MostDownloaded"),
             Some("likes") => Some("Generic_MostLiked"),
@@ -5250,17 +5270,17 @@ pub async fn gamebanana_search(
         };
         let url = if !q.is_empty() {
             format!(
-                "https://gamebanana.com/apiv11/Util/Search/Results?_sModelName=Mod&_sOrder=best_match&_idGameRow={GB_DEADLOCK_GAME_ID}&_sSearchString={}&_nPage={page}",
+                "https://gamebanana.com/apiv11/Util/Search/Results?_sModelName={model}&_sOrder=best_match&_idGameRow={GB_DEADLOCK_GAME_ID}&_sSearchString={}&_nPage={page}",
                 gb_urlencode(&q)
             )
         } else if let Some(s) = index_sort {
             // %5B/%5D = literal [] (curl would otherwise glob them).
             format!(
-                "https://gamebanana.com/apiv11/Mod/Index?_nPerpage=15&_aFilters%5BGeneric_Game%5D={GB_DEADLOCK_GAME_ID}&_sSort={s}&_nPage={page}"
+                "https://gamebanana.com/apiv11/{model}/Index?_nPerpage=15&_aFilters%5BGeneric_Game%5D={GB_DEADLOCK_GAME_ID}&_sSort={s}&_nPage={page}"
             )
         } else {
             format!(
-                "https://gamebanana.com/apiv11/Game/{GB_DEADLOCK_GAME_ID}/Subfeed?_nPage={page}&_sSort=default&_csvModelInclusions=Mod"
+                "https://gamebanana.com/apiv11/Game/{GB_DEADLOCK_GAME_ID}/Subfeed?_nPage={page}&_sSort=default&_csvModelInclusions={model}"
             )
         };
         let body = gb_fetch_json(&url)?;
@@ -5274,6 +5294,10 @@ pub async fn gamebanana_search(
                 if name.is_empty() {
                     return None;
                 }
+                let rec_model = match gb_str(r, "_sModelName") {
+                    m if m.is_empty() => model.to_string(),
+                    m => m,
+                };
                 let thumb_url = r
                     .pointer("/_aPreviewMedia/_aImages/0")
                     .map(|i| {
@@ -5298,9 +5322,13 @@ pub async fn gamebanana_search(
                         .map(|c| gb_str(c, "_sName"))
                         .unwrap_or_default(),
                     page_url: match gb_str(r, "_sProfileUrl") {
-                        u if u.is_empty() => format!("https://gamebanana.com/mods/{mod_id}"),
+                        u if u.is_empty() => format!(
+                            "https://gamebanana.com/{}/{mod_id}",
+                            if rec_model == "Sound" { "sounds" } else { "mods" }
+                        ),
                         u => u,
                     },
+                    model: rec_model,
                     thumb_url,
                     likes: r.get("_nLikeCount").and_then(|v| v.as_u64()).unwrap_or(0),
                     views: r.get("_nViewCount").and_then(|v| v.as_u64()).unwrap_or(0),
@@ -5335,10 +5363,14 @@ pub struct GbFile {
 
 /// The downloadable files on a mod page (a page can ship several variants).
 #[tauri::command]
-pub async fn gamebanana_files(mod_id: u64) -> Result<Vec<GbFile>, String> {
+pub async fn gamebanana_files(mod_id: u64, model: Option<String>) -> Result<Vec<GbFile>, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        let model = match model.as_deref() {
+            Some("Sound") => "Sound",
+            _ => "Mod",
+        };
         let body = gb_fetch_json(&format!(
-            "https://gamebanana.com/apiv11/Mod/{mod_id}/ProfilePage"
+            "https://gamebanana.com/apiv11/{model}/{mod_id}/ProfilePage"
         ))?;
         let empty = vec![];
         Ok(body
@@ -5384,6 +5416,7 @@ pub async fn gamebanana_download(
     mod_id: u64,
     download_url: String,
     file_name: String,
+    model: Option<String>,
 ) -> Result<GbDownloadResult, String> {
     use tauri::Manager;
     let dest_root = app
@@ -5392,6 +5425,10 @@ pub async fn gamebanana_download(
         .map_err(|e| e.to_string())?
         .join("gb_downloads");
     tauri::async_runtime::spawn_blocking(move || {
+        let model = match model.as_deref() {
+            Some("Sound") => "Sound",
+            _ => "Mod",
+        };
         let safe_name = file_name.replace(['/', '\\'], "_");
         let lower = safe_name.to_lowercase();
         if lower.ends_with(".rar") || lower.ends_with(".7z") {
@@ -5400,7 +5437,7 @@ pub async fn gamebanana_download(
             );
         }
         // Fresh dir per mod so an older version's files can't mix in.
-        let dir = dest_root.join(mod_id.to_string());
+        let dir = dest_root.join(format!("{}{mod_id}", if model == "Sound" { "s" } else { "" }));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         // Windows-native curl/tar (see download_tools for why not bare names).
@@ -5438,7 +5475,7 @@ pub async fn gamebanana_download(
             ));
         }
         // Verify the pull against the page BEFORE unpacking.
-        let info = gb_mod_info_blocking(&mod_id.to_string(), Some(&dest.to_string_lossy()))?;
+        let info = gb_mod_info_blocking(model, mod_id, Some(&dest.to_string_lossy()))?;
         if lower.ends_with(".zip") {
             let out = crate::procutil::quiet(pick("tar"))
                 .args(["-xf", &dest.to_string_lossy(), "-C", &dir.to_string_lossy()])
@@ -5782,19 +5819,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn gamebanana_id_parsing() {
-        assert_eq!(parse_gamebanana_mod_id("623518"), Some(623518));
+    fn gamebanana_ref_parsing() {
+        assert_eq!(parse_gamebanana_ref("623518"), Some(("Mod".into(), 623518)));
         assert_eq!(
-            parse_gamebanana_mod_id("https://gamebanana.com/mods/623518"),
-            Some(623518)
+            parse_gamebanana_ref("https://gamebanana.com/mods/623518"),
+            Some(("Mod".into(), 623518))
         );
         assert_eq!(
-            parse_gamebanana_mod_id("  gamebanana.com/mods/623518?tab=files  "),
-            Some(623518)
+            parse_gamebanana_ref("  gamebanana.com/mods/623518?tab=files  "),
+            Some(("Mod".into(), 623518))
         );
-        assert_eq!(parse_gamebanana_mod_id("https://gamebanana.com/tools/20646"), None);
-        assert_eq!(parse_gamebanana_mod_id("not a url"), None);
-        assert_eq!(parse_gamebanana_mod_id("https://gamebanana.com/mods/"), None);
+        assert_eq!(
+            parse_gamebanana_ref("https://gamebanana.com/sounds/87058"),
+            Some(("Sound".into(), 87058))
+        );
+        assert_eq!(parse_gamebanana_ref("https://gamebanana.com/tools/20646"), None);
+        assert_eq!(parse_gamebanana_ref("not a url"), None);
+        assert_eq!(parse_gamebanana_ref("https://gamebanana.com/mods/"), None);
     }
 
     #[test]
@@ -5829,7 +5870,7 @@ mod tests {
     #[test]
     #[ignore]
     fn live_gamebanana_search_and_files() {
-        let feed = tauri::async_runtime::block_on(gamebanana_search(String::new(), 1, None))
+        let feed = tauri::async_runtime::block_on(gamebanana_search(String::new(), 1, None, None))
             .expect("feed should load");
         assert!(feed.items.len() >= 10, "the Deadlock feed has pages of mods");
         assert!(!feed.is_complete);
@@ -5839,6 +5880,7 @@ mod tests {
             String::new(),
             1,
             Some("downloads".into()),
+            None,
         ))
         .expect("sorted feed should load");
         assert!(by_dl.items.len() >= 10);
@@ -5847,14 +5889,33 @@ mod tests {
             "most-downloaded should differ from the default feed's first item"
         );
 
-        let hits = tauri::async_runtime::block_on(gamebanana_search("music".into(), 1, None))
+        let hits = tauri::async_runtime::block_on(gamebanana_search("music".into(), 1, None, None))
             .expect("search should load");
         assert!(!hits.items.is_empty(), "searching music finds sound mods");
 
-        let files = tauri::async_runtime::block_on(gamebanana_files(623518))
+        // The Sound submission type: Deadlock's dedicated sound-mod section.
+        let sounds = tauri::async_runtime::block_on(gamebanana_search(
+            "abrams".into(),
+            1,
+            None,
+            Some("Sound".into()),
+        ))
+        .expect("sound search should load");
+        assert!(!sounds.items.is_empty(), "hero-name sound search finds sounds");
+        assert!(sounds.items.iter().all(|i| i.model == "Sound"));
+        assert!(sounds.items[0].page_url.contains("/sounds/"));
+
+        let files = tauri::async_runtime::block_on(gamebanana_files(623518, None))
             .expect("files should load");
         assert!(!files.is_empty());
         assert!(files[0].download_url.starts_with("https://"));
+
+        let sfiles = tauri::async_runtime::block_on(gamebanana_files(
+            sounds.items[0].mod_id,
+            Some("Sound".into()),
+        ))
+        .expect("sound files should load");
+        assert!(!sfiles.is_empty(), "sound submissions ship files too");
     }
 
     #[test]

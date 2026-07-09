@@ -968,6 +968,8 @@ export function gamebananaModInfo(pageUrl: string, vpkPath?: string): Promise<Gb
 
 export interface GbSearchItem {
   modId: number;
+  /** Submission type ("Mod" | "Sound") - pass back to files/download calls. */
+  model: string;
   name: string;
   author: string;
   category: string;
@@ -988,13 +990,20 @@ export interface GbSearchPage {
 
 /** Browse Deadlock mods on GameBanana: the submission feed when `query` is
  *  empty, the site search scoped to Deadlock otherwise. `sort` reorders the
- *  browse feed ("downloads" | "likes" | "new"); searches are relevance-ranked. */
+ *  browse feed ("downloads" | "likes" | "new"); searches are relevance-ranked.
+ *  `model` picks the submission type: "Mod" (default) or "Sound". */
 export function gamebananaSearch(
   query: string,
   page: number,
   sort?: string,
+  model?: string,
 ): Promise<GbSearchPage> {
-  return invoke("gamebanana_search", { query, page, sort: sort ?? null });
+  return invoke("gamebanana_search", {
+    query,
+    page,
+    sort: sort ?? null,
+    model: model ?? null,
+  });
 }
 
 export interface GbFile {
@@ -1006,8 +1015,8 @@ export interface GbFile {
 }
 
 /** The downloadable files on a mod page (a page can ship several variants). */
-export function gamebananaFiles(modId: number): Promise<GbFile[]> {
-  return invoke("gamebanana_files", { modId });
+export function gamebananaFiles(modId: number, model?: string): Promise<GbFile[]> {
+  return invoke("gamebanana_files", { modId, model: model ?? null });
 }
 
 export interface GbDownloadResult {
@@ -1023,8 +1032,14 @@ export function gamebananaDownload(
   modId: number,
   downloadUrl: string,
   fileName: string,
+  model?: string,
 ): Promise<GbDownloadResult> {
-  return invoke("gamebanana_download", { modId, downloadUrl, fileName });
+  return invoke("gamebanana_download", {
+    modId,
+    downloadUrl,
+    fileName,
+    model: model ?? null,
+  });
 }
 
 /** Copy an audio file into the app-data sound library; returns the copy. */

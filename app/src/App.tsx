@@ -709,8 +709,9 @@ export default function App() {
   );
   // Set by the Sound Library tab so audio dropped there is shelved, not slotted.
   const libraryDropRef = useRef<((paths: string[]) => void) | null>(null);
-  // A slot's "Find on GameBanana": the query the browser tab searches on open.
-  const [gbSeed, setGbSeed] = useState<string | null>(null);
+  // A slot's "Find on GameBanana": the search the browser tab runs on open.
+  // `sounds` locks it to GameBanana's dedicated sound-mod section.
+  const [gbSeed, setGbSeed] = useState<{ query: string; sounds: boolean } | null>(null);
 
   // ---- Startup game-data preload ----------------------------------------
   // Warm every tab's data (rosters, the sound index, then each hero's detail
@@ -3136,8 +3137,9 @@ export default function App() {
   }
 
   // The split-button's right half: jump to GameBanana searching for this
-  // sound. Hero/item names are the reliable search handles; other slots fall
-  // back to their tab's name.
+  // sound - locked to the site's dedicated Sounds section (it's a sound slot,
+  // so skins/HUDs are never what you want). Hero/item names are the reliable
+  // search handles; other slots fall back to their tab's name.
   function findSoundOnline(ev: EventProject) {
     const q =
       ev.group === "heroes" && selectedHeroInfo
@@ -3145,9 +3147,9 @@ export default function App() {
         : ev.group === ITEMS && selectedItem
           ? selectedItem.displayName
           : ev.group === UNSORTED
-            ? "" // no useful handle - just open the browser
+            ? "" // no useful handle - browse the whole Sounds section
             : (TAB_LABELS[ev.group] ?? ev.group);
-    if (q) setGbSeed(q);
+    setGbSeed({ query: q, sounds: true });
     setActiveTab(GAMEBANANA);
   }
 
@@ -3657,7 +3659,7 @@ export default function App() {
               for (const v of vpks) if (!next.includes(v)) next.push(v);
               updateSettings({ importedMods: next });
             }}
-            seedQuery={gbSeed}
+            seed={gbSeed}
             onSeedConsumed={() => setGbSeed(null)}
           />
         ) : activeTab === LIBRARY ? (
