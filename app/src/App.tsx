@@ -210,7 +210,7 @@ const TAB_CATEGORIES: { label: string; tabs: string[] }[] = [
  *  it, with the loose-file browser (All Sounds) as the catch-all at the
  *  bottom — child order follows the `tabs` array, and that one is pushed
  *  last. */
-const SOUND_MASTER = "Sound";
+const SOUND_MASTER = "Sounds";
 const SOUND_MASTER_CATEGORIES = ["In-game", "Match", "Game SFX"];
 const SOUND_MASTER_TABS = ["ui", UNSORTED, REPLACE_SOUNDS];
 
@@ -3227,7 +3227,10 @@ export default function App() {
   const renderTabButton = (g: string, indented: boolean, bootIdx?: number) => {
     const count = tabCount(g);
     const active = g === activeTab;
-    const tint = !indented && (g === "heroes" || g === ITEMS) ? accentFor({ group: g, side: "" }) : null;
+    const tint =
+      !indented && (g === "heroes" || g === ITEMS || g === POSTERS)
+        ? accentFor({ group: g, side: "" })
+        : null;
     if (tint) {
       return (
         <button
