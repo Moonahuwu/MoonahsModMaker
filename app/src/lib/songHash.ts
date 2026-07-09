@@ -13,6 +13,9 @@ import type { Song } from "../types";
 const RENDER_V = "v2";
 
 export function songHash(song: Song): string {
+  // Same filter as buildCompileConfig: a layer with no file yet doesn't
+  // compile, so it must not dirty the hash either.
+  const layers = (song.layers ?? []).filter((l) => l.sourceAudio);
   return [
     RENDER_V,
     song.sourceMp3,
@@ -23,6 +26,11 @@ export function songHash(song: Song): string {
     song.fadeIn,
     song.fadeOut,
     song.looping ? 1 : 0,
+    // Only present when layers exist so every pre-layers track's hash (and
+    // thus its compiled status) is preserved byte-for-byte.
+    ...(layers.length
+      ? [layers.map((l) => `${l.sourceAudio}@${l.gainDb}`).join(",")]
+      : []),
   ].join("|");
 }
 

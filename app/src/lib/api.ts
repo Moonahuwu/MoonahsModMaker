@@ -16,6 +16,8 @@ export interface ProcessReq {
   gainDb: number;
   fadeIn: number;
   fadeOut: number;
+  /** Extra tracks mixed under the clip - preview matches the compile exactly. */
+  layers?: { sourceAudio: string; gainDb: number }[];
   ffmpegPath?: string;
 }
 
@@ -68,6 +70,8 @@ export interface SongCompile {
   fadeIn: number;
   fadeOut: number;
   looping: boolean;
+  /** Extra tracks mixed under this one at render (events never see layers). */
+  layers?: { sourceAudio: string; gainDb: number }[];
   /** Fingerprint of the current params; matches the skip check in the backend. */
   currentHash: string;
   /** Hash recorded after the last successful compile (null = never compiled). */

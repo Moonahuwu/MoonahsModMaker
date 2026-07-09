@@ -30,6 +30,10 @@ pub struct SongCompile {
     pub fade_out: f64,
     #[serde(default)]
     pub looping: bool,
+    /// Extra tracks mixed under this one at render time (ffmpeg amix). The
+    /// events file never sees them - the output is still one audio file.
+    #[serde(default)]
+    pub layers: Vec<crate::audio::Layer>,
     /// Hash of the current {source,trim,gain,fades,looping,name}. When this equals
     /// `last_compiled_hash` and the `.vsnd_c` already exists, render+compile are
     /// skipped. `None` disables the skip (always (re)compile).
@@ -2557,6 +2561,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
         gain_db: f64,
         fade_in: f64,
         fade_out: f64,
+        layers: Vec<crate::audio::Layer>,
         wav: PathBuf,
         compiled: PathBuf,
     }
@@ -2581,6 +2586,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                 gain_db: song.gain_db,
                 fade_in: song.fade_in,
                 fade_out: song.fade_out,
+                layers: song.layers.clone(),
                 wav: content_root
                     .join(folder.trim_matches('/'))
                     .join(format!("{}.wav", song.sound_name)),
@@ -2626,6 +2632,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                 gain_db: ov.gain_db,
                 fade_in: ov.fade_in,
                 fade_out: ov.fade_out,
+                layers: vec![],
                 wav: content_root
                     .join(folder.trim_matches('/'))
                     .join(format!("{stem}.wav")),
@@ -2671,6 +2678,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                         j.gain_db,
                         j.fade_in,
                         j.fade_out,
+                        &j.layers,
                         &j.wav.to_string_lossy(),
                     );
                     if let Some(tx) = &live {
@@ -3794,6 +3802,7 @@ mod tests {
                 fade_in: 0.0,
                 fade_out: 0.0,
                 looping: false,
+                layers: vec![],
                 current_hash: None,
                 last_compiled_hash: None,
             }],
@@ -3959,6 +3968,7 @@ mod tests {
                     fade_in: 0.0,
                     fade_out: 1.0,
                     looping: true,
+                    layers: vec![],
                     current_hash: None,
                     last_compiled_hash: None,
                 }],
@@ -4236,6 +4246,7 @@ mod tests {
             fade_in: 0.0,
             fade_out: 0.0,
             looping: false,
+            layers: vec![],
             current_hash: current.map(String::from),
             last_compiled_hash: last.map(String::from),
         }

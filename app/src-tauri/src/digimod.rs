@@ -430,6 +430,7 @@ pub fn compile_digimod(
                 s.gain_db,
                 s.fade_in,
                 s.fade_out,
+                &[],
                 &wav.to_string_lossy(),
             )
         } else {

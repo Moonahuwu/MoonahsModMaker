@@ -27,9 +27,23 @@ pub struct ProcessReq {
     /// 0 = no fade.
     #[serde(default)]
     pub fade_out: f64,
+    /// Extra tracks mixed UNDER the clip (see `render_to`'s layer notes).
+    #[serde(default)]
+    pub layers: Vec<Layer>,
     /// Path/name of the ffmpeg binary; defaults to `ffmpeg` (on PATH).
     #[serde(default)]
     pub ffmpeg_path: Option<String>,
+}
+
+/// One extra track mixed into a clip: plays from the clip's start at its own
+/// volume, cut to the base clip's length. The events file never sees layers -
+/// they're baked into the single rendered audio file.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Layer {
+    pub source_audio: String,
+    #[serde(default)]
+    pub gain_db: f64,
 }
 
 fn staging_dir() -> PathBuf {
@@ -46,7 +60,17 @@ fn fmt(v: f64) -> String {
 /// Build the ffmpeg `-af` filter chain: gain, optional fade-in at the start, and
 /// optional fade-out anchored to the end of the (trimmed) clip of `duration`.
 fn build_af(gain_db: f64, duration: f64, fade_in: f64, fade_out: f64) -> String {
-    let mut af = format!("volume={gain_db}dB");
+    format!(
+        "volume={gain_db}dB{}",
+        fades_af(duration, fade_in, fade_out)
+    )
+}
+
+/// Just the fade filters (leading commas), or "" when no fades. Split out so
+/// the layered path can apply fades AFTER the mix - a fade-out describes the
+/// whole sound bite, not only the base track.
+fn fades_af(duration: f64, fade_in: f64, fade_out: f64) -> String {
+    let mut af = String::new();
     if fade_in > 0.0 {
         let d = fade_in.min(duration).max(0.0);
         af.push_str(&format!(",afade=t=in:st=0:d={}", fmt(d)));
@@ -57,6 +81,29 @@ fn build_af(gain_db: f64, duration: f64, fade_in: f64, fade_out: f64) -> String 
         af.push_str(&format!(",afade=t=out:st={}:d={}", fmt(st), fmt(d)));
     }
     af
+}
+
+/// The `-filter_complex` graph for a layered clip. Every input is normalized
+/// to one format first (amix does NOT resample mismatched inputs), given its
+/// own volume, then mixed cut to the BASE clip's length (`duration=first`,
+/// input 0 is trimmed by `-ss`/`-t`). `normalize=0` keeps levels as-is instead
+/// of amix's default divide-by-N ducking; fades run on the finished mix.
+fn mix_graph(gain_db: f64, duration: f64, fade_in: f64, fade_out: f64, layers: &[Layer]) -> String {
+    let fmt_in = "aresample=48000,aformat=channel_layouts=stereo";
+    let mut graph = String::new();
+    let mut pads = String::new();
+    graph.push_str(&format!("[0:a]{fmt_in},volume={gain_db}dB[a0];"));
+    pads.push_str("[a0]");
+    for (i, l) in layers.iter().enumerate() {
+        graph.push_str(&format!("[{}:a]{fmt_in},volume={}dB[a{}];", i + 1, l.gain_db, i + 1));
+        pads.push_str(&format!("[a{}]", i + 1));
+    }
+    graph.push_str(&format!(
+        "{pads}amix=inputs={}:duration=first:normalize=0{}[out]",
+        layers.len() + 1,
+        fades_af(duration, fade_in, fade_out)
+    ));
+    graph
 }
 
 fn hash_key(key: &str) -> String {
@@ -102,7 +149,8 @@ pub fn probe_duration(ffmpeg_path: Option<&str>, path: &str) -> Result<f64, Stri
 }
 
 /// Render trimmed + gain-boosted audio to a specific output path (used by the
-/// compile pipeline to place the source clip in the content tree).
+/// compile pipeline to place the source clip in the content tree). `layers`
+/// mix extra tracks under the clip - the output is still ONE audio file.
 pub fn render_to(
     ffmpeg_path: Option<&str>,
     source: &str,
@@ -111,6 +159,7 @@ pub fn render_to(
     gain_db: f64,
     fade_in: f64,
     fade_out: f64,
+    layers: &[Layer],
     out_path: &str,
 ) -> Result<(), String> {
     let ffmpeg = ffmpeg_path.unwrap_or("ffmpeg");
@@ -119,11 +168,10 @@ pub fn render_to(
     // the fade filters see the TRIMMED timeline. As an output option the fades
     // land on the original timeline instead — a trimmed track's fade-out fires
     // before/at the segment start (silent or fading from the beginning).
-    let result = crate::procutil::quiet(ffmpeg)
-        .args([
-            "-y",
-            "-ss",
-            &fmt(trim_start),
+    let mut cmd = crate::procutil::quiet(ffmpeg);
+    cmd.args(["-y", "-ss", &fmt(trim_start)]);
+    if layers.is_empty() {
+        cmd.args([
             "-i",
             source,
             "-t",
@@ -131,7 +179,24 @@ pub fn render_to(
             "-af",
             &build_af(gain_db, duration, fade_in, fade_out),
             out_path,
-        ])
+        ]);
+    } else {
+        // Input-side `-t` on the base: amix's `duration=first` measures the
+        // first INPUT stream, so the base must already be cut to the trim
+        // window or the mix would run to the file's end.
+        cmd.args(["-t", &fmt(duration), "-i", source]);
+        for l in layers {
+            cmd.args(["-i", &l.source_audio]);
+        }
+        cmd.args([
+            "-filter_complex",
+            &mix_graph(gain_db, duration, fade_in, fade_out, layers),
+            "-map",
+            "[out]",
+            out_path,
+        ]);
+    }
+    let result = cmd
         .output()
         .map_err(|e| format!("running {ffmpeg}: {e}"))?;
     if result.status.success() {
@@ -143,40 +208,36 @@ pub fn render_to(
 
 /// Render the processed preview. Returns the absolute path of the cached WAV.
 /// Identical requests reuse the cached file (same hash → skip re-render).
+/// Previews go through `render_to` so a layered clip previews EXACTLY as it
+/// compiles.
 pub fn process(req: &ProcessReq) -> Result<String, String> {
-    let ffmpeg = req.ffmpeg_path.as_deref().unwrap_or("ffmpeg");
     // "v2" salts the cache past the -ss placement fix (fades on the trimmed
     // timeline) so previews rendered with the old broken order aren't reused.
+    let layers_key: String = req
+        .layers
+        .iter()
+        .map(|l| format!("{}@{}", l.source_audio, l.gain_db))
+        .collect::<Vec<_>>()
+        .join(",");
     let key = format!(
-        "v2|{}|{}|{}|{}|{}|{}",
+        "v2|{}|{}|{}|{}|{}|{}|{layers_key}",
         req.source_path, req.trim_start, req.trim_end, req.gain_db, req.fade_in, req.fade_out
     );
     let out = staging_dir().join(format!("preview_{}.wav", hash_key(&key)));
     if out.exists() {
         return Ok(out.to_string_lossy().into_owned());
     }
-
-    let duration = (req.trim_end - req.trim_start).max(0.01);
     let out_str = out.to_string_lossy().into_owned();
-    // `-ss` before `-i` — see render_to: fades must run on the trimmed timeline.
-    let result = crate::procutil::quiet(ffmpeg)
-        .args([
-            "-y",
-            "-ss",
-            &fmt(req.trim_start),
-            "-i",
-            &req.source_path,
-            "-t",
-            &fmt(duration),
-            "-af",
-            &build_af(req.gain_db, duration, req.fade_in, req.fade_out),
-            &out_str,
-        ])
-        .output()
-        .map_err(|e| format!("running {ffmpeg}: {e}"))?;
-
-    if !result.status.success() {
-        return Err(String::from_utf8_lossy(&result.stderr).trim().to_string());
-    }
+    render_to(
+        req.ffmpeg_path.as_deref(),
+        &req.source_path,
+        req.trim_start,
+        req.trim_end,
+        req.gain_db,
+        req.fade_in,
+        req.fade_out,
+        &req.layers,
+        &out_str,
+    )?;
     Ok(out_str)
 }

@@ -348,6 +348,9 @@ export function buildCompileConfig(
       fadeIn: song.fadeIn,
       fadeOut: song.fadeOut,
       looping: song.looping,
+      layers: (song.layers ?? [])
+        .filter((l) => l.sourceAudio)
+        .map((l) => ({ sourceAudio: l.sourceAudio, gainDb: l.gainDb })),
       currentHash: songHash(song),
       lastCompiledHash: song.lastCompiledHash,
     })),

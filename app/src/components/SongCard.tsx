@@ -1,11 +1,16 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import { processAudio } from "../lib/api";
 import { songStatus } from "../lib/songHash";
-import type { Song } from "../types";
+import type { Song, SongLayer } from "../types";
 import { Waveform } from "./Waveform";
 import { StockWaveform } from "./StockWaveform";
+
+const AUDIO_FILTERS = [
+  { name: "Audio", extensions: ["mp3", "wav", "flac", "ogg", "m4a", "aac"] },
+];
 
 // Exception-based status: compiled is the normal state, so it gets only the
 // colored dot — badges are reserved for rows that still need a compile.
@@ -103,7 +108,10 @@ export function SongCard({
 
   const url = convertFileSrc(song.sourceMp3);
   const length = Math.max(0, song.trimEnd - song.trimStart);
-  const paramKey = `${song.sourceMp3}|${song.trimStart}|${song.trimEnd}|${song.gainDb}|${song.fadeIn}|${song.fadeOut}`;
+  // Layers with a file picked - what the preview mixes and the compile ships.
+  const activeLayers = (song.layers ?? []).filter((l) => l.sourceAudio);
+  const layersKey = activeLayers.map((l) => `${l.sourceAudio}@${l.gainDb}`).join(",");
+  const paramKey = `${song.sourceMp3}|${song.trimStart}|${song.trimEnd}|${song.gainDb}|${song.fadeIn}|${song.fadeOut}|${layersKey}`;
 
   // Keep the rename draft in sync if soundName changes elsewhere.
   useEffect(() => setNameDraft(song.soundName), [song.soundName]);
@@ -144,6 +152,7 @@ export function SongCard({
         gainDb: song.gainDb,
         fadeIn: song.fadeIn,
         fadeOut: song.fadeOut,
+        layers: activeLayers.map((l) => ({ sourceAudio: l.sourceAudio, gainDb: l.gainDb })),
         ffmpegPath,
       });
       const audio = new Audio(convertFileSrc(outPath));
@@ -181,9 +190,38 @@ export function SongCard({
     fmtTime(length),
     song.gainDb !== 0 ? `${song.gainDb > 0 ? "+" : ""}${song.gainDb}dB` : null,
     song.looping ? "loop" : null,
+    activeLayers.length > 0
+      ? `${activeLayers.length} layer${activeLayers.length > 1 ? "s" : ""}`
+      : null,
   ]
     .filter(Boolean)
     .join(" · ");
+
+  async function addLayers() {
+    const sel = await open({
+      multiple: true,
+      title: "Mix which audio file(s) into this track?",
+      filters: AUDIO_FILTERS,
+    });
+    if (!sel) return;
+    const files = Array.isArray(sel) ? sel : [sel];
+    const added: SongLayer[] = files.map((f) => ({
+      id: crypto.randomUUID(),
+      sourceAudio: f,
+      gainDb: 0,
+    }));
+    onChange({ layers: [...(song.layers ?? []), ...added] });
+  }
+
+  function updateLayer(id: string, patch: Partial<SongLayer>) {
+    onChange({
+      layers: (song.layers ?? []).map((l) => (l.id === id ? { ...l, ...patch } : l)),
+    });
+  }
+
+  function removeLayer(id: string) {
+    onChange({ layers: (song.layers ?? []).filter((l) => l.id !== id) });
+  }
 
   const status = songStatus(song);
   const badge = STATUS_BADGE[status];
@@ -473,6 +511,69 @@ export function SongCard({
                     {song.fadeOut.toFixed(1)}s
                   </span>
                 </label>
+              </div>
+
+              {/* Layers: extra tracks mixed under this one. The sound event and
+                  its pool stay untouched - the mix ships as this single file. */}
+              <div className="mt-3 border-t border-zinc-800/70 pt-2.5">
+                <div className="flex items-center justify-between">
+                  <span
+                    className="text-[11px] text-zinc-500"
+                    title="Extra sounds that play together with this track - mixed into the one compiled file, cut to this track's length. Fades apply to the finished mix."
+                  >
+                    {(song.layers ?? []).length > 0
+                      ? "Layers - play together with this track"
+                      : "Layers - mix another sound on top of this one"}
+                  </span>
+                  <button
+                    onClick={() => void addLayers()}
+                    className="rounded border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-400 transition hover:border-emerald-500/70 hover:text-emerald-300"
+                  >
+                    + Add layer
+                  </button>
+                </div>
+                {(song.layers ?? []).length > 0 && (
+                  <div className="mt-2 flex flex-col gap-1.5">
+                    {(song.layers ?? []).map((l) => (
+                      <div
+                        key={l.id}
+                        className="flex items-center gap-3 rounded-md border border-zinc-800 bg-zinc-950/40 px-2.5 py-1.5"
+                      >
+                        <span
+                          className="min-w-0 flex-1 truncate text-[11px] text-zinc-300"
+                          title={l.sourceAudio}
+                        >
+                          {l.sourceAudio.split(/[\\/]/).pop()}
+                        </span>
+                        <label className="flex shrink-0 items-center gap-2 text-xs text-zinc-400">
+                          <span className="text-[11px] text-zinc-500">Gain</span>
+                          <input
+                            type="range"
+                            min={-24}
+                            max={12}
+                            step={0.5}
+                            value={l.gainDb}
+                            onChange={(e) =>
+                              updateLayer(l.id, { gainDb: Number(e.target.value) })
+                            }
+                            className="w-24 accent-emerald-500"
+                          />
+                          <span className="w-14 text-right tabular-nums text-[11px] text-zinc-300">
+                            {l.gainDb > 0 ? "+" : ""}
+                            {l.gainDb}dB
+                          </span>
+                        </label>
+                        <button
+                          onClick={() => removeLayer(l.id)}
+                          aria-label="Remove layer"
+                          className="shrink-0 rounded p-0.5 text-zinc-500 transition hover:bg-red-950/40 hover:text-red-300"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           </motion.div>

@@ -21,6 +21,15 @@ export interface DerivedPaths {
 export type OutputMode = "folder" | "vpk";
 export type DurationMode = "auto" | "manual";
 
+/** One extra track mixed under a song at render time: plays from the clip's
+ *  start at its own volume, cut to the clip's length. The sound event and its
+ *  pool are untouched - layers are baked into the one rendered audio file. */
+export interface SongLayer {
+  id: string;
+  sourceAudio: string;
+  gainDb: number;
+}
+
 export interface Song {
   id: string;
   label: string;
@@ -32,6 +41,8 @@ export interface Song {
   fadeIn: number;
   fadeOut: number;
   looping: boolean;
+  /** Extra tracks mixed into this one (absent/empty = plain single track). */
+  layers?: SongLayer[];
   order: number;
   lastCompiledHash: string | null;
   /** When converted from a mod pack (absorb / edit-adopted): the original
