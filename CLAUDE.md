@@ -10,8 +10,10 @@ desktop app for building custom Deadlock mods and compiling them into a
 ready-to-install `.vpk`. It started as a music modder (match-intro,
 urn/Idol, hero ability music) and has grown to cover most of the game's sound events
 (map objectives, shop, UI/menu music, per-hero and per-item sounds), loose-file sound
-replacement, a gameplay config editor + randomizer, one-click custom-server hosting with
-an in-game F8 mod menu, and an experimental VFX recolor tab. The core invariant for
+replacement, hero/item image + wall-art (poster) replacement, a generated jumpscare/death
+HUD mod (DigiMaster), an experimental panorama UI editor with live preview (UI Master),
+a gameplay config editor + randomizer, one-click custom-server hosting with an in-game
+F8 mod menu, and an experimental VFX recolor tab. The core invariant for
 sound-event edits is **MERGE, NEVER REPLACE**: the app splices *only the array entries it
 owns* into the game's shared sound-event files and leaves the stock track and every other
 mod's entries byte-for-byte intact.
@@ -95,9 +97,12 @@ contains `{` braces).
   into **slots** = `(eventName, arrayKey, eventsRelpath)` grouped into **tabs/groups**;
   `Project::default_for_match_intro()` builds the default slot set (intro, urn, rift,
   midboss, powerups, teamobj, heroes, shop, ui). Beyond slots, the project also carries
-  override subsystems: `icon_mods`, `sound_overrides` (loose-file `.vsnd_c` replacements),
-  `effect_overrides` (VFX recolor), `vdata_overrides` / `global_overrides` /
-  `world_overrides` (gameplay config editor).
+  override subsystems: `icon_mods` (also hero images + ability icons + SVG name logos:
+  `.vsvg_c` targets wrap the PNG in an `<image>` svg), `sound_overrides` (loose-file
+  `.vsnd_c` replacements), `effect_overrides` (VFX recolor), `vdata_overrides` /
+  `global_overrides` / `world_overrides` (gameplay config editor), `poster_overrides`
+  (wall art), `digimod` (Jumpscares/Deaths config incl. the shared sound library +
+  `merge_vpks`), and `ui_overrides` (UI Master whole-file panorama edits).
 - `compile.rs` — the one-button pipeline. `compile_project` is **async** and wraps the
   heavy work in `spawn_blocking` so the UI stays responsive (returns a `CompileReport`
   with panic-safe error handling). Per song: ffmpeg render → `resourcecompiler`
@@ -106,7 +111,19 @@ contains `{` braces).
   folder or `pak01_dir.vpk`. Produces two variants under `outputDir`: `mine/` (your
   tracks only, always) and `combined/` (yours + imported mods, when any). `skip_compile`
   bypasses resourcecompiler for tests. `is_up_to_date()` skips unchanged songs via a hash.
+  Every recorded step carries a `pct` (0..=99) computed from `estimate_steps()`'s step
+  budget (drives the UI progress bar); per-item failures `soft_fail` and the run continues
+  with a failure roll-up at the end.
 - `audio.rs` — ffmpeg probe + render (trim/gain/fade-in/fade-out via `build_af`).
+- `digimod.rs` — the Jumpscares/Deaths (DigiMaster) generator: proven HUD engine
+  templates in `app/src-tauri/templates/digimod/` (base_hud hook + runtime-panel JS with
+  CONFIG/LIBRARY injection markers), videos → VP9 webm (raw-shipped; panorama plays sound
+  via generated `Digi.*` events, one per shared library sound), PNGs → vtex via the
+  panorama_image_list trick, base_hud compiles LAST (file:// refs resolve against the
+  game tree). `merge_vpks` absorbs other base_hud UI mods (their panorama files ride
+  raw; `inject_hooks` splices the digi hooks into THEIR base_hud). `import_from_vpk`
+  adopts an installed DigiMaster pak back into editable config (raw-extract the vjs_c:
+  panorama resources embed source verbatim; VRF FileExtract can't do vjs_c).
 - `vpk.rs` — shells out to the C# helper.
 - `install.rs` — one-click install into Deadlock's `game/citadel/addons`. Addons mount as
   `pakNN_dir.vpk` (NN = 01..99); a slot is "occupied" if any file there ends `pak<NN>_dir.vpk`
@@ -138,6 +155,18 @@ contains `{` braces).
   proven sufficient for audio + soundevents compiles — plus static ffmpeg/ffprobe)
   into app-data `tools/` via the System32-native curl+tar (bare names could hit
   MSYS/GNU tar, which chokes on `C:` paths). See "One-stop setup" under Build/run.
+  Newer groups: digimod (`digimod_detected`/`list_ui_mods` — 4MB head-sniff of addon
+  paks; NOTE a vpk dir tree stores ext/dir/stem as SEPARATE strings, so needles must be
+  bare stems; `import_digimod`, `extract_video_audio`, `media_thumb` — ffmpeg thumbs
+  disk-cached in app-data), UI Master (`list_ui_files`, `read_ui_file`,
+  `push_ui_files`/`clear_pushed_ui` — compiles edits and drops them LOOSE into our own
+  `citadel/eim_dev` dir mounted top-priority via `install::ensure_citadel_searchpath`;
+  manifest-tracked for clean removal), and the one-click updater
+  (`check_app_update`/`install_app_update` — GitHub latest release; numeric tags only,
+  attach the NSIS `-setup.exe` asset to releases to light up "Install now").
+  **Sync-command rule:** heavy commands MUST be `async` + `spawn_blocking` — sync Tauri
+  commands run ON THE UI THREAD and freeze the window (this bit hero_detail/hero_images/
+  list_ui_mods/check_app_update before they were wrapped).
 
 #### The CSDK compile recipe (load-bearing, don't "fix" casually)
 Headless compile uses the community **Reduced CSDK** toolchain via the content/game
@@ -171,9 +200,13 @@ durably via `save_settings`/`load_settings` (app-data `settings.json`) with a lo
 cache for instant first paint (`lib/settings.ts`, with `buildCompileConfig` +
 `installSrcVpk`).
 
-**Tabs.** The left sidebar renders project slot groups (`intro`, `urn`, `rift`,
-`midboss`, `powerups`, `teamobj`, `heroes`, `shop`, `ui` — the map-objective ones
-collapse under a "Map" category via `TAB_CATEGORIES`) plus non-slot tabs: `items`
+**Tabs.** The sidebar is resizable (drag handle on its edge; dbl-click resets; width in
+localStorage) and organizes into four tinted section buttons: HEROES (mint #a7fff1),
+ITEMS (orange), WALL ART (violet), and the "SOUNDS" master (sky) which nests the
+`TAB_CATEGORIES` groups (Match / In-game / Game SFX) plus `ui`, `unsorted`, and
+`replacesounds` (labeled "All Sounds") with animated collapse/expand. Slot groups:
+(`intro`, `match`, `stingers`, `brawl`, `urn`, `rift`, `midboss`, `powerups`, `teamobj`,
+`shop`, `gameplay`, `combat`, `mapsfx`, `ambience`, `npcs`, `ui`). Non-slot tabs: `items`
 (Deadlock-style shop UI, per-item sound events, `ItemsTab`), `replacesounds` (loose-file
 browser over ~79k game sounds, `SoundBrowser` + `OverrideEditor`), `unsorted`
 (auto-discovered events from new patches; slots created dynamically with
@@ -185,8 +218,16 @@ browser over ~79k game sounds, `SoundBrowser` + `OverrideEditor`), `unsorted`
 `materials/overlays` material from the pak via the helper's `material` cmd, ffmpeg-
 composites the art into the rect (+ white-fills the trans rect for cut-out posters),
 strips VRF's "Compiled Textures" block, recompiles the `.vmat`, and stages the
-`.vmat_c`+`.vtex_c` at vanilla paths), and `effects` (VFX recolor,
-`EffectsBrowser`/`EffectPreview` — hidden behind `settings.experimentalEffects`). The Heroes tab drills portrait grid (`HeroGrid`)
+`.vmat_c`+`.vtex_c` at vanilla paths), `jumpscares` (`DigimodTab` — appears when
+`digimod_detected` finds the engine in installed paks or the project configures it;
+video cards use disk-cached ffmpeg thumbnails + hover-to-play, adding a video
+auto-extracts its audio into the shared sound library, sounds have a Waveform clip
+editor), `uimaster` (`UiMasterTab` + `PanoramaPreview`/`lib/panorama.ts` — browse/edit
+panorama layouts+styles with an approximate live HTML preview and a push-to-eim_dev
+test loop; behind `experimentalUiMaster`), `customserver` (behind `experimentalServer`),
+and `effects` (VFX recolor, `EffectsBrowser`/`EffectPreview` — behind
+`settings.experimentalEffects`; experimental toggles are AUTHORITATIVE: hidden tabs'
+overrides are also excluded from compiles). The Heroes tab drills portrait grid (`HeroGrid`)
 → per-hero abilities/sounds/voicelines (`HeroDetail`, `HeroSoundsSection`,
 `VoicelinesPanel`). `ModMenuOverlay` is a separate always-on-top window (F8 in-game mod
 menu / RCON admin).
@@ -199,7 +240,14 @@ one-shot "Compile, Install & Launch", plus "Fix for new patch" = refresh vanilla
 rediscover events + recompile, and "Full merge" pack import). `FirstRunWizard` shows on
 first launch (`firstRunDone`) and runs one-click setup (autodetect → import live game
 music data). Waveform peaks are cached in-memory (`lib/peaksCache.ts`); `lib/songHash.ts`
-fingerprints a song to skip unchanged recompiles.
+fingerprints a song to skip unchanged recompiles. `lib/dataCache.ts` session-caches all
+game-data reads and `preloadGameData` warms every hero's detail/sounds/images at boot
+(HeroGrid shows the progress). The Backdrop renders the user's sigil (two inlined SVGs
+from `app/public/backdrop/`, class names namespaced per file — inline SVG styles are
+document-global) tinted by the active tab accent, with a JS spin driver that kicks on
+category switches. A compile shows a 0-100% bar plus the "compile crew" sprites
+(`app/public/loading/`). The sound clipboard (`lib/soundClipboard.ts`) copies a track +
+its edits between slots.
 
 ### Adding a new tab / slot
 Add the slot(s) with a new `group` + `events_relpath` in `project.rs`
@@ -217,6 +265,24 @@ current defaults, so new default slots appear for existing users automatically.
 - Deadlock is installed at `D:\SteamLibrary\steamapps\common\Deadlock`; the CSDK toolchain
   used for verified compiles is `Reduced_CSDK_12`. Real paths are configured at runtime in
   the app's Setup panel (and auto-detected via `autodetect_paths`).
+- **`app/src/App.css` must stay imported in App.tsx** (it silently wasn't for weeks —
+  every animation was dead). It may contain ONLY eim-* animation/effect rules; never
+  restyle bare elements (`button`, `input`, `:root`) globally — that fights Tailwind.
+- **UI copy style: never use em-dashes ("— ") in user-visible text** (labels, hints,
+  toasts, Rust step details). Use " - ", commas, colons. Also: no emoji in the UI —
+  monochrome glyphs (✕ ▶ ⚙ ⧉) that inherit text color only.
+- **Browser preview debugging:** with the dev server up, the real frontend renders in a
+  normal browser at `localhost:1420` (a `__TAURI_INTERNALS__` guard skips native-only
+  hooks; invoke-backed data just no-ops). Claude can drive Chrome against it to verify
+  UI changes visually — use it instead of guessing at geometry/styling.
+- **Icons:** window/taskbar icon comes from `app/src-tauri/icons/` (generated via
+  `npx tauri icon <1024px png>`; the source art is `app/public/MMMIcon.svg`). Changing
+  icon files does NOT trigger a rebuild — touch `build.rs`/`tauri.conf.json` so the exe
+  re-embeds them; Windows may also cache stale icons (`ie4uinit.exe -show`).
+- `citadel/grimoire` in the user's gameinfo.gi is NOT vanilla — the third-party GRIMOIRE
+  launcher injected it. Our dev-push uses our own `citadel/eim_dev` instead.
+- Vite serves `app/public/` case-SENSITIVELY even on Windows (logo 404'd over
+  `MMMLogo.svg` vs `MMMlogo.svg`).
 - The user's local `ModFiles` events file can be **stale** vs the installed game (stock
   refs drift); the helper `decode` has a fuzzy stem-prefix fallback for previews, and
   `refresh_vanilla` re-decompiles the live pak to fix drifted stock refs. The
