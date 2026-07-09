@@ -987,9 +987,14 @@ export interface GbSearchPage {
 }
 
 /** Browse Deadlock mods on GameBanana: the submission feed when `query` is
- *  empty, the site search scoped to Deadlock otherwise. */
-export function gamebananaSearch(query: string, page: number): Promise<GbSearchPage> {
-  return invoke("gamebanana_search", { query, page });
+ *  empty, the site search scoped to Deadlock otherwise. `sort` reorders the
+ *  browse feed ("downloads" | "likes" | "new"); searches are relevance-ranked. */
+export function gamebananaSearch(
+  query: string,
+  page: number,
+  sort?: string,
+): Promise<GbSearchPage> {
+  return invoke("gamebanana_search", { query, page, sort: sort ?? null });
 }
 
 export interface GbFile {

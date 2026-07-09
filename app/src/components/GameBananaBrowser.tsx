@@ -27,11 +27,20 @@ function fmtCount(n: number): string {
  * download count), the vpk inside lands in the normal import review, and the
  * page's credits attach automatically.
  */
+const SORTS: { key: string; label: string }[] = [
+  { key: "relevance", label: "Featured" },
+  { key: "downloads", label: "Most downloaded" },
+  { key: "likes", label: "Most liked" },
+  { key: "new", label: "Newest" },
+];
+
 export function GameBananaBrowser({
   settings,
   update,
   onImportPack,
   onBundleMany,
+  seedQuery,
+  onSeedConsumed,
 }: {
   settings: Settings;
   update: (patch: Partial<Settings>) => void;
@@ -39,11 +48,15 @@ export function GameBananaBrowser({
   onImportPack: (vpk: string) => void;
   /** A download held several vpks: add them all to the bundle list. */
   onBundleMany: (vpks: string[]) => void;
+  /** A slot's "Find on GameBanana" jump: search this immediately on open. */
+  seedQuery?: string | null;
+  onSeedConsumed?: () => void;
 }) {
   const { push } = useToast();
   const [query, setQuery] = useState("");
   // The query the current results belong to (typing doesn't re-search).
   const [activeQuery, setActiveQuery] = useState("");
+  const [sort, setSort] = useState("relevance");
   const [items, setItems] = useState<GbSearchItem[]>([]);
   const [page, setPage] = useState(1);
   const [complete, setComplete] = useState(true);
@@ -54,11 +67,11 @@ export function GameBananaBrowser({
   const [filesFor, setFilesFor] = useState<{ modId: number; files: GbFile[] } | null>(null);
   const [busy, setBusy] = useState<number | null>(null);
 
-  async function load(q: string, p: number, append: boolean) {
+  async function load(q: string, p: number, append: boolean, s = sort) {
     setLoading(true);
     setError(null);
     try {
-      const res = await gamebananaSearch(q, p);
+      const res = await gamebananaSearch(q, p, s);
       setItems((prev) => (append ? [...prev, ...res.items] : res.items));
       setComplete(res.isComplete);
       setPage(p);
@@ -70,11 +83,21 @@ export function GameBananaBrowser({
     }
   }
 
-  // First open: show the game's feed.
+  // First open with nothing pending: show the game's feed. (A pending seed is
+  // handled by the effect below, which also runs on mount.)
   useEffect(() => {
-    void load("", 1, false);
+    if (!seedQuery) void load("", 1, false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // A slot's "Find on GameBanana" jump - on mount, or while already open.
+  useEffect(() => {
+    if (!seedQuery) return;
+    setQuery(seedQuery);
+    void load(seedQuery, 1, false);
+    onSeedConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seedQuery]);
 
   async function getMod(item: GbSearchItem) {
     setBusy(item.modId);
@@ -169,8 +192,34 @@ export function GameBananaBrowser({
         )}
       </div>
 
-      <div className="mt-2 flex items-center gap-3 text-[11px] text-zinc-500">
-        <label className="flex cursor-pointer items-center gap-1.5">
+      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11px] text-zinc-500">
+        <div
+          className="flex items-center gap-1"
+          title={
+            activeQuery
+              ? "Searches are ranked by relevance - Clear the search to browse by sort"
+              : "Order the browse feed"
+          }
+        >
+          {SORTS.map((s) => (
+            <button
+              key={s.key}
+              onClick={() => {
+                setSort(s.key);
+                if (!activeQuery) void load("", 1, false, s.key);
+              }}
+              disabled={!!activeQuery}
+              className={`rounded px-2 py-0.5 transition disabled:opacity-40 ${
+                sort === s.key && !activeQuery
+                  ? "bg-yellow-500/15 text-yellow-300"
+                  : "text-zinc-500 hover:text-zinc-300"
+              }`}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+        <label className="ml-auto flex cursor-pointer items-center gap-1.5">
           <input
             type="checkbox"
             checked={showMature}

@@ -207,6 +207,8 @@ export function SidePanel({
   onMoveToTab,
   missingRefs,
   onPasteSong,
+  onAddFiles,
+  onFindOnline,
 }: {
   ev: EventProject;
   view: EventView | undefined;
@@ -236,6 +238,10 @@ export function SidePanel({
   missingRefs?: Set<string>;
   /** Paste the sound-clipboard track into this slot. */
   onPasteSong: (slotId: string) => void;
+  /** Left half of the add split-button: open a file picker for this slot. */
+  onAddFiles: (slotId: string) => void;
+  /** Right half: jump to the GameBanana tab searching for this sound. */
+  onFindOnline: (ev: EventProject) => void;
 }) {
   const copied = useCopiedSound();
   const [stockUrl, setStockUrl] = useState<string | null>(null);
@@ -523,24 +529,41 @@ export function SidePanel({
         </AnimatePresence>
       </Reorder.Group>
 
-      {/* Drop zone / empty state */}
+      {/* Add zone: 50/50 split button (your PC | GameBanana), still a drop
+          target - dropping audio anywhere on the window adds to the slot
+          under the cursor exactly as before. */}
       <motion.div
         animate={{
           borderColor: dropActive ? "rgb(16 185 129)" : "rgb(63 63 70)",
           backgroundColor: dropActive ? "rgba(16,185,129,0.06)" : "rgba(0,0,0,0)",
         }}
-        className={`mt-3 rounded-xl border border-dashed text-center text-xs ${
-          ev.songs.length === 0 ? "py-6" : "py-2.5"
+        className={`mt-3 overflow-hidden rounded-xl border border-dashed text-center text-xs ${
+          ev.songs.length === 0 ? "py-3" : "py-1"
         } ${dropActive ? "text-emerald-300" : "text-zinc-600"}`}
       >
-        {ev.songs.length === 0 ? (
-          <span>
-            <span className="block text-sm text-zinc-400">No tracks yet</span>
-            Drop an .mp3 here to add it to {ev.side}
-          </span>
-        ) : (
-          <span>Drop another .mp3 to add to {ev.side}</span>
+        {ev.songs.length === 0 && (
+          <span className="block pb-1 text-sm text-zinc-400">No tracks yet</span>
         )}
+        <div className="grid grid-cols-2 divide-x divide-zinc-800">
+          <button
+            onClick={() => onAddFiles(ev.id)}
+            className="group/add flex flex-col items-center gap-0.5 px-2 py-1.5 transition hover:text-emerald-300"
+          >
+            <span className="font-medium">Add from your PC</span>
+            <span className="text-[10px] text-zinc-700 transition group-hover/add:text-emerald-400/60">
+              browse files - or just drop audio here
+            </span>
+          </button>
+          <button
+            onClick={() => onFindOnline(ev)}
+            className="group/find flex flex-col items-center gap-0.5 px-2 py-1.5 transition hover:text-yellow-300"
+          >
+            <span className="font-medium">Find on GameBanana</span>
+            <span className="text-[10px] text-zinc-700 transition group-hover/find:text-yellow-400/60">
+              search mods for {ev.side}
+            </span>
+          </button>
+        </div>
         {copied && (
           <div className="mt-1.5 inline-flex items-center overflow-hidden rounded-lg border border-emerald-500/40">
             <button

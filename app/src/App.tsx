@@ -709,6 +709,8 @@ export default function App() {
   );
   // Set by the Sound Library tab so audio dropped there is shelved, not slotted.
   const libraryDropRef = useRef<((paths: string[]) => void) | null>(null);
+  // A slot's "Find on GameBanana": the query the browser tab searches on open.
+  const [gbSeed, setGbSeed] = useState<string | null>(null);
 
   // ---- Startup game-data preload ----------------------------------------
   // Warm every tab's data (rosters, the sound index, then each hero's detail
@@ -3119,6 +3121,36 @@ export default function App() {
     push("success", `Moved to ${TAB_LABELS[group] ?? group}`);
   }
 
+  // "Add from your PC": the add split-button's left half - file picker into
+  // the slot (same path as dropping the files on it).
+  async function addSlotFiles(slotId: string) {
+    const sel = await openDialog({
+      multiple: true,
+      title: "Add which audio file(s)?",
+      filters: [
+        { name: "Audio", extensions: ["mp3", "wav", "flac", "ogg", "m4a", "aac"] },
+      ],
+    });
+    if (!sel) return;
+    for (const p of Array.isArray(sel) ? sel : [sel]) void addSong(slotId, p);
+  }
+
+  // The split-button's right half: jump to GameBanana searching for this
+  // sound. Hero/item names are the reliable search handles; other slots fall
+  // back to their tab's name.
+  function findSoundOnline(ev: EventProject) {
+    const q =
+      ev.group === "heroes" && selectedHeroInfo
+        ? selectedHeroInfo.displayName
+        : ev.group === ITEMS && selectedItem
+          ? selectedItem.displayName
+          : ev.group === UNSORTED
+            ? "" // no useful handle - just open the browser
+            : (TAB_LABELS[ev.group] ?? ev.group);
+    if (q) setGbSeed(q);
+    setActiveTab(GAMEBANANA);
+  }
+
   // One SidePanel for a slot, with all its handlers wired (shared by the normal
   // tabs and the Heroes drill-in).
   const renderPanel = (ev: EventProject) => (
@@ -3149,6 +3181,8 @@ export default function App() {
       onDownloadEntry={downloadEntryTo}
       onDownloadSong={downloadSong}
       missingRefs={missingSoundRefs}
+      onAddFiles={(slotId) => void addSlotFiles(slotId)}
+      onFindOnline={findSoundOnline}
     />
   );
 
@@ -3623,6 +3657,8 @@ export default function App() {
               for (const v of vpks) if (!next.includes(v)) next.push(v);
               updateSettings({ importedMods: next });
             }}
+            seedQuery={gbSeed}
+            onSeedConsumed={() => setGbSeed(null)}
           />
         ) : activeTab === LIBRARY ? (
           <LibraryTab

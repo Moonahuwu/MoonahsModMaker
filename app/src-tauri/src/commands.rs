@@ -5230,20 +5230,37 @@ pub struct GbSearchPage {
 }
 
 /// Browse Deadlock mods on GameBanana: the game's submission feed when the
-/// query is empty, the site search scoped to Deadlock otherwise.
+/// query is empty, the site search scoped to Deadlock otherwise. `sort`
+/// ("downloads" | "likes" | "new") reorders the BROWSE feed via Mod/Index;
+/// query searches are always relevance-ranked by the site.
 #[tauri::command]
-pub async fn gamebanana_search(query: String, page: u32) -> Result<GbSearchPage, String> {
+pub async fn gamebanana_search(
+    query: String,
+    page: u32,
+    sort: Option<String>,
+) -> Result<GbSearchPage, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let q = query.trim().to_string();
         let page = page.max(1);
-        let url = if q.is_empty() {
-            format!(
-                "https://gamebanana.com/apiv11/Game/{GB_DEADLOCK_GAME_ID}/Subfeed?_nPage={page}&_sSort=default&_csvModelInclusions=Mod"
-            )
-        } else {
+        let index_sort = match sort.as_deref() {
+            Some("downloads") => Some("Generic_MostDownloaded"),
+            Some("likes") => Some("Generic_MostLiked"),
+            Some("new") => Some("Generic_Newest"),
+            _ => None,
+        };
+        let url = if !q.is_empty() {
             format!(
                 "https://gamebanana.com/apiv11/Util/Search/Results?_sModelName=Mod&_sOrder=best_match&_idGameRow={GB_DEADLOCK_GAME_ID}&_sSearchString={}&_nPage={page}",
                 gb_urlencode(&q)
+            )
+        } else if let Some(s) = index_sort {
+            // %5B/%5D = literal [] (curl would otherwise glob them).
+            format!(
+                "https://gamebanana.com/apiv11/Mod/Index?_nPerpage=15&_aFilters%5BGeneric_Game%5D={GB_DEADLOCK_GAME_ID}&_sSort={s}&_nPage={page}"
+            )
+        } else {
+            format!(
+                "https://gamebanana.com/apiv11/Game/{GB_DEADLOCK_GAME_ID}/Subfeed?_nPage={page}&_sSort=default&_csvModelInclusions=Mod"
             )
         };
         let body = gb_fetch_json(&url)?;
@@ -5812,13 +5829,25 @@ mod tests {
     #[test]
     #[ignore]
     fn live_gamebanana_search_and_files() {
-        let feed = tauri::async_runtime::block_on(gamebanana_search(String::new(), 1))
+        let feed = tauri::async_runtime::block_on(gamebanana_search(String::new(), 1, None))
             .expect("feed should load");
         assert!(feed.items.len() >= 10, "the Deadlock feed has pages of mods");
         assert!(!feed.is_complete);
         assert!(feed.items.iter().any(|i| !i.thumb_url.is_empty()));
 
-        let hits = tauri::async_runtime::block_on(gamebanana_search("music".into(), 1))
+        let by_dl = tauri::async_runtime::block_on(gamebanana_search(
+            String::new(),
+            1,
+            Some("downloads".into()),
+        ))
+        .expect("sorted feed should load");
+        assert!(by_dl.items.len() >= 10);
+        assert_ne!(
+            by_dl.items[0].mod_id, feed.items[0].mod_id,
+            "most-downloaded should differ from the default feed's first item"
+        );
+
+        let hits = tauri::async_runtime::block_on(gamebanana_search("music".into(), 1, None))
             .expect("search should load");
         assert!(!hits.items.is_empty(), "searching music finds sound mods");
 
