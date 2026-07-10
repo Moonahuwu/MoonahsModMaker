@@ -3110,7 +3110,12 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
         // (the slow part). The stamp fingerprints the whole config + variant,
         // so changes that never dirty an events file — a removed override, a
         // dropped events file, toggles, changed imports — still rebuild.
-        let build_stamp = fingerprint(&format!("{cfg:?}|imported:{}", v.with_imported));
+        // STAGE_FORMAT bumps when the staging semantics themselves change, so
+        // an app update rebuilds outputs even though the config didn't move
+        // (v2 = imports stage every pack dir, not a whitelist).
+        const STAGE_FORMAT: &str = "v2";
+        let build_stamp =
+            fingerprint(&format!("{STAGE_FORMAT}|{cfg:?}|imported:{}", v.with_imported));
         let stamp_file = output_dir.join(v.name).join(".eim_buildstamp");
         let out_artifact = if cfg.output_mode == "vpk" {
             output_dir.join(v.name).join(&cfg.vpk_name)
