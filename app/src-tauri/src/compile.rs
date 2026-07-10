@@ -3142,30 +3142,30 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
         let mut staged = 0;
 
         // Imported assets go only into the combined variant. Full vpk merge:
-        // stage every real asset tree (not just sounds), so models/particles/etc.
-        // come along too. We extract a fixed set of game-content dirs so the
-        // pack's working/junk folders (MYSoundevents, NEWSoundevents, *_BACKUP,
-        // scripts, readmes) are skipped. Soundevents are NOT staged wholesale —
-        // they're merged via array-union (above), since clobbering the live
-        // shared events files would revert other mods + the current patch.
-        const ASSET_DIRS: [&str; 7] = [
-            "sounds/", "models/", "particles/", "materials/", "panorama/",
-            // localization strings (item renames) + gameplay vdata mods
-            "resource/", "scripts/",
-        ];
+        // stage EVERY top-level tree the pack actually contains — a mod can
+        // reference its own custom dirs (e.g. particles pointing at an
+        // enderpearl/ folder), so the old fixed whitelist silently dropped
+        // those and broke the mod. Held back: soundevents trees (merged via
+        // array-union above — clobbering the live shared events files would
+        // revert other mods + the current patch; working copies like
+        // MYSoundevents/NEWSoundevents match the same filter) and obvious
+        // backup junk.
         if v.with_imported {
             if let Some(helper) = helper_opt {
                 for mod_vpk in &cfg.imported_mods {
                     let mut copied = 0usize;
                     let mut errs: Vec<String> = Vec::new();
+                    let asset_dirs = import_asset_dirs(helper, mod_vpk);
                     let src_path = Path::new(mod_vpk);
                     if src_path.is_file() {
                         // Raw .vpk: unpack ONCE into a persistent cache keyed by
                         // the file's identity, then stage with plain copies —
                         // big packs stop paying the vpk-unpack cost every build.
+                        // "v2" invalidates caches from the whitelist era (they
+                        // lack the pack's custom dirs).
                         let meta = std::fs::metadata(src_path).ok();
                         let ident = format!(
-                            "{mod_vpk}|{}|{}",
+                            "v2|{mod_vpk}|{}|{}",
                             meta.as_ref().map(|m| m.len()).unwrap_or(0),
                             meta.and_then(|m| m.modified().ok())
                                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
@@ -3178,7 +3178,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                             let _ = std::fs::remove_dir_all(&cache);
                             let _ = std::fs::create_dir_all(&cache);
                             let mut ok = true;
-                            for dir in ASSET_DIRS {
+                            for dir in &asset_dirs {
                                 if let Err(e) = vpk::extract_all(
                                     helper,
                                     mod_vpk,
@@ -3200,7 +3200,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                         let _ = std::fs::remove_file(stage.join(".eim_complete"));
                     } else {
                         // Cached-pack dirs are already extracted — prefix copies.
-                        for dir in ASSET_DIRS {
+                        for dir in &asset_dirs {
                             match vpk::extract_all(helper, mod_vpk, &stage.to_string_lossy(), Some(dir)) {
                                 Ok(detail) => {
                                     if let Some(n) =
@@ -3431,6 +3431,42 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
     report.output_path = Some(output_dir.to_string_lossy().into_owned());
 
     Ok(())
+}
+
+/// The top-level dirs of an imported pack that ride into the combined build:
+/// everything the pack contains, EXCEPT soundevents trees (merged via
+/// array-union, never staged wholesale - this also catches working copies
+/// like MYSoundevents/NEWSoundevents) and obvious backup junk. Falls back to
+/// the classic game-content set if the pack can't be listed, so a transient
+/// helper failure can't produce an empty combined build.
+fn import_asset_dirs(helper: &str, mod_vpk: &str) -> Vec<String> {
+    let mut dirs: std::collections::BTreeSet<String> = Default::default();
+    if let Ok(entries) = vpk::list(helper, mod_vpk, None) {
+        for e in entries {
+            if let Some((top, _)) = e.replace('\\', "/").split_once('/') {
+                let t = top.to_lowercase();
+                if t.is_empty()
+                    || t.contains("soundevent")
+                    || t.contains("backup")
+                    || t.ends_with(".bak")
+                    || t.ends_with("_old")
+                {
+                    continue;
+                }
+                dirs.insert(format!("{t}/"));
+            }
+        }
+    }
+    if dirs.is_empty() {
+        return [
+            "sounds/", "models/", "particles/", "materials/", "panorama/", "resource/",
+            "scripts/",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    }
+    dirs.into_iter().collect()
 }
 
 // ---------------- Easy Compile (experimental) ----------------
@@ -4559,6 +4595,31 @@ mod tests {
         let _ = std::fs::remove_dir_all(&compiled_root);
         let _ = std::fs::remove_dir_all(&out);
         let _ = std::fs::remove_file(&art);
+    }
+
+    /// Custom pack dirs (enderpearl/) must ride into the combined build;
+    /// soundevents trees (incl. working copies) and backup junk must not.
+    #[test]
+    fn import_dirs_take_everything_but_soundevents() {
+        let root = std::env::temp_dir().join("eim_import_dirs_test");
+        let _ = std::fs::remove_dir_all(&root);
+        for f in [
+            "enderpearl/tex.vtex_c",
+            "particles/drifter/pearl.vpcf_c",
+            "soundevents/hero/drifter.vsndevts_c",
+            "MYSoundevents/music.vsndevts",
+            "sounds_BACKUP/old.vsnd_c",
+            "sounds/x.vsnd_c",
+        ] {
+            let p = root.join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, "x").unwrap();
+        }
+        std::fs::write(root.join("readme.txt"), "x").unwrap();
+        // Directory sources list without the helper (cached-pack path).
+        let dirs = import_asset_dirs("unused", &root.to_string_lossy());
+        assert_eq!(dirs, vec!["enderpearl/", "particles/", "sounds/"]);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     fn song_with(current: Option<&str>, last: Option<&str>) -> SongCompile {
