@@ -275,7 +275,35 @@ export function installSrcVpk(s: Settings): string {
   return `${s.outputDir}/${variant}/${s.vpkName}`;
 }
 
-/** Derive the full CompileConfig from settings + the project's events. */
+/** Direct replace: the slot swaps its only sound (one track, the stock entry
+ *  disabled, nothing else touched), so there's no need to edit the shared
+ *  events file at all - the user's audio compiles AT the stock path and the
+ *  untouched event plays it by its original name. Requires the live pool to
+ *  prove the event carries no vsnd_duration (a merge updates duration for
+ *  longer tracks; a straight file swap can't, so those keep merging). */
+export function isDirectReplaceSlot(
+  ev: EventProject,
+  explicitOverrideRefs: Set<string>,
+  pools: Record<string, { vsndDuration: number | null } | undefined>,
+): boolean {
+  const disabled = new Set([...ev.excludedEntries, ...ev.removedEntries]);
+  return (
+    ev.songs.length === 1 &&
+    !!ev.stockEntry &&
+    ev.adopted.length === 0 &&
+    ev.vsndDurationMode === "auto" &&
+    disabled.size === 1 &&
+    disabled.has(ev.stockEntry) &&
+    pools[ev.id] != null &&
+    pools[ev.id]!.vsndDuration === null &&
+    !explicitOverrideRefs.has(ev.stockEntry)
+  );
+}
+
+/** Derive the full CompileConfig from settings + the project's events.
+ *  `pools` (slot id → live event view) unlocks the direct-replace shortcut:
+ *  a slot that just swaps its ONLY sound compiles at the stock path instead
+ *  of editing the shared events file. */
 export function buildCompileConfig(
   s: Settings,
   events: EventProject[],
@@ -289,7 +317,50 @@ export function buildCompileConfig(
   posterOverrides: PosterOverride[] = [],
   digimod: DigimodConfig | null = null,
   uiOverrides: UiFileOverride[] = [],
+  pools: Record<string, { vsndDuration: number | null } | undefined> = {},
 ): CompileConfig {
+  const explicitOverrideRefs = new Set(soundOverrides.map((o) => o.targetRef));
+  const isDirectReplace = (ev: EventProject) =>
+    isDirectReplaceSlot(ev, explicitOverrideRefs, pools);
+  const directSlots = events.filter(isDirectReplace);
+  // A slot with no changes leaves its events file alone - and an events file
+  // nobody touches stays OUT of the build entirely (a replace-two-sounds
+  // profile must not ship every soundevents file it never edited).
+  const mergeSlots = events.filter(
+    (ev) =>
+      !isDirectReplace(ev) &&
+      (ev.songs.length > 0 ||
+        ev.adopted.length > 0 ||
+        ev.excludedEntries.length > 0 ||
+        ev.removedEntries.length > 0 ||
+        ev.previousOwnedNames.length > 0),
+  );
+  const directCompiles: SoundOverrideCompile[] = directSlots.map((ev) => {
+    const song = ev.songs[0];
+    return {
+      targetRef: ev.stockEntry,
+      sourceAudio: song.sourceMp3,
+      trimStart: song.trimStart,
+      trimEnd: song.trimEnd,
+      gainDb: song.gainDb,
+      fadeIn: song.fadeIn,
+      fadeOut: song.fadeOut,
+      looping: song.looping,
+      layers: (song.layers ?? [])
+        .filter((l) => l.sourceAudio)
+        .map((l) => ({
+          sourceAudio: l.sourceAudio,
+          gainDb: l.gainDb,
+          offset: l.offset ?? 0,
+          trimStart: l.trimStart ?? 0,
+          trimEnd: l.trimEnd ?? 0,
+        })),
+      // The app stamps songs with songHash after a good compile, so the
+      // up-to-date check must speak the same fingerprint.
+      currentHash: songHash(song),
+      lastCompiledHash: song.lastCompiledHash,
+    };
+  });
   const posterCompiles: PosterCompile[] = posterOverrides.map((p) => ({
     sheetId: p.sheetId,
     materials: p.materials,
@@ -335,7 +406,7 @@ export function buildCompileConfig(
     currentHash: overrideHash(o),
     lastCompiledHash: o.lastCompiledHash ?? null,
   }));
-  const eventCompiles: EventCompile[] = events.map((ev) => ({
+  const eventCompiles: EventCompile[] = mergeSlots.map((ev) => ({
     eventName: ev.eventName,
     arrayKey: ev.arrayKey,
     stockEntry: ev.stockEntry,
@@ -393,7 +464,7 @@ export function buildCompileConfig(
     creditsText: s.writeCreditsFile ? buildCreditsText(s) || undefined : undefined,
     events: eventCompiles,
     iconMods: iconCompiles,
-    soundOverrides: overrideCompiles,
+    soundOverrides: [...overrideCompiles, ...directCompiles],
     effectOverrides: effectCompiles,
     vdataOverrides,
     globalOverrides,

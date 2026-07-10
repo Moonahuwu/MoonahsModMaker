@@ -17,7 +17,7 @@ import {
 import { cItemRoster } from "../lib/dataCache";
 import { BuildPreview, type PreviewMod, type YoursFile } from "./BuildPreview";
 import { ExportModal, type ExportExtra, type ExportSlot } from "./ExportModal";
-import { buildCompileConfig, installSrcVpk, sheetSiblingsKey, slotSoundFolder, type Settings } from "../lib/settings";
+import { buildCompileConfig, installSrcVpk, isDirectReplaceSlot, sheetSiblingsKey, slotSoundFolder, type Settings } from "../lib/settings";
 import { songStatus, overrideHash, effectHash, posterHash } from "../lib/songHash";
 import { useToast } from "./Toaster";
 import type { DigimodConfig, EffectOverride, EventProject, GlobalOverride, IconMod, PosterOverride, SoundOverride, UiFileOverride, VdataOverride, WorldOverride } from "../types";
@@ -37,6 +37,7 @@ export function CompileBar({
   posterOverrides,
   digimod,
   uiOverrides,
+  pools,
   onCompiled,
   onFixForNewPatch,
   onBulkGain,
@@ -54,6 +55,9 @@ export function CompileBar({
   posterOverrides: PosterOverride[];
   digimod: DigimodConfig | null;
   uiOverrides: UiFileOverride[];
+  /** Live event views by slot id - unlocks the direct-replace shortcut (a
+   *  slot swapping its only sound skips the events file entirely). */
+  pools: Record<string, { vsndDuration: number | null } | undefined>;
   /** Called after a successful compile so the project can record compiled hashes. */
   onCompiled: () => void;
   /** Nudge every track's + replacement's gain by `delta` dB (loudness leveling). */
@@ -279,7 +283,7 @@ export function CompileBar({
             return true;
           })
         : [];
-      const config = buildCompileConfig(s, evts, false, iconMods, soundOverrides, effectOverrides, gameplay, global, world, posterOverrides, digimod, uiOverrides);
+      const config = buildCompileConfig(s, evts, false, iconMods, soundOverrides, effectOverrides, gameplay, global, world, posterOverrides, digimod, uiOverrides, pools);
       const r = await compileProject(config);
       setReport(r);
       if (r.ok) {
@@ -380,7 +384,13 @@ export function CompileBar({
       | "new"
       | "changed"
       | "unchanged";
+    const overrideRefs = new Set(soundOverrides.map((o) => o.targetRef));
     for (const ev of evts) {
+      // Direct replace ships ONE file at the stock path - no events file.
+      if (isDirectReplaceSlot(ev, overrideRefs, pools)) {
+        add(ev.stockEntry.replace(/\.vsnd$/, ".vsnd_c"), ofSong(songStatus(ev.songs[0])));
+        continue;
+      }
       const folder = slotSoundFolder(ev, s.soundFolder).replace(/\/+$/, "");
       let evDirty: "new" | "changed" | "unchanged" = "unchanged";
       for (const song of ev.songs) {
@@ -498,7 +508,7 @@ export function CompileBar({
         importedMods: [],
         importedModExcludes: {},
       };
-      const config = buildCompileConfig(s2, evts, false, icons, ovs, fx, [], [], []);
+      const config = buildCompileConfig(s2, evts, false, icons, ovs, fx, [], [], [], [], null, [], pools);
       const r = await compileProject(config);
       if (r.ok) {
         push("success", `Exported → ${r.outputPath ?? dir}`);

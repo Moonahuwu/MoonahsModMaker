@@ -229,6 +229,10 @@ pub struct SoundOverrideCompile {
     /// The vanilla `.vsnd` path to shadow (drives output + staging paths).
     pub target_ref: String,
     pub source_audio: String,
+    /// Extra tracks mixed under this one at render (the direct-replace path
+    /// carries a slot track's layers through).
+    #[serde(default)]
+    pub layers: Vec<crate::audio::Layer>,
     #[serde(default)]
     pub trim_start: f64,
     #[serde(default)]
@@ -2641,7 +2645,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                 gain_db: ov.gain_db,
                 fade_in: ov.fade_in,
                 fade_out: ov.fade_out,
-                layers: vec![],
+                layers: ov.layers.clone(),
                 wav: content_root
                     .join(folder.trim_matches('/'))
                     .join(format!("{stem}.wav")),

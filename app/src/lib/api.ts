@@ -315,6 +315,9 @@ export interface EffectCompile {
 export interface SoundOverrideCompile {
   targetRef: string;
   sourceAudio: string;
+  /** Extra tracks mixed under this one (the direct-replace path carries a
+   *  slot track's layers through; Replace-tab overrides leave it empty). */
+  layers?: LayerCompile[];
   trimStart: number;
   trimEnd: number;
   gainDb: number;

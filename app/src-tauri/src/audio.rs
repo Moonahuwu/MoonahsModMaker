@@ -40,7 +40,7 @@ pub struct ProcessReq {
 /// the bite, at its own volume - all cut to the base clip's length. The
 /// events file never sees layers; they're baked into the single rendered
 /// audio file.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Layer {
     pub source_audio: String,

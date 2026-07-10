@@ -4083,6 +4083,7 @@ export default function App() {
             posterOverrides={project.posterOverrides ?? []}
             digimod={project.digimod ?? null}
             uiOverrides={settings.experimentalUiMaster ? (project.uiOverrides ?? []) : []}
+            pools={pools}
             onCompiled={markAllCompiled}
             onBulkGain={bulkGain}
             onFixForNewPatch={refreshVanilla}
