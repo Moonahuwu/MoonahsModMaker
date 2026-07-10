@@ -280,19 +280,22 @@ export function installSrcVpk(s: Settings): string {
  *  shared events file at all - the user's audio compiles AT the original
  *  path and the untouched event plays it by its original name. Returns the
  *  `.vsnd` ref to shadow, or null when the slot needs a real merge.
- *  Requires the live pool to prove the event carries no vsnd_duration (a
- *  merge updates duration for longer tracks; a straight file swap can't, so
- *  those keep merging). Slots without a stockEntry (hero abilities, items)
- *  qualify when the pool holds exactly the one entry the user disabled. */
+ *  Duration: a merge only ever EXTENDS vsnd_duration for longer clips, so a
+ *  clip that fits inside the event's existing duration behaves identically
+ *  either way - only longer clips keep merging. Slots without a stockEntry
+ *  (hero abilities, items) qualify when the pool holds exactly the one entry
+ *  the user disabled. */
 export function directReplaceTarget(
   ev: EventProject,
   explicitOverrideRefs: Set<string>,
   pools: Record<string, { vsndDuration: number | null; entries?: string[] } | undefined>,
 ): string | null {
   const pool = pools[ev.id];
-  if (!pool || pool.vsndDuration !== null) return null;
+  if (!pool) return null;
   if (ev.songs.length !== 1 || ev.adopted.length !== 0 || ev.vsndDurationMode !== "auto")
     return null;
+  const clipLen = Math.max(0, ev.songs[0].trimEnd - ev.songs[0].trimStart);
+  if (pool.vsndDuration !== null && clipLen > pool.vsndDuration) return null;
   const disabled = new Set([...ev.excludedEntries, ...ev.removedEntries]);
   if (disabled.size !== 1) return null;
   const target = [...disabled][0];
