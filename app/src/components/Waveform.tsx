@@ -32,6 +32,9 @@ interface WaveformProps {
   /** Called when the trim region is clicked; return true to take over
    *  playback (a layered track plays its full mix, not just this wave). */
   onRegionPlay?: () => boolean;
+  /** Receives a "move the playhead to t seconds" function - the card drives
+   *  it while ITS audio (the rendered mix) plays, so the cursor follows. */
+  seekRef?: React.MutableRefObject<((t: number) => void) | null>;
   /** Live playhead position (seconds) as the waveform plays. */
   onTime?: (t: number) => void;
 }
@@ -41,7 +44,7 @@ interface WaveformProps {
  * marking the trim window. The region is the source of truth for trim edits;
  * `trimStart/trimEnd` seed it on load.
  */
-export function Waveform({ url, trimStart, trimEnd, onTrimChange, widthPct, onDuration, timeline, onTime, onRegionPlay }: WaveformProps) {
+export function Waveform({ url, trimStart, trimEnd, onTrimChange, widthPct, onDuration, timeline, onTime, onRegionPlay, seekRef }: WaveformProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   // Keep latest trim/callback without re-creating wavesurfer on every change.
   const trimRef = useRef({ trimStart, trimEnd });
@@ -98,6 +101,9 @@ export function Waveform({ url, trimStart, trimEnd, onTrimChange, widthPct, onDu
     // Live playhead position while playing / scrubbing.
     ws.on("timeupdate", (t) => onTimeRef.current?.(t));
 
+    // External playhead control (the card syncs it to the rendered mix).
+    if (seekRef) seekRef.current = (t) => ws.setTime(t);
+
     // Left-click the trim region to play that slice; click again to pause/resume.
     // A layered track hands playback to the card (the full mix), so what you
     // hear is what compiles.
@@ -124,8 +130,10 @@ export function Waveform({ url, trimStart, trimEnd, onTrimChange, widthPct, onDu
 
     return () => {
       el.removeEventListener("contextmenu", onContext);
+      if (seekRef) seekRef.current = null;
       ws.destroy();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url]);
 
   return (

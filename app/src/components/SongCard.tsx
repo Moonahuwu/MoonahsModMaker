@@ -143,6 +143,32 @@ export function SongCard({
   const audioRef = useRef<HTMLAudioElement | null>(null);
   // Key the rendered audio was produced for; re-render when trim/gain change.
   const renderedKey = useRef<string>("");
+  // The card's preview plays a RENDERED file (mix included), not the wave -
+  // this loop walks the waveform's playhead along with it. The mix's t=0 is
+  // the trim start on the source timeline.
+  const waveSeek = useRef<((t: number) => void) | null>(null);
+  const trimStartRef = useRef(song.trimStart);
+  trimStartRef.current = song.trimStart;
+  const syncRaf = useRef<number | null>(null);
+  function startPlayheadSync() {
+    if (syncRaf.current != null) cancelAnimationFrame(syncRaf.current);
+    const tick = () => {
+      const a = audioRef.current;
+      if (!a || a.paused) {
+        syncRaf.current = null;
+        return;
+      }
+      waveSeek.current?.(trimStartRef.current + a.currentTime);
+      syncRaf.current = requestAnimationFrame(tick);
+    };
+    syncRaf.current = requestAnimationFrame(tick);
+  }
+  useEffect(
+    () => () => {
+      if (syncRaf.current != null) cancelAnimationFrame(syncRaf.current);
+    },
+    [],
+  );
 
   const url = convertFileSrc(song.sourceMp3);
   const length = Math.max(0, song.trimEnd - song.trimStart);
@@ -182,6 +208,7 @@ export function SongCard({
     }
     if (state === "paused" && audioRef.current) {
       await audioRef.current.play();
+      startPlayheadSync();
       setState("playing");
       return;
     }
@@ -207,7 +234,11 @@ export function SongCard({
       const audio = new Audio(convertFileSrc(outPath));
       audioRef.current = audio;
       renderedKey.current = paramKey;
-      audio.onended = () => setState("idle");
+      audio.onended = () => {
+        setState("idle");
+        // Park the playhead back at the clip start.
+        waveSeek.current?.(trimStartRef.current);
+      };
       audio.onpause = () => {
         // only reflect external pauses; our explicit pause already set state
       };
@@ -216,6 +247,7 @@ export function SongCard({
         setState("idle");
       };
       await audio.play();
+      startPlayheadSync();
       setState("playing");
     } catch (e) {
       setError(String(e));
@@ -228,6 +260,7 @@ export function SongCard({
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
     }
+    waveSeek.current?.(trimStartRef.current);
     setState("idle");
   }
 
@@ -585,6 +618,7 @@ export function SongCard({
                           }
                         : undefined
                     }
+                    seekRef={waveSeek}
                   />
                   {/* Layer lanes: stacked under the waveform on the same time
                       scale, editor-style. Drag a wave to place it, edges to
