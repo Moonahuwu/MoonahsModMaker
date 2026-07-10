@@ -42,6 +42,7 @@ export function GameBananaBrowser({
   onBundleMany,
   seed,
   onSeedConsumed,
+  onBack,
 }: {
   settings: Settings;
   update: (patch: Partial<Settings>) => void;
@@ -53,6 +54,8 @@ export function GameBananaBrowser({
    *  `sounds` locks the browser to the Sound submission type. */
   seed?: { query: string; sounds: boolean } | null;
   onSeedConsumed?: () => void;
+  /** Return to the slot this screen was opened from (no sidebar tab). */
+  onBack?: () => void;
 }) {
   const { push } = useToast();
   const [query, setQuery] = useState("");
@@ -165,9 +168,17 @@ export function GameBananaBrowser({
 
   return (
     <section className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5">
-      <div className="flex items-baseline justify-between gap-3">
+      <div className="flex items-center gap-3">
+        {onBack && (
+          <button
+            onClick={onBack}
+            className="rounded-md border border-zinc-700 px-2.5 py-1 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-white"
+          >
+            ← Back
+          </button>
+        )}
         <h3 className="text-sm font-semibold text-zinc-200">Browse GameBanana</h3>
-        <span className="text-[11px] text-zinc-600">
+        <span className="ml-auto text-[11px] text-zinc-600">
           downloads count on the author's page
         </span>
       </div>

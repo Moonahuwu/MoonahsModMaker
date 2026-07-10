@@ -719,9 +719,11 @@ export default function App() {
   // Expanded song-card bodies: audio dropped on an OPEN card becomes a layer
   // of that track instead of a new track in the slot.
   const songEls = useRef<Record<string, HTMLElement | null>>({});
-  // A slot's "Find on GameBanana": the search the browser tab runs on open.
-  // `sounds` locks it to GameBanana's dedicated sound-mod section.
+  // A slot's "Find on GameBanana": the search the browser screen runs on
+  // open. `sounds` locks it to GameBanana's dedicated sound-mod section.
   const [gbSeed, setGbSeed] = useState<{ query: string; sounds: boolean } | null>(null);
+  // Where the jump came from, so the browser's back button can return there.
+  const [gbReturn, setGbReturn] = useState<string>("intro");
 
   // ---- Startup game-data preload ----------------------------------------
   // Warm every tab's data (rosters, the sound index, then each hero's detail
@@ -804,7 +806,10 @@ export default function App() {
     // Custom Server is experimental: the toggle is authoritative (gameplay
     // edits only compile behind the separate includeGameplay option anyway).
     if (settings.experimentalServer) out.push(CUSTOM_SERVER);
-    out.push(GAMEBANANA, MOD_COMBINER, LIBRARY, REPLACE_SOUNDS);
+    // GameBanana deliberately has NO sidebar tab (GRIMOIRE etc. already do
+    // generic browsing) - it opens contextually via a slot's "Find on
+    // GameBanana" split-button.
+    out.push(MOD_COMBINER, LIBRARY, REPLACE_SOUNDS);
     return out;
   }, [
     project,
@@ -816,9 +821,10 @@ export default function App() {
   ]);
 
   // If the active tab vanishes (e.g. turning off an experimental feature while
-  // viewing it), fall back to the first tab.
+  // viewing it), fall back to the first tab. GameBanana is exempt: it's a
+  // contextual screen (slot jump), never in the sidebar.
   useEffect(() => {
-    if (!tabs.includes(activeTab)) setActiveTab("intro");
+    if (!tabs.includes(activeTab) && activeTab !== GAMEBANANA) setActiveTab("intro");
   }, [tabs, activeTab]);
 
   // Fresh tab = fresh scroll position. (Playing audio stops via each player's
@@ -3222,6 +3228,7 @@ export default function App() {
             ? "" // no useful handle - browse the whole Sounds section
             : (TAB_LABELS[ev.group] ?? ev.group);
     setGbSeed({ query: q, sounds: true });
+    setGbReturn(activeTab);
     setActiveTab(GAMEBANANA);
   }
 
@@ -3734,6 +3741,7 @@ export default function App() {
             }}
             seed={gbSeed}
             onSeedConsumed={() => setGbSeed(null)}
+            onBack={() => setActiveTab(gbReturn)}
           />
         ) : activeTab === LIBRARY ? (
           <LibraryTab
