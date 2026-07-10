@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { StockWaveform } from "./StockWaveform";
 import {
   gamebananaDownload,
   gamebananaFiles,
@@ -69,6 +70,8 @@ export function GameBananaBrowser({
   // Per-mod expanded file list (multi-file pages) + busy state.
   const [filesFor, setFilesFor] = useState<{ modId: number; files: GbFile[] } | null>(null);
   const [busy, setBusy] = useState<number | null>(null);
+  // One open audio preview at a time (sound submissions host a preview MP3).
+  const [previewFor, setPreviewFor] = useState<number | null>(null);
 
   async function load(q: string, p: number, append: boolean, s = sort, m = model) {
     setLoading(true);
@@ -152,8 +155,13 @@ export function GameBananaBrowser({
     }
   }
 
-  const visible = items.filter((i) => showMature || !i.nsfw);
-  const hiddenCount = items.length - visible.length;
+  // While searching, "Most liked" re-sorts the loaded results exactly (the
+  // endpoint only offers a popularity order); browse feeds come pre-sorted.
+  const visible = (() => {
+    const v = items.filter((i) => showMature || !i.nsfw);
+    return activeQuery && sort === "likes" ? [...v].sort((a, b) => b.likes - a.likes) : v;
+  })();
+  const hiddenCount = items.filter((i) => !showMature && i.nsfw).length;
 
   return (
     <section className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5">
@@ -223,24 +231,21 @@ export function GameBananaBrowser({
             </button>
           ))}
         </div>
-        <div
-          className="flex items-center gap-1"
-          title={
-            activeQuery
-              ? "Searches are ranked by relevance - Clear the search to browse by sort"
-              : "Order the browse feed"
-          }
-        >
+        <div className="flex items-center gap-1" title="Order the results">
           {SORTS.map((s) => (
             <button
               key={s.key}
               onClick={() => {
                 setSort(s.key);
-                if (!activeQuery) void load("", 1, false, s.key);
+                void load(activeQuery, 1, false, s.key);
               }}
-              disabled={!!activeQuery}
-              className={`rounded px-2 py-0.5 transition disabled:opacity-40 ${
-                sort === s.key && !activeQuery
+              title={
+                activeQuery && s.key === "downloads"
+                  ? "While searching, the site offers popularity order (closest to downloads)"
+                  : undefined
+              }
+              className={`rounded px-2 py-0.5 transition ${
+                sort === s.key
                   ? "bg-yellow-500/15 text-yellow-300"
                   : "text-zinc-500 hover:text-zinc-300"
               }`}
@@ -314,6 +319,21 @@ export function GameBananaBrowser({
                   <span className="ml-auto shrink-0 text-[10px] tabular-nums text-zinc-600">
                     ♥ {fmtCount(item.likes)}
                   </span>
+                  {item.audioUrl && (
+                    <button
+                      onClick={() =>
+                        setPreviewFor((p) => (p === item.modId ? null : item.modId))
+                      }
+                      title="Listen before you install"
+                      className={`shrink-0 rounded border px-2 py-1 text-[11px] transition ${
+                        previewFor === item.modId
+                          ? "border-yellow-500/60 text-yellow-300"
+                          : "border-zinc-700 text-zinc-300 hover:border-yellow-500/60 hover:text-yellow-300"
+                      }`}
+                    >
+                      {previewFor === item.modId ? "✕" : "▶"}
+                    </button>
+                  )}
                   <button
                     onClick={() => void getMod(item)}
                     disabled={busy === item.modId}
@@ -322,6 +342,11 @@ export function GameBananaBrowser({
                     {busy === item.modId ? "…" : "Get"}
                   </button>
                 </div>
+                {previewFor === item.modId && item.audioUrl && (
+                  <div className="mt-1.5 border-t border-zinc-800 pt-1.5">
+                    <StockWaveform url={item.audioUrl} accent="#eab308" autoplay />
+                  </div>
+                )}
                 {filesFor?.modId === item.modId && (
                   <div className="mt-1.5 flex flex-col gap-1 border-t border-zinc-800 pt-1.5">
                     <span className="text-[10px] text-zinc-500">Which file?</span>

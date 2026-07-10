@@ -14,6 +14,7 @@ export function StockWaveform({
   onDuration,
   timeline,
   onTime,
+  autoplay,
 }: {
   url: string;
   accent: string;
@@ -21,6 +22,8 @@ export function StockWaveform({
   onDuration?: (d: number) => void;
   timeline?: boolean;
   onTime?: (t: number) => void;
+  /** Start playing as soon as the audio is ready (GameBanana previews). */
+  autoplay?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WaveSurfer | null>(null);
@@ -62,6 +65,7 @@ export function StockWaveform({
       onDurationRef.current?.(d);
     });
     ws.on("interaction", () => ws.play());
+    if (autoplay) ws.on("ready", () => void ws.play());
     return () => {
       ws.destroy();
       wsRef.current = null;

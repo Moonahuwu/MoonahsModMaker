@@ -5233,6 +5233,9 @@ pub struct GbSearchItem {
     pub views: u64,
     /// The page carries content ratings (nudity etc.) - hidden by default.
     pub nsfw: bool,
+    /// Sound submissions host a preview MP3 on GameBanana's CDN (CORS-open) -
+    /// streamed for the in-card listen-before-you-install player. "" = none.
+    pub audio_url: String,
 }
 
 #[derive(serde::Serialize, Debug, Clone)]
@@ -5269,8 +5272,16 @@ pub async fn gamebanana_search(
             _ => None,
         };
         let url = if !q.is_empty() {
+            // The search endpoint's own orders: best_match, popularity, date.
+            // No downloads order exists, so "downloads" rides popularity (the
+            // closest ranking the site offers while searching).
+            let order = match sort.as_deref() {
+                Some("downloads") | Some("likes") => "popularity",
+                Some("new") => "date",
+                _ => "best_match",
+            };
             format!(
-                "https://gamebanana.com/apiv11/Util/Search/Results?_sModelName={model}&_sOrder=best_match&_idGameRow={GB_DEADLOCK_GAME_ID}&_sSearchString={}&_nPage={page}",
+                "https://gamebanana.com/apiv11/Util/Search/Results?_sModelName={model}&_sOrder={order}&_idGameRow={GB_DEADLOCK_GAME_ID}&_sSearchString={}&_nPage={page}",
                 gb_urlencode(&q)
             )
         } else if let Some(s) = index_sort {
@@ -5336,6 +5347,11 @@ pub async fn gamebanana_search(
                         .get("_bHasContentRatings")
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false),
+                    audio_url: r
+                        .pointer("/_aPreviewMedia/_aMetadata/_sAudioUrl")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
                 })
             })
             .collect();
@@ -5904,6 +5920,20 @@ mod tests {
         assert!(!sounds.items.is_empty(), "hero-name sound search finds sounds");
         assert!(sounds.items.iter().all(|i| i.model == "Sound"));
         assert!(sounds.items[0].page_url.contains("/sounds/"));
+        assert!(
+            sounds.items.iter().any(|i| i.audio_url.starts_with("https://")),
+            "sound submissions host preview MP3s"
+        );
+
+        // Search-time sorts ride the endpoint's own orders (popularity/date).
+        let by_new = tauri::async_runtime::block_on(gamebanana_search(
+            "abrams".into(),
+            1,
+            Some("new".into()),
+            Some("Sound".into()),
+        ))
+        .expect("date-ordered search should load");
+        assert!(!by_new.items.is_empty());
 
         let files = tauri::async_runtime::block_on(gamebanana_files(623518, None))
             .expect("files should load");

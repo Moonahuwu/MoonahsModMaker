@@ -991,6 +991,8 @@ export interface GbSearchItem {
   views: number;
   /** Page carries content ratings (mature) - hidden unless opted in. */
   nsfw: boolean;
+  /** Sound submissions: preview MP3 on GameBanana's CDN ("" = none). */
+  audioUrl: string;
 }
 
 export interface GbSearchPage {
