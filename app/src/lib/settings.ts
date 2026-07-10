@@ -275,29 +275,39 @@ export function installSrcVpk(s: Settings): string {
   return `${s.outputDir}/${variant}/${s.vpkName}`;
 }
 
-/** Direct replace: the slot swaps its only sound (one track, the stock entry
- *  disabled, nothing else touched), so there's no need to edit the shared
- *  events file at all - the user's audio compiles AT the stock path and the
- *  untouched event plays it by its original name. Requires the live pool to
- *  prove the event carries no vsnd_duration (a merge updates duration for
- *  longer tracks; a straight file swap can't, so those keep merging). */
-export function isDirectReplaceSlot(
+/** Direct replace: the slot swaps its only sound (one track, the original
+ *  entry disabled, nothing else touched), so there's no need to edit the
+ *  shared events file at all - the user's audio compiles AT the original
+ *  path and the untouched event plays it by its original name. Returns the
+ *  `.vsnd` ref to shadow, or null when the slot needs a real merge.
+ *  Requires the live pool to prove the event carries no vsnd_duration (a
+ *  merge updates duration for longer tracks; a straight file swap can't, so
+ *  those keep merging). Slots without a stockEntry (hero abilities, items)
+ *  qualify when the pool holds exactly the one entry the user disabled. */
+export function directReplaceTarget(
   ev: EventProject,
   explicitOverrideRefs: Set<string>,
-  pools: Record<string, { vsndDuration: number | null } | undefined>,
-): boolean {
+  pools: Record<string, { vsndDuration: number | null; entries?: string[] } | undefined>,
+): string | null {
+  const pool = pools[ev.id];
+  if (!pool || pool.vsndDuration !== null) return null;
+  if (ev.songs.length !== 1 || ev.adopted.length !== 0 || ev.vsndDurationMode !== "auto")
+    return null;
   const disabled = new Set([...ev.excludedEntries, ...ev.removedEntries]);
-  return (
-    ev.songs.length === 1 &&
-    !!ev.stockEntry &&
-    ev.adopted.length === 0 &&
-    ev.vsndDurationMode === "auto" &&
-    disabled.size === 1 &&
-    disabled.has(ev.stockEntry) &&
-    pools[ev.id] != null &&
-    pools[ev.id]!.vsndDuration === null &&
-    !explicitOverrideRefs.has(ev.stockEntry)
-  );
+  if (disabled.size !== 1) return null;
+  const target = [...disabled][0];
+  // Placeholder refs are shared across events - never shadow those.
+  if (!target || target.endsWith("null.vsnd")) return null;
+  if (ev.stockEntry) {
+    if (target !== ev.stockEntry) return null;
+  } else {
+    // No stock ref recorded (hero/item slots): the pool must hold exactly
+    // the one original the user disabled, so the swap can't touch anything
+    // that wasn't already this event's only sound.
+    if (!pool.entries || pool.entries.length !== 1 || pool.entries[0] !== target) return null;
+  }
+  if (explicitOverrideRefs.has(target)) return null;
+  return target;
 }
 
 /** Derive the full CompileConfig from settings + the project's events.
@@ -317,18 +327,21 @@ export function buildCompileConfig(
   posterOverrides: PosterOverride[] = [],
   digimod: DigimodConfig | null = null,
   uiOverrides: UiFileOverride[] = [],
-  pools: Record<string, { vsndDuration: number | null } | undefined> = {},
+  pools: Record<string, { vsndDuration: number | null; entries?: string[] } | undefined> = {},
 ): CompileConfig {
   const explicitOverrideRefs = new Set(soundOverrides.map((o) => o.targetRef));
-  const isDirectReplace = (ev: EventProject) =>
-    isDirectReplaceSlot(ev, explicitOverrideRefs, pools);
-  const directSlots = events.filter(isDirectReplace);
+  const directTargets = new Map<string, string>();
+  for (const ev of events) {
+    const t = directReplaceTarget(ev, explicitOverrideRefs, pools);
+    if (t) directTargets.set(ev.id, t);
+  }
+  const directSlots = events.filter((ev) => directTargets.has(ev.id));
   // A slot with no changes leaves its events file alone - and an events file
   // nobody touches stays OUT of the build entirely (a replace-two-sounds
   // profile must not ship every soundevents file it never edited).
   const mergeSlots = events.filter(
     (ev) =>
-      !isDirectReplace(ev) &&
+      !directTargets.has(ev.id) &&
       (ev.songs.length > 0 ||
         ev.adopted.length > 0 ||
         ev.excludedEntries.length > 0 ||
@@ -338,7 +351,7 @@ export function buildCompileConfig(
   const directCompiles: SoundOverrideCompile[] = directSlots.map((ev) => {
     const song = ev.songs[0];
     return {
-      targetRef: ev.stockEntry,
+      targetRef: directTargets.get(ev.id)!,
       sourceAudio: song.sourceMp3,
       trimStart: song.trimStart,
       trimEnd: song.trimEnd,

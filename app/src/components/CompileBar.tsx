@@ -17,7 +17,7 @@ import {
 import { cItemRoster } from "../lib/dataCache";
 import { BuildPreview, type PreviewMod, type YoursFile } from "./BuildPreview";
 import { ExportModal, type ExportExtra, type ExportSlot } from "./ExportModal";
-import { buildCompileConfig, installSrcVpk, isDirectReplaceSlot, sheetSiblingsKey, slotSoundFolder, type Settings } from "../lib/settings";
+import { buildCompileConfig, directReplaceTarget, installSrcVpk, sheetSiblingsKey, slotSoundFolder, type Settings } from "../lib/settings";
 import { songStatus, overrideHash, effectHash, posterHash } from "../lib/songHash";
 import { useToast } from "./Toaster";
 import type { DigimodConfig, EffectOverride, EventProject, GlobalOverride, IconMod, PosterOverride, SoundOverride, UiFileOverride, VdataOverride, WorldOverride } from "../types";
@@ -57,7 +57,7 @@ export function CompileBar({
   uiOverrides: UiFileOverride[];
   /** Live event views by slot id - unlocks the direct-replace shortcut (a
    *  slot swapping its only sound skips the events file entirely). */
-  pools: Record<string, { vsndDuration: number | null } | undefined>;
+  pools: Record<string, { vsndDuration: number | null; entries?: string[] } | undefined>;
   /** Called after a successful compile so the project can record compiled hashes. */
   onCompiled: () => void;
   /** Nudge every track's + replacement's gain by `delta` dB (loudness leveling). */
@@ -386,9 +386,10 @@ export function CompileBar({
       | "unchanged";
     const overrideRefs = new Set(soundOverrides.map((o) => o.targetRef));
     for (const ev of evts) {
-      // Direct replace ships ONE file at the stock path - no events file.
-      if (isDirectReplaceSlot(ev, overrideRefs, pools)) {
-        add(ev.stockEntry.replace(/\.vsnd$/, ".vsnd_c"), ofSong(songStatus(ev.songs[0])));
+      // Direct replace ships ONE file at the original path - no events file.
+      const direct = directReplaceTarget(ev, overrideRefs, pools);
+      if (direct) {
+        add(direct.replace(/\.vsnd$/, ".vsnd_c"), ofSong(songStatus(ev.songs[0])));
         continue;
       }
       const folder = slotSoundFolder(ev, s.soundFolder).replace(/\/+$/, "");
