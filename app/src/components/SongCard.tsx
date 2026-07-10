@@ -2,7 +2,9 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import WaveSurfer from "wavesurfer.js";
 import { probeAudio, processAudio } from "../lib/api";
+import { getCachedPeaks, setCachedPeaks } from "../lib/peaksCache";
 import { songStatus } from "../lib/songHash";
 import type { Song, SongLayer } from "../types";
 import { Waveform } from "./Waveform";
@@ -15,6 +17,33 @@ const AUDIO_FILTERS = [
 /** Round to 10ms - keeps dragged values (and the JSON they save to) tidy. */
 function snap(v: number): number {
   return Math.round(v * 100) / 100;
+}
+
+/** A layer's waveform, drawn non-interactively inside its timeline block (the
+ *  block's own drag handlers do the work; the wave is just the picture). */
+function LayerWave({ path }: { path: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!ref.current) return;
+    const url = convertFileSrc(path);
+    const cached = getCachedPeaks(url);
+    const ws = WaveSurfer.create({
+      container: ref.current,
+      url,
+      height: 30,
+      waveColor: "#7dd3fcaa",
+      progressColor: "#7dd3fcaa",
+      cursorWidth: 0,
+      interact: false,
+      normalize: true,
+      ...(cached ? { peaks: cached.peaks, duration: cached.duration } : {}),
+    });
+    ws.on("decode", (d) => {
+      if (!cached) setCachedPeaks(url, ws.exportPeaks(), d);
+    });
+    return () => ws.destroy();
+  }, [path]);
+  return <div ref={ref} className="pointer-events-none h-full w-full" />;
 }
 
 // Exception-based status: compiled is the normal state, so it gets only the
@@ -261,8 +290,11 @@ export function SongCard({
     }
   }, [song.layers, ffmpegPath]);
 
-  // The bite's timeline: the base track's trimmed length.
+  // The bite's timeline: the base track's trimmed length. Lanes render on the
+  // SOURCE timeline (the same scale as the waveform above them) so layers sit
+  // visually aligned; a layer's offset stays anchored to the trim start.
   const clipLen = Math.max(0.1, length);
+  const tlDur = mineDur ?? Math.max(song.trimEnd, 0.1);
   /** A layer's effective clip window (end falls back to its file's length). */
   function layerWin(l: SongLayer): { ts: number; te: number; dur: number } {
     const dur = layerDurs[l.id] ?? 0;
@@ -296,7 +328,7 @@ export function SongCard({
       id: l.id,
       mode,
       startX: e.clientX,
-      pxPerSec: w / clipLen,
+      pxPerSec: w / tlDur,
       orig: { offset: Math.max(0, l.offset ?? 0), ts, te, dur },
     };
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
@@ -536,6 +568,104 @@ export function SongCard({
                     onTime={setMineTime}
                     timeline
                   />
+                  {/* Layer lanes: stacked under the waveform on the same time
+                      scale, editor-style. Drag a wave to place it, edges to
+                      trim; each bakes into this one track at compile. */}
+                  {(song.layers ?? []).length > 0 && (
+                    <div
+                      style={compareOpen ? { width: `${pct(mineDur)}%` } : undefined}
+                    >
+                      {(song.layers ?? []).map((l) => {
+                        const { ts, te } = layerWin(l);
+                        const len = te - ts;
+                        const off = Math.max(0, l.offset ?? 0);
+                        const start = song.trimStart + off;
+                        const leftPct = Math.min(100, (start / tlDur) * 100);
+                        const widthPct = Math.max(
+                          1.5,
+                          Math.min(100 - leftPct, (len / tlDur) * 100),
+                        );
+                        const srcDur = layerDurs[l.id] ?? 0;
+                        return (
+                          <div key={l.id} className="mt-1">
+                            <div
+                              data-lane
+                              className="relative h-9 overflow-hidden rounded bg-zinc-900/60"
+                            >
+                              <div
+                                onPointerDown={(e) => beginDrag(e, l, "move")}
+                                onPointerMove={onDragMove}
+                                onPointerUp={endDrag}
+                                title={`starts ${off.toFixed(2)}s into the clip - drag to move, edges to trim`}
+                                className="absolute inset-y-0.5 flex cursor-grab touch-none items-stretch overflow-hidden rounded border border-sky-500/40 bg-sky-500/10 active:cursor-grabbing"
+                                style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
+                              >
+                                <span
+                                  onPointerDown={(e) => beginDrag(e, l, "l")}
+                                  onPointerMove={onDragMove}
+                                  onPointerUp={endDrag}
+                                  className="w-1.5 shrink-0 cursor-ew-resize touch-none bg-sky-400/50 transition hover:bg-sky-300"
+                                />
+                                <div className="relative min-w-0 flex-1 overflow-hidden">
+                                  {srcDur > 0 && len > 0 && (
+                                    <div
+                                      className="absolute inset-y-0"
+                                      style={{
+                                        width: `${(srcDur / len) * 100}%`,
+                                        left: `-${(ts / len) * 100}%`,
+                                      }}
+                                    >
+                                      <LayerWave path={l.sourceAudio} />
+                                    </div>
+                                  )}
+                                </div>
+                                <span
+                                  onPointerDown={(e) => beginDrag(e, l, "r")}
+                                  onPointerMove={onDragMove}
+                                  onPointerUp={endDrag}
+                                  className="w-1.5 shrink-0 cursor-ew-resize touch-none bg-sky-400/50 transition hover:bg-sky-300"
+                                />
+                              </div>
+                            </div>
+                            <div className="mt-0.5 flex items-center gap-2 pl-1 text-[10px] text-zinc-500">
+                              <span
+                                className="max-w-[38%] truncate"
+                                title={l.sourceAudio}
+                              >
+                                {l.sourceAudio.split(/[\\/]/).pop()}
+                              </span>
+                              <input
+                                type="range"
+                                min={-24}
+                                max={12}
+                                step={0.5}
+                                value={l.gainDb}
+                                onChange={(e) =>
+                                  updateLayer(l.id, { gainDb: Number(e.target.value) })
+                                }
+                                title="Layer volume"
+                                className="h-1 w-24 accent-sky-400"
+                              />
+                              <span className="w-10 tabular-nums">
+                                {l.gainDb > 0 ? "+" : ""}
+                                {l.gainDb}dB
+                              </span>
+                              <span className="tabular-nums text-zinc-600">
+                                {len.toFixed(2)}s at {off.toFixed(2)}s
+                              </span>
+                              <button
+                                onClick={() => removeLayer(l.id)}
+                                aria-label="Remove layer"
+                                className="ml-auto rounded p-0.5 text-zinc-600 transition hover:bg-red-950/40 hover:text-red-300"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -566,6 +696,14 @@ export function SongCard({
                   />
                   Loop
                 </label>
+
+                <button
+                  onClick={() => void addLayers()}
+                  title="Mix another sound on top of this one - it shows as a draggable lane under the waveform (or just drop audio on this open card)"
+                  className="ml-auto rounded border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-400 transition hover:border-sky-500/70 hover:text-sky-300"
+                >
+                  + Layer
+                </button>
               </div>
 
               {/* Sliders in an even grid — no ragged wrap. */}
@@ -620,133 +758,6 @@ export function SongCard({
                 </label>
               </div>
 
-              {/* Layers: extra tracks mixed under this one. The sound event and
-                  its pool stay untouched - the mix ships as this single file. */}
-              <div className="mt-3 border-t border-zinc-800/70 pt-2.5">
-                <div className="flex items-center justify-between">
-                  <span
-                    className="text-[11px] text-zinc-500"
-                    title="Extra sounds that play together with this track - mixed into the one compiled file, cut to this track's length. Fades apply to the finished mix."
-                  >
-                    {(song.layers ?? []).length > 0
-                      ? "Layers - play together with this track"
-                      : "Layers - mix another sound on top of this one"}
-                  </span>
-                  <button
-                    onClick={() => void addLayers()}
-                    className="rounded border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-400 transition hover:border-emerald-500/70 hover:text-emerald-300"
-                  >
-                    + Add layer
-                  </button>
-                </div>
-                {(song.layers ?? []).length > 0 && (
-                  <div className="mt-2 rounded-lg border border-zinc-800 bg-zinc-950/40 p-2">
-                    {/* Reference lane: the base track = the whole bite. */}
-                    <div className="mb-1.5 flex items-center gap-2">
-                      <div className="w-40 shrink-0" />
-                      <div className="relative h-4 min-w-0 flex-1 overflow-hidden rounded bg-zinc-900">
-                        <div
-                          className="absolute inset-0 rounded border border-emerald-500/25 bg-emerald-500/10"
-                          title={`${song.label} - the full sound bite (${clipLen.toFixed(2)}s)`}
-                        >
-                          <span className="block truncate px-1.5 text-[9px] leading-4 text-emerald-300/60">
-                            {song.label || "this track"}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                    {(song.layers ?? []).map((l) => {
-                      const { ts, te } = layerWin(l);
-                      const len = te - ts;
-                      const off = Math.max(0, l.offset ?? 0);
-                      const leftPct = Math.min(100, (off / clipLen) * 100);
-                      const widthPct = Math.max(
-                        1.5,
-                        Math.min(100 - leftPct, (len / clipLen) * 100),
-                      );
-                      return (
-                        <div key={l.id} className="mb-1.5 flex items-center gap-2 last:mb-0">
-                          {/* Left rail: name, gain, remove. */}
-                          <div className="w-40 shrink-0">
-                            <div className="flex items-center gap-1">
-                              <span
-                                className="min-w-0 flex-1 truncate text-[10px] text-zinc-400"
-                                title={l.sourceAudio}
-                              >
-                                {l.sourceAudio.split(/[\\/]/).pop()}
-                              </span>
-                              <button
-                                onClick={() => removeLayer(l.id)}
-                                aria-label="Remove layer"
-                                className="shrink-0 rounded p-0.5 text-zinc-600 transition hover:bg-red-950/40 hover:text-red-300"
-                              >
-                                ✕
-                              </button>
-                            </div>
-                            <div className="flex items-center gap-1.5">
-                              <input
-                                type="range"
-                                min={-24}
-                                max={12}
-                                step={0.5}
-                                value={l.gainDb}
-                                onChange={(e) =>
-                                  updateLayer(l.id, { gainDb: Number(e.target.value) })
-                                }
-                                title="Layer volume"
-                                className="h-1 min-w-0 flex-1 accent-emerald-500"
-                              />
-                              <span className="w-11 shrink-0 text-right text-[9px] tabular-nums text-zinc-500">
-                                {l.gainDb > 0 ? "+" : ""}
-                                {l.gainDb}dB
-                              </span>
-                            </div>
-                          </div>
-                          {/* Lane: drag the block to place it, edges to trim. */}
-                          <div
-                            data-lane
-                            className="relative h-9 min-w-0 flex-1 overflow-hidden rounded bg-zinc-900"
-                          >
-                            <div
-                              onPointerDown={(e) => beginDrag(e, l, "move")}
-                              onPointerMove={onDragMove}
-                              onPointerUp={endDrag}
-                              title={`starts ${off.toFixed(2)}s into the bite - clip ${ts.toFixed(2)}-${te.toFixed(2)}s - drag to move, edges to trim`}
-                              className="absolute inset-y-0.5 flex cursor-grab touch-none items-center overflow-hidden rounded border border-sky-500/40 bg-sky-500/15 active:cursor-grabbing"
-                              style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
-                            >
-                              <span
-                                onPointerDown={(e) => beginDrag(e, l, "l")}
-                                onPointerMove={onDragMove}
-                                onPointerUp={endDrag}
-                                className="h-full w-1.5 shrink-0 cursor-ew-resize touch-none bg-sky-400/50 transition hover:bg-sky-300"
-                              />
-                              <span className="pointer-events-none min-w-0 flex-1 truncate px-1 text-[9px] text-sky-200/80">
-                                {len.toFixed(1)}s
-                              </span>
-                              <span
-                                onPointerDown={(e) => beginDrag(e, l, "r")}
-                                onPointerMove={onDragMove}
-                                onPointerUp={endDrag}
-                                className="h-full w-1.5 shrink-0 cursor-ew-resize touch-none bg-sky-400/50 transition hover:bg-sky-300"
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                    {/* Time ruler for the bite. */}
-                    <div className="flex items-center gap-2">
-                      <div className="w-40 shrink-0" />
-                      <div className="flex min-w-0 flex-1 justify-between text-[9px] tabular-nums text-zinc-600">
-                        <span>0s</span>
-                        <span>{(clipLen / 2).toFixed(1)}s</span>
-                        <span>{clipLen.toFixed(1)}s</span>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
             </div>
           </motion.div>
         )}
