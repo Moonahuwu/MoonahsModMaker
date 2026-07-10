@@ -680,7 +680,16 @@ pub(crate) fn run_resource_compiler(cfg: &CompileConfig, input_abs: &str) -> Res
 /// startup dominates audio compiles, so batching N files into one call is far
 /// faster than N calls — verified against the real CSDK ("OK: 2 compiled").
 pub(crate) fn run_resource_compiler_multi(cfg: &CompileConfig, inputs: &[String]) -> Result<String, String> {
-    let exe = Path::new(&cfg.resource_compiler);
+    run_compiler_raw(&cfg.resource_compiler, &cfg.game_info_dir, inputs)
+}
+
+/// The bare invocation (Easy Compile has no CompileConfig to hand over).
+pub(crate) fn run_compiler_raw(
+    resource_compiler: &str,
+    game_info_dir: &str,
+    inputs: &[String],
+) -> Result<String, String> {
+    let exe = Path::new(resource_compiler);
     let mut cmd = crate::procutil::quiet(exe);
     if let Some(dir) = exe.parent() {
         if !dir.as_os_str().is_empty() {
@@ -696,7 +705,7 @@ pub(crate) fn run_resource_compiler_multi(cfg: &CompileConfig, inputs: &[String]
     }
     cmd.args([
         "-game",
-        &cfg.game_info_dir,
+        game_info_dir,
         "-f",
         "-danger_mode_ignore_schema_mismatches",
     ]);
@@ -3420,6 +3429,251 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
     Ok(())
 }
 
+// ---------------- Easy Compile (experimental) ----------------
+
+/// One-off "compile anything" (experimental): auto-detect each file by
+/// extension, run it through the CSDK recipe, and drop the produced `_c`
+/// into a folder of the user's choice. Images ride the same
+/// `panorama_image_list` trick as the icon pipeline (the community's
+/// documented method for UI vtex).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EasyCompileReq {
+    pub content_root: String,
+    pub compiled_root: String,
+    pub game_info_dir: String,
+    pub resource_compiler: String,
+    #[serde(default)]
+    pub ffmpeg_path: Option<String>,
+    pub files: Vec<String>,
+    pub out_dir: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EasyCompiled {
+    pub input: String,
+    /// Where the compiled file landed in the output folder (None on failure).
+    pub output: Option<String>,
+    pub error: Option<String>,
+}
+
+const EASY_RASTER: &[&str] = &["png", "jpg", "jpeg", "webp", "bmp", "tga"];
+const EASY_AUDIO: &[&str] = &["wav", "mp3", "flac", "ogg", "m4a", "aac"];
+const EASY_PANORAMA: &[&str] = &["xml", "css", "js"];
+const EASY_DIRECT: &[&str] = &["vsndevts", "vmat", "vpcf", "vdata"];
+
+/// Source 2 wants tame file names; also dedupes collisions across inputs.
+fn easy_stem(raw: &str, used: &mut std::collections::HashSet<String>) -> String {
+    let base: String = raw
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    let base = if base.is_empty() { "file".to_string() } else { base };
+    let mut stem = base.clone();
+    let mut n = 2;
+    while !used.insert(stem.clone()) {
+        stem = format!("{base}_{n}");
+        n += 1;
+    }
+    stem
+}
+
+fn easy_ffmpeg_convert(ffmpeg: Option<&str>, src: &str, dest: &Path) -> Result<(), String> {
+    let exe = ffmpeg.unwrap_or("ffmpeg");
+    let out = crate::procutil::quiet(exe)
+        .args(["-y", "-i", src])
+        .arg(dest)
+        .output()
+        .map_err(|e| format!("running ffmpeg: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr)
+            .trim()
+            .lines()
+            .last()
+            .unwrap_or("ffmpeg failed")
+            .to_string())
+    }
+}
+
+pub fn easy_compile_blocking(req: &EasyCompileReq) -> Result<Vec<EasyCompiled>, String> {
+    let content_root = Path::new(&req.content_root);
+    let compiled_root = Path::new(&req.compiled_root);
+    std::fs::create_dir_all(&req.out_dir).map_err(|e| format!("output folder: {e}"))?;
+
+    // Fresh workspace both sides, so stale outputs can't pose as this run's.
+    let img_dir = content_root.join("panorama/images/eim_easy");
+    let pano_dir = content_root.join("panorama/eim_easy");
+    let misc_dir = content_root.join("eim_easy");
+    for d in ["panorama/images/eim_easy", "panorama/eim_easy", "eim_easy"] {
+        let _ = std::fs::remove_dir_all(content_root.join(d));
+        let _ = std::fs::remove_dir_all(compiled_root.join(d));
+    }
+    for d in [&img_dir, &pano_dir, &misc_dir] {
+        std::fs::create_dir_all(d).map_err(|e| format!("preparing workspace: {e}"))?;
+    }
+
+    let mut results: Vec<EasyCompiled> = req
+        .files
+        .iter()
+        .map(|f| EasyCompiled { input: f.clone(), output: None, error: None })
+        .collect();
+    let mut used = std::collections::HashSet::new();
+    let mut image_list = String::new();
+    // result idx -> the compiled file the run should produce.
+    let mut expect: Vec<(usize, PathBuf)> = Vec::new();
+    // Staged sources compiled directly (result idx tags per-file retry errors).
+    let mut direct: Vec<(usize, String)> = Vec::new();
+    let mut any_images = false;
+
+    for (idx, f) in req.files.iter().enumerate() {
+        let p = Path::new(f);
+        if !p.is_file() {
+            results[idx].error = Some("file not found".into());
+            continue;
+        }
+        let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+        let raw_stem = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let stem = easy_stem(&raw_stem, &mut used);
+
+        if EASY_RASTER.contains(&ext.as_str()) {
+            let dest = img_dir.join(format!("{stem}.png"));
+            let staged = if ext == "png" {
+                std::fs::copy(p, &dest).map(|_| ()).map_err(|e| e.to_string())
+            } else {
+                easy_ffmpeg_convert(req.ffmpeg_path.as_deref(), f, &dest)
+            };
+            if let Err(e) = staged {
+                results[idx].error = Some(e);
+                continue;
+            }
+            image_list.push_str(&format!(
+                "\t\tpanorama:\"file://{{images}}/eim_easy/{stem}.png\",\n"
+            ));
+            any_images = true;
+            expect.push((idx, compiled_root.join(format!("panorama/images/eim_easy/{stem}_png.vtex_c"))));
+        } else if ext == "svg" {
+            let dest = img_dir.join(format!("{stem}.svg"));
+            if let Err(e) = std::fs::copy(p, &dest) {
+                results[idx].error = Some(e.to_string());
+                continue;
+            }
+            image_list.push_str(&format!(
+                "\t\tpanorama:\"file://{{images}}/eim_easy/{stem}.svg\",\n"
+            ));
+            any_images = true;
+            expect.push((idx, compiled_root.join(format!("panorama/images/eim_easy/{stem}.vsvg_c"))));
+        } else if EASY_AUDIO.contains(&ext.as_str()) {
+            // wav/mp3 compile as-is; anything else converts to wav first.
+            let direct_ok = ext == "wav" || ext == "mp3";
+            let dest = misc_dir.join(format!("{stem}.{}", if direct_ok { ext.as_str() } else { "wav" }));
+            let staged = if direct_ok {
+                std::fs::copy(p, &dest).map(|_| ()).map_err(|e| e.to_string())
+            } else {
+                easy_ffmpeg_convert(req.ffmpeg_path.as_deref(), f, &dest)
+            };
+            if let Err(e) = staged {
+                results[idx].error = Some(e);
+                continue;
+            }
+            direct.push((idx, dest.to_string_lossy().into_owned()));
+            expect.push((idx, compiled_root.join(format!("eim_easy/{stem}.vsnd_c"))));
+        } else if EASY_PANORAMA.contains(&ext.as_str()) {
+            let dest = pano_dir.join(format!("{stem}.{ext}"));
+            if let Err(e) = std::fs::copy(p, &dest) {
+                results[idx].error = Some(e.to_string());
+                continue;
+            }
+            let cext = match ext.as_str() {
+                "xml" => "vxml_c",
+                "css" => "vcss_c",
+                _ => "vjs_c",
+            };
+            direct.push((idx, dest.to_string_lossy().into_owned()));
+            expect.push((idx, compiled_root.join(format!("panorama/eim_easy/{stem}.{cext}"))));
+        } else if EASY_DIRECT.contains(&ext.as_str()) {
+            let dest = misc_dir.join(format!("{stem}.{ext}"));
+            if let Err(e) = std::fs::copy(p, &dest) {
+                results[idx].error = Some(e.to_string());
+                continue;
+            }
+            direct.push((idx, dest.to_string_lossy().into_owned()));
+            expect.push((idx, compiled_root.join(format!("eim_easy/{stem}.{ext}_c"))));
+        } else {
+            results[idx].error = Some(format!(
+                "can't compile .{ext} files (images, audio, panorama xml/css/js, vsndevts, vmat, vpcf, vdata)"
+            ));
+        }
+    }
+
+    // Images compile through ONE panorama_image_list vdata (the documented
+    // way to make UI vtex; same trick the icon pipeline uses).
+    if any_images {
+        let vdata = content_root.join("eim_easy_images.vdata");
+        let body = format!(
+            "{ENCODING_HEADER}{{\n\tgeneric_data_type = \"panorama_image_list\"\n\timage_list =\n\t[\n{image_list}\t]\n}}\n"
+        );
+        let run = std::fs::write(&vdata, body).map_err(|e| e.to_string()).and_then(|()| {
+            run_compiler_raw(&req.resource_compiler, &req.game_info_dir, &[vdata
+                .to_string_lossy()
+                .into_owned()])
+        });
+        if let Err(e) = run {
+            for (idx, produced) in &expect {
+                if produced.starts_with(compiled_root.join("panorama/images/eim_easy"))
+                    && results[*idx].error.is_none()
+                {
+                    results[*idx].error = Some(format!("image compile failed: {e}"));
+                }
+            }
+        }
+    }
+
+    // Everything else batches into one invocation; a failed batch retries
+    // one-by-one so each bad file gets its own precise error.
+    if !direct.is_empty() {
+        let inputs: Vec<String> = direct.iter().map(|(_, p)| p.clone()).collect();
+        if run_compiler_raw(&req.resource_compiler, &req.game_info_dir, &inputs).is_err() {
+            for (idx, staged) in &direct {
+                if let Err(e) = run_compiler_raw(
+                    &req.resource_compiler,
+                    &req.game_info_dir,
+                    std::slice::from_ref(staged),
+                ) {
+                    results[*idx].error = Some(e);
+                }
+            }
+        }
+    }
+
+    // Collect what the runs produced into the output folder.
+    for (idx, produced) in &expect {
+        if results[*idx].error.is_some() {
+            continue;
+        }
+        if produced.exists() {
+            let name = produced.file_name().map(|n| n.to_string_lossy().into_owned());
+            match name {
+                Some(n) => {
+                    let out = Path::new(&req.out_dir).join(&n);
+                    match std::fs::copy(produced, &out) {
+                        Ok(_) => results[*idx].output = Some(out.to_string_lossy().into_owned()),
+                        Err(e) => results[*idx].error = Some(format!("copying result: {e}")),
+                    }
+                }
+                None => results[*idx].error = Some("no output name".into()),
+            }
+        } else {
+            results[*idx].error =
+                Some("the compiler produced no output for this file (bad content?)".into());
+        }
+    }
+    Ok(results)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4016,6 +4270,73 @@ mod tests {
 
     /// Real VFX-recolor pipeline: decompile Curse's particle from the pak,
     /// hue-shift it, recompile, pack. Run with:
+    /// Real-toolchain Easy Compile: a generated PNG becomes a .vtex_c and a
+    /// generated WAV becomes a .vsnd_c, both landing in the output folder.
+    ///   cargo test -p app --lib -- --ignored e2e_easy_compile --nocapture
+    #[test]
+    #[ignore]
+    fn e2e_easy_compile() {
+        let csdk = r"C:\Users\ethob\Desktop\DeadlockModding\Reduced_CSDK_12";
+        let ffmpeg = r"C:\Users\ethob\Desktop\DeadlockModding\EIM_Tools\ffmpeg\ffmpeg.exe";
+        let compiler = format!(r"{csdk}\game\bin_tools\win64\resourcecompiler.exe");
+        if !Path::new(&compiler).exists() || !Path::new(ffmpeg).exists() {
+            eprintln!("skipping: CSDK or ffmpeg missing");
+            return;
+        }
+        let addon = "eim_easy_e2e_addon";
+        let tmp = std::env::temp_dir().join("eim_easy_e2e");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        // Generate a source image + audio with ffmpeg (no fixtures needed).
+        let png = tmp.join("Easy Test Image.png");
+        let wav = tmp.join("easy_test_tone.wav");
+        assert!(crate::procutil::quiet(ffmpeg)
+            .args(["-y", "-f", "lavfi", "-i", "color=c=red:s=64x64:d=1", "-frames:v", "1"])
+            .arg(&png)
+            .output()
+            .unwrap()
+            .status
+            .success());
+        assert!(crate::procutil::quiet(ffmpeg)
+            .args(["-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=1"])
+            .arg(&wav)
+            .output()
+            .unwrap()
+            .status
+            .success());
+
+        let out_dir = tmp.join("out");
+        let req = EasyCompileReq {
+            content_root: format!(r"{csdk}\content\citadel_addons\{addon}"),
+            compiled_root: format!(r"{csdk}\game\citadel_addons\{addon}"),
+            game_info_dir: format!(r"{csdk}\game\citadel"),
+            resource_compiler: compiler,
+            ffmpeg_path: Some(ffmpeg.into()),
+            files: vec![
+                png.to_string_lossy().into_owned(),
+                wav.to_string_lossy().into_owned(),
+                tmp.join("missing.png").to_string_lossy().into_owned(),
+            ],
+            out_dir: out_dir.to_string_lossy().into_owned(),
+        };
+        let res = easy_compile_blocking(&req).expect("easy compile should run");
+        for r in &res {
+            eprintln!("{} -> {:?} {:?}", r.input, r.output, r.error);
+        }
+        assert_eq!(res.len(), 3);
+        let img = &res[0];
+        assert!(img.error.is_none(), "image failed: {:?}", img.error);
+        let img_out = img.output.as_ref().expect("image output");
+        assert!(img_out.ends_with("easy_test_image_png.vtex_c"), "got {img_out}");
+        assert!(std::fs::metadata(img_out).unwrap().len() > 100);
+        let snd = &res[1];
+        assert!(snd.error.is_none(), "audio failed: {:?}", snd.error);
+        let snd_out = snd.output.as_ref().expect("audio output");
+        assert!(snd_out.ends_with("easy_test_tone.vsnd_c"), "got {snd_out}");
+        assert!(std::fs::metadata(snd_out).unwrap().len() > 100);
+        assert!(res[2].error.is_some(), "missing file must report an error");
+    }
+
     ///   cargo test -p app --lib -- --ignored e2e_recolor_particle --nocapture
     #[test]
     #[ignore]

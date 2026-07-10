@@ -222,6 +222,13 @@ export function SetupSection({
               accent="accent-amber-500"
             />
             <Toggle
+              checked={settings.experimentalEasyCompile}
+              onChange={(v) => update({ experimentalEasyCompile: v })}
+              title="Easy Compile (compile any file)"
+              desc="Show the Easy Compile tab: drop images, audio, or panorama/config sources and get their compiled _c files in a folder of your choice."
+              accent="accent-amber-500"
+            />
+            <Toggle
               checked={settings.showExperimentalHeroes}
               onChange={(v) => update({ showExperimentalHeroes: v })}
               title="Show experimental heroes"

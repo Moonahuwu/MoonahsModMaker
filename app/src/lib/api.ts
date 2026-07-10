@@ -1065,6 +1065,29 @@ export function libraryRemove(path: string): Promise<void> {
   return invoke("library_remove", { path });
 }
 
+export interface EasyCompileReq {
+  contentRoot: string;
+  compiledRoot: string;
+  gameInfoDir: string;
+  resourceCompiler: string;
+  ffmpegPath?: string;
+  files: string[];
+  outDir: string;
+}
+
+export interface EasyCompiled {
+  input: string;
+  /** Where the compiled file landed in the output folder (null on failure). */
+  output: string | null;
+  error: string | null;
+}
+
+/** Easy Compile (experimental): auto-detect each file and compile it to its
+ *  `_c` form into `outDir` (images ride the panorama_image_list vtex trick). */
+export function easyCompile(req: EasyCompileReq): Promise<EasyCompiled[]> {
+  return invoke("easy_compile", { req });
+}
+
 export interface HeroImage {
   /** card | card_critical | card_gloat | vertical | sm | mm | background | logo */
   kind: string;

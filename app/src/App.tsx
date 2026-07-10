@@ -85,6 +85,7 @@ import { songHash, overrideHash, effectHash, posterHash } from "./lib/songHash";
 import type { EffectOverride, EventProject, EventView, PosterOverride, Project, Song, SongLayer, SoundOverride } from "./types";
 import { GameBananaBrowser } from "./components/GameBananaBrowser";
 import { LibraryTab } from "./components/LibraryTab";
+import { EasyCompileTab } from "./components/EasyCompileTab";
 import "./index.css";
 import "./App.css";
 
@@ -111,6 +112,8 @@ const POSTERS = "posters";
 const JUMPSCARES = "jumpscares";
 /** UI Master (experimental): edit the game's panorama layouts/styles. */
 const UIMASTER = "uimaster";
+/** Easy Compile (experimental): one-off source → `_c` conversion. */
+const EASY_COMPILE = "easycompile";
 /** Catch-all tab for events auto-discovered from a new patch. */
 const UNSORTED = "unsorted";
 
@@ -189,6 +192,7 @@ const TAB_LABELS: Record<string, string> = {
   [POSTERS]: "Wall Art",
   [JUMPSCARES]: "Jumpscares",
   [UIMASTER]: "UI Master",
+  [EASY_COMPILE]: "Easy Compile",
   [CUSTOM_SERVER]: "Custom Server",
   [MOD_COMBINER]: "Mod combiner",
   [GAMEBANANA]: "GameBanana",
@@ -543,6 +547,7 @@ function accentFor(ev: { group: string; side: string }): string {
   if (ev.group === POSTERS) return "#8b5cf6"; // deep violet (posters)
   if (ev.group === JUMPSCARES) return "#ef4444"; // red (spooky)
   if (ev.group === UIMASTER) return "#f59e0b"; // amber (experimental UI editing)
+  if (ev.group === EASY_COMPILE) return "#fbbf24"; // amber (compiler utility)
   if (ev.group === CUSTOM_SERVER) return "#38bdf8"; // sky (server)
   if (ev.group === GAMEBANANA) return "#eab308"; // GameBanana yellow
   if (ev.group === LIBRARY) return "#93c5fd"; // light blue (library shelf)
@@ -709,6 +714,8 @@ export default function App() {
   );
   // Set by the Sound Library tab so audio dropped there is shelved, not slotted.
   const libraryDropRef = useRef<((paths: string[]) => void) | null>(null);
+  // Set by Easy Compile: files dropped on that tab queue for one-off compiles.
+  const easyDropRef = useRef<((paths: string[]) => void) | null>(null);
   // Expanded song-card bodies: audio dropped on an OPEN card becomes a layer
   // of that track instead of a new track in the slot.
   const songEls = useRef<Record<string, HTMLElement | null>>({});
@@ -782,6 +789,7 @@ export default function App() {
     // CompileBar effectOverrides prop), so nothing ships invisibly.
     if (settings.experimentalEffects) out.push(EFFECTS);
     if (settings.experimentalUiMaster) out.push(UIMASTER);
+    if (settings.experimentalEasyCompile) out.push(EASY_COMPILE);
     out.push(POSTERS);
     // Jumpscares only when the DigiMaster engine is in the user's mods (or
     // this project already configures it).
@@ -803,6 +811,7 @@ export default function App() {
     settings.experimentalEffects,
     settings.experimentalServer,
     settings.experimentalUiMaster,
+    settings.experimentalEasyCompile,
     digimodOn,
   ]);
 
@@ -1131,6 +1140,12 @@ export default function App() {
       } else if (p.type === "drop") {
         const { side } = pickSide(p.position.x, p.position.y);
         setDropTarget(null);
+        // Easy Compile tab: ANY dropped file queues for a one-off compile.
+        if (activeTabRef.current === EASY_COMPILE && easyDropRef.current && p.paths.length > 0) {
+          easyDropRef.current(p.paths);
+          return;
+        }
+
         const vpks = p.paths.filter((pp) => /\.vpk$/i.test(pp));
         const audio = p.paths.filter((pp) => AUDIO_EXT.test(pp));
         const images = p.paths.filter((pp) => IMAGE_EXT.test(pp));
@@ -3727,6 +3742,8 @@ export default function App() {
             ffmpegPath={settings.ffmpegPath || undefined}
             dropRef={libraryDropRef}
           />
+        ) : activeTab === EASY_COMPILE ? (
+          <EasyCompileTab settings={settings} update={updateSettings} dropRef={easyDropRef} />
         ) : activeTab === ITEMS ? (
           <ItemsTab
             helperPath={settings.vpkHelperPath}

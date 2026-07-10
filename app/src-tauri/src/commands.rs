@@ -5583,6 +5583,17 @@ pub async fn library_remove(app: tauri::AppHandle, path: String) -> Result<(), S
         .map_err(|e| e.to_string())?
 }
 
+/// Easy Compile (experimental): auto-detect each file and compile it to its
+/// `_c` form, dropping results in a folder of the user's choice.
+#[tauri::command]
+pub async fn easy_compile(
+    req: crate::compile::EasyCompileReq,
+) -> Result<Vec<crate::compile::EasyCompiled>, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::compile::easy_compile_blocking(&req))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// Collect mountable vpks under `dir`: `*_dir.vpk`, or plain `*.vpk` that
 /// aren't numbered data parts (`_NNN.vpk`).
 fn find_dir_vpks(dir: &std::path::Path, out: &mut Vec<String>) {

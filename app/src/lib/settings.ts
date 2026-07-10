@@ -60,6 +60,11 @@ export interface Settings {
    *  layouts/styles directly). Very experimental — a bad edit can break the
    *  in-game UI until the mod is removed. */
   experimentalUiMaster: boolean;
+  /** Experimental: reveal the Easy Compile tab (compile any source file to
+   *  its _c form into a folder of your choice - UI vtex etc.). */
+  experimentalEasyCompile: boolean;
+  /** Easy Compile: where compiled files land (persisted between runs). */
+  easyCompileOutDir: string;
   /** Include UI-tab sound changes in the compiled build. Off by default — UI
    *  soundevent edits make broad menu changes that can break things. */
   includeUiSounds: boolean;
@@ -152,6 +157,8 @@ export const DEFAULT_SETTINGS: Settings = {
   experimentalEffects: false,
   experimentalServer: false,
   experimentalUiMaster: false,
+  experimentalEasyCompile: false,
+  easyCompileOutDir: "",
   includeUiSounds: false,
   source2ViewerPath: "",
   includeGameplay: false,
