@@ -30,7 +30,7 @@ function LayerWave({ path }: { path: string }) {
     const ws = WaveSurfer.create({
       container: ref.current,
       url,
-      height: 30,
+      height: 44,
       waveColor: "#7dd3fcaa",
       progressColor: "#7dd3fcaa",
       cursorWidth: 0,
@@ -579,51 +579,66 @@ export function SongCard({
                         const { ts, te } = layerWin(l);
                         const len = te - ts;
                         const off = Math.max(0, l.offset ?? 0);
-                        const start = song.trimStart + off;
-                        const leftPct = Math.min(100, (start / tlDur) * 100);
-                        const widthPct = Math.max(
-                          1.5,
-                          Math.min(100 - leftPct, (len / tlDur) * 100),
-                        );
                         const srcDur = layerDurs[l.id] ?? 0;
+                        // The clip window's position on the shared timeline,
+                        // and the FULL waveform anchored so its in-point sits
+                        // at the window's left edge. Trims never rescale the
+                        // wave - the highlighted window just grows/shrinks
+                        // over it, exactly like the trim region up top.
+                        const start = song.trimStart + off;
+                        const regionLeft = Math.min(100, (start / tlDur) * 100);
+                        const regionW = Math.max(
+                          0.75,
+                          Math.min(100 - regionLeft, (len / tlDur) * 100),
+                        );
+                        const waveLeft = ((start - ts) / tlDur) * 100;
+                        const waveW = ((srcDur || len) / tlDur) * 100;
                         return (
                           <div key={l.id} className="mt-1">
                             <div
                               data-lane
-                              className="relative h-9 overflow-hidden rounded bg-zinc-900/60"
+                              className="relative h-11 overflow-hidden rounded bg-zinc-900/60"
                             >
+                              {srcDur > 0 && (
+                                <div
+                                  className="absolute inset-y-0"
+                                  style={{ left: `${waveLeft}%`, width: `${waveW}%` }}
+                                >
+                                  <LayerWave path={l.sourceAudio} />
+                                </div>
+                              )}
+                              {/* Dim the wave outside the clip window. */}
+                              <div
+                                className="pointer-events-none absolute inset-y-0 left-0 bg-zinc-950/70"
+                                style={{ width: `${Math.max(0, regionLeft)}%` }}
+                              />
+                              <div
+                                className="pointer-events-none absolute inset-y-0 right-0 bg-zinc-950/70"
+                                style={{
+                                  width: `${Math.max(0, 100 - regionLeft - regionW)}%`,
+                                }}
+                              />
+                              {/* The clip window: drag to move (the wave slides
+                                  along), edges to trim (the wave stays put). */}
                               <div
                                 onPointerDown={(e) => beginDrag(e, l, "move")}
                                 onPointerMove={onDragMove}
                                 onPointerUp={endDrag}
                                 title={`starts ${off.toFixed(2)}s into the clip - drag to move, edges to trim`}
-                                className="absolute inset-y-0.5 flex cursor-grab touch-none items-stretch overflow-hidden rounded border border-sky-500/40 bg-sky-500/10 active:cursor-grabbing"
-                                style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
+                                className="absolute inset-y-0 flex cursor-grab touch-none items-stretch justify-between rounded-sm bg-sky-400/15 ring-1 ring-inset ring-sky-400/40 active:cursor-grabbing"
+                                style={{ left: `${regionLeft}%`, width: `${regionW}%` }}
                               >
                                 <span
                                   onPointerDown={(e) => beginDrag(e, l, "l")}
                                   onPointerMove={onDragMove}
                                   onPointerUp={endDrag}
-                                  className="w-1.5 shrink-0 cursor-ew-resize touch-none bg-sky-400/50 transition hover:bg-sky-300"
+                                  className="w-1.5 shrink-0 cursor-ew-resize touch-none bg-sky-400/60 transition hover:bg-sky-300"
                                 />
-                                <div className="relative min-w-0 flex-1 overflow-hidden">
-                                  {srcDur > 0 && len > 0 && (
-                                    <div
-                                      className="absolute inset-y-0"
-                                      style={{
-                                        width: `${(srcDur / len) * 100}%`,
-                                        left: `-${(ts / len) * 100}%`,
-                                      }}
-                                    >
-                                      <LayerWave path={l.sourceAudio} />
-                                    </div>
-                                  )}
-                                </div>
                                 <span
                                   onPointerDown={(e) => beginDrag(e, l, "r")}
                                   onPointerMove={onDragMove}
                                   onPointerUp={endDrag}
-                                  className="w-1.5 shrink-0 cursor-ew-resize touch-none bg-sky-400/50 transition hover:bg-sky-300"
+                                  className="w-1.5 shrink-0 cursor-ew-resize touch-none bg-sky-400/60 transition hover:bg-sky-300"
                                 />
                               </div>
                             </div>
