@@ -3444,7 +3444,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
 /// like MYSoundevents/NEWSoundevents) and obvious backup junk. Falls back to
 /// the classic game-content set if the pack can't be listed, so a transient
 /// helper failure can't produce an empty combined build.
-fn import_asset_dirs(helper: &str, mod_vpk: &str) -> Vec<String> {
+pub(crate) fn import_asset_dirs(helper: &str, mod_vpk: &str) -> Vec<String> {
     let mut dirs: std::collections::BTreeSet<String> = Default::default();
     if let Ok(entries) = vpk::list(helper, mod_vpk, None) {
         for e in entries {

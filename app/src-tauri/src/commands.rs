@@ -382,20 +382,52 @@ pub fn scan_pack_contents(
     Ok(out)
 }
 
+/// Cache format version, folded into a marker file so caches created by
+/// older app builds refresh themselves on the next import/review (v2 = every
+/// top-level pack dir is cached, not a fixed whitelist, so custom dirs like
+/// a particle pack's enderpearl/ ride along).
+const PACK_CACHE_V: &str = "2";
+
 /// Extract an imported pack ONCE into an app-managed cache dir, so compiles,
 /// previews and adopted-track staging never need the original `.vpk` again
 /// (the whole vpk layer accepts the cache dir as a source). Asset trees are
 /// copied verbatim; soundevents are stored as decompiled TEXT. Returns the
 /// cache dir (already-cached dir inputs are returned as-is).
 #[tauri::command]
-pub fn cache_pack(
+pub async fn cache_pack(
     app: tauri::AppHandle,
     helper_path: String,
     pack_vpk: String,
 ) -> Result<String, String> {
     use tauri::Manager;
+    // Extraction is heavy - a sync command would freeze the window.
+    let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || cache_pack_blocking(app_data, helper_path, pack_vpk))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn cache_pack_blocking(
+    app_data: std::path::PathBuf,
+    helper_path: String,
+    pack_vpk: String,
+) -> Result<String, String> {
     if std::path::Path::new(&pack_vpk).is_dir() {
-        return Ok(pack_vpk); // re-import of an already-cached pack
+        // Re-import of an already-cached pack: refresh it when it predates
+        // the current cache format and its source vpk is still around.
+        let dir = std::path::PathBuf::from(&pack_vpk);
+        let fresh = std::fs::read_to_string(dir.join(".eim_cache_v"))
+            .map(|v| v.trim() == PACK_CACHE_V)
+            .unwrap_or(false);
+        if !fresh {
+            if let Ok(orig) = std::fs::read_to_string(dir.join("eim_source.txt")) {
+                let orig = orig.trim().to_string();
+                if std::path::Path::new(&orig).is_file() {
+                    fill_pack_cache(&helper_path, &orig, &dir)?;
+                }
+            }
+        }
+        return Ok(pack_vpk);
     }
     // Friendly name (the vpk stem, or its folder for generic pakNN_dir.vpk)
     // plus a short hash of the full path for uniqueness.
@@ -416,22 +448,30 @@ pub fn cache_pack(
         h ^= u64::from(*b);
         h = h.wrapping_mul(0x100000001b3);
     }
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
+    let dir = app_data
         .join("packs")
         .join(format!("{name}_{:08x}", h as u32));
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    fill_pack_cache(&helper_path, &pack_vpk, &dir)?;
+    Ok(dir.to_string_lossy().replace('\\', "/"))
+}
 
-    for d in ["sounds/", "models/", "particles/", "materials/", "panorama/"] {
-        let _ = crate::vpk::extract_all(&helper_path, &pack_vpk, &dir.to_string_lossy(), Some(d));
+/// (Re)extract a pack into its cache dir: every top-level dir the pack
+/// contains (soundevents trees and backup junk excepted), plus soundevents
+/// as decompiled text for the import/combine steps.
+fn fill_pack_cache(
+    helper_path: &str,
+    pack_vpk: &str,
+    dir: &std::path::Path,
+) -> Result<(), String> {
+    for d in crate::compile::import_asset_dirs(helper_path, pack_vpk) {
+        let _ = crate::vpk::extract_all(helper_path, pack_vpk, &dir.to_string_lossy(), Some(&d));
     }
     // Soundevents land as decompiled text (what the import + combine steps
     // read). True top-level files only — the listing is a substring match, so
     // working copies (NEWSoundevents/, MERGEDsoundevents/, backups) would
     // otherwise be cached as junk.
-    for f in crate::vpk::list(&helper_path, &pack_vpk, Some("soundevents/"))? {
+    for f in crate::vpk::list(helper_path, pack_vpk, Some("soundevents/"))? {
         let lower = f.to_lowercase();
         if !lower.starts_with("soundevents/")
             || lower.contains("backup")
@@ -445,14 +485,15 @@ pub fn cache_pack(
             let _ = std::fs::create_dir_all(p);
         }
         if f.ends_with(".vsndevts") {
-            let _ = crate::vpk::extract(&helper_path, &pack_vpk, &f, &out.to_string_lossy());
+            let _ = crate::vpk::extract(helper_path, pack_vpk, &f, &out.to_string_lossy());
         } else if f.ends_with(".vsndevts_c") {
-            let _ = crate::vpk::decompile_from_vpk(&helper_path, &pack_vpk, &f, &out.to_string_lossy());
+            let _ = crate::vpk::decompile_from_vpk(helper_path, pack_vpk, &f, &out.to_string_lossy());
         }
     }
-    // Record where this cache came from (for the curious / future tooling).
-    let _ = std::fs::write(dir.join("eim_source.txt"), &pack_vpk);
-    Ok(dir.to_string_lossy().replace('\\', "/"))
+    // Record the source + cache format so a stale cache can refresh itself.
+    let _ = std::fs::write(dir.join("eim_source.txt"), pack_vpk);
+    let _ = std::fs::write(dir.join(".eim_cache_v"), PACK_CACHE_V);
+    Ok(())
 }
 
 /// Which of a pack's files are byte-identical (CRC32, from the vpk indexes) to
