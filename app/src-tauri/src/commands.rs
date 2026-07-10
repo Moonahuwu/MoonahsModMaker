@@ -5583,6 +5583,73 @@ pub async fn library_remove(app: tauri::AppHandle, path: String) -> Result<(), S
         .map_err(|e| e.to_string())?
 }
 
+#[derive(serde::Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtractedAudio {
+    pub path: String,
+    /// The vpk-internal ref it came from (`sounds/x.vsnd_c`).
+    pub source_ref: String,
+}
+
+/// Pull the sounds out of a mod vpk as playable audio files (the GameBanana
+/// slot flow wants the mp3s, not the pack). Capped so a giant music pack
+/// can't sit decoding for minutes; sounds that fail to decode are skipped.
+#[tauri::command]
+pub async fn vpk_extract_audio(
+    app: tauri::AppHandle,
+    helper_path: String,
+    vpk: String,
+) -> Result<Vec<ExtractedAudio>, String> {
+    use tauri::Manager;
+    let dest_root = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("gb_audio");
+    tauri::async_runtime::spawn_blocking(move || {
+        let entries = crate::vpk::list(&helper_path, &vpk, None)?;
+        let sounds: Vec<String> = entries
+            .into_iter()
+            .filter(|e| e.to_lowercase().ends_with(".vsnd_c"))
+            .collect();
+        if sounds.is_empty() {
+            return Err("that pack has no sounds inside".into());
+        }
+        // Keyed by vpk name + size so re-adds reuse the same folder.
+        let stem = std::path::Path::new(&vpk)
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "pack".into());
+        let size = std::fs::metadata(&vpk).map(|m| m.len()).unwrap_or(0);
+        let dir = dest_root.join(format!("{stem}_{size:x}"));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        const CAP: usize = 64;
+        let mut out = Vec::new();
+        for s in sounds.iter().take(CAP) {
+            let name = std::path::Path::new(s)
+                .file_stem()
+                .map(|x| x.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let name = name.trim_end_matches(".vsnd");
+            let base = dir.join(format!("{:02}_{name}", out.len()));
+            if let Ok(written) =
+                crate::vpk::decode(&helper_path, &vpk, s, &base.to_string_lossy())
+            {
+                out.push(ExtractedAudio {
+                    path: written.trim().to_string(),
+                    source_ref: s.clone(),
+                });
+            }
+        }
+        if out.is_empty() {
+            return Err("couldn't decode any sounds from that pack".into());
+        }
+        Ok(out)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Easy Compile (experimental): auto-detect each file and compile it to its
 /// `_c` form, dropping results in a folder of the user's choice.
 #[tauri::command]

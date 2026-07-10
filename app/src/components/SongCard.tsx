@@ -306,11 +306,13 @@ export function SongCard({
 
   // One drag at a time: move the block, or trim either edge. Values write
   // straight into the layer via onChange; `orig` keeps the drag anchored.
+  // `moved` distinguishes a real drag from a plain click (click = play mix).
   const drag = useRef<{
     id: string;
     mode: "move" | "l" | "r";
     startX: number;
     pxPerSec: number;
+    moved: boolean;
     orig: { offset: number; ts: number; te: number; dur: number };
   } | null>(null);
 
@@ -329,6 +331,7 @@ export function SongCard({
       mode,
       startX: e.clientX,
       pxPerSec: w / tlDur,
+      moved: false,
       orig: { offset: Math.max(0, l.offset ?? 0), ts, te, dur },
     };
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
@@ -337,6 +340,9 @@ export function SongCard({
   function onDragMove(e: React.PointerEvent) {
     const d = drag.current;
     if (!d) return;
+    // A couple px of jitter is a click, not a drag - don't nudge the layer.
+    if (!d.moved && Math.abs(e.clientX - d.startX) <= 3) return;
+    d.moved = true;
     const dsec = (e.clientX - d.startX) / d.pxPerSec;
     const { offset, ts, te, dur } = d.orig;
     if (d.mode === "move") {
@@ -359,7 +365,11 @@ export function SongCard({
   }
 
   function endDrag() {
+    const d = drag.current;
     drag.current = null;
+    // Plain click on a layer: hear the whole thing - base + every layer,
+    // exactly what compiles.
+    if (d && !d.moved && d.mode === "move") void playPause();
   }
 
   const status = songStatus(song);
@@ -567,6 +577,14 @@ export function SongCard({
                     onDuration={setMineDur}
                     onTime={setMineTime}
                     timeline
+                    onRegionPlay={
+                      activeLayers.length > 0
+                        ? () => {
+                            void playPause();
+                            return true;
+                          }
+                        : undefined
+                    }
                   />
                   {/* Layer lanes: stacked under the waveform on the same time
                       scale, editor-style. Drag a wave to place it, edges to

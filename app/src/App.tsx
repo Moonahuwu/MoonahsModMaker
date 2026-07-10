@@ -40,6 +40,7 @@ import {
   listSoundeventFiles,
   downloadTools,
   sanitizeName,
+  vpkExtractAudio,
   listProfiles,
   saveProfile,
   loadProfile,
@@ -720,8 +721,14 @@ export default function App() {
   // of that track instead of a new track in the slot.
   const songEls = useRef<Record<string, HTMLElement | null>>({});
   // A slot's "Find on GameBanana": the search the browser screen runs on
-  // open. `sounds` locks it to GameBanana's dedicated sound-mod section.
-  const [gbSeed, setGbSeed] = useState<{ query: string; sounds: boolean } | null>(null);
+  // open. `sounds` locks it to GameBanana's dedicated sound-mod section;
+  // `slotId` makes Get extract a pack's audio straight into that slot.
+  const [gbSeed, setGbSeed] = useState<{
+    query: string;
+    sounds: boolean;
+    slotId?: string;
+    slotLabel?: string;
+  } | null>(null);
   // Where the jump came from, so the browser's back button can return there.
   const [gbReturn, setGbReturn] = useState<string>("intro");
 
@@ -3227,9 +3234,34 @@ export default function App() {
           : ev.group === UNSORTED
             ? "" // no useful handle - browse the whole Sounds section
             : (TAB_LABELS[ev.group] ?? ev.group);
-    setGbSeed({ query: q, sounds: true });
+    setGbSeed({ query: q, sounds: true, slotId: ev.id, slotLabel: ev.side });
     setGbReturn(activeTab);
     setActiveTab(GAMEBANANA);
+  }
+
+  // GameBanana slot mode: decode a downloaded pack's sounds and add each as
+  // a track in the slot the search came from (the mp3s, not the vpk).
+  async function addPackSoundsToSlot(slotId: string, vpks: string[], modName: string) {
+    push("info", `Extracting sounds from "${modName}"…`);
+    let added = 0;
+    for (const v of vpks) {
+      try {
+        const clips = await vpkExtractAudio(settingsRef.current.vpkHelperPath, v);
+        for (const c of clips) {
+          await addSong(slotId, c.path);
+          added++;
+        }
+      } catch (e) {
+        push("error", `${modName}: ${e}`);
+      }
+    }
+    if (added > 0) {
+      push(
+        "success",
+        `Added ${added} sound${added > 1 ? "s" : ""} from "${modName}" - credit the author if you release this`,
+      );
+      setActiveTab(gbReturn);
+    }
   }
 
   // One SidePanel for a slot, with all its handlers wired (shared by the normal
@@ -3741,6 +3773,9 @@ export default function App() {
             }}
             seed={gbSeed}
             onSeedConsumed={() => setGbSeed(null)}
+            onAddToSlot={(slotId, vpks, modName) =>
+              void addPackSoundsToSlot(slotId, vpks, modName)
+            }
             onBack={() => setActiveTab(gbReturn)}
           />
         ) : activeTab === LIBRARY ? (

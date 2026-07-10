@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { StockWaveform } from "./StockWaveform";
@@ -42,6 +42,7 @@ export function GameBananaBrowser({
   onBundleMany,
   seed,
   onSeedConsumed,
+  onAddToSlot,
   onBack,
 }: {
   settings: Settings;
@@ -51,9 +52,13 @@ export function GameBananaBrowser({
   /** A download held several vpks: add them all to the bundle list. */
   onBundleMany: (vpks: string[]) => void;
   /** A slot's "Find on GameBanana" jump: search this immediately on open.
-   *  `sounds` locks the browser to the Sound submission type. */
-  seed?: { query: string; sounds: boolean } | null;
+   *  `sounds` locks the browser to the Sound submission type; `slotId` puts
+   *  the browser in slot mode - Get extracts the pack's audio straight into
+   *  that slot instead of bundling the vpk. */
+  seed?: { query: string; sounds: boolean; slotId?: string; slotLabel?: string } | null;
   onSeedConsumed?: () => void;
+  /** Slot mode: extract these downloaded vpks' sounds into the slot. */
+  onAddToSlot?: (slotId: string, vpks: string[], modName: string) => void;
   /** Return to the slot this screen was opened from (no sidebar tab). */
   onBack?: () => void;
 }) {
@@ -75,20 +80,34 @@ export function GameBananaBrowser({
   const [busy, setBusy] = useState<number | null>(null);
   // One open audio preview at a time (sound submissions host a preview MP3).
   const [previewFor, setPreviewFor] = useState<number | null>(null);
+  // Slot mode: Get extracts the pack's sounds into this slot (no bundling).
+  const [targetSlot, setTargetSlot] = useState<{ id: string; label: string } | null>(null);
+
+  // A newer request always wins: without this, a slow earlier search can
+  // resolve late and stomp the results the user is actually looking at.
+  const reqSeq = useRef(0);
 
   async function load(q: string, p: number, append: boolean, s = sort, m = model) {
+    const req = ++reqSeq.current;
     setLoading(true);
     setError(null);
     try {
       const res = await gamebananaSearch(q, p, s, m);
-      setItems((prev) => (append ? [...prev, ...res.items] : res.items));
+      if (req !== reqSeq.current) return;
+      setItems((prev) => {
+        if (!append) return res.items;
+        // The site's ranking can shift between pages - drop repeats.
+        const seen = new Set(prev.map((i) => `${i.model}:${i.modId}`));
+        return [...prev, ...res.items.filter((i) => !seen.has(`${i.model}:${i.modId}`))];
+      });
       setComplete(res.isComplete);
       setPage(p);
       setActiveQuery(q);
+      if (!append) setPreviewFor(null);
     } catch (e) {
-      setError(String(e));
+      if (req === reqSeq.current) setError(String(e));
     } finally {
-      setLoading(false);
+      if (req === reqSeq.current) setLoading(false);
     }
   }
 
@@ -106,6 +125,7 @@ export function GameBananaBrowser({
     const m = seed.sounds ? "Sound" : "Mod";
     setModel(m);
     setQuery(seed.query);
+    setTargetSlot(seed.slotId ? { id: seed.slotId, label: seed.slotLabel ?? "the slot" } : null);
     void load(seed.query, 1, false, sort, m);
     onSeedConsumed?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -138,6 +158,12 @@ export function GameBananaBrowser({
     push("info", `Downloading "${item.name}"…`);
     try {
       const res = await gamebananaDownload(item.modId, file.downloadUrl, file.name, item.model);
+      // Slot mode: the user wants the mp3s, not the pack - the sounds inside
+      // extract straight into the slot they came from.
+      if (targetSlot && onAddToSlot) {
+        onAddToSlot(targetSlot.id, res.vpks, item.name);
+        return;
+      }
       // Credits attach to every vpk from this page - the whole point.
       const credits = { ...(settings.importedModCredits ?? {}) };
       for (const v of res.vpks) credits[v] = res.info;
@@ -187,6 +213,21 @@ export function GameBananaBrowser({
         normal import review, and the page's author + credits attach automatically for
         your credits list.
       </p>
+      {targetSlot && (
+        <div className="mt-2 flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/5 px-3 py-1.5 text-xs text-emerald-300">
+          <span>
+            Get extracts a pack's sounds straight into <b>{targetSlot.label}</b> as tracks
+            - no vpk bundling.
+          </span>
+          <button
+            onClick={() => setTargetSlot(null)}
+            title="Switch to normal mode (bundle the whole vpk instead)"
+            className="ml-auto shrink-0 rounded px-1.5 py-0.5 text-emerald-400/70 transition hover:bg-emerald-500/15 hover:text-emerald-200"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       <div className="mt-3 flex gap-2">
         <input

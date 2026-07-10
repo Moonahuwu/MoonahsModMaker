@@ -29,6 +29,9 @@ interface WaveformProps {
   onDuration?: (d: number) => void;
   /** Show a seconds ruler under the waveform. */
   timeline?: boolean;
+  /** Called when the trim region is clicked; return true to take over
+   *  playback (a layered track plays its full mix, not just this wave). */
+  onRegionPlay?: () => boolean;
   /** Live playhead position (seconds) as the waveform plays. */
   onTime?: (t: number) => void;
 }
@@ -38,13 +41,15 @@ interface WaveformProps {
  * marking the trim window. The region is the source of truth for trim edits;
  * `trimStart/trimEnd` seed it on load.
  */
-export function Waveform({ url, trimStart, trimEnd, onTrimChange, widthPct, onDuration, timeline, onTime }: WaveformProps) {
+export function Waveform({ url, trimStart, trimEnd, onTrimChange, widthPct, onDuration, timeline, onTime, onRegionPlay }: WaveformProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   // Keep latest trim/callback without re-creating wavesurfer on every change.
   const trimRef = useRef({ trimStart, trimEnd });
   trimRef.current = { trimStart, trimEnd };
   const onTrimChangeRef = useRef(onTrimChange);
   onTrimChangeRef.current = onTrimChange;
+  const onRegionPlayRef = useRef(onRegionPlay);
+  onRegionPlayRef.current = onRegionPlay;
   const onDurationRef = useRef(onDuration);
   onDurationRef.current = onDuration;
   const timelineRef = useRef(timeline);
@@ -94,8 +99,11 @@ export function Waveform({ url, trimStart, trimEnd, onTrimChange, widthPct, onDu
     ws.on("timeupdate", (t) => onTimeRef.current?.(t));
 
     // Left-click the trim region to play that slice; click again to pause/resume.
+    // A layered track hands playback to the card (the full mix), so what you
+    // hear is what compiles.
     regions.on("region-clicked", (region, e) => {
       e.stopPropagation();
+      if (onRegionPlayRef.current?.()) return;
       if (ws.isPlaying()) {
         ws.pause();
       } else {

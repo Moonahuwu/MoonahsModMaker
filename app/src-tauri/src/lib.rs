@@ -139,6 +139,7 @@ pub fn run() {
             commands::library_add,
             commands::library_remove,
             commands::easy_compile,
+            commands::vpk_extract_audio,
             commands::open_in_viewer,
             commands::item_particles,
             commands::item_roster,

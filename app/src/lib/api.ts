@@ -1065,6 +1065,17 @@ export function libraryRemove(path: string): Promise<void> {
   return invoke("library_remove", { path });
 }
 
+export interface ExtractedAudio {
+  path: string;
+  /** The vpk-internal ref it came from (sounds/x.vsnd_c). */
+  sourceRef: string;
+}
+
+/** Decode a mod vpk's sounds to playable audio files (capped at 64). */
+export function vpkExtractAudio(helperPath: string, vpk: string): Promise<ExtractedAudio[]> {
+  return invoke("vpk_extract_audio", { helperPath, vpk });
+}
+
 export interface EasyCompileReq {
   contentRoot: string;
   compiledRoot: string;
