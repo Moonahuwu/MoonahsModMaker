@@ -191,6 +191,9 @@ VIAddVersionKey "ProductVersion" "${VERSION}"
 !macro EIM_DARK_GUIINIT
   Push $0
   System::Call 'dwmapi::DwmSetWindowAttribute(p $HWNDPARENT, i 20, *i 1, i 4)'
+  ; DWMWA_BORDER_COLOR (34, Win11): the default border reads as a white
+  ; line along the window bottom against the dark theme.
+  System::Call 'dwmapi::DwmSetWindowAttribute(p $HWNDPARENT, i 34, *i ${EIM_BG_BGR}, i 4)'
   SetCtlColors $HWNDPARENT "0x${EIM_FG}" "0x${EIM_BG}"
   GetDlgItem $0 $HWNDPARENT 1028 ; branding text
   SetCtlColors $0 "0x${EIM_FG}" "0x${EIM_BG}"
@@ -216,6 +219,8 @@ FunctionEnd
   Push $0
   Push $1
   Push $2
+  Push $3
+  Push $4
   FindWindow $0 "#32770" "" $HWNDPARENT
   ${If} $0 <> 0
     SetCtlColors $0 "0x${EIM_FG}" "0x${EIM_BG}"
@@ -223,19 +228,25 @@ FunctionEnd
     ${DoWhile} $2 < 1300
       GetDlgItem $1 $0 $2
       ${If} $1 <> 0
+        ; Themed "Button"-class controls that aren't push buttons (check
+        ; boxes, radios, group boxes) draw their caption in the theme color
+        ; and ignore SetCtlColors text: detach them from the visual style
+        ; first. BS_* type lives in the low style nibble; 0/1 = push.
+        System::Call 'user32::GetClassName(p r1, t .r3, i 16)'
+        ${If} $3 == "Button"
+          System::Call 'user32::GetWindowLongW(p r1, i -16) i .r4'
+          IntOp $4 $4 & 0xF
+          ${If} $4 >= 2
+            System::Call 'uxtheme::SetWindowTheme(p r1, w "", w "")'
+          ${EndIf}
+        ${EndIf}
         SetCtlColors $1 "0x${EIM_FG}" "0x${EIM_BG}"
       ${EndIf}
       IntOp $2 $2 + 1
     ${Loop}
-    ; Themed group boxes draw their caption in the theme color and ignore
-    ; SetCtlColors text (the directory page's "Destination Folder"): detach
-    ; the control from the visual style so the colors apply.
-    GetDlgItem $1 $0 1020
-    ${If} $1 <> 0
-      System::Call 'uxtheme::SetWindowTheme(p r1, w "", w "")'
-      SetCtlColors $1 "0x${EIM_FG}" "0x${EIM_BG}"
-    ${EndIf}
   ${EndIf}
+  Pop $4
+  Pop $3
   Pop $2
   Pop $1
   Pop $0
@@ -272,6 +283,7 @@ FunctionEnd
 ; Installer pages, must be ordered as they appear
 ; 1. Welcome Page
 !define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW EimDarkPage
 !insertmacro MUI_PAGE_WELCOME
 
 ; 2. License Page (if defined)
@@ -524,6 +536,7 @@ Var AppStartMenuFolder
 !define MUI_FINISHPAGE_RUN
 !define MUI_FINISHPAGE_RUN_FUNCTION RunMainBinary
 !define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW EimDarkPage
 !insertmacro MUI_PAGE_FINISH
 
 Function RunMainBinary
