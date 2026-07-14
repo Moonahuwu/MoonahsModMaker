@@ -62,6 +62,11 @@ apostrophe. Installers land in `target/release/bundle/{nsis,msi}/`. The NSIS wiz
 branded (installer icon + dark-theme sidebar/header BMPs wired in `tauri.conf.json` >
 `bundle.windows.nsis`); the BMPs are generated from `icons/icon.png` by
 `app/src-tauri/installer/make-installer-art.ps1` — re-run it after changing the icon.
+The wizard is DARK-THEMED via a custom NSIS template
+(`app/src-tauri/installer/installer.nsi`, wired by `bundle.windows.nsis.template`):
+it's the stock tauri-cli v2.11.4 template plus the "EimDark" blocks (MUI_BGCOLOR,
+DWM dark titlebar, per-page SetCtlColors sweeps). If `@tauri-apps/cli` is upgraded,
+re-vendor the matching stock template and re-apply those blocks.
 
 **One-stop setup / tools bundle:** users never need the 36GB CSDK. A trimmed
 toolchain (proven sufficient by real audio + soundevents compiles) lives at
