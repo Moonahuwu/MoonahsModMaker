@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { motion } from "motion/react";
+import { useEscape } from "../lib/useEscape";
 
 /** One exportable slot (an event carrying your content). */
 export interface ExportSlot {
@@ -35,6 +36,7 @@ export function ExportModal({
   onCancel: () => void;
   onExport: (slotIds: Set<string>, extraIds: Set<string>) => void;
 }) {
+  useEscape(onCancel, !busy);
   const [selSlots, setSelSlots] = useState<Set<string>>(new Set());
   const [selExtras, setSelExtras] = useState<Set<string>>(new Set());
 

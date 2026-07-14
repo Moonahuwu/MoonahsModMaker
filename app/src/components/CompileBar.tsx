@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "motion/react";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -17,7 +18,7 @@ import {
 import { cItemRoster } from "../lib/dataCache";
 import { BuildPreview, type PreviewMod, type YoursFile } from "./BuildPreview";
 import { ExportModal, type ExportExtra, type ExportSlot } from "./ExportModal";
-import { buildCompileConfig, directReplaceTarget, installSrcVpk, sheetSiblingsKey, slotSoundFolder, type Settings } from "../lib/settings";
+import { buildCompileConfig, directReplaceTarget, installSrcVpk, sheetSiblingsKey, slotSoundFolder, worldOverrideCategory, type Settings } from "../lib/settings";
 import { songStatus, overrideHash, effectHash, posterHash } from "../lib/songHash";
 import { useToast } from "./Toaster";
 import type { DigimodConfig, EffectOverride, EventProject, GlobalOverride, IconMod, PosterOverride, SoundOverride, UiFileOverride, VdataOverride, WorldOverride } from "../types";
@@ -269,18 +270,14 @@ export function CompileBar({
             return true;
           })
         : [];
-      const global =
-        s.includeGameplay && !ex.has("__cat:global") && !ex.has("__global__") ? globalOverrides : [];
+      const global = s.includeGameplay && !ex.has("__cat:global") ? globalOverrides : [];
       const world = s.includeGameplay
         ? worldOverrides.filter((o) => {
             if (ex.has(`${o.file}::${o.entity}`)) return false;
-            const isMinion = o.file.includes("npc_units");
-            const isBox = o.file.includes("misc") && o.entity.includes("breakable");
-            const isPower = o.file.includes("misc") && (o.entity.includes("powerup") || o.entity.includes("pickup"));
-            if (isMinion && ex.has("__cat:minions")) return false;
-            if (isBox && ex.has("__cat:boxes")) return false;
-            if (isPower && ex.has("__cat:powerups")) return false;
-            return true;
+            // Shared classifier (settings.ts) - the editor's chips use the
+            // same one, so a chip can't silently stop matching the gate.
+            const cat = worldOverrideCategory(o.file, o.entity);
+            return cat === "other" || !ex.has(`__cat:${cat}`);
           })
         : [];
       const config = buildCompileConfig(s, evts, false, iconMods, soundOverrides, effectOverrides, gameplay, global, world, posterOverrides, digimod, uiOverrides, pools);
@@ -450,9 +447,21 @@ export function CompileBar({
         mods.push({
           source: m,
           name: previewModName(m),
-          files: [...c.overwrites, ...c.ownSounds, ...c.models, ...c.particles, ...c.materials, ...c.panorama].sort(),
+          // Every category ships since the stage-everything change -
+          // "other" (scripts/cfg/resource/...) included. Leaving a category
+          // out of this list is destructive: Save replaces the mod's whole
+          // exclude entry from it, wiping Import Review deselections.
+          files: [
+            ...c.overwrites,
+            ...c.ownSounds,
+            ...c.models,
+            ...c.particles,
+            ...c.materials,
+            ...c.panorama,
+            ...c.other,
+          ].sort(),
           initialExcluded: settings.importedModExcludes?.[m] ?? [],
-          skipped: c.other.length,
+          skipped: 0,
           unchanged,
         });
       }
@@ -509,7 +518,7 @@ export function CompileBar({
         importedMods: [],
         importedModExcludes: {},
       };
-      const config = buildCompileConfig(s2, evts, false, icons, ovs, fx, [], [], [], [], null, [], pools);
+      const config = { ...buildCompileConfig(s2, evts, false, icons, ovs, fx, [], [], [], [], null, [], pools), exportOnly: true };
       const r = await compileProject(config);
       if (r.ok) {
         push("success", `Exported → ${r.outputPath ?? dir}`);
@@ -586,30 +595,38 @@ export function CompileBar({
           />
         </div>
       )}
-      {/* Partial export picker. */}
-      <AnimatePresence>
-        {exportOpen && (
-          <ExportModal
-            slots={exportSlots}
-            extras={exportExtras}
-            busy={exporting}
-            onCancel={() => !exporting && setExportOpen(false)}
-            onExport={(s, x) => void runExport(s, x)}
-          />
-        )}
-      </AnimatePresence>
+      {/* Partial export picker + build preview: portaled to <body>. This
+          bar's backdrop-blur makes it the containing block for fixed
+          descendants, which would pin the "fullscreen" modals inside the
+          bottom bar (they rendered off screen). */}
+      {createPortal(
+        <AnimatePresence>
+          {exportOpen && (
+            <ExportModal
+              slots={exportSlots}
+              extras={exportExtras}
+              busy={exporting}
+              onCancel={() => !exporting && setExportOpen(false)}
+              onExport={(s, x) => void runExport(s, x)}
+            />
+          )}
+        </AnimatePresence>,
+        document.body,
+      )}
 
-      {/* Pre-compile build preview (what lands in the .vpk). */}
-      <AnimatePresence>
-        {preview && (
-          <BuildPreview
-            yours={preview.yours}
-            mods={preview.mods}
-            onCancel={() => setPreview(null)}
-            onSave={savePreview}
-          />
-        )}
-      </AnimatePresence>
+      {createPortal(
+        <AnimatePresence>
+          {preview && (
+            <BuildPreview
+              yours={preview.yours}
+              mods={preview.mods}
+              onCancel={() => setPreview(null)}
+              onSave={savePreview}
+            />
+          )}
+        </AnimatePresence>,
+        document.body,
+      )}
 
       {/* Live compile feed — each pipeline step streams in as it runs. */}
       <AnimatePresence>
@@ -655,10 +672,24 @@ export function CompileBar({
                 >
                   {report.ok ? "✓ Compile succeeded" : "✗ Compile failed"}
                 </span>
+                <button
+                  onClick={() => {
+                    const text = report.steps
+                      .map((s) => `${s.ok ? "OK " : "FAIL"} ${s.name}${s.detail ? ` - ${s.detail}` : ""}`)
+                      .join("\n");
+                    void navigator.clipboard
+                      .writeText(`Compile ${report.ok ? "succeeded" : "failed"}\n${text}`)
+                      .then(() => push("success", "Report copied - paste it anywhere"));
+                  }}
+                  title="Copy every step of this report as text (for bug reports and troubleshooting)"
+                  className="ml-auto rounded-md border border-zinc-700 px-2.5 py-1 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-white"
+                >
+                  ⧉ Copy report
+                </button>
                 {report.outputPath && (
                   <button
                     onClick={openOutput}
-                    className="ml-auto rounded-md border border-zinc-700 px-2.5 py-1 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-white"
+                    className="rounded-md border border-zinc-700 px-2.5 py-1 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-white"
                   >
                     Open output folder
                   </button>

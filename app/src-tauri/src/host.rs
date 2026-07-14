@@ -46,6 +46,19 @@ pub fn status(root: &Path) -> HostStatus {
     }
 }
 
+/// Overwrite `path` atomically: write a sibling temp file, then rename over the
+/// target (on Windows std's rename replaces existing files via MoveFileEx). A
+/// crash mid-write can no longer leave a truncated gameinfo.gi - which would
+/// stop the game launching at all, not just hosting.
+fn write_atomic(path: &Path, contents: &str) -> Result<(), String> {
+    let tmp = path.with_extension("gi.eim.tmp");
+    std::fs::write(&tmp, contents).map_err(|e| format!("writing {}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("replacing {}: {e}", path.display())
+    })
+}
+
 /// Insert `insertion` immediately after the opening `{` of the named block.
 fn insert_after_block(text: &str, block: &str, insertion: &str) -> Result<String, String> {
     let pos = text.find(block).ok_or_else(|| format!("no {block} block in gameinfo.gi"))?;
@@ -76,21 +89,29 @@ pub fn setup(root: &Path) -> Result<HostStatus, String> {
         if !bak.exists() {
             std::fs::copy(&gi, &bak).map_err(|e| format!("backing up gameinfo.gi: {e}"))?;
         }
-        std::fs::write(&gi, &text).map_err(|e| format!("writing gameinfo.gi: {e}"))?;
+        write_atomic(&gi, &text)?;
     }
     Ok(status(root))
 }
 
 /// Remove the two hosting edits (leaves every other line, e.g. the addons search
-/// path, intact — so it doesn't clobber the install patch).
+/// path, intact — so it doesn't clobber the install patch). Preserves the file's
+/// original line endings and trailing newline instead of normalizing to LF.
 pub fn revert(root: &Path) -> Result<HostStatus, String> {
     let gi = gameinfo_path(root);
     let text = std::fs::read_to_string(&gi).map_err(|e| format!("reading gameinfo.gi: {e}"))?;
+    let nl = if text.contains("\r\n") { "\r\n" } else { "\n" };
     let kept: Vec<&str> = text
         .lines()
         .filter(|l| !l.contains("CreateListenSocketP2P") && !l.contains("net_p2p_listen_dedicated"))
         .collect();
-    std::fs::write(&gi, kept.join("\n")).map_err(|e| format!("writing gameinfo.gi: {e}"))?;
+    let mut out = kept.join(nl);
+    if text.ends_with('\n') {
+        out.push_str(nl);
+    }
+    if out != text {
+        write_atomic(&gi, &out)?;
+    }
     Ok(status(root))
 }
 
@@ -114,12 +135,14 @@ pub fn connect_id(root: &Path) -> Option<String> {
 
 /// Generate a throwaway RCON password for this launch. Lowercase + digits only
 /// (no look-alikes) so it's safe to pass on a command line and easy to read.
+/// Seeded from OS entropy (RandomState draws from the system CSPRNG) - the old
+/// clock seed could be brute-forced by anyone on the LAN who knew roughly when
+/// the server launched, and RCON binds to the LAN address.
 fn gen_rcon_password() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let mut x = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0x9E37_79B9_7F4A_7C15)
+    use std::hash::{BuildHasher, Hasher};
+    let mut x = std::collections::hash_map::RandomState::new()
+        .build_hasher()
+        .finish()
         | 1;
     let alphabet = b"abcdefghijkmnpqrstuvwxyz23456789";
     let mut s = String::with_capacity(16);
@@ -272,6 +295,19 @@ mod tests {
         )
         .unwrap();
         assert_eq!(connect_id(&root).as_deref(), Some("[A:1:2291896339:50255]"));
+    }
+
+    #[test]
+    fn revert_preserves_crlf_and_trailing_newline() {
+        let crlf = SAMPLE.replace('\n', "\r\n");
+        let root = write_tmp("revert_crlf", &crlf);
+        setup(&root).unwrap();
+        revert(&root).unwrap();
+        let text = std::fs::read_to_string(gameinfo_path(&root)).unwrap();
+        assert!(!text.contains("CreateListenSocketP2P"));
+        assert!(text.contains("\r\n"), "CRLF endings must survive a revert");
+        assert!(text.ends_with("\r\n"), "trailing newline must survive");
+        assert!(!text.contains("\n\n\n"), "no blank-line growth");
     }
 
     #[test]

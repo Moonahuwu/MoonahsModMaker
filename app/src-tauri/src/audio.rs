@@ -148,7 +148,20 @@ fn ffprobe_from(ffmpeg: &str) -> String {
     "ffprobe".to_string()
 }
 
+/// A missing input would surface as a raw ffmpeg dump ("Error opening input:
+/// No such file or directory") - catch it first with a message that says what
+/// happened and what to do.
+fn require_input(path: &str) -> Result<(), String> {
+    if std::path::Path::new(path).exists() {
+        return Ok(());
+    }
+    Err(format!(
+        "source audio is missing on disk: {path}. If this track or layer came from a decoded game sound, the app auto-repairs it when the profile loads - restart the app or switch to this profile again. If it still fails, remove the track and re-add it."
+    ))
+}
+
 pub fn probe_duration(ffmpeg_path: Option<&str>, path: &str) -> Result<f64, String> {
+    require_input(path)?;
     let ffmpeg = ffmpeg_path.unwrap_or("ffmpeg");
     let ffprobe = ffprobe_from(ffmpeg);
     let out = crate::procutil::quiet(&ffprobe)
@@ -187,6 +200,10 @@ pub fn render_to(
     out_path: &str,
 ) -> Result<(), String> {
     let ffmpeg = ffmpeg_path.unwrap_or("ffmpeg");
+    require_input(source)?;
+    for l in layers {
+        require_input(&l.source_audio)?;
+    }
     let duration = (trim_end - trim_start).max(0.01);
     // `-ss` MUST come before `-i` (input seeking): it resets timestamps to 0 so
     // the fade filters see the TRIMMED timeline. As an output option the fades

@@ -13,9 +13,12 @@ use std::path::Path;
 use std::process::Command;
 
 /// Recursively list a cached-pack directory as vpk-style internal paths
-/// (forward slashes, relative to `root`), optionally filtered by substring
-/// (matching the helper's `list` filter semantics).
+/// (forward slashes, relative to `root`), optionally filtered by substring.
+/// The filter matches CASE-INSENSITIVELY - the C# helper's `list` filter is
+/// OrdinalIgnoreCase, and a divergence here silently drops mixed-case pack
+/// dirs (e.g. `Sounds/`) from staging once the pack is cached.
 fn list_dir(root: &Path, filter: Option<&str>) -> Vec<String> {
+    let filter_lower = filter.map(str::to_lowercase);
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -28,7 +31,11 @@ fn list_dir(root: &Path, filter: Option<&str>) -> Vec<String> {
             }
             if let Ok(rel) = p.strip_prefix(root) {
                 let rel = rel.to_string_lossy().replace('\\', "/");
-                if filter.map(|f| rel.contains(f)).unwrap_or(true) {
+                if filter_lower
+                    .as_deref()
+                    .map(|f| rel.to_lowercase().contains(f))
+                    .unwrap_or(true)
+                {
                     out.push(rel);
                 }
             }
@@ -159,10 +166,13 @@ pub fn extract_all(
     let src = Path::new(vpk);
     if src.is_dir() {
         let dest_root = Path::new(dest_dir);
+        let prefix_lower = prefix.map(str::to_lowercase);
         let mut copied = 0usize;
         for rel in list_dir(src, None) {
-            if let Some(p) = prefix {
-                if !rel.starts_with(p) {
+            // Ignore-case like the helper: staging lowercases dir prefixes,
+            // but the cache preserves the pack's original casing on disk.
+            if let Some(p) = &prefix_lower {
+                if !rel.to_lowercase().starts_with(p.as_str()) {
                     continue;
                 }
             }

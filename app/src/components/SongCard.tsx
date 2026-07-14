@@ -89,11 +89,24 @@ interface SongCardProps {
   /** Registers the EXPANDED body element - the window drop handler uses it so
    *  audio dropped on an open card lands as a layer, not a new track. */
   bodyRef?: (el: HTMLElement | null) => void;
+  /** Decode the slot's original game sound to a local audio file, for mixing
+   *  it in as a layer. Absent when the slot has no playable stock sound. */
+  onFetchOriginal?: () => Promise<string>;
 }
 
 function fmtTime(s: number): string {
   return `${s.toFixed(2)}s`;
 }
+
+// Shared WebAudio context for the live preview chain. Gain and fades are
+// applied to the playing render in real time, so dragging a slider is audible
+// immediately instead of waiting for an ffmpeg re-render.
+let liveCtx: AudioContext | null = null;
+function audioCtx(): AudioContext {
+  liveCtx ??= new AudioContext();
+  return liveCtx;
+}
+const dbToLinear = (db: number) => Math.pow(10, db / 20);
 
 type PlayState = "idle" | "loading" | "playing" | "paused";
 
@@ -117,6 +130,7 @@ export function SongCard({
   onLoadStock,
   compareDefault,
   bodyRef,
+  onFetchOriginal,
 }: SongCardProps) {
   const [state, setState] = useState<PlayState>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -158,6 +172,7 @@ export function SongCard({
         syncRaf.current = null;
         return;
       }
+      applyLiveFx(a);
       waveSeek.current?.(trimStartRef.current + a.currentTime);
       syncRaf.current = requestAnimationFrame(tick);
     };
@@ -180,23 +195,77 @@ export function SongCard({
         `${l.sourceAudio}@${l.gainDb}@${l.offset ?? 0}@${l.trimStart ?? 0}@${l.trimEnd ?? 0}`,
     )
     .join(",");
-  const paramKey = `${song.sourceMp3}|${song.trimStart}|${song.trimEnd}|${song.gainDb}|${song.fadeIn}|${song.fadeOut}|${layersKey}`;
+  // Fades are always applied live (they run post-mix in the compile too), and
+  // the master gain is live when there are no layers. With layers, the master
+  // gain scales only the base lane pre-mix, so it stays baked into the render
+  // (a post-mix live gain would wrongly scale the layers with it).
+  const liveGain = activeLayers.length === 0;
+  const paramKey = `${song.sourceMp3}|${song.trimStart}|${song.trimEnd}|${liveGain ? "live" : song.gainDb}|${layersKey}`;
+
+  // The live-effects chain (element → gain → speakers) and the values it
+  // applies each frame. Slider drags land here without touching the render.
+  const gainNode = useRef<GainNode | null>(null);
+  const srcNode = useRef<MediaElementAudioSourceNode | null>(null);
+  const liveFx = useRef({ gainDb: 0, liveGain: true, fadeIn: 0, fadeOut: 0, length: 0 });
+  liveFx.current = {
+    gainDb: song.gainDb,
+    liveGain,
+    fadeIn: song.fadeIn,
+    fadeOut: song.fadeOut,
+    length,
+  };
+
+  /** Gain the chain should sit at when the clip time is `t` (fade envelope ×
+   *  master gain) - the same linear ramps ffmpeg's afade bakes at compile. */
+  function liveTarget(t: number): number {
+    const p = liveFx.current;
+    let env = 1;
+    const fi = Math.min(p.fadeIn, p.length);
+    if (fi > 0 && t < fi) env *= Math.max(0, t / fi);
+    const fo = Math.min(p.fadeOut, p.length);
+    if (fo > 0 && t > p.length - fo) env *= Math.max(0, (p.length - t) / fo);
+    return (p.liveGain ? dbToLinear(p.gainDb) : 1) * env;
+  }
+
+  function applyLiveFx(a: HTMLAudioElement) {
+    const g = gainNode.current;
+    if (!g) return;
+    // A short ramp keeps slider drags click-free but still instant to the ear.
+    g.gain.setTargetAtTime(liveTarget(a.currentTime), audioCtx().currentTime, 0.03);
+  }
+
+  function dropLiveChain() {
+    srcNode.current?.disconnect();
+    gainNode.current?.disconnect();
+    srcNode.current = null;
+    gainNode.current = null;
+  }
 
   // Keep the rename draft in sync if soundName changes elsewhere.
   useEffect(() => setNameDraft(song.soundName), [song.soundName]);
 
   // Detached Audio objects outlive the component — stop playback on unmount
   // (tab switch, song removal).
-  useEffect(() => () => audioRef.current?.pause(), []);
+  useEffect(
+    () => () => {
+      audioRef.current?.pause();
+      dropLiveChain();
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
 
-  // Invalidate cached playback when the trim/gain change.
+  // Invalidate cached playback when the trim (or a baked gain) changes. Gain
+  // and fades apply live and don't re-render.
   useEffect(() => {
     if (renderedKey.current && renderedKey.current !== paramKey) {
       audioRef.current?.pause();
       audioRef.current = null;
+      dropLiveChain();
       renderedKey.current = "";
       setState("idle");
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paramKey]);
 
   async function playPause() {
@@ -215,13 +284,15 @@ export function SongCard({
     // idle → render (if needed) then play
     setState("loading");
     try {
+      // Gain and fades stay OUT of the preview render - the live chain below
+      // applies them during playback (compile still bakes everything).
       const outPath = await processAudio({
         sourcePath: song.sourceMp3,
         trimStart: song.trimStart,
         trimEnd: song.trimEnd,
-        gainDb: song.gainDb,
-        fadeIn: song.fadeIn,
-        fadeOut: song.fadeOut,
+        gainDb: liveGain ? 0 : song.gainDb,
+        fadeIn: 0,
+        fadeOut: 0,
         layers: activeLayers.map((l) => ({
           sourceAudio: l.sourceAudio,
           gainDb: l.gainDb,
@@ -231,9 +302,28 @@ export function SongCard({
         })),
         ffmpegPath,
       });
-      const audio = new Audio(convertFileSrc(outPath));
+      const audio = new Audio();
+      // The asset protocol sends CORS headers (the waveforms fetch it) - and
+      // WebAudio needs a non-opaque stream to process it.
+      audio.crossOrigin = "anonymous";
+      audio.src = convertFileSrc(outPath);
       audioRef.current = audio;
       renderedKey.current = paramKey;
+      try {
+        const ctx = audioCtx();
+        dropLiveChain();
+        const src = ctx.createMediaElementSource(audio);
+        const g = ctx.createGain();
+        src.connect(g);
+        g.connect(ctx.destination);
+        srcNode.current = src;
+        gainNode.current = g;
+        g.gain.value = liveTarget(0);
+        void ctx.resume();
+      } catch {
+        // No WebAudio: plain playback still works, edits just aren't live.
+        dropLiveChain();
+      }
       audio.onended = () => {
         setState("idle");
         // Park the playhead back at the clip start.
@@ -296,6 +386,27 @@ export function SongCard({
       trimEnd: 0,
     }));
     onChange({ layers: [...(song.layers ?? []), ...added] });
+  }
+
+  // Mix the slot's ORIGINAL game sound in as a layer (decoded once to a local
+  // file, then it behaves like any dropped audio: move/trim/gain per lane).
+  const [origBusy, setOrigBusy] = useState(false);
+  async function addOriginalLayer() {
+    if (!onFetchOriginal || origBusy) return;
+    setOrigBusy(true);
+    try {
+      const path = await onFetchOriginal();
+      onChange({
+        layers: [
+          ...(song.layers ?? []),
+          { id: crypto.randomUUID(), sourceAudio: path, gainDb: 0, offset: 0, trimStart: 0, trimEnd: 0 },
+        ],
+      });
+    } catch (e) {
+      setError(`Couldn't decode the original: ${e}`);
+    } finally {
+      setOrigBusy(false);
+    }
   }
 
   function updateLayer(id: string, patch: Partial<SongLayer>) {
@@ -771,6 +882,16 @@ export function SongCard({
                 >
                   + Layer
                 </button>
+                {onFetchOriginal && (
+                  <button
+                    onClick={() => void addOriginalLayer()}
+                    disabled={origBusy}
+                    title="Mix the game's original sound in as a layer - your track and the stock one play together"
+                    className="rounded border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-400 transition hover:border-sky-500/70 hover:text-sky-300 disabled:opacity-50"
+                  >
+                    {origBusy ? "Adding…" : "+ Original"}
+                  </button>
+                )}
               </div>
 
               {/* Sliders in an even grid — no ragged wrap. */}

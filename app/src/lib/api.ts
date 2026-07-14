@@ -125,6 +125,10 @@ export interface CompileConfig {
   importedModExcludes?: Record<string, string[]>;
   /** Attribution for bundled mods - written as combined/credits.txt when set. */
   creditsText?: string;
+  /** One-off subset export into a user-chosen folder: skips build stamps and
+   *  the "no imports -> delete stale combined/" cleanup (that folder may hold
+   *  a real combined build). */
+  exportOnly?: boolean;
   events: EventCompile[];
   iconMods?: IconCompile[];
   soundOverrides?: SoundOverrideCompile[];
@@ -173,13 +177,13 @@ export interface DigiEntryCompile {
   soundId?: string | null;
 }
 
-/** True when an installed addon pak ships the DigiMaster jumpscare engine. */
+/** True when an installed addon pak ships the MoonahMasterUI jumpscare engine (legacy DigiMaster paks count too). */
 export function digimodDetected(addonsDir: string): Promise<boolean> {
   return invoke("digimod_detected", { addonsDir });
 }
 
 /** An installed pak overriding base_hud (a panorama UI mod) — a candidate
- *  for the Jumpscares tab's merge. `hasDigi` = it IS the DigiMaster engine. */
+ *  for the Jumpscares tab's merge. `hasDigi` = it IS the MoonahMasterUI engine (current or legacy). */
 export interface UiModVpk {
   path: string;
   fileName: string;
@@ -191,7 +195,7 @@ export function listUiMods(addonsDir: string): Promise<UiModVpk[]> {
   return invoke("list_ui_mods", { addonsDir });
 }
 
-/** An existing DigiMaster pak parsed back into an editable config: media is
+/** An existing MoonahMasterUI/DigiMaster pak parsed back into an editable config: media is
  *  extracted to real files in app-data, sounds decoded to playable audio. */
 export interface DigimodImport {
   rngInterval: number;
@@ -199,7 +203,7 @@ export interface DigimodImport {
   deathChance: number;
   scares: DigiEntryImported[];
   deaths: DigiEntryImported[];
-  /** Deduped: one per Digi.* event, shared by entries exactly like the pak. */
+  /** Deduped: one per engine sound event, shared by entries exactly like the pak. */
   sounds: DigiSoundImported[];
   warnings: string[];
 }
@@ -221,7 +225,7 @@ export interface DigiSoundImported {
   volume: number;
 }
 
-/** Adopt an installed DigiMaster pak into the Jumpscares tab. */
+/** Adopt an installed MoonahMasterUI (or legacy DigiMaster) pak into the Jumpscares tab. */
 export function importDigimod(helperPath: string, vpk: string): Promise<DigimodImport> {
   return invoke("import_digimod", { helperPath, vpk });
 }
@@ -326,6 +330,12 @@ export interface SoundOverrideCompile {
   looping: boolean;
   currentHash: string;
   lastCompiledHash: string | null;
+  /** Content-relative .vsnd_c of a previous identical render at another path
+   *  (a slot's merge-path output from before it qualified for direct replace).
+   *  When params are unchanged but the stock path was never compiled, the
+   *  backend copies this instead of re-rendering, so the source audio file
+   *  is not needed. */
+  reuseFrom?: string;
 }
 
 export interface StepResult {
@@ -360,6 +370,28 @@ export function decodeStock(
   stockRef: string,
 ): Promise<string> {
   return invoke("decode_stock", { helperPath, pakPath, stockRef });
+}
+
+/** A stale decoded-audio source path + the .vsnd ref that produced it (when known). */
+export interface HealItem {
+  path: string;
+  importedRef?: string;
+}
+
+export interface HealedSource {
+  path: string;
+  healed: string;
+}
+
+/** Repair song/layer sources whose decoded audio was cleaned out of the old
+ *  %TEMP% cache: relink to the durable copy or re-decode from a cached pack /
+ *  the game pak. Only healed items come back; existing files are skipped. */
+export function healMissingSources(
+  helperPath: string,
+  pakPath: string,
+  items: HealItem[],
+): Promise<HealedSource[]> {
+  return invoke("heal_missing_sources", { helperPath, pakPath, items });
 }
 
 /** Decode a compiled entry from a vpk and save a copy into Downloads. */
@@ -492,6 +524,12 @@ export function decompileVpkAll(
  *  later compiles/previews read from it — the original .vpk isn't needed again. */
 export function cachePack(helperPath: string, packVpk: string): Promise<string> {
   return invoke("cache_pack", { helperPath, packVpk });
+}
+
+/** The cache dir a vpk maps to, if it already exists (no extraction). Lets a
+ *  re-review by original .vpk path find settings keyed under the cache dir. */
+export function packCacheLookup(packVpk: string): Promise<string | null> {
+  return invoke("pack_cache_lookup", { packVpk });
 }
 
 /** Which of a pack's files are byte-identical to the game's originals at the
@@ -717,8 +755,13 @@ export interface LaunchInfo {
 }
 /** Launch the client as a dedicated host on `map`. Returns PID + RCON password.
  * `maxPlayers` opens extra server slots (for many bots) — experimental above 12. */
-export function launchHost(deadlockRoot: string, map: string, maxPlayers?: number): Promise<LaunchInfo> {
-  return invoke("launch_host", { deadlockRoot, map, maxPlayers });
+export function launchHost(
+  deadlockRoot: string,
+  map: string,
+  maxPlayers?: number,
+  autoPrep?: boolean,
+): Promise<LaunchInfo> {
+  return invoke("launch_host", { deadlockRoot, map, maxPlayers, autoPrep });
 }
 /** Launch Deadlock (normal client, via Steam) to test an installed mod in a real
  * match. `deadlockRoot` is only an exe fallback if Steam can't start. */
@@ -730,9 +773,33 @@ export function launchGame(deadlockRoot?: string): Promise<void> {
 export function rconExec(command: string): Promise<string> {
   return invoke("rcon_exec", { command });
 }
-/** Whether a host has been launched from this app (so we can drive it over RCON). */
+/** Whether the app-launched server is reachable right now (launched AND
+ *  something accepts TCP on the RCON port - not just "a password exists"). */
 export function rconReady(): Promise<boolean> {
   return invoke("rcon_ready");
+}
+
+/** One-call snapshot of the app-launched server for panels/overlay. */
+export interface HostInfo {
+  /** A host was launched from this app session (RCON password stored). */
+  launched: boolean;
+  /** Something is accepting TCP on the RCON/game port right now. */
+  listening: boolean;
+  /** The map the server was launched on. */
+  map: string | null;
+  /** P2P connect id from console.log, once the server logged it. */
+  connectId: string | null;
+  /** Auto-prep progress: "waiting" | "done" | "failed" (null = prep off). */
+  prep: string | null;
+}
+export function hostInfo(): Promise<HostInfo> {
+  return invoke("host_info");
+}
+
+/** Enable/disable the global F8 overlay hotkey (on only while the Custom
+ *  Server tab is enabled, so the overlay can't surprise anyone). */
+export function setOverlayHotkey(enabled: boolean): Promise<void> {
+  return invoke("set_overlay_hotkey", { enabled });
 }
 /** Tail the dedicated server's console.log (the in-app server console). */
 export function readServerLog(deadlockRoot: string, maxBytes?: number): Promise<string> {
@@ -1038,12 +1105,15 @@ export function gamebananaFiles(modId: number, model?: string): Promise<GbFile[]
 export interface GbDownloadResult {
   /** Mountable `_dir.vpk`s found inside the download. */
   vpks: string[];
+  /** Loose audio files inside the download - Sound submissions often ship a
+   *  bare mp3/wav (or a zip of them) instead of a pak. */
+  audios: string[];
   /** Page attribution; md5Verified is true on a clean download. */
   info: GbModInfo;
 }
 
 /** Download through GameBanana's own URL (counts on the author's stats),
- *  unpack, and return the vpk(s) inside. */
+ *  unpack, and return the vpk(s) and/or audio files inside. */
 export function gamebananaDownload(
   modId: number,
   downloadUrl: string,

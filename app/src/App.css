@@ -54,6 +54,15 @@
   from { opacity: 0; transform: translateX(-14px); }
   to { opacity: 1; transform: translateX(0); }
 }
+/* Pre-boot hold: each animation's first frame, applied while the launch cache
+   warm runs so the reveal plays on a settled app (App.tsx bootPlay). */
+.eim-boot-hold-aside {
+  transform: translateX(-100%);
+  opacity: 0.4;
+}
+.eim-boot-hold-item {
+  opacity: 0;
+}
 
 /* Compile button pulse: "you have uncompiled changes" */
 .eim-pulse {
@@ -114,4 +123,31 @@
 @keyframes eim-crew-jump {
   0%, 64%, 78%, 100% { transform: translateY(0); }
   71% { transform: translateY(-10px); }
+}
+
+/* Accessibility: stop every decorative eim-* animation when the user asked
+   the OS for reduced motion (motion/react animations are handled separately
+   by MotionConfig reducedMotion="user" in main.tsx). */
+@media (prefers-reduced-motion: reduce) {
+  .eim-bg-glow-a,
+  .eim-bg-glow-b,
+  .eim-boot-aside,
+  .eim-boot-item,
+  .eim-pulse,
+  .eim-danger-stripe,
+  .eim-sigil,
+  .eim-sigil-layer,
+  .eim-crew-walk,
+  .eim-crew-jump {
+    animation: none !important;
+  }
+  /* Without the animation, the boot/hold base styles would leave the sidebar
+     hidden - show everything in its final place instead. */
+  .eim-boot-aside,
+  .eim-boot-item,
+  .eim-boot-hold-aside,
+  .eim-boot-hold-item {
+    opacity: 1 !important;
+    transform: none !important;
+  }
 }

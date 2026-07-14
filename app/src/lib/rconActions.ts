@@ -16,6 +16,8 @@ export interface QuickAction {
   label: string;
   cmds: string[];
   title?: string;
+  /** Restarts the map (kicks everyone in the match) - the UI asks before firing. */
+  destructive?: boolean;
 }
 
 export interface CatalogGroup {
@@ -31,10 +33,12 @@ export function commandCatalog(map: string): CatalogGroup[] {
     {
       title: "Match modes (restart to apply)",
       items: [
-        { label: "Bot match 6v6", cmds: ["exec citadel_botmatch_practice_6v6.cfg", "citadel_cinematic_intro_enabled 1", `changelevel ${m}`] },
-        { label: "Player vs bots", cmds: ["exec citadel_botmatch_player_vs_bot.cfg", `changelevel ${m}`] },
-        { label: "Sandbox", cmds: ["exec citadel_sandbox_match.cfg", `changelevel ${m}`] },
-        { label: "1v1", cmds: ["exec citadel_1v1_match.cfg", `changelevel ${m}`] },
+        // changelevel is cheat-flagged on current builds - sv_cheats 1 first
+        // or the whole action silently no-ops (verified live 2026-07-12).
+        { label: "Bot match 6v6", destructive: true, cmds: ["sv_cheats 1", "exec citadel_botmatch_practice_6v6.cfg", "citadel_cinematic_intro_enabled 1", `changelevel ${m}`] },
+        { label: "Player vs bots", destructive: true, cmds: ["sv_cheats 1", "exec citadel_botmatch_player_vs_bot.cfg", `changelevel ${m}`] },
+        { label: "Sandbox", destructive: true, cmds: ["sv_cheats 1", "exec citadel_sandbox_match.cfg", `changelevel ${m}`] },
+        { label: "1v1", destructive: true, cmds: ["sv_cheats 1", "exec citadel_1v1_match.cfg", `changelevel ${m}`] },
       ],
     },
     {
@@ -61,7 +65,7 @@ export function commandCatalog(map: string): CatalogGroup[] {
       items: [
         { label: "Cinematic intro ON", cmds: ["citadel_cinematic_intro_enabled 1"] },
         { label: "Cinematic intro OFF", cmds: ["citadel_cinematic_intro_enabled -1"] },
-        { label: `Restart (${m})`, cmds: [`changelevel ${m}`] },
+        { label: `Restart (${m})`, destructive: true, cmds: ["sv_cheats 1", `changelevel ${m}`] },
       ],
     },
     {
@@ -84,7 +88,9 @@ export function quickActions(map: string): QuickAction[] {
     {
       label: "Bot match 6v6",
       title: "Solo 6v6 vs bots with the full match intro, then restart to apply",
+      destructive: true,
       cmds: [
+        "sv_cheats 1",
         "exec citadel_botmatch_practice_6v6.cfg",
         "citadel_cinematic_intro_enabled 1",
         `changelevel ${m}`,
@@ -93,15 +99,17 @@ export function quickActions(map: string): QuickAction[] {
     {
       label: "Player vs bots",
       title: "1 lane vs bots",
-      cmds: ["exec citadel_botmatch_player_vs_bot.cfg", `changelevel ${m}`],
+      destructive: true,
+      cmds: ["sv_cheats 1", "exec citadel_botmatch_player_vs_bot.cfg", `changelevel ${m}`],
     },
     {
       label: "Sandbox",
       title: "Coop sandbox: cheats, all-talk, duplicate heroes",
-      cmds: ["exec citadel_sandbox_match.cfg", `changelevel ${m}`],
+      destructive: true,
+      cmds: ["sv_cheats 1", "exec citadel_sandbox_match.cfg", `changelevel ${m}`],
     },
     { label: "No bots", cmds: ["citadel_spawn_practice_bots 0", "citadel_solo_bot_match 0"] },
-    { label: `Restart (${m})`, cmds: [`changelevel ${m}`] },
+    { label: `Restart (${m})`, destructive: true, cmds: ["sv_cheats 1", `changelevel ${m}`] },
     { label: "Cheats on", cmds: ["sv_cheats 1"] },
     { label: "Status", cmds: ["status"] },
   ];

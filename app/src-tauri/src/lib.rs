@@ -24,6 +24,39 @@ fn toggle_overlay(app: &tauri::AppHandle) {
     }
 }
 
+/// Register/unregister the F8 overlay hotkey. The frontend calls this with the
+/// Custom Server toggle's value (on settings load and every change), so F8
+/// only exists while that tab is enabled - a mystery mod-menu popping over the
+/// game would scare anyone who never opted into the server feature.
+#[tauri::command]
+fn set_overlay_hotkey(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    #[cfg(desktop)]
+    {
+        use tauri::Manager;
+        use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Shortcut};
+        let key = Shortcut::new(None, Code::F8);
+        let gs = app.global_shortcut();
+        if enabled {
+            if !gs.is_registered(key) {
+                // Best-effort: if another app owns F8 we just skip it (the
+                // overlay can still be opened from the app's button).
+                let _ = gs.register(key);
+            }
+        } else {
+            if gs.is_registered(key) {
+                let _ = gs.unregister(key);
+            }
+            // Also tuck the overlay away if it was open.
+            if let Some(win) = app.get_webview_window("overlay") {
+                let _ = win.hide();
+            }
+        }
+    }
+    #[cfg(not(desktop))]
+    let _ = (app, enabled);
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut builder = tauri::Builder::default()
@@ -32,30 +65,25 @@ pub fn run() {
         .manage(commands::HostState::default());
 
     // Global hotkey (F8) to toggle the in-game mod-menu overlay. Desktop only.
+    // NOT registered at startup: the frontend enables it via set_overlay_hotkey
+    // only while the Custom Server tab is on.
     #[cfg(desktop)]
     {
-        use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Shortcut, ShortcutState};
-        let overlay_key = Shortcut::new(None, Code::F8);
-        builder = builder
-            .plugin(
-                tauri_plugin_global_shortcut::Builder::new()
-                    .with_handler(move |app, _shortcut, event| {
-                        if event.state == ShortcutState::Pressed {
-                            toggle_overlay(app);
-                        }
-                    })
-                    .build(),
-            )
-            .setup(move |app| {
-                // Best-effort: if the hotkey is already taken we just skip it
-                // (the overlay can still be opened from the app's button).
-                let _ = app.global_shortcut().register(overlay_key);
-                Ok(())
-            });
+        use tauri_plugin_global_shortcut::ShortcutState;
+        builder = builder.plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(move |app, _shortcut, event| {
+                    if event.state == ShortcutState::Pressed {
+                        toggle_overlay(app);
+                    }
+                })
+                .build(),
+        );
     }
 
     builder
         .invoke_handler(tauri::generate_handler![
+            set_overlay_hotkey,
             commands::read_event_pool,
             commands::read_event_pools,
             commands::derive_paths,
@@ -81,6 +109,7 @@ pub fn run() {
             commands::pack_vpk,
             commands::extract_vpk,
             commands::decode_stock,
+            commands::heal_missing_sources,
             commands::refresh_vanilla,
             commands::list_editable_events,
             commands::list_soundevent_files,
@@ -97,6 +126,7 @@ pub fn run() {
             commands::launch_game,
             commands::rcon_exec,
             commands::rcon_ready,
+            commands::host_info,
             commands::read_server_log,
             commands::host_connect_id,
             commands::hero_roster,
@@ -113,6 +143,7 @@ pub fn run() {
             commands::scan_pack_contents,
             commands::events_for_refs,
             commands::cache_pack,
+            commands::pack_cache_lookup,
             commands::pack_unchanged_files,
             commands::decompile_vpk_all,
             commands::browse_particles,

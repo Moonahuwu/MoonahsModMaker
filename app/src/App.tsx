@@ -9,6 +9,8 @@ import {
   checkSoundRefs,
   copyToDownloads,
   decodeStock as decodeStockApi,
+  healMissingSources,
+  type HealItem,
   downloadEntry,
   openInViewer,
   itemParticles,
@@ -29,7 +31,10 @@ import {
   importPackEvents,
   scanPackContents,
   eventsForRefs,
+  type RefEventHit,
+  setOverlayHotkey,
   cachePack,
+  packCacheLookup,
   packIcons,
   checkAppUpdate,
   digimodDetected,
@@ -63,6 +68,8 @@ import {
 import { SidePanel } from "./components/SidePanel";
 import { Backdrop } from "./components/Backdrop";
 import { ImportReview, type PackReview, type ReviewEvent, type ReviewGroup } from "./components/ImportReview";
+import { SlotSoundPicker, type PickClip, type PickGroup } from "./components/SlotSoundPicker";
+import { useEscape } from "./lib/useEscape";
 import { SetupSection } from "./components/SetupSection";
 import { FirstRunWizard } from "./components/FirstRunWizard";
 import { ImportedMods } from "./components/ImportedMods";
@@ -109,7 +116,7 @@ const EFFECTS = "effects";
 const CUSTOM_SERVER = "customserver";
 /** Special always-present tab for replacing in-world posters/signs/graffiti. */
 const POSTERS = "posters";
-/** Jumpscares/Deaths (DigiMaster) — only when the engine is detected installed. */
+/** Jumpscares/Deaths (MoonahMasterUI) — only when the engine is detected installed. */
 const JUMPSCARES = "jumpscares";
 /** UI Master (experimental): edit the game's panorama layouts/styles. */
 const UIMASTER = "uimaster";
@@ -175,6 +182,7 @@ const TAB_LABELS: Record<string, string> = {
   midboss: "Midboss",
   powerups: "Powerups",
   teamobj: "Team Objectives",
+  sinners: "Sinners",
   heroes: "Heroes",
   shop: "Shop Music",
   ui: "UI",
@@ -205,14 +213,14 @@ const TAB_LABELS: Record<string, string> = {
 const SIDEBAR_ORDER = [
   "heroes", ITEMS,
   "intro", "match", "stingers", "brawl",
-  "urn", "rift", "midboss", "powerups", "teamobj", "shop",
+  "urn", "rift", "midboss", "powerups", "teamobj", "sinners", "shop",
   "gameplay", "combat", "mapsfx", "ambience", "npcs",
   "ui", UNSORTED,
 ];
 
 /** Parent groupings in the sidebar: a collapsible header over related tabs. */
 const TAB_CATEGORIES: { label: string; tabs: string[] }[] = [
-  { label: "In-game", tabs: ["urn", "rift", "midboss", "powerups", "teamobj", "shop"] },
+  { label: "In-game", tabs: ["urn", "rift", "midboss", "powerups", "teamobj", "sinners", "shop"] },
   { label: "Match", tabs: ["intro", "match", "stingers", "brawl"] },
   // Gameplay has curated slots; the rest appear once discovery/import routes
   // slots into them.
@@ -237,6 +245,7 @@ const MOVE_TARGETS: { value: string; label: string }[] = [
   "midboss",
   "powerups",
   "teamobj",
+  "sinners",
   "shop",
   "ui",
   "match",
@@ -317,8 +326,11 @@ function isImportArtifact(e: EventProject): boolean {
 
 /** Event names / soundevent files to skip when importing a pack (matched as a
  *  lowercase substring of the event name or its file). "priest" = the Half-Life
- *  crossbow hero mod built on gordon audio; not wanted. Ask to add more. */
-const EXCLUDED_IMPORT_TERMS = ["priest"];
+ *  crossbow hero mod built on gordon audio; not wanted. "moonah."/"digi." = the
+ *  Jumpscares engine's generated sound events (one per library sound, legacy
+ *  Digi.* prefix) — they belong to the Jumpscares tab, not sound slots, and
+ *  would otherwise flood Ambience via world_ambient_emitters. Ask to add more. */
+const EXCLUDED_IMPORT_TERMS = ["priest", "moonah.", "digi."];
 
 function isExcludedImport(relpath: string, eventName: string): boolean {
   const r = relpath.toLowerCase();
@@ -358,6 +370,9 @@ function routeGroupFor(relpath: string, eventName: string): string {
     relpath.includes("world_ambient_emitters")
   )
     return "ambience";
+  // The Sinner's Sacrifice soul vault has its own curated tab - route its
+  // whole file there (new-patch events included), not to the NPCs catch-all.
+  if (relpath === "soundevents/npc/neut_vaults.vsndevts") return "sinners";
   if (relpath.startsWith("soundevents/npc/")) return "npcs";
   if (/soundevents\/(player|gameplay|damage|status_effects)\.vsndevts$/.test(relpath))
     // The midboss's own SFX (horn/low-health/death) live in gameplay.vsndevts
@@ -426,10 +441,14 @@ function reconcileProject(saved: Project, def: Project): Project {
       // Auto-discovered slots persist always (keep the catch-all tab stable);
       // hero/item slots persist only when they hold content.
       (isAutoSlot(e.id) || (isDynamicSlot(e.id) && slotHasContent(e))) &&
-      // Excluded imports (EXCLUDED_IMPORT_TERMS, e.g. the priest mod) are
-      // purged on load — but never a slot the user attached songs/edits to
-      // (autosave would make that deletion permanent).
-      !(isExcludedImport(e.eventsRelpath, e.eventName) && !slotHasContent(e)),
+      // Excluded imports (EXCLUDED_IMPORT_TERMS, e.g. the priest mod or the
+      // Jumpscares engine's Moonah./Digi. events) are purged on load — adopted
+      // refs and importer-absorbed songs (importedRef) go with them, but never
+      // a song the user added by hand (autosave would make that permanent).
+      !(
+        isExcludedImport(e.eventsRelpath, e.eventName) &&
+        e.songs.every((s) => !!s.importedRef)
+      ),
   );
   // Re-home previously-Unsorted auto/import slots whose event family the router
   // now recognizes. Ids are group-independent, so this moves the slot (with all
@@ -444,14 +463,18 @@ function reconcileProject(saved: Project, def: Project): Project {
 
 /** One-time cleanup: re-importing a pack used to re-convert already-absorbed
  *  tracks, doubling every one as a `name_2`-style copy. Drop songs that are a
- *  numbered-name duplicate of an earlier track in the same slot with the same
- *  label and identical trim window. */
+ *  numbered-name duplicate of an earlier track in the same slot converted
+ *  from the SAME pack ref - `importedRef` is what identifies a re-import
+ *  double. Tracks without one are the user's own (a deliberate copy-paste
+ *  into the same slot to double its pool weight looks identical otherwise)
+ *  and must never be deduped. */
 function dedupeReimportedSongs(events: EventProject[]): EventProject[] {
   return events.map((e) => {
     if (e.songs.length < 2) return e;
     const kept: Song[] = [];
     for (const s of e.songs) {
       const isDup = kept.some((k) => {
+        if (!k.importedRef || k.importedRef !== s.importedRef) return false;
         if (k.label !== s.label) return false;
         if (Math.abs((k.trimEnd - k.trimStart) - (s.trimEnd - s.trimStart)) > 0.01) return false;
         const esc = k.soundName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -531,6 +554,7 @@ function accentFor(ev: { group: string; side: string }): string {
   if (ev.group === "midboss") return "#f97316"; // orange
   if (ev.group === "powerups") return "#84cc16"; // lime
   if (ev.group === "teamobj") return "#60a5fa"; // blue
+  if (ev.group === "sinners") return "#d4a017"; // slot-machine gold (soul vault)
   if (ev.group === "shop") return "#10b981"; // emerald (souls/shop)
   if (ev.group === "ui") return "#38bdf8"; // sky (menus)
   if (ev.group === "match") return "#f472b6"; // pink (match flow)
@@ -691,6 +715,7 @@ export default function App() {
   // Soundevents files already decompiled into the vanilla merge base this session.
   const ensuredFiles = useRef<Set<string>>(new Set());
   const [settingsOpen, setSettingsOpen] = useState(false);
+  useEscape(() => setSettingsOpen(false), settingsOpen);
   const { settings, update: updateSettings, ready: settingsReady } = useSettings();
   const { push } = useToast();
 
@@ -731,6 +756,16 @@ export default function App() {
   } | null>(null);
   // Where the jump came from, so the browser's back button can return there.
   const [gbReturn, setGbReturn] = useState<string>("intro");
+  // Slot-mode download turned out to change more than the chosen slot: the
+  // picker modal's contents (which sounds go where, or install the whole vpk).
+  const [slotPick, setSlotPick] = useState<{
+    modName: string;
+    slotId: string;
+    slotLabel: string;
+    vpks: string[];
+    groups: PickGroup[];
+    truncated: boolean;
+  } | null>(null);
 
   // ---- Startup game-data preload ----------------------------------------
   // Warm every tab's data (rosters, the sound index, then each hero's detail
@@ -773,7 +808,7 @@ export default function App() {
     return out;
   }, [project?.iconMods]);
 
-  // Jumpscares tab gate: does any installed pak ship the DigiMaster engine?
+  // Jumpscares tab gate: does any installed pak ship the MoonahMasterUI engine?
   const [digimodOn, setDigimodOn] = useState(false);
   useEffect(() => {
     if (!settings.addonsDir) return;
@@ -800,7 +835,7 @@ export default function App() {
     if (settings.experimentalUiMaster) out.push(UIMASTER);
     if (settings.experimentalEasyCompile) out.push(EASY_COMPILE);
     out.push(POSTERS);
-    // Jumpscares only when the DigiMaster engine is in the user's mods (or
+    // Jumpscares only when the MoonahMasterUI engine is in the user's mods (or
     // this project already configures it).
     if (
       digimodOn ||
@@ -816,7 +851,12 @@ export default function App() {
     // GameBanana deliberately has NO sidebar tab (GRIMOIRE etc. already do
     // generic browsing) - it opens contextually via a slot's "Find on
     // GameBanana" split-button.
-    out.push(MOD_COMBINER, LIBRARY, REPLACE_SOUNDS);
+    // Mod combiner is experimental: hidden behind the toggle, but it stays
+    // visible while mods are already bundled (they still compile into
+    // combined/, so hiding their management UI would ship them invisibly).
+    if (settings.experimentalModCombiner || settings.importedMods.length > 0)
+      out.push(MOD_COMBINER);
+    out.push(LIBRARY, REPLACE_SOUNDS);
     return out;
   }, [
     project,
@@ -824,8 +864,19 @@ export default function App() {
     settings.experimentalServer,
     settings.experimentalUiMaster,
     settings.experimentalEasyCompile,
+    settings.experimentalModCombiner,
+    settings.importedMods,
     digimodOn,
   ]);
+
+  // The global F8 overlay hotkey exists only while the Custom Server tab is
+  // enabled - a mystery mod-menu popping over the game would scare anyone who
+  // never opted into the server feature. Applied on load + on every toggle
+  // (disabling also hides an open overlay).
+  useEffect(() => {
+    if (!settingsReady) return;
+    setOverlayHotkey(settings.experimentalServer).catch(() => {});
+  }, [settingsReady, settings.experimentalServer]);
 
   // If the active tab vanishes (e.g. turning off an experimental feature while
   // viewing it), fall back to the first tab. GameBanana is exempt: it's a
@@ -943,6 +994,7 @@ export default function App() {
           importedMods: blob?.importedMods ?? settings.importedMods ?? [],
         });
         void load(proj);
+        void healProjectSources(proj);
       } catch (e) {
         hydrated.current = false;
         push("error", String(e));
@@ -997,6 +1049,65 @@ export default function App() {
     }
   }
 
+  // Repair song/layer sources that point at a decoded-audio cache file that
+  // no longer exists (the pre-durable cache lived in %TEMP% and Windows
+  // cleanup deletes it): relink to the durable copy, or re-decode from a
+  // cached pack / the game pak when the track still knows its ref. Runs on
+  // every profile load; healed paths persist via the normal autosave.
+  async function healProjectSources(proj: Project) {
+    const stale = /[\\/]stock_[0-9a-f]{16}\.[a-z0-9]+$/i;
+    const items: HealItem[] = [];
+    for (const e of proj.events) {
+      for (const song of e.songs) {
+        if (stale.test(song.sourceMp3)) {
+          items.push({ path: song.sourceMp3, importedRef: song.importedRef ?? undefined });
+        }
+        for (const l of song.layers ?? []) {
+          if (stale.test(l.sourceAudio)) {
+            // "+ Original" layers are decodes of the slot's stock entry.
+            items.push({ path: l.sourceAudio, importedRef: e.stockEntry || undefined });
+          }
+        }
+      }
+    }
+    if (items.length === 0) return;
+    const s = settingsRef.current;
+    try {
+      const fixes = await healMissingSources(s.vpkHelperPath, s.deadlockPak, items);
+      if (fixes.length === 0) return;
+      const map = new Map(fixes.map((f) => [f.path, f.healed]));
+      setProject((prev) =>
+        prev
+          ? {
+              ...prev,
+              events: prev.events.map((e) => ({
+                ...e,
+                songs: e.songs.map((song) => {
+                  const src = map.get(song.sourceMp3);
+                  const touchedLayer = song.layers?.some((l) => map.has(l.sourceAudio));
+                  if (!src && !touchedLayer) return song;
+                  return {
+                    ...song,
+                    ...(src ? { sourceMp3: src } : {}),
+                    ...(touchedLayer
+                      ? {
+                          layers: song.layers?.map((l) =>
+                            map.has(l.sourceAudio) ? { ...l, sourceAudio: map.get(l.sourceAudio)! } : l,
+                          ),
+                        }
+                      : {}),
+                  };
+                }),
+              })),
+            }
+          : prev,
+      );
+      push("success", `Repaired ${map.size} track source(s) - decoded audio relinked`);
+    } catch {
+      /* best effort - the per-track error message still explains the fix */
+    }
+  }
+
   // Load a profile blob into the editor (resets transient hero UI), and point
   // settings at it. The autosave effect persists from here on.
   function applyProfile(name: string, blob: ProfileBlob | null, def: Project) {
@@ -1008,6 +1119,7 @@ export default function App() {
     setProject(proj);
     updateSettings({ activeProfile: name, importedMods: blob?.importedMods ?? [] });
     void load(proj);
+    void healProjectSources(proj);
   }
 
   async function switchProfile(name: string) {
@@ -1457,6 +1569,10 @@ export default function App() {
   }
 
   function removeSong(songId: string) {
+    // Keep what was removed so the toast's Undo can put it straight back
+    // (same slot, same settings; `order` still sorts it near its old spot).
+    const holder = projectRef.current?.events.find((e) => e.songs.some((s) => s.id === songId));
+    const song = holder?.songs.find((s) => s.id === songId);
     setProject((prev) =>
       prev
         ? {
@@ -1468,6 +1584,24 @@ export default function App() {
           }
         : prev,
     );
+    if (holder && song) {
+      push("info", `Removed "${song.label || song.soundName}"`, {
+        label: "Undo",
+        onClick: () =>
+          setProject((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  events: prev.events.map((e) =>
+                    e.id === holder.id && !e.songs.some((s) => s.id === song.id)
+                      ? { ...e, songs: [...e.songs, song] }
+                      : e,
+                  ),
+                }
+              : prev,
+          ),
+      });
+    }
   }
 
   // Decode a compiled entry to a playable URL. `vpk` defaults to the game pak
@@ -1476,6 +1610,13 @@ export default function App() {
     const s = settingsRef.current;
     const path = await decodeStockApi(s.vpkHelperPath, vpk ?? s.deadlockPak, ref);
     return convertFileSrc(path);
+  }
+
+  // Same decode, but the raw file path: layer mixing feeds it to ffmpeg
+  // (asset URLs only work for in-app playback).
+  function decodeStockPath(ref: string, vpk?: string): Promise<string> {
+    const s = settingsRef.current;
+    return decodeStockApi(s.vpkHelperPath, vpk ?? s.deadlockPak, ref);
   }
 
   function shortRef(ref: string): string {
@@ -1649,12 +1790,27 @@ export default function App() {
           accent: accentFor({ group, side: "" }),
           events: evs.sort((x, y) => x.label.localeCompare(y.label)),
         }));
+      // Prior excludes are keyed by the CACHE DIR after a first import - a
+      // re-review started from the original .vpk path must find them there,
+      // or every previously-deselected file comes back checked (and confirm
+      // then overwrites the real exclude list).
+      let priorExcludes = s.importedModExcludes?.[vpk] ?? [];
+      if (priorExcludes.length === 0) {
+        try {
+          const cached = await packCacheLookup(vpk);
+          if (cached && cached !== vpk) {
+            priorExcludes = s.importedModExcludes?.[cached] ?? [];
+          }
+        } catch {
+          /* lookup is best-effort */
+        }
+      }
       setPackReview({
         vpk,
         name: baseName(vpk),
         groups,
         contents,
-        priorExcludes: s.importedModExcludes?.[vpk] ?? [],
+        priorExcludes,
       });
     } catch (e) {
       push("error", `Pack scan failed: ${e}`);
@@ -1678,6 +1834,23 @@ export default function App() {
     const s = settingsRef.current;
     if (!proj) return;
     setPackReview(null);
+    // Snapshot the scan results NOW: dragging another pack onto the window
+    // mid-confirm refills these refs, and the awaits below are long.
+    const pendingEvents = pendingImportEvents.current ?? [];
+    const overwriteRefsSnapshot = new Set(pendingOverwriteRefs.current);
+    // The import commits into whatever profile was active when it started -
+    // a profile switch during the long cache/decode awaits must abort the
+    // remaining commits, or the OLD profile's slots land in the NEW profile.
+    const startProfile = s.activeProfile;
+    let profileAbortToasted = false;
+    const profileChanged = () => {
+      if (settingsRef.current.activeProfile === startProfile) return false;
+      if (!profileAbortToasted) {
+        profileAbortToasted = true;
+        push("error", "Import stopped - the profile changed while it was running. Re-import in the target profile.");
+      }
+      return true;
+    };
     try {
       // One-off import: extract the pack into the app-managed cache and use
       // THAT as the source from here on — the original .vpk is never needed
@@ -1693,19 +1866,34 @@ export default function App() {
           push("error", `Couldn't cache the pack - keeping the original .vpk as the source: ${e}`);
         }
       }
+      if (profileChanged()) return;
       if (bundle) {
         // Register the bundle + remember which of its files were deselected
-        // (compile drops them from the combined stage).
-        const excludes = { ...(s.importedModExcludes ?? {}) };
-        delete excludes[vpk];
-        if (excludedFiles.length > 0) excludes[source] = excludedFiles;
-        else delete excludes[source];
-        updateSettings({
-          importedMods: [
-            ...s.importedMods.filter((m) => m !== vpk && m !== source),
-            source,
-          ],
-          importedModExcludes: excludes,
+        // (compile drops them from the combined stage). Functional form: the
+        // cachePack await above is long, and a plain patch from the entry
+        // snapshot would clobber any settings change made meanwhile (another
+        // import's excludes, a removed mod, linked credits).
+        updateSettings((cur) => {
+          const excludes = { ...(cur.importedModExcludes ?? {}) };
+          delete excludes[vpk];
+          if (excludedFiles.length > 0) excludes[source] = excludedFiles;
+          else delete excludes[source];
+          // The one-off cache re-keys the mod by its cached dir: GameBanana
+          // credits were attached under the downloaded vpk's path, so move
+          // them too (credits.txt looks up by the importedMods entry).
+          const credits = { ...(cur.importedModCredits ?? {}) };
+          if (source !== vpk && credits[vpk]) {
+            credits[source] = credits[vpk];
+            delete credits[vpk];
+          }
+          return {
+            importedMods: [
+              ...(cur.importedMods ?? []).filter((m) => m !== vpk && m !== source),
+              source,
+            ],
+            importedModExcludes: excludes,
+            importedModCredits: credits,
+          };
         });
       }
       // Adopt the pack's panorama images (item icons etc.) as editable Icon
@@ -1740,6 +1928,7 @@ export default function App() {
               ({ ic, id }) =>
                 !existing.some((m) => m.id === id || m.targetVtexc === ic.targetVtexc),
             );
+          if (profileChanged()) return;
           if (additions.length > 0) {
             adoptedIcons = additions.length;
             setProject((prev) =>
@@ -1770,7 +1959,7 @@ export default function App() {
       }
       const iconNote = adoptedIcons > 0 ? ` · ${adoptedIcons} icon(s) adopted` : "";
 
-      const events = (pendingImportEvents.current ?? []).filter((ie) =>
+      const events = pendingEvents.filter((ie) =>
         selectedKeys.has(`${ie.eventsRelpath}::${ie.eventName}::${ie.arrayKey}`),
       );
       if (events.length === 0) {
@@ -1899,17 +2088,53 @@ export default function App() {
         }
       }
 
-      const finalEvents = order.map((id) => {
-        const slot = slotsById.get(id)!;
-        const add = additions.get(id);
-        return add && add.length ? { ...slot, adopted: [...slot.adopted, ...add] } : slot;
+      if (profileChanged()) return;
+      // Commit FUNCTIONALLY against the live project, not the entry snapshot:
+      // the cache/decode awaits above take long enough for the user to keep
+      // editing, and a wholesale events replace from the snapshot silently
+      // reverted anything they did meanwhile.
+      setProject((prev) => {
+        if (!prev) return prev;
+        const known = new Set(prev.events.map((e) => e.id));
+        const out = prev.events
+          .filter((e) => {
+            // Same pruning the snapshot pass did, evaluated on CURRENT state.
+            if (isImportArtifact(e) && isExcludedImport(e.eventsRelpath, e.eventName)) return false;
+            if (isImportSlot(e.id) && !slotHasContent(e) && !additions.has(e.id)) return false;
+            return true;
+          })
+          .map((e) => {
+            const add = additions.get(e.id);
+            if (!add?.length) return e;
+            // Re-dedupe against the live slot - it may have changed since the
+            // snapshot (and this also hardens two overlapping imports).
+            const have = new Set([
+              ...e.adopted.map((a) => a.reference),
+              ...e.songs.map((x) => x.importedRef).filter((r): r is string => !!r),
+            ]);
+            const fresh = add.filter((a) => !have.has(a.reference));
+            return fresh.length ? { ...e, adopted: [...e.adopted, ...fresh] } : e;
+          });
+        for (const id of order) {
+          if (known.has(id)) continue;
+          const slot = slotsById.get(id);
+          if (!slot) continue;
+          const add = additions.get(id) ?? [];
+          out.push(add.length ? { ...slot, adopted: [...slot.adopted, ...add] } : slot);
+        }
+        return { ...prev, events: out };
       });
-      setProject((prev) => (prev ? { ...prev, events: finalEvents } : prev));
 
       // Pool the newly-created slots so they render. Decompile their soundevents
       // files into the merge base first (import touches files we may not have
       // pulled yet, e.g. hero/*, mods/*, gameplay/player/damage).
-      const created = finalEvents.filter((e) => !keptIds.has(e.id));
+      const created = order
+        .filter((id) => !keptIds.has(id))
+        .map((id) => {
+          const slot = slotsById.get(id)!;
+          const add = additions.get(id) ?? [];
+          return add.length ? { ...slot, adopted: [...slot.adopted, ...add] } : slot;
+        });
       if (created.length) {
         await ensureVanillaFiles(Array.from(new Set(created.map((e) => e.eventsRelpath))));
         const root = settingsRef.current.vanillaRoot.replace(/[/\\]+$/, "");
@@ -1937,10 +2162,9 @@ export default function App() {
       // path). Un-decodable entries stay adopted (linked) instead.
       let absorbed = 0;
       {
-        const overwriteRefs = pendingOverwriteRefs.current;
         const jobs = [...additions.entries()].flatMap(([slotId, adds]) =>
           adds
-            .filter((a) => mode === "absorb" || overwriteRefs.has(a.reference))
+            .filter((a) => mode === "absorb" || overwriteRefsSnapshot.has(a.reference))
             .map((a) => ({ slotId, reference: a.reference, label: a.label })),
         );
         if (jobs.length > 0) {
@@ -1960,6 +2184,7 @@ export default function App() {
             }
           };
           await Promise.all(Array.from({ length: 3 }, () => worker()));
+          if (profileChanged()) return;
           absorbed = done.length;
           if (done.length > 0) {
             setProject((prev) => {
@@ -2027,12 +2252,19 @@ export default function App() {
             });
             // The absorbed audio now compiles from YOUR tracks — drop the
             // pack's copies from the bundle so they don't ship twice.
+            // Functional form: `cur` already includes the bundle write above
+            // (setSettings updaters chain), so no manual recompose is needed
+            // and nothing done meanwhile gets clobbered.
             if (bundle) {
-              const cur = settingsRef.current;
-              const merged = { ...(cur.importedModExcludes ?? {}) };
-              const extra = done.map((d) => d.reference.replace(/\.vsnd$/, ".vsnd_c"));
-              merged[source] = Array.from(new Set([...(merged[source] ?? []), ...extra]));
-              updateSettings({ importedModExcludes: merged });
+              updateSettings((cur) => {
+                const merged = { ...(cur.importedModExcludes ?? {}) };
+                if (vpk !== source) delete merged[vpk];
+                const extra = done.map((d) => d.reference.replace(/\.vsnd$/, ".vsnd_c"));
+                merged[source] = Array.from(
+                  new Set([...(merged[source] ?? excludedFiles), ...extra]),
+                );
+                return { importedModExcludes: merged };
+              });
             }
           }
         }
@@ -3088,13 +3320,43 @@ export default function App() {
     }
     setRandomizing(true);
     try {
+      // Snapshot what the roll replaces so the toast's Undo can restore it.
+      const before = projectRef.current
+        ? {
+            vdata: projectRef.current.vdataOverrides ?? [],
+            global: projectRef.current.globalOverrides ?? [],
+            world: projectRef.current.worldOverrides ?? [],
+          }
+        : null;
+      const hadGameplay = settingsRef.current.includeGameplay;
       const rolled = await randomizeConfig(settings.vpkHelperPath, settings.deadlockPak, temperature, settings.randomizer);
       setProject((prev) =>
         prev ? { ...prev, vdataOverrides: rolled.vdata, globalOverrides: rolled.global, worldOverrides: rolled.world } : prev,
       );
       updateSettings({ includeGameplay: true });
       const n = rolled.vdata.length + rolled.global.length + rolled.world.length;
-      push("success", `Randomized ${n} values`);
+      push(
+        "success",
+        `Randomized ${n} values${hadGameplay ? "" : " - include-in-build turned ON"}`,
+        before
+          ? {
+              label: "Undo",
+              onClick: () => {
+                setProject((prev) =>
+                  prev
+                    ? {
+                        ...prev,
+                        vdataOverrides: before.vdata,
+                        globalOverrides: before.global,
+                        worldOverrides: before.world,
+                      }
+                    : prev,
+                );
+                if (!hadGameplay) updateSettings({ includeGameplay: false });
+              },
+            }
+          : undefined,
+      );
     } catch (e) {
       push("error", `Randomize failed: ${e}`);
     } finally {
@@ -3102,9 +3364,12 @@ export default function App() {
     }
   }
 
-  // Clear all gameplay + global edits (back to vanilla).
+  // Clear all gameplay + global edits (back to vanilla). Also clears the
+  // per-entity/category exclusion keys - they describe edits that no longer
+  // exist, and leftovers would silently drop the NEXT edit of the same thing.
   function resetGameplay() {
     setProject((prev) => (prev ? { ...prev, vdataOverrides: [], globalOverrides: [], worldOverrides: [] } : prev));
+    updateSettings({ excludedConfigKeys: [] });
     push("info", "Gameplay config reset to default");
   }
 
@@ -3239,21 +3504,14 @@ export default function App() {
     setActiveTab(GAMEBANANA);
   }
 
-  // GameBanana slot mode: decode a downloaded pack's sounds and add each as
-  // a track in the slot the search came from (the mp3s, not the vpk).
-  async function addPackSoundsToSlot(slotId: string, vpks: string[], modName: string) {
-    push("info", `Extracting sounds from "${modName}"…`);
+  // Add picked slot-mode sounds as tracks (each pick already knows its slot).
+  async function addPickedSounds(picks: { slotId: string; path: string }[], modName: string) {
     let added = 0;
-    for (const v of vpks) {
-      try {
-        const clips = await vpkExtractAudio(settingsRef.current.vpkHelperPath, v);
-        for (const c of clips) {
-          await addSong(slotId, c.path);
-          added++;
-        }
-      } catch (e) {
-        push("error", `${modName}: ${e}`);
-      }
+    for (const p of picks) {
+      // Decoded files carry a "00_" index prefix - strip it from the label so
+      // a stock-named replacement still triggers the exact-name auto-replace.
+      await addSong(p.slotId, p.path, { label: baseName(p.path).replace(/^\d+_/, "") });
+      added++;
     }
     if (added > 0) {
       push(
@@ -3262,6 +3520,156 @@ export default function App() {
       );
       setActiveTab(gbReturn);
     }
+  }
+
+  // The picker's "Install the whole mod": hand the vpk(s) to the normal import
+  // flow instead - review, bundling, event routing and credits all come along,
+  // and nothing the mod ships is dropped.
+  function installWholeModFromPick() {
+    const pick = slotPick;
+    if (!pick) return;
+    setSlotPick(null);
+    setActiveTab(gbReturn);
+    if (pick.vpks.length === 1) {
+      void startPackImport(pick.vpks[0]);
+    } else {
+      const cur = settingsRef.current.importedMods;
+      const next = [...cur];
+      for (const v of pick.vpks) if (!next.includes(v)) next.push(v);
+      updateSettings({ importedMods: next });
+      push(
+        "success",
+        `Added ${pick.vpks.length} vpks from "${pick.modName}" - review them in the Mod combiner`,
+      );
+    }
+  }
+
+  // GameBanana slot mode: decode a downloaded pack's sounds. A pack that is
+  // clearly just tracks for the chosen slot adds one-click like before; one
+  // that changes other events too opens a picker so the user decides what
+  // lands where (or installs the whole vpk via the import review). Loose
+  // audio files (Sound submissions ship a bare mp3/wav or a zip of them
+  // instead of a pak) are tracks by definition - they add straight in.
+  async function addPackSoundsToSlot(
+    slotId: string,
+    vpks: string[],
+    modName: string,
+    audios: string[] = [],
+  ) {
+    if (audios.length > 0) {
+      await addPickedSounds(audios.map((p) => ({ slotId, path: p })), modName);
+    }
+    if (vpks.length === 0) return;
+    push("info", `Extracting sounds from "${modName}"…`);
+    const clips: { path: string; ref: string }[] = [];
+    let truncated = false;
+    for (const v of vpks) {
+      try {
+        const res = await vpkExtractAudio(settingsRef.current.vpkHelperPath, v);
+        if (res.length >= 64) truncated = true; // the decode cap
+        for (const c of res) clips.push({ path: c.path, ref: c.sourceRef.replace(/_c$/, "") });
+      } catch (e) {
+        push("error", `${modName}: ${e}`);
+      }
+    }
+    if (clips.length === 0) return;
+    const proj = projectRef.current;
+    const slot = proj?.events.find((e) => e.id === slotId);
+    if (clips.length === 1 || !proj || !slot) {
+      await addPickedSounds(clips.map((c) => ({ slotId, path: c.path })), modName);
+      return;
+    }
+
+    // Which event owns each sound (reverse lookup against the vanilla merge
+    // base, best effort): decides between "tracks for my slot" and a
+    // multi-event mod that needs the picker.
+    let hits: RefEventHit[] = [];
+    try {
+      const ensure = new Set<string>(proj.events.map((e) => e.eventsRelpath));
+      for (const c of clips) {
+        const m = c.ref.match(/^sounds\/(?:abilities|vo|weapons)\/([a-z0-9_]+)\//);
+        if (m) ensure.add(`soundevents/hero/${m[1]}.vsndevts`);
+      }
+      const vroot = await ensureVanillaFiles([...ensure]);
+      hits = await eventsForRefs(vroot, clips.map((c) => c.ref));
+    } catch {
+      /* no lookup - everything falls into the "other sounds" bucket below */
+    }
+    const slotByKey = new Map(
+      proj.events.map((e) => [`${e.eventsRelpath}::${e.eventName}::${e.arrayKey}`, e]),
+    );
+    const chosenKey = `${slot.eventsRelpath}::${slot.eventName}::${slot.arrayKey}`;
+    const hitsByRef = new Map<string, RefEventHit[]>();
+    for (const h of hits) {
+      const list = hitsByRef.get(h.reference) ?? [];
+      list.push(h);
+      hitsByRef.set(h.reference, list);
+    }
+    const clipName = (c: { path: string }) => baseName(c.path).replace(/^\d+_/, "");
+    const mine: PickClip[] = [];
+    const bySlot = new Map<string, PickClip[]>();
+    const other: PickClip[] = [];
+    for (const c of clips) {
+      const pc: PickClip = { path: c.path, name: clipName(c), ref: c.ref };
+      const keys = (hitsByRef.get(c.ref) ?? []).map(
+        (h) => `${h.eventsRelpath}::${h.eventName}::${h.arrayKey}`,
+      );
+      if (keys.includes(chosenKey)) {
+        mine.push(pc);
+        continue;
+      }
+      const owned = keys.map((k) => slotByKey.get(k)).find((s) => s && s.id !== slotId);
+      if (owned) {
+        const list = bySlot.get(owned.id) ?? [];
+        list.push(pc);
+        bySlot.set(owned.id, list);
+      } else {
+        other.push(pc);
+      }
+    }
+    // Everything belongs to the chosen slot: keep the one-click magic.
+    if (mine.length === clips.length) {
+      await addPickedSounds(mine.map((c) => ({ slotId, path: c.path })), modName);
+      return;
+    }
+    const groups: PickGroup[] = [];
+    if (mine.length > 0) {
+      groups.push({
+        key: "mine",
+        label: `For ${slot.side}`,
+        accent: accentFor(slot),
+        targetSlotId: slotId,
+        note: "These sounds belong to the event this slot edits.",
+        clips: mine,
+        defaultOn: true,
+      });
+    }
+    for (const [sid, list] of bySlot) {
+      const s = proj.events.find((e) => e.id === sid)!;
+      groups.push({
+        key: sid,
+        label: `${TAB_LABELS[s.group] ?? s.group}: ${s.side}`,
+        accent: accentFor(s),
+        targetSlotId: sid,
+        note: "Selected sounds are added to that slot, not this one.",
+        clips: list,
+        defaultOn: false,
+      });
+    }
+    if (other.length > 0) {
+      groups.push({
+        key: "other",
+        label: "Other sounds",
+        accent: "#71717a",
+        targetSlotId: slotId,
+        note: `Not matched to any of your tabs - selected ones are added to ${slot.side}. "Install the whole mod" places every file properly instead.`,
+        clips: other,
+        // A pack where nothing was recognized is usually just track variants
+        // for this slot - start those checked; otherwise leave them off.
+        defaultOn: mine.length === 0 && bySlot.size === 0,
+      });
+    }
+    setSlotPick({ modName, slotId, slotLabel: slot.side, vpks, groups, truncated });
   }
 
   // One SidePanel for a slot, with all its handlers wired (shared by the normal
@@ -3290,6 +3698,7 @@ export default function App() {
       onRemoveEntry={removeEntry}
       onRestoreEntry={restoreEntry}
       onDecodeStock={decodeStock}
+      onDecodeStockPath={decodeStockPath}
       onEditAdopted={editAdopted}
       onDownloadEntry={downloadEntryTo}
       onDownloadSong={downloadSong}
@@ -3373,16 +3782,32 @@ export default function App() {
   }
 
   // Boot animation: on a fresh launch the sidebar slides open and its entries
-  // cascade in. `booted` flips once the show is over so later re-renders
-  // (new tabs, count changes) don't replay it.
+  // cascade in. The show waits for the launch cache warm (the preload's core
+  // steps) so it plays on a settled app instead of during the load: `bootPlay`
+  // starts it, and `booted` flips once it's over so later re-renders (new
+  // tabs, count changes) don't replay it.
+  const [bootPlay, setBootPlay] = useState(false);
   const [booted, setBooted] = useState(false);
   useEffect(() => {
+    if (bootPlay) return;
+    if (preload?.coreDone) {
+      setBootPlay(true);
+      return;
+    }
+    // The preload may never run (first-run wizard, paths missing) or could
+    // stall - don't hold the reveal hostage. Every progress report re-arms
+    // the timer, so a running warm gets its full 20s between steps.
+    const t = setTimeout(() => setBootPlay(true), preload ? 20000 : 2500);
+    return () => clearTimeout(t);
+  }, [preload, bootPlay]);
+  useEffect(() => {
+    if (!bootPlay) return;
     const t = setTimeout(() => setBooted(true), 1800);
     return () => clearTimeout(t);
-  }, []);
-  const bootCls = booted ? "" : " eim-boot-item";
+  }, [bootPlay]);
+  const bootCls = booted ? "" : bootPlay ? " eim-boot-item" : " eim-boot-hold-item";
   const bootStyle = (i: number): React.CSSProperties | undefined =>
-    booted ? undefined : { animationDelay: `${0.35 + i * 0.05}s` };
+    booted || !bootPlay ? undefined : { animationDelay: `${0.35 + i * 0.05}s` };
 
   // One sidebar tab button (indented when nested under a parent category).
   // Heroes/Items get their own tint (like the sky ♪ Sound master) so the big
@@ -3533,7 +3958,7 @@ export default function App() {
       <aside
         style={{ width: sidebarW }}
         className={`relative z-30 flex h-screen shrink-0 flex-col gap-1 border-r border-zinc-800 bg-zinc-950 p-4${
-          booted ? "" : " eim-boot-aside"
+          booted ? "" : bootPlay ? " eim-boot-aside" : " eim-boot-hold-aside"
         }`}
       >
         {/* Resize handle: drag to adjust, double-click to reset. */}
@@ -3705,7 +4130,7 @@ export default function App() {
                       : activeTab === POSTERS
                         ? "Replace the world's posters, signs, ghost signs, and graffiti with your own images - drop a PNG onto a region and compile."
                         : activeTab === JUMPSCARES
-                          ? "Random jumpscares while you play + videos when you die - your DigiMaster mod, configured here and rebuilt on compile."
+                          ? "Random jumpscares while you play + videos when you die - your MoonahMasterUI mod, configured here and rebuilt on compile."
                           : activeTab === UIMASTER
                             ? "Edit the game's UI files directly - decompiled to source, compiled back into your mod. Very experimental."
                             : null;
@@ -3762,7 +4187,6 @@ export default function App() {
           />
         ) : activeTab === GAMEBANANA ? (
           <GameBananaBrowser
-            settings={settings}
             update={updateSettings}
             onImportPack={startPackImport}
             onBundleMany={(vpks) => {
@@ -3773,8 +4197,8 @@ export default function App() {
             }}
             seed={gbSeed}
             onSeedConsumed={() => setGbSeed(null)}
-            onAddToSlot={(slotId, vpks, modName) =>
-              void addPackSoundsToSlot(slotId, vpks, modName)
+            onAddToSlot={(slotId, vpks, modName, audios) =>
+              void addPackSoundsToSlot(slotId, vpks, modName, audios)
             }
             onBack={() => setActiveTab(gbReturn)}
           />
@@ -3861,12 +4285,16 @@ export default function App() {
             includeGameplay={settings.includeGameplay}
             onToggleGameplay={(on) => updateSettings({ includeGameplay: on })}
             excludedKeys={settings.excludedConfigKeys}
-            onSetExcluded={(keys, excluded) => {
-              const cur = new Set(settings.excludedConfigKeys);
-              if (excluded) keys.forEach((k) => cur.add(k));
-              else keys.forEach((k) => cur.delete(k));
-              updateSettings({ excludedConfigKeys: [...cur] });
-            }}
+            onSetExcluded={(keys, excluded) =>
+              // Functional: rapid chip toggles each build on the previous
+              // update instead of a shared stale snapshot.
+              updateSettings((prev) => {
+                const cur = new Set(prev.excludedConfigKeys);
+                if (excluded) keys.forEach((k) => cur.add(k));
+                else keys.forEach((k) => cur.delete(k));
+                return { excludedConfigKeys: [...cur] };
+              })
+            }
             overrides={project?.vdataOverrides ?? []}
             onSet={setVdataOverride}
             onClear={clearVdataOverride}
@@ -3883,6 +4311,8 @@ export default function App() {
             onSetRandomizerOpts={(patch) =>
               updateSettings({ randomizer: { ...settings.randomizer, ...patch } })
             }
+            hostAutoPrep={settings.hostAutoPrep}
+            onSetHostAutoPrep={(on) => updateSettings({ hostAutoPrep: on })}
           />
         ) : activeTab === EFFECTS ? (
           <EffectsBrowser
@@ -4149,6 +4579,25 @@ export default function App() {
             onConfirm={(sel, bundle, excluded, mode, zeroGain) =>
               void applyPackImport(packReview.vpk, sel, bundle, excluded, mode, zeroGain)
             }
+          />
+        )}
+      </AnimatePresence>
+
+      {/* GameBanana slot mode: the pack changes more than the chosen slot. */}
+      <AnimatePresence>
+        {slotPick && (
+          <SlotSoundPicker
+            modName={slotPick.modName}
+            slotLabel={slotPick.slotLabel}
+            groups={slotPick.groups}
+            truncated={slotPick.truncated}
+            onCancel={() => setSlotPick(null)}
+            onAdd={(picks) => {
+              const name = slotPick.modName;
+              setSlotPick(null);
+              void addPickedSounds(picks, name);
+            }}
+            onWholeMod={installWholeModFromPick}
           />
         )}
       </AnimatePresence>

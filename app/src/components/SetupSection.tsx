@@ -229,6 +229,13 @@ export function SetupSection({
               accent="accent-amber-500"
             />
             <Toggle
+              checked={settings.experimentalModCombiner}
+              onChange={(v) => update({ experimentalModCombiner: v })}
+              title="Mod combiner (bundle other mods)"
+              desc="Show the Mod combiner tab: bundle other mods' .vpk files into your compiled pack. The tab stays visible while mods are already bundled."
+              accent="accent-amber-500"
+            />
+            <Toggle
               checked={settings.showExperimentalHeroes}
               onChange={(v) => update({ showExperimentalHeroes: v })}
               title="Show experimental heroes"

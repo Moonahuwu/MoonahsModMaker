@@ -1,4 +1,4 @@
-//! Jumpscares/Deaths mod generator ("DigiMaster").
+//! Jumpscares/Deaths mod generator ("MoonahMasterUI", formerly "DigiMaster").
 //!
 //! The user's proven HUD-overlay mod, productized: the static engine
 //! (base_hud hook + runtime-panel JS + CSS + the Anita-UI in-game menu) is
@@ -9,14 +9,14 @@
 //! and returns everything to stage into the output vpk.
 //!
 //! NOTE: like the original mod, `soundevents/world_ambient_emitters.vsndevts`
-//! is overridden wholesale with only the Digi.* events (proven in the user's
-//! mod for months).
+//! is overridden wholesale with only the Moonah.* events (proven in the
+//! user's mod for months).
 
 use std::path::{Path, PathBuf};
 
 use crate::compile::{CompileConfig, CompileReport, DigiEntry, DigimodCompile, DigiSound};
 
-const TPL_JS: &str = include_str!("../templates/digimod/digi_master.js");
+const TPL_JS: &str = include_str!("../templates/digimod/moonah_master.js");
 const TPL_XML: &str = include_str!("../templates/digimod/base_hud.xml");
 const TPL_CSS: &str = include_str!("../templates/digimod/jumpscare_overlay.css");
 const TPL_ANITA_JS: &str = include_str!("../templates/digimod/anita_ui_core.js");
@@ -33,14 +33,14 @@ fn sanitize_id(s: &str) -> String {
 }
 
 fn sound_event(sound_id: &str) -> String {
-    format!("Digi.{}", sanitize_id(sound_id))
+    format!("Moonah.{}", sanitize_id(sound_id))
 }
 
 fn media_rel(e: &DigiEntry) -> String {
     if e.kind == "image" {
-        format!("panorama/images/digi/{}.vtex", sanitize_id(&e.id))
+        format!("panorama/images/moonah/{}.vtex", sanitize_id(&e.id))
     } else {
-        format!("panorama/videos/digi/{}.webm", sanitize_id(&e.id))
+        format!("panorama/videos/moonah/{}.webm", sanitize_id(&e.id))
     }
 }
 
@@ -82,7 +82,7 @@ fn file_identity(p: &str) -> String {
 /// Fingerprint of the whole digimod config + every source file's identity.
 fn digimod_fingerprint(dm: &DigimodCompile) -> String {
     let mut key = format!(
-        "v1|{}|{}|{}\n",
+        "v2|{}|{}|{}\n",
         dm.rng_interval, dm.scare_chance, dm.death_chance
     );
     for e in dm.scares.iter().chain(dm.deaths.iter()) {
@@ -111,13 +111,15 @@ fn digimod_fingerprint(dm: &DigimodCompile) -> String {
     crate::compile::fingerprint(&key)
 }
 
-/// Splice the digi engine's hooks into a foreign mod's base_hud source: the
+/// Splice the engine's hooks into a foreign mod's base_hud source: the
 /// two style includes, the two script includes, and the overlay anchor
 /// panels. Substring guards make it idempotent (anything already present is
 /// left alone), so re-merging or merging a hud that partially matches ours
 /// can't double-inject.
 fn inject_hooks(xml: &str) -> Result<String, String> {
-    let mut out = xml.to_string();
+    // A hud that went through an older merge references the legacy script
+    // name; retarget it so it points at the file this build actually ships.
+    let mut out = xml.replace("digi_master.vjs_c", "moonah_master.vjs_c");
     let styles = [
         ("jumpscare_overlay", "\t\t<include src=\"s2r://panorama/styles/jumpscare_overlay.vcss_c\" />\n"),
         ("anita_ui.vcss", "\t\t<include src=\"s2r://panorama/styles/anita_ui.vcss_c\" />\n"),
@@ -130,7 +132,7 @@ fn inject_hooks(xml: &str) -> Result<String, String> {
         out.insert_str(pos, &add);
     }
     let scripts = [
-        ("digi_master", "\t\t<include src=\"s2r://panorama/scripts/digi_master.vjs_c\" />\n"),
+        ("moonah_master", "\t\t<include src=\"s2r://panorama/scripts/moonah_master.vjs_c\" />\n"),
         ("anita_ui_core", "\t\t<include src=\"s2r://panorama/scripts/anita_ui_core.vjs_c\" />\n"),
     ];
     let add: String = scripts.iter().filter(|(k, _)| !out.contains(k)).map(|(_, l)| *l).collect();
@@ -199,14 +201,14 @@ fn to_webm(ffmpeg: Option<&str>, src: &str, dest: &Path) -> Result<String, Strin
     Ok("converted to VP9 webm".into())
 }
 
-/// Generate the soundevents file: one Digi.* event per library sound.
+/// Generate the soundevents file: one Moonah.* event per library sound.
 fn gen_soundevents(dm: &DigimodCompile) -> String {
     let mut out = String::from(
         "<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} format:generic:version{7412167c-06e9-4698-aff2-e63eb59037e7} -->\n{\n",
     );
     for s in dm.sounds.iter().filter(|s| !s.source_audio.is_empty()) {
         out.push_str(&format!(
-            "\t{} = \n\t{{\n\t\tbase = \"Base.UI\"\n\t\tvolume = {:.6}\n\t\tpitch = 1.000000\n\t\tvsnd_files = \"sounds/digi/{}.vsnd\"\n\t}}\n",
+            "\t{} = \n\t{{\n\t\tbase = \"Base.UI\"\n\t\tvolume = {:.6}\n\t\tpitch = 1.000000\n\t\tvsnd_files = \"sounds/moonah/{}.vsnd\"\n\t}}\n",
             sound_event(&s.id),
             s.volume.clamp(0.0, 10.0),
             sanitize_id(&s.id),
@@ -216,7 +218,7 @@ fn gen_soundevents(dm: &DigimodCompile) -> String {
     out
 }
 
-/// Generate digi_master.js from the template + this config.
+/// Generate moonah_master.js from the template + this config.
 fn gen_js(dm: &DigimodCompile) -> String {
     let config = format!(
         "{{ IS_ENABLED: true, RNG_INTERVAL: {}, SCARE_CHANCE: {}, DEATH_CHANCE: {} }}",
@@ -232,8 +234,8 @@ fn gen_js(dm: &DigimodCompile) -> String {
         deaths.join(",\n        "),
     );
     TPL_JS
-        .replace("/*__DIGI_CONFIG__*/{}/*__END__*/", &config)
-        .replace("/*__DIGI_LIBRARY__*/{ SCARES: [], DEATHS: [] }/*__END__*/", &library)
+        .replace("/*__MOONAH_CONFIG__*/{}/*__END__*/", &config)
+        .replace("/*__MOONAH_LIBRARY__*/{ SCARES: [], DEATHS: [] }/*__END__*/", &library)
 }
 
 /// Run the whole digimod build. Returns (compiled-root-relative rels to
@@ -288,7 +290,7 @@ pub fn compile_digimod(
     // Expected staging list (computable without building — used by the skip).
     let mut rels: Vec<String> = vec![
         "panorama/layout/base_hud.vxml_c".into(),
-        "panorama/scripts/digi_master.vjs_c".into(),
+        "panorama/scripts/moonah_master.vjs_c".into(),
         "panorama/scripts/anita_ui_core.vjs_c".into(),
         "panorama/styles/jumpscare_overlay.vcss_c".into(),
         "panorama/styles/anita_ui.vcss_c".into(),
@@ -296,13 +298,13 @@ pub fn compile_digimod(
     ];
     for e in dm.scares.iter().chain(dm.deaths.iter()) {
         if e.kind == "image" {
-            rels.push(format!("panorama/images/digi/{}.vtex_c", sanitize_id(&e.id)));
+            rels.push(format!("panorama/images/moonah/{}.vtex_c", sanitize_id(&e.id)));
         } else {
-            rels.push(format!("panorama/videos/digi/{}.webm", sanitize_id(&e.id)));
+            rels.push(format!("panorama/videos/moonah/{}.webm", sanitize_id(&e.id)));
         }
     }
     for s in dm.sounds.iter().filter(|s| !s.source_audio.is_empty()) {
-        rels.push(format!("sounds/digi/{}.vsnd_c", sanitize_id(&s.id)));
+        rels.push(format!("sounds/moonah/{}.vsnd_c", sanitize_id(&s.id)));
     }
     for (_, keep) in &merge_files {
         for rel in keep {
@@ -358,7 +360,7 @@ pub fn compile_digimod(
     // 1) Static engine + generated JS/soundevents into the content tree.
     let mut to_compile: Vec<PathBuf> = Vec::new();
     for (rel, text) in [
-        ("panorama/scripts/digi_master.js", gen_js(dm)),
+        ("panorama/scripts/moonah_master.js", gen_js(dm)),
         ("panorama/scripts/anita_ui_core.js", TPL_ANITA_JS.to_string()),
         ("panorama/styles/jumpscare_overlay.css", TPL_CSS.to_string()),
         ("panorama/styles/anita_ui.css", TPL_ANITA_CSS.to_string()),
@@ -379,7 +381,7 @@ pub fn compile_digimod(
     for e in dm.scares.iter().chain(dm.deaths.iter()) {
         let id = sanitize_id(&e.id);
         if e.kind == "image" {
-            let png = content_root.join(format!("panorama/images/digi/{id}.png"));
+            let png = content_root.join(format!("panorama/images/moonah/{id}.png"));
             if let Some(parent) = png.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
@@ -390,7 +392,7 @@ pub fn compile_digimod(
             }
             image_pngs.push((id.clone(), png));
         } else {
-            let dest = compiled_root.join(format!("panorama/videos/digi/{id}.webm"));
+            let dest = compiled_root.join(format!("panorama/videos/moonah/{id}.webm"));
             match to_webm(ffmpeg, &e.source_media, &dest) {
                 Ok(detail) => report.ok_step(format!("jumpscare video: {}", e.name), detail),
                 Err(err) => {
@@ -405,7 +407,7 @@ pub fn compile_digimod(
     // Trim/gain/fades ride the same render path the song pipeline uses.
     for s in dm.sounds.iter().filter(|s| !s.source_audio.is_empty()) {
         let id = sanitize_id(&s.id);
-        let wav = content_root.join(format!("sounds/digi/{id}.wav"));
+        let wav = content_root.join(format!("sounds/moonah/{id}.wav"));
         if let Some(parent) = wav.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -472,9 +474,9 @@ pub fn compile_digimod(
     if !image_pngs.is_empty() {
         let mut list = String::new();
         for (id, _) in &image_pngs {
-            list.push_str(&format!("\t\tpanorama:\"file://{{images}}/digi/{id}.png\",\n"));
+            list.push_str(&format!("\t\tpanorama:\"file://{{images}}/moonah/{id}.png\",\n"));
         }
-        let vdata = content_root.join("digi_images.vdata");
+        let vdata = content_root.join("moonah_images.vdata");
         let body = format!(
             "<!-- kv3 encoding:text:version{{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d}} format:generic:version{{7412167c-06e9-4698-aff2-e63eb59037e7}} -->\n{{\n\tgeneric_data_type = \"panorama_image_list\"\n\timage_list =\n\t[\n{list}\t]\n}}\n"
         );
@@ -483,8 +485,8 @@ pub fn compile_digimod(
                 Ok(_) => {
                     for (id, _) in &image_pngs {
                         let produced =
-                            compiled_root.join(format!("panorama/images/digi/{id}_png.vtex_c"));
-                        let target = compiled_root.join(format!("panorama/images/digi/{id}.vtex_c"));
+                            compiled_root.join(format!("panorama/images/moonah/{id}_png.vtex_c"));
+                        let target = compiled_root.join(format!("panorama/images/moonah/{id}.vtex_c"));
                         if let Err(e) = std::fs::copy(&produced, &target) {
                             report.soft_fail(format!("jumpscare image stage: {id}"), e.to_string());
                             all_ok = false;
@@ -500,23 +502,23 @@ pub fn compile_digimod(
     }
     // The hud itself: with a merged UI mod that ships its own base_hud, THAT
     // becomes the base (VRF recovers clean source from the vxml_c) and the
-    // digi hooks are spliced into it; otherwise our stock template.
+    // engine hooks are spliced into it; otherwise our stock template.
     let hud_xml: String = if let (Some(vpk), Some(h)) = (&base_hud_donor, helper) {
         let name = Path::new(vpk).file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| vpk.clone());
-        let tmp = content_root.join(".digi_merge_base_hud.xml");
+        let tmp = content_root.join(".moonah_merge_base_hud.xml");
         let recovered = crate::vpk::decompile_from_vpk(h, vpk, "panorama/layout/base_hud.vxml_c", &tmp.to_string_lossy())
             .and_then(|_| std::fs::read_to_string(&tmp).map_err(|e| e.to_string()))
             .and_then(|src| inject_hooks(&src));
         let _ = std::fs::remove_file(&tmp);
         match recovered {
             Ok(xml) => {
-                report.ok_step(format!("merge base_hud: {name}"), "digi hooks injected into the mod's hud");
+                report.ok_step(format!("merge base_hud: {name}"), "MoonahMasterUI hooks injected into the mod's hud");
                 xml
             }
             Err(e) => {
                 report.soft_fail(
                     format!("merge base_hud: {name}"),
-                    format!("{e} - falling back to the stock digi hud (that mod's hud edits won't apply)"),
+                    format!("{e} - falling back to the stock MoonahMasterUI hud (that mod's hud edits won't apply)"),
                 );
                 all_ok = false;
                 TPL_XML.to_string()
@@ -554,11 +556,11 @@ pub fn compile_digimod(
 }
 
 // ==========================================================================
-// IMPORT — adopt an existing DigiMaster pak into the tab: parse CONFIG +
-// LIBRARY out of the compiled digi_master.vjs_c (panorama resources embed
-// the source verbatim; VRF's FileExtract chokes on vjs_c, so raw extract +
-// text scan), pull each webm/vtex/vsnd out to real files, and hand back a
-// ready-to-edit config.
+// IMPORT — adopt an existing MoonahMasterUI pak (or a legacy DigiMaster
+// one) into the tab: parse CONFIG + LIBRARY out of the compiled engine
+// vjs_c (panorama resources embed the source verbatim; VRF's FileExtract
+// chokes on vjs_c, so raw extract + text scan), pull each webm/vtex/vsnd
+// out to real files, and hand back a ready-to-edit config.
 // ==========================================================================
 
 #[derive(Debug, serde::Serialize)]
@@ -569,8 +571,8 @@ pub struct DigimodImport {
     pub death_chance: u32,
     pub scares: Vec<ImportedEntry>,
     pub deaths: Vec<ImportedEntry>,
-    /// The recovered sound library: one per Digi.* event, deduped — entries
-    /// sharing an event in the pak share a sound here too.
+    /// The recovered sound library: one per engine sound event, deduped —
+    /// entries sharing an event in the pak share a sound here too.
     pub sounds: Vec<ImportedSound>,
     /// Non-fatal per-entry problems (media missing from the pak etc.).
     pub warnings: Vec<String>,
@@ -701,17 +703,22 @@ fn event_info(kv3: &str, event: &str) -> Option<(f64, String)> {
     Some((volume, vsnd))
 }
 
-/// Parse + extract a DigiMaster pak into an editable config. `dest_dir`
-/// receives the media files (webm/png/audio), one per entry.
+/// Parse + extract a MoonahMasterUI (or legacy DigiMaster) pak into an
+/// editable config. `dest_dir` receives the media files (webm/png/audio),
+/// one per entry.
 pub fn import_from_vpk(helper: &str, vpk: &str, dest_dir: &Path) -> Result<DigimodImport, String> {
     std::fs::create_dir_all(dest_dir).map_err(|e| e.to_string())?;
     let tmp = dest_dir.join(".import_tmp");
     std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
 
-    // The JS source rides verbatim inside the compiled resource.
-    let raw_js = tmp.join("digi_master.raw");
-    crate::vpk::extract(helper, vpk, "panorama/scripts/digi_master.vjs_c", &raw_js.to_string_lossy())
-        .map_err(|e| format!("no DigiMaster engine in this pak ({e})"))?;
+    // The JS source rides verbatim inside the compiled resource. Old paks
+    // ship the engine under its legacy DigiMaster name; try both.
+    let raw_js = tmp.join("moonah_master.raw");
+    crate::vpk::extract(helper, vpk, "panorama/scripts/moonah_master.vjs_c", &raw_js.to_string_lossy())
+        .or_else(|_| {
+            crate::vpk::extract(helper, vpk, "panorama/scripts/digi_master.vjs_c", &raw_js.to_string_lossy())
+        })
+        .map_err(|e| format!("no MoonahMasterUI (or legacy DigiMaster) engine in this pak ({e})"))?;
     let js = String::from_utf8_lossy(&std::fs::read(&raw_js).map_err(|e| e.to_string())?).into_owned();
 
     // Sound events (volumes + vsnd paths) — optional, the pak may ship none.
@@ -730,12 +737,17 @@ pub fn import_from_vpk(helper: &str, vpk: &str, dest_dir: &Path) -> Result<Digim
 
     let mut warnings: Vec<String> = Vec::new();
     let mut used_ids: Vec<String> = Vec::new();
-    // Sound library: one entry per Digi.* event — decoded once, shared by
+    // Sound library: one entry per engine event — decoded once, shared by
     // every media entry that references it (mirrors the pak's structure).
+    // Both event prefixes appear in the wild: Moonah.* (current) and
+    // Digi.* (legacy paks).
+    let strip_prefix = |event: &str| -> String {
+        event.trim_start_matches("Moonah.").trim_start_matches("Digi.").to_string()
+    };
     let mut sounds: Vec<ImportedSound> = Vec::new();
     let mut sound_fail: Vec<String> = Vec::new(); // events that didn't decode
     let mut sound_for_event = |event: &str, warnings: &mut Vec<String>| -> Option<String> {
-        let id = sanitize_id(event.trim_start_matches("Digi."));
+        let id = sanitize_id(&strip_prefix(event));
         if let Some(s) = sounds.iter().find(|s| s.id == id) {
             return Some(s.id.clone());
         }
@@ -753,7 +765,7 @@ pub fn import_from_vpk(helper: &str, vpk: &str, dest_dir: &Path) -> Result<Digim
                 let path = written.lines().last().map(|l| l.trim().to_string())?;
                 sounds.push(ImportedSound {
                     id: id.clone(),
-                    name: event.trim_start_matches("Digi.").to_string(),
+                    name: strip_prefix(event),
                     source_audio: path,
                     volume,
                 });
@@ -834,7 +846,7 @@ pub fn import_from_vpk(helper: &str, vpk: &str, dest_dir: &Path) -> Result<Digim
     drop(sound_for_event);
     let _ = std::fs::remove_dir_all(&tmp);
     if scares.is_empty() && deaths.is_empty() {
-        return Err("no media entries found in this pak's DigiMaster library".into());
+        return Err("no media entries found in this pak's MoonahMasterUI library".into());
     }
     Ok(DigimodImport {
         rng_interval: num_after(&js, "RNG_INTERVAL").unwrap_or(60.0) as u32,
@@ -964,7 +976,7 @@ var LIBRARY = {
         assert!(out.contains("CoolHudExtra"));
         // …ours arrive…
         assert!(out.contains("jumpscare_overlay.vcss_c"));
-        assert!(out.contains("digi_master.vjs_c"));
+        assert!(out.contains("moonah_master.vjs_c"));
         assert!(out.contains("anita_ui_core.vjs_c"));
         assert!(out.contains("MediaOverlayContainer"));
         // …inside the WindowRoot panel, before its closing tag.
@@ -980,11 +992,24 @@ var LIBRARY = {
     }
 
     #[test]
+    fn legacy_digi_include_is_retargeted_not_doubled() {
+        // A hud merged by an older build carries the legacy script include;
+        // it must be renamed to the current engine file, not joined by it.
+        let legacy = FOREIGN.replace(
+            "<include src=\"s2r://panorama/scripts/cool_hud.vjs_c\" />",
+            "<include src=\"s2r://panorama/scripts/cool_hud.vjs_c\" />\n\t\t<include src=\"s2r://panorama/scripts/digi_master.vjs_c\" />",
+        );
+        let out = inject_hooks(&legacy).unwrap();
+        assert!(!out.contains("digi_master.vjs_c"));
+        assert_eq!(out.matches("moonah_master.vjs_c").count(), 1);
+    }
+
+    #[test]
     fn adds_scripts_block_when_missing() {
         let no_scripts = FOREIGN.replace("\t<scripts>\n\t\t<include src=\"s2r://panorama/scripts/cool_hud.vjs_c\" />\n\t</scripts>\n", "");
         let out = inject_hooks(&no_scripts).unwrap();
         assert!(out.contains("<scripts>"));
-        assert!(out.contains("digi_master.vjs_c"));
+        assert!(out.contains("moonah_master.vjs_c"));
         // The synthesized block sits between styles and the root panel.
         assert!(out.find("<scripts>").unwrap() > out.find("</styles>").unwrap());
         assert!(out.find("</scripts>").unwrap() < out.find("WindowRoot").unwrap());

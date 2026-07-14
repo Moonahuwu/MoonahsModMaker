@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { motion } from "motion/react";
 import type { PackContents } from "../lib/api";
+import { useEscape } from "../lib/useEscape";
 
 /** One importable sound event, already routed to its destination tab. */
 export interface ReviewEvent {
@@ -205,6 +206,7 @@ export function ImportReview({
     zeroGain: boolean,
   ) => void;
 }) {
+  useEscape(onCancel);
   const allEventKeys = useMemo(
     () => review.groups.flatMap((g) => g.events.map((e) => e.key)),
     [review],

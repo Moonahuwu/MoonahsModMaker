@@ -11,7 +11,7 @@ ready-to-install `.vpk`. It started as a music modder (match-intro,
 urn/Idol, hero ability music) and has grown to cover most of the game's sound events
 (map objectives, shop, UI/menu music, per-hero and per-item sounds), loose-file sound
 replacement, hero/item image + wall-art (poster) replacement, a generated jumpscare/death
-HUD mod (DigiMaster), an experimental panorama UI editor with live preview (UI Master),
+HUD mod (MoonahMasterUI, formerly DigiMaster), an experimental panorama UI editor with live preview (UI Master),
 a gameplay config editor + randomizer, one-click custom-server hosting with an in-game
 F8 mod menu, and an experimental VFX recolor tab. The core invariant for
 sound-event edits is **MERGE, NEVER REPLACE**: the app splices *only the array entries it
@@ -58,7 +58,10 @@ Fix: kill the PID from `Get-NetTCPConnection -LocalPort 1420` plus stray `app` p
 apostrophe — NSIS wraps shortcut paths in single quotes, so `Moonah's` explodes a
 COM macro's argument list ("NSISCOMCALL requires 4 parameters, passed 8"). It's
 "Moonahs Mod Maker" for the installer; the window title / in-app branding keep the
-apostrophe. Installers land in `target/release/bundle/{nsis,msi}/`.
+apostrophe. Installers land in `target/release/bundle/{nsis,msi}/`. The NSIS wizard is
+branded (installer icon + dark-theme sidebar/header BMPs wired in `tauri.conf.json` >
+`bundle.windows.nsis`); the BMPs are generated from `icons/icon.png` by
+`app/src-tauri/installer/make-installer-art.ps1` — re-run it after changing the icon.
 
 **One-stop setup / tools bundle:** users never need the 36GB CSDK. A trimmed
 toolchain (proven sufficient by real audio + soundevents compiles) lives at
@@ -115,15 +118,19 @@ contains `{` braces).
   budget (drives the UI progress bar); per-item failures `soft_fail` and the run continues
   with a failure roll-up at the end.
 - `audio.rs` — ffmpeg probe + render (trim/gain/fade-in/fade-out via `build_af`).
-- `digimod.rs` — the Jumpscares/Deaths (DigiMaster) generator: proven HUD engine
+- `digimod.rs` — the Jumpscares/Deaths (MoonahMasterUI, formerly DigiMaster; the
+  `digimod` code names + serialized `digimod` project field keep the old name for
+  compat) generator: proven HUD engine
   templates in `app/src-tauri/templates/digimod/` (base_hud hook + runtime-panel JS with
   CONFIG/LIBRARY injection markers), videos → VP9 webm (raw-shipped; panorama plays sound
-  via generated `Digi.*` events, one per shared library sound), PNGs → vtex via the
+  via generated `Moonah.*` events, one per shared library sound), PNGs → vtex via the
   panorama_image_list trick, base_hud compiles LAST (file:// refs resolve against the
   game tree). `merge_vpks` absorbs other base_hud UI mods (their panorama files ride
-  raw; `inject_hooks` splices the digi hooks into THEIR base_hud). `import_from_vpk`
-  adopts an installed DigiMaster pak back into editable config (raw-extract the vjs_c:
-  panorama resources embed source verbatim; VRF FileExtract can't do vjs_c).
+  raw; `inject_hooks` splices the engine hooks into THEIR base_hud). `import_from_vpk`
+  adopts an installed MoonahMasterUI pak back into editable config (raw-extract the vjs_c:
+  panorama resources embed source verbatim; VRF FileExtract can't do vjs_c); detection
+  and import both fall back to the legacy `digi_master` stem / `Digi.*` prefix so old
+  paks still work.
 - `vpk.rs` — shells out to the C# helper.
 - `install.rs` — one-click install into Deadlock's `game/citadel/addons`. Addons mount as
   `pakNN_dir.vpk` (NN = 01..99); a slot is "occupied" if any file there ends `pak<NN>_dir.vpk`
@@ -206,7 +213,9 @@ ITEMS (orange), WALL ART (violet), and the "SOUNDS" master (sky) which nests the
 `TAB_CATEGORIES` groups (Match / In-game / Game SFX) plus `ui`, `unsorted`, and
 `replacesounds` (labeled "All Sounds") with animated collapse/expand. Slot groups:
 (`intro`, `match`, `stingers`, `brawl`, `urn`, `rift`, `midboss`, `powerups`, `teamobj`,
-`shop`, `gameplay`, `combat`, `mapsfx`, `ambience`, `npcs`, `ui`). Non-slot tabs: `items`
+`sinners` (the Sinner's Sacrifice soul vault - `soundevents/npc/neut_vaults.vsndevts`,
+incl. `track_2.track_vsnd_files` scalar slots for the hit jingles), `shop`, `gameplay`,
+`combat`, `mapsfx`, `ambience`, `npcs`, `ui`). Non-slot tabs: `items`
 (Deadlock-style shop UI, per-item sound events, `ItemsTab`), `replacesounds` (loose-file
 browser over ~79k game sounds, `SoundBrowser` + `OverrideEditor`), `unsorted`
 (auto-discovered events from new patches; slots created dynamically with

@@ -4,22 +4,47 @@
 // server was launched from the app. Lives in its own Tauri window ("overlay").
 import { useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { rconExec, rconReady } from "../lib/api";
-import { commandCatalog, quickActions } from "../lib/rconActions";
+import { hostInfo, rconExec, type HostInfo } from "../lib/api";
+import { commandCatalog, quickActions, type QuickAction } from "../lib/rconActions";
 
 export function ModMenuOverlay() {
   const [tab, setTab] = useState<"actions" | "commands">("actions");
   const [map, setMap] = useState("dl_midtown");
-  const [ready, setReady] = useState(false);
+  // The map follows the launched server until the user types their own.
+  const mapTouched = useRef(false);
+  const [info, setInfo] = useState<HostInfo | null>(null);
   const [busy, setBusy] = useState(false);
   const [cmd, setCmd] = useState("");
   const [out, setOut] = useState<{ text: string; err?: boolean } | null>(null);
+  // Destructive action (changelevel kicks everyone): click once to arm,
+  // again to fire.
+  const [armed, setArmed] = useState<string | null>(null);
+  useEffect(() => {
+    if (!armed) return;
+    const t = setTimeout(() => setArmed(null), 3500);
+    return () => clearTimeout(t);
+  }, [armed]);
   const logRef = useRef<HTMLDivElement>(null);
 
-  // Poll whether a host is running so the menu can show its state.
+  const launched = !!info?.launched;
+  const listening = !!info?.listening;
+  const ready = launched && listening;
+
+  // Poll the backend's server snapshot so the menu reflects reality (map,
+  // connect id, actually-up vs booting vs dead). Skipped while the overlay
+  // window is hidden - F8 shows it again and the next tick catches up.
   useEffect(() => {
     let alive = true;
-    const tick = () => rconReady().then((r) => alive && setReady(r)).catch(() => {});
+    const tick = () => {
+      if (document.hidden) return;
+      hostInfo()
+        .then((i) => {
+          if (!alive) return;
+          setInfo(i);
+          if (i.map && !mapTouched.current) setMap(i.map);
+        })
+        .catch(() => {});
+    };
     tick();
     const id = setInterval(tick, 2500);
     return () => {
@@ -50,6 +75,38 @@ export function ModMenuOverlay() {
     }
   }
 
+  /** Quick-action click with the arm step for destructive ones. */
+  function clickAction(a: QuickAction) {
+    if (a.destructive && armed !== a.label) {
+      setArmed(a.label);
+      return;
+    }
+    setArmed(null);
+    void run(a.cmds);
+  }
+
+  const actionButton = (a: QuickAction, subtle: boolean) => (
+    <button
+      key={a.label}
+      onClick={() => clickAction(a)}
+      disabled={busy || !ready}
+      title={
+        a.destructive && armed !== a.label
+          ? `Restarts the map (kicks everyone) - click again to confirm. ${a.cmds.join("  ·  ")}`
+          : (a.title ?? a.cmds.join("  ·  "))
+      }
+      className={`rounded-md border px-2 py-1.5 text-[11px] font-medium transition disabled:opacity-40 ${
+        armed === a.label
+          ? "border-rose-500/60 bg-rose-500/15 text-rose-200"
+          : subtle
+            ? "border-zinc-700 bg-zinc-800/50 text-zinc-200 hover:border-violet-500/40 hover:bg-violet-500/15"
+            : "border-violet-500/40 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20"
+      }`}
+    >
+      {armed === a.label ? `${a.label}?` : a.label}
+    </button>
+  );
+
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden rounded-xl border border-violet-500/40 bg-zinc-950/95 text-zinc-200 shadow-2xl backdrop-blur">
       {/* drag handle */}
@@ -57,16 +114,25 @@ export function ModMenuOverlay() {
         data-tauri-drag-region
         className="flex items-center gap-2 border-b border-zinc-800 px-3 py-2"
       >
-        <span className="text-sm text-violet-300">◈</span>
+        <span aria-hidden className="text-sm text-violet-300">◈</span>
         <span className="text-xs font-bold tracking-wide text-violet-200">MOD MENU</span>
         <span
-          className={`h-2 w-2 rounded-full ${ready ? "bg-emerald-400" : "bg-zinc-600"}`}
-          title={ready ? "Server live" : "No server launched from the app"}
+          className={`h-2 w-2 rounded-full ${
+            ready ? "bg-emerald-400" : launched ? "bg-amber-400" : "bg-zinc-600"
+          }`}
+          title={
+            ready
+              ? "Server live"
+              : launched
+                ? "Server starting or not responding"
+                : "No server launched from the app"
+          }
         />
         <button
           onClick={() => void getCurrentWindow().hide()}
           className="ml-auto rounded px-1.5 text-zinc-500 transition hover:bg-zinc-800 hover:text-zinc-200"
           title="Hide (F8 to reopen)"
+          aria-label="Hide overlay"
         >
           ✕
         </button>
@@ -74,9 +140,28 @@ export function ModMenuOverlay() {
 
       {/* Fixed top: status + map + submenu tabs */}
       <div className="space-y-2 px-3 pt-2">
-        {!ready && (
+        {!launched && (
           <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-300">
             No server yet - click <b>Host game now</b> in the app, then these controls go live.
+          </div>
+        )}
+        {launched && !listening && (
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-300">
+            The server process is gone (console closed or crashed) - host again from the app.
+          </div>
+        )}
+        {info?.connectId && ready && (
+          <div className="flex items-center gap-1.5">
+            <code className="min-w-0 flex-1 truncate rounded bg-zinc-900 px-1.5 py-1 text-[10px] text-emerald-300">
+              connect {info.connectId}
+            </code>
+            <button
+              onClick={() => void navigator.clipboard.writeText(`connect ${info.connectId}`)}
+              title="Copy the connect command for friends"
+              className="shrink-0 rounded-md border border-zinc-700 bg-zinc-800/60 px-1.5 py-1 text-[10px] text-zinc-300 transition hover:bg-zinc-800"
+            >
+              ⧉ Copy
+            </button>
           </div>
         )}
 
@@ -84,7 +169,10 @@ export function ModMenuOverlay() {
           <label className="text-[11px] text-zinc-500">Map</label>
           <input
             value={map}
-            onChange={(e) => setMap(e.target.value)}
+            onChange={(e) => {
+              mapTouched.current = true;
+              setMap(e.target.value);
+            }}
             className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-200 outline-none focus:border-violet-500"
           />
         </div>
@@ -109,17 +197,7 @@ export function ModMenuOverlay() {
       <div className="min-h-0 flex-1 space-y-2 overflow-auto px-3 py-2">
         {tab === "actions" && (
           <div className="grid grid-cols-2 gap-1.5">
-            {quickActions(map).map((a) => (
-              <button
-                key={a.label}
-                onClick={() => void run(a.cmds)}
-                disabled={busy || !ready}
-                title={a.title ?? a.cmds.join("  ·  ")}
-                className="rounded-md border border-violet-500/40 bg-violet-500/10 px-2 py-1.5 text-[11px] font-medium text-violet-200 transition hover:bg-violet-500/20 disabled:opacity-40"
-              >
-                {a.label}
-              </button>
-            ))}
+            {quickActions(map).map((a) => actionButton(a, false))}
           </div>
         )}
 
@@ -128,17 +206,7 @@ export function ModMenuOverlay() {
             <div key={g.title} className="space-y-1">
               <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">{g.title}</div>
               <div className="grid grid-cols-2 gap-1.5">
-                {g.items.map((a) => (
-                  <button
-                    key={a.label}
-                    onClick={() => void run(a.cmds)}
-                    disabled={busy || !ready}
-                    title={a.title ?? a.cmds.join("  ·  ")}
-                    className="rounded-md border border-zinc-700 bg-zinc-800/50 px-2 py-1 text-[11px] font-medium text-zinc-200 transition hover:border-violet-500/40 hover:bg-violet-500/15 disabled:opacity-40"
-                  >
-                    {a.label}
-                  </button>
-                ))}
+                {g.items.map((a) => actionButton(a, true))}
               </div>
             </div>
           ))}
@@ -155,7 +223,7 @@ export function ModMenuOverlay() {
           }}
           className="flex items-center gap-1.5"
         >
-          <span className="text-violet-400">›</span>
+          <span aria-hidden className="text-violet-400">›</span>
           <input
             value={cmd}
             onChange={(e) => setCmd(e.target.value)}

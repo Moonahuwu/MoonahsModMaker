@@ -191,7 +191,23 @@ fn canon_events_relpath(path: &str) -> String {
 /// backups / merged copies the pack happens to bundle are skipped, and remaining
 /// duplicates are merged by (relpath, event, array).
 #[tauri::command]
-pub fn import_pack_events(
+pub async fn import_pack_events(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+    pack_vpk: String,
+    exclude_prefixes: Vec<String>,
+) -> Result<Vec<ImportEvent>, String> {
+    // Heavy: helper shell-outs per soundevents file plus the ~79k-entry game
+    // sound index - sync commands run ON the UI thread and freeze the window.
+    tauri::async_runtime::spawn_blocking(move || {
+        import_pack_events_blocking(app, helper_path, pak_path, pack_vpk, exclude_prefixes)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn import_pack_events_blocking(
     app: tauri::AppHandle,
     helper_path: String,
     pak_path: String,
@@ -246,7 +262,7 @@ pub fn import_pack_events(
         let lower = f.to_lowercase();
         // Skip the pack's bundled vanilla snapshots / backups / merged copies —
         // we only want the author's edited soundevents.
-        if lower.contains("backup") || lower.contains("newsoundevents") || lower.contains("merged") {
+        if crate::compile::junk_soundevents_path(&lower) {
             continue;
         }
         let dest = tmp.join(format!("{}.vsndevts", f.replace('/', "_").trim_end_matches("_c")));
@@ -330,7 +346,21 @@ pub struct PackContents {
 /// it bundles by category. Cheap — one pack listing + the cached game sound
 /// index.
 #[tauri::command]
-pub fn scan_pack_contents(
+pub async fn scan_pack_contents(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+    pack_vpk: String,
+) -> Result<PackContents, String> {
+    // Pack listing + game sound index - heavy enough to freeze a sync command.
+    tauri::async_runtime::spawn_blocking(move || {
+        scan_pack_contents_blocking(app, helper_path, pak_path, pack_vpk)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn scan_pack_contents_blocking(
     app: tauri::AppHandle,
     helper_path: String,
     pak_path: String,
@@ -350,6 +380,10 @@ pub fn scan_pack_contents(
         other: vec![],
     };
     for f in files {
+        // Cache bookkeeping files are ours, not the pack's contents.
+        if f == "eim_source.txt" || f == ".eim_cache_v" {
+            continue;
+        }
         if f.starts_with("sounds/") && f.ends_with(".vsnd_c") {
             if index.contains(f.trim_end_matches("_c")) {
                 out.overwrites.push(f);
@@ -415,6 +449,7 @@ fn cache_pack_blocking(
     if std::path::Path::new(&pack_vpk).is_dir() {
         // Re-import of an already-cached pack: refresh it when it predates
         // the current cache format and its source vpk is still around.
+        // Best-effort - a failed refresh keeps the old (working) cache.
         let dir = std::path::PathBuf::from(&pack_vpk);
         let fresh = std::fs::read_to_string(dir.join(".eim_cache_v"))
             .map(|v| v.trim() == PACK_CACHE_V)
@@ -423,14 +458,21 @@ fn cache_pack_blocking(
             if let Ok(orig) = std::fs::read_to_string(dir.join("eim_source.txt")) {
                 let orig = orig.trim().to_string();
                 if std::path::Path::new(&orig).is_file() {
-                    fill_pack_cache(&helper_path, &orig, &dir)?;
+                    let _ = fill_pack_cache(&helper_path, &orig, &dir);
                 }
             }
         }
         return Ok(pack_vpk);
     }
-    // Friendly name (the vpk stem, or its folder for generic pakNN_dir.vpk)
-    // plus a short hash of the full path for uniqueness.
+    let dir = pack_cache_dir(&app_data, &pack_vpk);
+    fill_pack_cache(&helper_path, &pack_vpk, &dir)?;
+    Ok(dir.to_string_lossy().replace('\\', "/"))
+}
+
+/// The cache dir a vpk path maps to: a friendly name (the vpk stem, or its
+/// folder for generic pakNN_dir.vpk) plus a short hash of the full path for
+/// uniqueness. Pure derivation - does not touch the filesystem.
+fn pack_cache_dir(app_data: &std::path::Path, pack_vpk: &str) -> std::path::PathBuf {
     let norm = pack_vpk.replace('\\', "/");
     let mut parts: Vec<&str> = norm.split('/').filter(|s| !s.is_empty()).collect();
     let file = parts.pop().unwrap_or("pack");
@@ -448,51 +490,104 @@ fn cache_pack_blocking(
         h ^= u64::from(*b);
         h = h.wrapping_mul(0x100000001b3);
     }
-    let dir = app_data
-        .join("packs")
-        .join(format!("{name}_{:08x}", h as u32));
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    fill_pack_cache(&helper_path, &pack_vpk, &dir)?;
-    Ok(dir.to_string_lossy().replace('\\', "/"))
+    app_data.join("packs").join(format!("{name}_{:08x}", h as u32))
+}
+
+/// Where a vpk's cache dir WOULD be, if it already exists - so the frontend
+/// can find the settings (excludes/credits) keyed under the cache dir when a
+/// re-import starts from the original .vpk path. No extraction happens.
+#[tauri::command]
+pub fn pack_cache_lookup(app: tauri::AppHandle, pack_vpk: String) -> Option<String> {
+    use tauri::Manager;
+    if std::path::Path::new(&pack_vpk).is_dir() {
+        return Some(pack_vpk);
+    }
+    let app_data = app.path().app_data_dir().ok()?;
+    let dir = pack_cache_dir(&app_data, &pack_vpk);
+    dir.is_dir()
+        .then(|| dir.to_string_lossy().replace('\\', "/"))
 }
 
 /// (Re)extract a pack into its cache dir: every top-level dir the pack
 /// contains (soundevents trees and backup junk excepted), plus soundevents
 /// as decompiled text for the import/combine steps.
+///
+/// Builds into a sibling temp dir and swaps on success. Three failure modes
+/// this closes: an extraction error must fail the call (the old cache stayed
+/// stamped complete while missing whole dirs, and the user is told the .vpk
+/// is no longer needed); a failed refresh must keep the existing working
+/// cache; and a refresh into a live dir must not keep files the pack no
+/// longer ships.
 fn fill_pack_cache(
     helper_path: &str,
     pack_vpk: &str,
     dir: &std::path::Path,
 ) -> Result<(), String> {
-    for d in crate::compile::import_asset_dirs(helper_path, pack_vpk) {
-        let _ = crate::vpk::extract_all(helper_path, pack_vpk, &dir.to_string_lossy(), Some(&d));
+    let (dirs, dirs_listed) = crate::compile::import_asset_dirs_listed(helper_path, pack_vpk);
+    if !dirs_listed {
+        return Err("pack listing failed - cache not written (the fallback dir whitelist could miss the pack's custom dirs)".into());
+    }
+    let tmp = dir.with_file_name(format!(
+        "{}.refresh",
+        dir.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "pack".into())
+    ));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+
+    let mut errs: Vec<String> = Vec::new();
+    for d in dirs {
+        if let Err(e) =
+            crate::vpk::extract_all(helper_path, pack_vpk, &tmp.to_string_lossy(), Some(&d))
+        {
+            errs.push(format!("{d}: {e}"));
+        }
     }
     // Soundevents land as decompiled text (what the import + combine steps
-    // read). True top-level files only — the listing is a substring match, so
-    // working copies (NEWSoundevents/, MERGEDsoundevents/, backups) would
-    // otherwise be cached as junk.
-    for f in crate::vpk::list(helper_path, pack_vpk, Some("soundevents/"))? {
-        let lower = f.to_lowercase();
-        if !lower.starts_with("soundevents/")
-            || lower.contains("backup")
-            || lower.contains("newsoundevents")
-            || lower.contains("merged")
-        {
-            continue;
+    // read). True top-level files only; junk working copies skipped by path
+    // segment (a substring test also dropped legit merged_* names).
+    match crate::vpk::list(helper_path, pack_vpk, Some("soundevents/")) {
+        Ok(files) => {
+            for f in files {
+                let lower = f.to_lowercase();
+                if !lower.starts_with("soundevents/")
+                    || crate::compile::junk_soundevents_path(&lower)
+                {
+                    continue;
+                }
+                let out = tmp.join(f.trim_end_matches("_c"));
+                if let Some(p) = out.parent() {
+                    let _ = std::fs::create_dir_all(p);
+                }
+                let res = if f.ends_with(".vsndevts") {
+                    crate::vpk::extract(helper_path, pack_vpk, &f, &out.to_string_lossy())
+                        .map(|_| ())
+                } else if f.ends_with(".vsndevts_c") {
+                    crate::vpk::decompile_from_vpk(helper_path, pack_vpk, &f, &out.to_string_lossy())
+                        .map(|_| ())
+                } else {
+                    Ok(())
+                };
+                if let Err(e) = res {
+                    errs.push(format!("{f}: {e}"));
+                }
+            }
         }
-        let out = dir.join(f.trim_end_matches("_c"));
-        if let Some(p) = out.parent() {
-            let _ = std::fs::create_dir_all(p);
-        }
-        if f.ends_with(".vsndevts") {
-            let _ = crate::vpk::extract(helper_path, pack_vpk, &f, &out.to_string_lossy());
-        } else if f.ends_with(".vsndevts_c") {
-            let _ = crate::vpk::decompile_from_vpk(helper_path, pack_vpk, &f, &out.to_string_lossy());
-        }
+        Err(e) => errs.push(format!("list soundevents: {e}")),
     }
-    // Record the source + cache format so a stale cache can refresh itself.
-    let _ = std::fs::write(dir.join("eim_source.txt"), pack_vpk);
-    let _ = std::fs::write(dir.join(".eim_cache_v"), PACK_CACHE_V);
+    if !errs.is_empty() {
+        let _ = std::fs::remove_dir_all(&tmp);
+        let n = errs.len();
+        errs.truncate(3);
+        return Err(format!("pack cache incomplete ({n} error(s)): {}", errs.join(" | ")));
+    }
+    // Source + format markers are part of the success payload: a cache
+    // without them refreshes itself on the next import/review.
+    std::fs::write(tmp.join("eim_source.txt"), pack_vpk).map_err(|e| e.to_string())?;
+    std::fs::write(tmp.join(".eim_cache_v"), PACK_CACHE_V).map_err(|e| e.to_string())?;
+    if dir.exists() {
+        std::fs::remove_dir_all(dir).map_err(|e| format!("clearing old cache: {e}"))?;
+    }
+    std::fs::rename(&tmp, dir).map_err(|e| format!("activating cache: {e}"))?;
     Ok(())
 }
 
@@ -500,7 +595,20 @@ fn fill_pack_cache(
 /// the game's file at the same path — i.e. bundled-but-UNCHANGED vanilla
 /// copies old packs ship. Drives the build preview's changed-only filter.
 #[tauri::command]
-pub fn pack_unchanged_files(
+pub async fn pack_unchanged_files(
+    helper_path: String,
+    pak_path: String,
+    source: String,
+) -> Result<Vec<String>, String> {
+    // CRC-hashes pack files off disk - not UI-thread work.
+    tauri::async_runtime::spawn_blocking(move || {
+        pack_unchanged_files_blocking(helper_path, pak_path, source)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn pack_unchanged_files_blocking(
     helper_path: String,
     pak_path: String,
     source: String,
@@ -562,7 +670,20 @@ pub struct RefEventHit {
 /// of raw file overwrites. Best-effort: only soundevents files already
 /// decompiled under `vanilla_root` are scanned.
 #[tauri::command]
-pub fn events_for_refs(vanilla_root: String, refs: Vec<String>) -> Result<Vec<RefEventHit>, String> {
+pub async fn events_for_refs(
+    vanilla_root: String,
+    refs: Vec<String>,
+) -> Result<Vec<RefEventHit>, String> {
+    // Reads + brace-parses every decompiled vanilla soundevents file.
+    tauri::async_runtime::spawn_blocking(move || events_for_refs_blocking(vanilla_root, refs))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn events_for_refs_blocking(
+    vanilla_root: String,
+    refs: Vec<String>,
+) -> Result<Vec<RefEventHit>, String> {
     use std::collections::HashSet;
     let want: HashSet<&str> = refs.iter().map(|s| s.as_str()).collect();
     if want.is_empty() {
@@ -607,12 +728,39 @@ pub fn events_for_refs(vanilla_root: String, refs: Vec<String>) -> Result<Vec<Re
 
 /// Decode a stock track's compiled `.vsnd_c` (from the game's pak) to playable
 /// audio for the waveform comparison. `stock_ref` is the `.vsnd` reference; the
-/// result is cached in the staging dir and the audio file path is returned.
+/// audio file path is returned. Cached in APP-DATA, not %TEMP%: these paths get
+/// persisted in projects (edited adopted entries, "+ Original" layers), and
+/// Windows temp cleanup used to leave them dangling ("No such file" at
+/// probe/compile time).
 #[tauri::command]
-pub fn decode_stock(
+pub async fn decode_stock(
+    app: tauri::AppHandle,
     helper_path: String,
     pak_path: String,
     stock_ref: String,
+) -> Result<String, String> {
+    use tauri::Manager;
+
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("decoded");
+    tauri::async_runtime::spawn_blocking(move || {
+        decode_stock_blocking(&dir, &helper_path, &pak_path, &stock_ref)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The decode itself: hash (pak, internal ref) into a stable stem under the
+/// durable `decoded/` dir, reusing any cached copy (including a surviving one
+/// from the pre-durable %TEMP% cache) before decoding fresh.
+fn decode_stock_blocking(
+    decoded_dir: &std::path::Path,
+    helper_path: &str,
+    pak_path: &str,
+    stock_ref: &str,
 ) -> Result<String, String> {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -620,30 +768,126 @@ pub fn decode_stock(
     let internal = if let Some(stripped) = stock_ref.strip_suffix(".vsnd") {
         format!("{stripped}.vsnd_c")
     } else {
-        stock_ref.clone()
+        stock_ref.to_string()
     };
 
     let mut h = DefaultHasher::new();
     pak_path.hash(&mut h);
     internal.hash(&mut h);
-    let dir = std::env::temp_dir().join("deadlock-intro-tool");
-    let _ = std::fs::create_dir_all(&dir);
-    let out_base = dir.join(format!("stock_{:016x}", h.finish()));
+    let _ = std::fs::create_dir_all(decoded_dir);
+    let out_base = decoded_dir.join(format!("stock_{:016x}", h.finish()));
 
-    // Reuse a cached decode if present (any extension).
+    // Reuse a cached decode if present (any extension). Also adopt a
+    // surviving copy from the old %TEMP% cache (same hashed stem) so
+    // pre-existing projects heal without a re-decode.
+    let old_base =
+        std::env::temp_dir().join("deadlock-intro-tool").join(format!("stock_{:016x}", h.finish()));
     for ext in ["mp3", "wav", "aac"] {
         let cached = out_base.with_extension(ext);
         if cached.exists() {
             return Ok(cached.to_string_lossy().into_owned());
         }
+        let old = old_base.with_extension(ext);
+        if old.exists() && std::fs::copy(&old, &cached).is_ok() {
+            return Ok(cached.to_string_lossy().into_owned());
+        }
     }
 
-    crate::vpk::decode(
-        &helper_path,
-        &pak_path,
-        &internal,
-        &out_base.to_string_lossy(),
-    )
+    crate::vpk::decode(helper_path, pak_path, &internal, &out_base.to_string_lossy())
+}
+
+/// One stale track/layer source path to repair, plus the `.vsnd` reference
+/// that originally produced it when the project still knows it.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HealItem {
+    pub path: String,
+    #[serde(default)]
+    pub imported_ref: Option<String>,
+}
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct HealedSource {
+    pub path: String,
+    pub healed: String,
+}
+
+/// Repair song/layer sources whose decoded audio vanished (the pre-durable
+/// decode cache lived in %TEMP% and Windows cleanup deletes it). Per item:
+/// skip if the file still exists; else look for the same hashed stem in the
+/// durable `decoded/` dir (identical hash = identical pak+ref = identical
+/// audio); else re-decode the ref - cached pack dirs first (a rename-trick
+/// mod's audio sits at a stock ref, so the game pak would give the wrong
+/// sound), the game pak last. Unhealable items are simply omitted.
+#[tauri::command]
+pub async fn heal_missing_sources(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+    items: Vec<HealItem>,
+) -> Vec<HealedSource> {
+    use tauri::Manager;
+    let Ok(data) = app.path().app_data_dir() else {
+        return vec![];
+    };
+    let decoded = data.join("decoded");
+    let packs = data.join("packs");
+    tauri::async_runtime::spawn_blocking(move || {
+        let pack_dirs: Vec<std::path::PathBuf> = std::fs::read_dir(&packs)
+            .map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect())
+            .unwrap_or_default();
+        let mut done: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut out: Vec<HealedSource> = Vec::new();
+        for item in items {
+            if let Some(healed) = done.get(&item.path) {
+                out.push(HealedSource { path: item.path, healed: healed.clone() });
+                continue;
+            }
+            let p = std::path::Path::new(&item.path);
+            if p.exists() {
+                continue;
+            }
+            let mut healed: Option<String> = None;
+            let stem = p
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if stem.starts_with("stock_") {
+                healed = ["mp3", "wav", "aac"]
+                    .iter()
+                    .map(|e| decoded.join(&stem).with_extension(e))
+                    .find(|c| c.exists())
+                    .map(|c| c.to_string_lossy().into_owned());
+            }
+            if healed.is_none() && !helper_path.is_empty() {
+                if let Some(r) = item.imported_ref.as_deref().filter(|r| !r.is_empty()) {
+                    let internal = r
+                        .strip_suffix(".vsnd")
+                        .map(|s| format!("{s}.vsnd_c"))
+                        .unwrap_or_else(|| r.to_string());
+                    let mut sources: Vec<String> = pack_dirs
+                        .iter()
+                        .filter(|d| d.join(&internal).exists())
+                        .map(|d| d.to_string_lossy().into_owned())
+                        .collect();
+                    if !pak_path.is_empty() {
+                        sources.push(pak_path.clone());
+                    }
+                    healed = sources
+                        .iter()
+                        .find_map(|src| decode_stock_blocking(&decoded, &helper_path, src, r).ok());
+                }
+            }
+            if let Some(h) = healed {
+                done.insert(item.path.clone(), h.clone());
+                out.push(HealedSource { path: item.path, healed: h });
+            }
+        }
+        out
+    })
+    .await
+    .unwrap_or_default()
 }
 
 #[derive(serde::Serialize)]
@@ -870,26 +1114,139 @@ pub fn revert_hosting(deadlock_root: String) -> Result<crate::host::HostStatus, 
     crate::host::revert(std::path::Path::new(&deadlock_root))
 }
 
-/// Shared host state: the RCON password of the server this app most recently
-/// launched. Lives in Tauri-managed state so *any* window (main UI or the F8
-/// mod-menu overlay) can drive the same server without passing the password
-/// around. Cleared to None until a host is launched from the app.
+/// Shared host state: what the server this app most recently launched was
+/// started with. Lives in Tauri-managed state so *any* window (main UI or the
+/// F8 mod-menu overlay) can drive the same server without passing values
+/// around. All None until a host is launched from the app.
 #[derive(Default)]
 pub struct HostState {
     pub rcon_password: std::sync::Mutex<Option<String>>,
+    /// The map the server was launched on (overlay actions target it).
+    pub map: std::sync::Mutex<Option<String>>,
+    /// Deadlock root the server was launched from (for connect-id lookups).
+    pub deadlock_root: std::sync::Mutex<Option<String>>,
+    /// PID of the launched server process - liveness polls check the process
+    /// table instead of poking the game's network port (see host_info).
+    pub pid: std::sync::Mutex<Option<u32>>,
+    /// Auto-prep progress: None (off) | "waiting" | "done" | "failed: <why>".
+    /// The panel shows this so the prep isn't an invisible background mystery.
+    pub prep: std::sync::Mutex<Option<String>>,
+    /// Bumped on every launch; a prep thread exits when superseded, so a stale
+    /// thread can't keep hammering a NEW server with an OLD password (repeated
+    /// auth failures get the source IP banned for "rcon hacking attempts").
+    pub prep_gen: std::sync::Mutex<u64>,
 }
 
-/// Launch the installed client as a dedicated host on `map`. Stores the RCON
-/// password in shared state and also returns it (with the PID) for display.
+/// Is the launched server process still alive? Process-table lookup, NOT a
+/// TCP probe: the RCON socket IS the game port, and connect-and-drop pokes
+/// every 2.5s while someone is playing caused server frame stalls and flaky
+/// loopback sessions. tasklist is slow-ish but this runs on a worker thread.
+fn host_pid_alive(pid: u32) -> bool {
+    let out = match crate::procutil::quiet("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+        .output()
+    {
+        Ok(o) => o,
+        Err(_) => return false,
+    };
+    String::from_utf8_lossy(&out.stdout).contains(&format!("\"{pid}\""))
+}
+
+/// Launch the installed client as a dedicated host on `map`. Refuses when a
+/// server is already listening on the RCON/game port - a second launch can't
+/// bind, and storing its fresh password would desync RCON from the server
+/// that's actually running. Stores password/map/root in shared state and also
+/// returns the password (with the PID) for display.
 #[tauri::command]
-pub fn launch_host(
+pub async fn launch_host(
+    app: tauri::AppHandle,
     state: tauri::State<'_, HostState>,
     deadlock_root: String,
     map: String,
     max_players: Option<u32>,
+    auto_prep: Option<bool>,
 ) -> Result<crate::host::LaunchInfo, String> {
-    let info = crate::host::launch(std::path::Path::new(&deadlock_root), &map, max_players)?;
+    let root2 = deadlock_root.clone();
+    let map2 = map.clone();
+    let info = tauri::async_runtime::spawn_blocking(move || {
+        // One-shot TCP probe is fine HERE (nobody is mid-match on a server
+        // we're about to double-launch); the recurring liveness polls must
+        // not touch the port - see host_pid_alive.
+        if crate::rcon::server_listening() {
+            return Err(
+                "A dedicated server is already running (port 27015 is in use). Use the running one, or close its console window first."
+                    .to_string(),
+            );
+        }
+        crate::host::launch(std::path::Path::new(&root2), &map2, max_players)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    *state.pid.lock().unwrap() = Some(info.pid);
     *state.rcon_password.lock().unwrap() = Some(info.rcon_password.clone());
+    let resolved_map = if map.trim().is_empty() { "dl_midtown".to_string() } else { map.trim().to_string() };
+    *state.map.lock().unwrap() = Some(resolved_map.clone());
+    *state.deadlock_root.lock().unwrap() = Some(deadlock_root);
+
+    // Auto-prep (on by default): once the server accepts RCON, turn cheats on
+    // and restart the map once. A freshly-restarted map is the reliable join
+    // state (launch-state joins load broken worlds), and changelevel itself is
+    // cheat-flagged on current builds. Runs on its own thread so it survives
+    // the UI navigating away. RCON only opens after the map finishes loading -
+    // with a big addons folder that can take minutes, so retry for 5 - and the
+    // outcome is written to HostState.prep so the panel can show it.
+    let gen = {
+        let mut g = state.prep_gen.lock().unwrap();
+        *g += 1;
+        *g
+    };
+    if auto_prep.unwrap_or(true) {
+        let pw = info.rcon_password.clone();
+        let app2 = app.clone();
+        *state.prep.lock().unwrap() = Some("waiting".into());
+        std::thread::spawn(move || {
+            use tauri::Manager;
+            let superseded = || *app2.state::<HostState>().prep_gen.lock().unwrap() != gen;
+            let set_prep = |v: &str| {
+                let s = app2.state::<HostState>();
+                if *s.prep_gen.lock().unwrap() == gen {
+                    *s.prep.lock().unwrap() = Some(v.to_string());
+                }
+            };
+            let mut auth_fails = 0u32;
+            for _ in 0..60u32 {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                if superseded() {
+                    return;
+                }
+                match crate::rcon::exec_auto(&pw, "sv_cheats 1") {
+                    Ok(_) => {
+                        let _ = crate::rcon::exec_auto(&pw, &format!("changelevel {resolved_map}"));
+                        set_prep("done");
+                        return;
+                    }
+                    // NEVER hammer failed auths: ~10 of them get the source IP
+                    // banned ("Banning x.x.x.x for rcon hacking attempts") and
+                    // then ALL RCON is dead until the server restarts. During
+                    // boot the server can accept TCP before the +rcon_password
+                    // convar applies, so give it 3 well-spaced chances only.
+                    Err(e) if e.starts_with("RCON auth failed") => {
+                        auth_fails += 1;
+                        if auth_fails >= 3 {
+                            set_prep("failed: RCON rejected the password - restart the server console (bans and stale state clear on restart)");
+                            return;
+                        }
+                        std::thread::sleep(std::time::Duration::from_secs(25));
+                    }
+                    // Not reachable yet (still booting) - keep waiting.
+                    Err(_) => {}
+                }
+            }
+            set_prep("failed: the server never accepted RCON within 5 minutes");
+        });
+    } else {
+        *state.prep.lock().unwrap() = None;
+    }
     Ok(info)
 }
 
@@ -902,23 +1259,70 @@ pub fn launch_game(deadlock_root: Option<String>) -> Result<(), String> {
 }
 
 /// Send a single RCON command to the server launched from this app and return
-/// its console output. Uses the password stashed by `launch_host`.
+/// its console output. Uses the password stashed by `launch_host`. Async: this
+/// is TCP with multi-second connect timeouts - sync would freeze the window.
 #[tauri::command]
-pub fn rcon_exec(state: tauri::State<'_, HostState>, command: String) -> Result<String, String> {
+pub async fn rcon_exec(state: tauri::State<'_, HostState>, command: String) -> Result<String, String> {
     let pw = state
         .rcon_password
         .lock()
         .unwrap()
         .clone()
         .ok_or("No host running from this app yet - click \"Host game now\" first.")?;
-    crate::rcon::exec_auto(&pw, &command)
+    tauri::async_runtime::spawn_blocking(move || crate::rcon::exec_auto(&pw, &command))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
-/// Whether a host has been launched from this app (so the admin/overlay knows
-/// it can send commands).
+/// Whether the app-launched server can take commands: a password was stored
+/// AND its process is still alive. (The old password-only check kept saying
+/// "ready" forever after the server died.)
 #[tauri::command]
-pub fn rcon_ready(state: tauri::State<'_, HostState>) -> bool {
-    state.rcon_password.lock().unwrap().is_some()
+pub async fn rcon_ready(state: tauri::State<'_, HostState>) -> Result<bool, String> {
+    let Some(pid) = *state.pid.lock().unwrap() else {
+        return Ok(false);
+    };
+    if state.rcon_password.lock().unwrap().is_none() {
+        return Ok(false);
+    }
+    tauri::async_runtime::spawn_blocking(move || host_pid_alive(pid))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Everything a panel needs to reflect the app-launched server in one call:
+/// launched-from-here, actually-listening, the launched map, and the P2P
+/// connect id parsed from console.log (once the server logged it).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostInfo {
+    pub launched: bool,
+    pub listening: bool,
+    pub map: Option<String>,
+    pub connect_id: Option<String>,
+    /// Auto-prep progress: "waiting" | "done" | "failed" (None = prep off).
+    pub prep: Option<String>,
+}
+
+#[tauri::command]
+pub async fn host_info(state: tauri::State<'_, HostState>) -> Result<HostInfo, String> {
+    let launched = state.rcon_password.lock().unwrap().is_some();
+    let pid = *state.pid.lock().unwrap();
+    let map = state.map.lock().unwrap().clone();
+    let root = state.deadlock_root.lock().unwrap().clone();
+    let prep = state.prep.lock().unwrap().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        // "listening" = the launched process is still alive. Deliberately NOT
+        // a TCP probe: the RCON socket is the game port, and poking it every
+        // poll caused server frame stalls / flaky loopback connects mid-match.
+        let listening = pid.is_some_and(host_pid_alive);
+        let connect_id = root
+            .as_deref()
+            .and_then(|r| crate::host::connect_id(std::path::Path::new(r)));
+        HostInfo { launched, listening, map, connect_id, prep }
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /// Tail the dedicated server's `console.log` (written by `-condebug`). Reads only
@@ -1735,8 +2139,21 @@ fn prettify_ability_name(key: &str) -> String {
 /// Read a hero's four signature abilities and their editable properties out of
 /// the live `abilities.vdata` (decompiled + cached alongside the hero portraits).
 /// Icons are decoded once and cached. Static game data → safe to cache.
+// Async + spawn_blocking (CLAUDE.md sync-command rule): first load decompiles
+// vdata via the helper process - sync would freeze the window for seconds.
 #[tauri::command]
-pub fn hero_config(
+pub async fn hero_config(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+    codename: String,
+) -> Result<Vec<AbilityConfig>, String> {
+    tauri::async_runtime::spawn_blocking(move || hero_config_impl(app, helper_path, pak_path, codename))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn hero_config_impl(
     app: tauri::AppHandle,
     helper_path: String,
     pak_path: String,
@@ -1845,7 +2262,17 @@ const GLOBAL_FIELDS: &[(&str, &str, &str)] = &[
 /// Read the current values of the curated global fields out of the live
 /// `generic_data.vdata`. Fields not present in the file are skipped.
 #[tauri::command]
-pub fn global_config(
+pub async fn global_config(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+) -> Result<Vec<GlobalStat>, String> {
+    tauri::async_runtime::spawn_blocking(move || global_config_impl(app, helper_path, pak_path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn global_config_impl(
     app: tauri::AppHandle,
     helper_path: String,
     pak_path: String,
@@ -2078,8 +2505,10 @@ fn xorshift(state: &mut u64) -> f64 {
 }
 
 /// Format a randomized number, matching the vanilla value's int/float style and
-/// re-appending its unit suffix.
-fn fmt_random(n: f64, is_float: bool, unit: &str) -> String {
+/// re-appending its unit suffix. `source` is the pre-roll value: an integer stat
+/// never rounds to 0 when it started nonzero (a 1-bullet clip x0.4 would
+/// otherwise become a gun that fires zero bullets).
+fn fmt_random(n: f64, source: f64, is_float: bool, unit: &str) -> String {
     if is_float {
         let mut s = format!("{:.2}", (n * 100.0).round() / 100.0);
         while s.contains('.') && s.ends_with('0') {
@@ -2090,7 +2519,11 @@ fn fmt_random(n: f64, is_float: bool, unit: &str) -> String {
         }
         format!("{s}{unit}")
     } else {
-        format!("{}{}", n.round() as i64, unit)
+        let mut v = n.round() as i64;
+        if v == 0 && source != 0.0 {
+            v = if source > 0.0 { 1 } else { -1 };
+        }
+        format!("{v}{unit}")
     }
 }
 
@@ -2102,7 +2535,44 @@ fn fmt_random(n: f64, is_float: bool, unit: &str) -> String {
 /// The exponential keeps the spread symmetric. Non-positive values (0 / -1
 /// sentinels) are left alone so we don't break "disabled" flags.
 #[tauri::command]
-pub fn randomize_config(
+pub async fn randomize_config(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+    temperature: Option<f64>,
+    skip_movement: Option<bool>,
+    skip_cast: Option<bool>,
+    skip_scale: Option<bool>,
+    include_guns: Option<bool>,
+    no_negative: Option<bool>,
+    randomize_item_tiers: Option<bool>,
+    hero_stats: Option<bool>,
+    hero_investment: Option<bool>,
+    unsorted: Option<bool>,
+) -> Result<RandomConfig, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        randomize_config_impl(
+            app,
+            helper_path,
+            pak_path,
+            temperature,
+            skip_movement,
+            skip_cast,
+            skip_scale,
+            include_guns,
+            no_negative,
+            randomize_item_tiers,
+            hero_stats,
+            hero_investment,
+            unsorted,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[allow(clippy::too_many_arguments)]
+fn randomize_config_impl(
     app: tauri::AppHandle,
     helper_path: String,
     pak_path: String,
@@ -2164,7 +2634,7 @@ pub fn randomize_config(
             return None;
         }
         let factor = ((xorshift(seed) * 2.0 - 1.0) * k).exp();
-        Some(fmt_random(num * factor, val.contains('.'), &unit))
+        Some(fmt_random(num * factor, num, val.contains('.'), &unit))
     };
     // Upgrade bonuses: sign-preserving (negatives like -12 cooldown are real
     // bonuses, not sentinels). Skip exact zero, and — when "no negatives" is on —
@@ -2175,7 +2645,7 @@ pub fn randomize_config(
             return None;
         }
         let factor = ((xorshift(seed) * 2.0 - 1.0) * k).exp();
-        Some(fmt_random(num * factor, val.contains('.'), &unit))
+        Some(fmt_random(num * factor, num, val.contains('.'), &unit))
     };
 
     // Abilities + items (every entity in abilities.vdata).
@@ -2257,14 +2727,14 @@ pub fn randomize_config(
             if num <= 0.0 {
                 return None;
             }
-            Some(fmt_random(num * factor, val.contains('.'), &unit))
+            Some(fmt_random(num * factor, num, val.contains('.'), &unit))
         };
         let scale_up = |val: &str, factor: f64| -> Option<String> {
             let (num, unit) = split_value_unit(val);
             if num == 0.0 {
                 return None;
             }
-            Some(fmt_random(num * factor, val.contains('.'), &unit))
+            Some(fmt_random(num * factor, num, val.contains('.'), &unit))
         };
         for it in &items {
             if it.disabled || it.tier < 1 || it.tier > 5 {
@@ -2465,7 +2935,18 @@ pub fn randomize_config(
 /// `abilities.vdata`. Items live in the same file as abilities, so they share the
 /// override pipeline — `item_name` is the entity key (e.g. `upgrade_base`).
 #[tauri::command]
-pub fn item_config(
+pub async fn item_config(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+    item_name: String,
+) -> Result<Vec<AbilityProp>, String> {
+    tauri::async_runtime::spawn_blocking(move || item_config_impl(app, helper_path, pak_path, item_name))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn item_config_impl(
     app: tauri::AppHandle,
     helper_path: String,
     pak_path: String,
@@ -2583,7 +3064,18 @@ fn prettify_entity_name(key: &str) -> String {
 /// npc_units.vdata), "boxes" (breakable props in misc.vdata) or "powerups"
 /// (powerup/pickup entities in misc.vdata).
 #[tauri::command]
-pub fn world_config(
+pub async fn world_config(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+    kind: String,
+) -> Result<Vec<EntityConfig>, String> {
+    tauri::async_runtime::spawn_blocking(move || world_config_impl(app, helper_path, pak_path, kind))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn world_config_impl(
     app: tauri::AppHandle,
     helper_path: String,
     pak_path: String,
@@ -4653,15 +5145,18 @@ fn addon_dir_vpks(addons_dir: &str) -> Vec<std::path::PathBuf> {
         .collect()
 }
 
-/// True when any installed addon pak ships the DigiMaster jumpscare engine
-/// (signature: a compiled digi_master script). Gates the Jumpscares tab.
+/// True when any installed addon pak ships the MoonahMasterUI jumpscare
+/// engine (signature: a compiled engine script; the legacy DigiMaster stem
+/// still counts so old paks keep the tab visible). Gates the Jumpscares tab.
 /// Async is load-bearing: this reads the head of every installed pak (tens
 /// of MB of disk) — a sync command would do that on the UI thread.
 #[tauri::command]
 pub async fn digimod_detected(addons_dir: String) -> bool {
     tauri::async_runtime::spawn_blocking(move || {
         addon_dir_vpks(&addons_dir).iter().any(|p| {
-            vpk_head(p).map(|h| head_contains(&h, b"digi_master")).unwrap_or(false)
+            vpk_head(p)
+                .map(|h| head_contains(&h, b"moonah_master") || head_contains(&h, b"digi_master"))
+                .unwrap_or(false)
         })
     })
     .await
@@ -4669,8 +5164,9 @@ pub async fn digimod_detected(addons_dir: String) -> bool {
 }
 
 /// An installed addon pak that overrides the base HUD layout (a panorama UI
-/// mod). `has_digi` marks paks that ARE the DigiMaster engine — the
-/// Jumpscares tab replaces those rather than merging them.
+/// mod). `has_digi` marks paks that ARE the MoonahMasterUI engine (current
+/// or legacy DigiMaster) — the Jumpscares tab replaces those rather than
+/// merging them.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UiModVpk {
@@ -4694,7 +5190,7 @@ pub async fn list_ui_mods(addons_dir: String) -> Vec<UiModVpk> {
             out.push(UiModVpk {
                 path: path.to_string_lossy().to_string(),
                 file_name: path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
-                has_digi: head_contains(&head, b"digi_master"),
+                has_digi: head_contains(&head, b"moonah_master") || head_contains(&head, b"digi_master"),
             });
         }
         out
@@ -4703,7 +5199,8 @@ pub async fn list_ui_mods(addons_dir: String) -> Vec<UiModVpk> {
     .unwrap_or_default()
 }
 
-/// Adopt an existing DigiMaster pak: parse its CONFIG + LIBRARY, pull every
+/// Adopt an existing MoonahMasterUI (or legacy DigiMaster) pak: parse its
+/// CONFIG + LIBRARY, pull every
 /// webm/image/sound out into app-data `digimod_media/`, and return an
 /// editable config for the Jumpscares tab. Async — extraction + decode of a
 /// dozen media files takes seconds.
@@ -5460,6 +5957,9 @@ pub struct GbDownloadResult {
     /// Mountable `_dir.vpk`s found in the download (multi-part `_NNN.vpk`
     /// archives are data-only and skipped).
     pub vpks: Vec<String>,
+    /// Loose audio files found in the download - Sound submissions often ship
+    /// a bare mp3/wav (or a zip of them) instead of a pak.
+    pub audios: Vec<String>,
     /// The mod page's attribution info - the archive we just pulled is hashed
     /// against the page's MD5s, so `md5_verified` is true on a clean download.
     pub info: GbModInfo,
@@ -5549,12 +6049,15 @@ pub async fn gamebanana_download(
         let mut vpks: Vec<String> = Vec::new();
         find_dir_vpks(&dir, &mut vpks);
         vpks.sort();
-        if vpks.is_empty() {
+        let mut audios: Vec<String> = Vec::new();
+        find_audio_files(&dir, &mut audios);
+        audios.sort();
+        if vpks.is_empty() && audios.is_empty() {
             return Err(
-                "downloaded fine, but there's no .vpk inside - this doesn't look like a pak mod".into(),
+                "downloaded fine, but there's no .vpk or audio inside - this doesn't look like a pak or sound mod".into(),
             );
         }
-        Ok(GbDownloadResult { vpks, info })
+        Ok(GbDownloadResult { vpks, audios, info })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -5724,6 +6227,30 @@ fn find_dir_vpks(dir: &std::path::Path, out: &mut Vec<String>) {
             .map(|(_, tail)| tail.len() == 3 && tail.chars().all(|c| c.is_ascii_digit()))
             .unwrap_or(false);
         if name.ends_with("_dir.vpk") || !is_numbered_part {
+            out.push(p.to_string_lossy().into_owned());
+        }
+    }
+}
+
+/// Collect loose audio files under `dir` (the formats the Library tab's file
+/// picker accepts; ffmpeg reads them all). Sound submissions ship these
+/// instead of paks.
+fn find_audio_files(dir: &std::path::Path, out: &mut Vec<String>) {
+    const AUDIO_EXTS: [&str; 6] = ["mp3", "wav", "flac", "ogg", "m4a", "aac"];
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            find_audio_files(&p, out);
+            continue;
+        }
+        let ext = p
+            .extension()
+            .map(|x| x.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        if AUDIO_EXTS.contains(&ext.as_str()) {
             out.push(p.to_string_lossy().into_owned());
         }
     }

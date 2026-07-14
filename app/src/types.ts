@@ -10,6 +10,10 @@ export interface EventView {
   arrayKey: string;
   entries: string[]; // full ".vsnd" reference strings, in array order
   vsndDuration: number | null;
+  /** Event-level modifiers the game applies to every file the event plays
+   *  (ours included). Only simple numeric forms; randomized ones are null. */
+  volume: number | null;
+  pitch: number | null;
 }
 
 export interface DerivedPaths {
@@ -208,7 +212,7 @@ export interface UiFileOverride {
   vanillaText?: string;
 }
 
-/** One jumpscare/death media entry (DigiMaster HUD mod). */
+/** One jumpscare/death media entry (MoonahMasterUI HUD mod). */
 export interface DigiEntry {
   id: string;
   name: string;
@@ -226,7 +230,7 @@ export interface DigiEntry {
   volume?: number;
 }
 
-/** One shared sound: compiles to a `Digi.<id>` event any entry can play. */
+/** One shared sound: compiles to a `Moonah.<id>` event any entry can play. */
 export interface DigiSound {
   id: string;
   name: string;

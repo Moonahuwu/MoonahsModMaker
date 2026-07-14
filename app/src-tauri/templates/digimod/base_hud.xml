@@ -1,5 +1,5 @@
-<!-- DigiMaster v2 — STATIC hud hook. Panels are created at runtime by
-     digi_master.js ($.CreatePanel), so this file never needs editing when
+<!-- MoonahMasterUI — STATIC hud hook. Panels are created at runtime by
+     moonah_master.js ($.CreatePanel), so this file never needs editing when
      media is added/removed: the JS LIBRARY is the single source of truth. -->
 <root>
     <styles>
@@ -10,7 +10,7 @@
     </styles>
 
     <scripts>
-        <include src="file://panorama/scripts/digi_master.js" />
+        <include src="file://panorama/scripts/moonah_master.js" />
         <include src="s2r://panorama/scripts/anita_ui_core.vjs_c" />
     </scripts>
 

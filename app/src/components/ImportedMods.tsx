@@ -139,16 +139,12 @@ export function ImportedMods({
   }
 
   function remove(p: string) {
-    // Drop the pack AND its remembered file deselections + attribution.
-    const excludes = { ...(settings.importedModExcludes ?? {}) };
-    delete excludes[p];
-    const nextCredits = { ...credits };
-    delete nextCredits[p];
-    update({
-      importedMods: mods.filter((m) => m !== p),
-      importedModExcludes: excludes,
-      importedModCredits: nextCredits,
-    });
+    // Drop the pack from THIS profile's bundle list only. Its excludes and
+    // GameBanana credits stay in the path-keyed registry: importedMods is
+    // per-profile while those maps are settings-global, so deleting them here
+    // would silently break any other profile still bundling the same pack -
+    // and keeping them means a re-import remembers its link + deselections.
+    update({ importedMods: mods.filter((m) => m !== p) });
   }
 
   function addPath() {
@@ -354,7 +350,7 @@ export function ImportedMods({
               >
                 <span className="truncate">{m.fileName}</span>
                 <span className="ml-auto shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-[10px]">
-                  DigiMaster pak - import it in the Jumpscares tab instead
+                  MoonahMasterUI pak - import it in the Jumpscares tab instead
                 </span>
               </div>
             ) : (

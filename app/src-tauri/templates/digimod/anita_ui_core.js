@@ -537,15 +537,25 @@ var AnitaUILogger = (function() {
         },
 
         monitorEscapeMenu: function(root) {
-            let hudPanel = root.FindChildTraverse(CONFIG.IDS.HUD_ROOT);
-            const btn = root.FindChildTraverse(CONFIG.IDS.OVERLAY_BTN);
-            
-            if (!hudPanel) {
-                let p = $.GetContextPanel();
-                while (p) {
-                    if (p.id === CONFIG.IDS.HUD_ROOT) { hudPanel = p; break; }
-                    p = p.GetParent();
+            // Full-tree FindChildTraverse at 20Hz causes frame hitches; cache
+            // both panels and only re-search (on a slower tick) after one has
+            // been destroyed.
+            let hudPanel = this._hudPanel;
+            let btn = this._overlayBtn;
+            if (!hudPanel || !(hudPanel.IsValid && hudPanel.IsValid())) {
+                hudPanel = root.FindChildTraverse(CONFIG.IDS.HUD_ROOT);
+                if (!hudPanel) {
+                    let p = $.GetContextPanel();
+                    while (p) {
+                        if (p.id === CONFIG.IDS.HUD_ROOT) { hudPanel = p; break; }
+                        p = p.GetParent();
+                    }
                 }
+                this._hudPanel = hudPanel;
+            }
+            if (!btn || !(btn.IsValid && btn.IsValid())) {
+                btn = root.FindChildTraverse(CONFIG.IDS.OVERLAY_BTN);
+                this._overlayBtn = btn;
             }
 
             if (hudPanel && btn) {
@@ -559,7 +569,7 @@ var AnitaUILogger = (function() {
                 }
             }
 
-            $.Schedule(0.05, () => this.monitorEscapeMenu(root));
+            $.Schedule(hudPanel && btn ? 0.05 : 0.5, () => this.monitorEscapeMenu(root));
         },
 
         getRoot: function(p) {

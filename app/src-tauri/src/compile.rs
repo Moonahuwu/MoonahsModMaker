@@ -130,9 +130,11 @@ pub struct CompileConfig {
     pub imported_mods: Vec<String>,
     /// Per-mod files the user DESELECTED in the import review: mod vpk path →
     /// raw internal paths (e.g. `sounds/x.vsnd_c`) to drop from the combined
-    /// stage after the pack's asset dirs are extracted.
+    /// stage after the pack's asset dirs are extracted. BTreeMap on purpose:
+    /// the whole-variant build stamp fingerprints `{cfg:?}`, and a HashMap's
+    /// random iteration order would mismatch the stamp on every run.
     #[serde(default)]
-    pub imported_mod_excludes: std::collections::HashMap<String, Vec<String>>,
+    pub imported_mod_excludes: std::collections::BTreeMap<String, Vec<String>>,
     pub events: Vec<EventCompile>,
     /// Custom icon overrides: scaled + compiled to `.vtex_c` and staged so they
     /// override the game's icons.
@@ -159,7 +161,7 @@ pub struct CompileConfig {
     /// npc_units.vdata / misc.vdata, recompile, and stage.
     #[serde(default)]
     pub world_overrides: Vec<WorldCompile>,
-    /// Jumpscares/Deaths HUD mod (DigiMaster): generated from templates +
+    /// Jumpscares/Deaths HUD mod (MoonahMasterUI): generated from templates +
     /// this config; media converted/compiled and staged into the vpk.
     #[serde(default)]
     pub digimod: Option<DigimodCompile>,
@@ -177,6 +179,13 @@ pub struct CompileConfig {
     /// it. None or blank = no file.
     #[serde(default)]
     pub credits_text: Option<String>,
+    /// One-off subset export into a user-chosen folder (Options → Export…):
+    /// skips the housekeeping a real compile does around its own output dir -
+    /// above all "no imports → delete stale combined/", which would destroy an
+    /// unrelated combined/ build in the chosen folder - and writes no build
+    /// stamps (an export must never mark the real output up to date).
+    #[serde(default)]
+    pub export_only: bool,
 }
 
 /// One edited panorama file (UI Master): the compiled internal path it
@@ -249,6 +258,13 @@ pub struct SoundOverrideCompile {
     pub current_hash: Option<String>,
     #[serde(default)]
     pub last_compiled_hash: Option<String>,
+    /// Content-relative `.vsnd_c` of a previous identical render at a
+    /// DIFFERENT path: the slot's merge-path output from before it qualified
+    /// for direct replace. When the params are unchanged but the stock path
+    /// was never compiled, that file is copied instead of re-rendering - the
+    /// source audio may be long gone (temp-cache decodes get cleaned up).
+    #[serde(default)]
+    pub reuse_from: Option<String>,
 }
 
 impl SoundOverrideCompile {
@@ -276,6 +292,17 @@ impl SoundOverrideCompile {
             && self.current_hash.is_some()
             && self.current_hash == self.last_compiled_hash
             && compiled_exists
+    }
+    /// Whether a missing compiled target can adopt `reuse_from` instead of
+    /// re-rendering: the params are unchanged since the last good compile,
+    /// the render just never happened AT THIS PATH (the slot switched from a
+    /// merge to direct replace, which moved the output to the stock path).
+    fn can_reuse_prev(&self, skip_compile: bool, compiled_exists: bool) -> bool {
+        !skip_compile
+            && !compiled_exists
+            && self.reuse_from.is_some()
+            && self.current_hash.is_some()
+            && self.current_hash == self.last_compiled_hash
     }
 }
 
@@ -336,7 +363,7 @@ pub struct DigimodCompile {
     pub death_chance: u32,
     pub scares: Vec<DigiEntry>,
     pub deaths: Vec<DigiEntry>,
-    /// The sound library: each becomes a `Digi.<id>` sound event, shareable
+    /// The sound library: each becomes a `Moonah.<id>` sound event, shareable
     /// across any number of entries (like the user's original mod, where
     /// several death videos played the same event).
     #[serde(default)]
@@ -375,7 +402,7 @@ pub struct DigiSound {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DigiEntry {
-    /// Stable id (sanitized into file stems + Digi.* event names).
+    /// Stable id (sanitized into file stems + Moonah.* event names).
     pub id: String,
     /// Display name (report steps + in-game test buttons).
     pub name: String,
@@ -2636,6 +2663,26 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                 report.ok_step(format!("up to date: {stem}"), "unchanged - skipped");
                 continue;
             }
+            // Unchanged render that only moved (merge slot -> direct replace):
+            // copy the previous compile to the stock path instead of
+            // re-rendering, so the original source audio is never needed.
+            if ov.can_reuse_prev(cfg.skip_compile, compiled.exists()) {
+                let prev = compiled_root.join(ov.reuse_from.as_deref().unwrap_or_default());
+                if prev.is_file() {
+                    let copied = compiled
+                        .parent()
+                        .is_some_and(|d| std::fs::create_dir_all(d).is_ok())
+                        && std::fs::copy(&prev, &compiled).is_ok();
+                    if copied {
+                        compiled_any = true;
+                        report.ok_step(
+                            format!("reuse compile: {stem}"),
+                            "unchanged - previous render adopted at the stock path",
+                        );
+                        continue;
+                    }
+                }
+            }
             jobs.push(AudioJob {
                 label: stem.clone(),
                 kind: " (override)",
@@ -2857,7 +2904,8 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
     let helper_opt = cfg.vpk_helper_path.as_deref().filter(|h| !h.is_empty());
 
     // 3. Read imported mods' soundevents (decompiled) once, keyed by relpath.
-    let mut imported_texts: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    //    Each text carries its pack source so per-pack excludes can be applied.
+    let mut imported_texts: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
     if !cfg.imported_mods.is_empty() {
         let helper = match helper_opt {
             Some(h) => h,
@@ -2875,28 +2923,37 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                 // MERGEDSoundevents/, backups) would otherwise be merged,
                 // compiled and STAGED — junk folders in the output vpk.
                 let lower = f.to_lowercase();
-                if !lower.starts_with("soundevents/")
-                    || lower.contains("backup")
-                    || lower.contains("newsoundevents")
-                    || lower.contains("merged")
-                {
+                if !lower.starts_with("soundevents/") || junk_soundevents_path(&lower) {
                     continue;
                 }
                 let relpath = f.trim_end_matches("_c").to_string();
-                if cached && f.ends_with(".vsndevts") {
-                    // Cached packs store soundevents as decompiled text — read direct.
-                    if let Ok(text) = std::fs::read_to_string(src_dir.join(f.as_str())) {
-                        imported_texts.entry(relpath).or_default().push(text);
+                if f.ends_with(".vsndevts") {
+                    // Cached packs store soundevents as decompiled text — read
+                    // direct. Old raw packs bundle text sources too — extract.
+                    if cached {
+                        if let Ok(text) = std::fs::read_to_string(src_dir.join(f.as_str())) {
+                            imported_texts.entry(relpath).or_default().push((mod_vpk.clone(), text));
+                        }
+                    } else {
+                        let tmp = tmp_dir.join(format!("m{mi}_{}", f.replace('/', "_")));
+                        if vpk::extract(helper, mod_vpk, f, &tmp.to_string_lossy()).is_ok() {
+                            if let Ok(text) = std::fs::read_to_string(&tmp) {
+                                imported_texts.entry(relpath).or_default().push((mod_vpk.clone(), text));
+                            }
+                        }
                     }
                     continue;
                 }
                 if !f.ends_with(".vsndevts_c") {
                     continue;
                 }
+                if files.iter().any(|t| t.as_str() == relpath) {
+                    continue; // the text twin covers it
+                }
                 let tmp = tmp_dir.join(format!("m{mi}_{}", f.replace('/', "_")));
                 if vpk::decompile_from_vpk(helper, mod_vpk, f, &tmp.to_string_lossy()).is_ok() {
                     if let Ok(text) = std::fs::read_to_string(&tmp) {
-                        imported_texts.entry(relpath).or_default().push(text);
+                        imported_texts.entry(relpath).or_default().push((mod_vpk.clone(), text));
                     }
                 }
             }
@@ -2919,7 +2976,9 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
 
     for v in &variants {
         let stage = output_dir.join(v.name).join("_staging");
-        let mut events_c_rels: Vec<String> = Vec::new();
+        // (vpk-internal rel, absolute source to stage from) - the source is a
+        // per-variant sidecar `_c`, not the shared compiled-tree file.
+        let mut events_c_rels: Vec<(String, PathBuf)> = Vec::new();
         // Set once any events file for this variant is actually (re)written +
         // compiled this run (i.e. Opt A below did NOT skip it). Combined with the
         // run-level `compiled_any`, this drives the whole-variant skip.
@@ -2948,18 +3007,26 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                         let _ = std::fs::create_dir_all(parent);
                     }
                     let internal = format!("{rel}_c");
-                    if vpk::decompile_from_vpk(helper, pak, &internal, &vanilla.to_string_lossy())
-                        .is_ok()
+                    match vpk::decompile_from_vpk(helper, pak, &internal, &vanilla.to_string_lossy())
                     {
-                        report.ok_step(
+                        Ok(_) => report.ok_step(
                             format!("[{}] fetch vanilla {rel}", v.name),
                             "from game pak".to_string(),
-                        );
+                        ),
+                        // A pack-only NEW file legitimately isn't in the pak;
+                        // only a slot-referenced file failing to fetch is a
+                        // problem (the pack-snapshot fallback below would
+                        // wholesale-replace a shared game file).
+                        Err(e) => {
+                            if by_file.contains_key(rel) {
+                                report.soft_fail(format!("[{}] fetch vanilla {rel}", v.name), e);
+                            }
+                        }
                     }
                 }
             }
 
-            let (mut text, additions): (String, &[String]) = if vanilla.exists() {
+            let (mut text, additions): (String, &[(String, String)]) = if vanilla.exists() {
                 match std::fs::read_to_string(&vanilla) {
                     Ok(t) => (t, mod_texts.map(|v| v.as_slice()).unwrap_or(&[])),
                     Err(e) => {
@@ -2968,27 +3035,80 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                     }
                 }
             } else if let Some(mt) = mod_texts {
-                (mt[0].clone(), &mt[1..])
+                (mt[0].1.clone(), &mt[1..])
             } else {
                 report.soft_fail(format!("read {rel}"), "no vanilla base or imported source");
                 continue 'relpaths;
             };
 
             let mut added = 0;
-            for mt in additions {
-                if let Ok(arrays) = kv3_core::list_arrays(mt) {
-                    for a in arrays {
-                        if let Ok(t) =
-                            kv3_core::add_entries(&text, &a.event_name, &a.array_key, &a.entries)
-                        {
-                            text = t;
-                            added += 1;
+            let mut union_skipped: Vec<String> = Vec::new();
+            for (src, mt) in additions {
+                // Refs the user excluded for this pack must not enter the
+                // merged events - their files are removed from the stage, so
+                // a merged entry would point at a missing sound in-game.
+                let excl: std::collections::HashSet<String> = cfg
+                    .imported_mod_excludes
+                    .get(src)
+                    .map(|v| v.iter().map(|e| e.trim_end_matches("_c").to_string()).collect())
+                    .unwrap_or_default();
+                match kv3_core::list_arrays(mt) {
+                    Ok(arrays) => {
+                        for a in arrays {
+                            let entries: Vec<String> =
+                                a.entries.iter().filter(|e| !excl.contains(*e)).cloned().collect();
+                            if entries.is_empty() {
+                                continue;
+                            }
+                            match kv3_core::add_entries(&text, &a.event_name, &a.array_key, &entries)
+                            {
+                                Ok(t) => {
+                                    text = t;
+                                    added += 1;
+                                }
+                                // The pack ADDED this event (it's not in the
+                                // vanilla base) - copy its whole block so it
+                                // doesn't silently vanish from the combined mod.
+                                Err(kv3_core::Kv3Error::EventNotFound(_)) => {
+                                    match kv3_core::copy_event(&text, mt, &a.event_name) {
+                                        Ok(t) => {
+                                            text = t;
+                                            added += 1;
+                                        }
+                                        Err(e) => union_skipped.push(format!("{}: {e}", a.event_name)),
+                                    }
+                                }
+                                Err(e) => union_skipped.push(format!("{}: {e}", a.event_name)),
+                            }
+                            // A pack's longer vsnd_duration must survive the
+                            // union or its track is cut off at vanilla length.
+                            if let (Ok(Some(theirs)), Ok(Some(base))) = (
+                                kv3_core::read_duration(mt, &a.event_name),
+                                kv3_core::read_duration(&text, &a.event_name),
+                            ) {
+                                if theirs > base {
+                                    if let Ok(t) = kv3_core::set_duration(&text, &a.event_name, theirs)
+                                    {
+                                        text = t;
+                                    }
+                                }
+                            }
                         }
                     }
+                    Err(e) => union_skipped.push(format!("parse: {e}")),
                 }
             }
             if v.with_imported && !additions.is_empty() {
-                report.ok_step(format!("[{}] combine {rel}", v.name), format!("{added} array(s)"));
+                let detail = if union_skipped.is_empty() {
+                    format!("{added} array(s)")
+                } else {
+                    union_skipped.truncate(3);
+                    format!(
+                        "{added} array(s), some skipped: {}",
+                        union_skipped.join(", ")
+                    )
+                };
+                report.ok_step(format!("[{}] combine {rel}", v.name), detail);
             }
 
             if let Some(slots) = by_file.get(rel) {
@@ -3043,21 +3163,26 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
             // `.vsndevts_c` is current — a failed run leaves the new text with
             // the old `_c`. The stamp is only written after the compiler
             // succeeds, closing that gap.
-            let events_stamp = events_dest.with_extension("vsndevts.eimstamp");
-            // Opt A: if the freshly-merged text is byte-identical to what the
-            // last successful compile ran on AND the compiled `.vsndevts_c`
+            //
+            // Both stamp and compiled output are PER-VARIANT: mine and combined
+            // share the content path, so a shared stamp/output made the two
+            // variants ping-pong (every compile rewrote + recompiled + .bak'd
+            // both), and staging the shared `_c` after a skip could ship the
+            // OTHER variant's events. Each variant keeps its own `_c` sidecar
+            // and stages from that.
+            let events_stamp = events_dest.with_extension(format!("vsndevts.eimstamp_{}", v.name));
+            let events_c_sidecar =
+                events_c_abs.with_extension(format!("vsndevts_c_{}", v.name));
+            // Opt A: if the freshly-merged text is byte-identical to what this
+            // variant's last successful compile ran on AND its sidecar `_c`
             // still exists, the resourcecompiler pass would just reproduce the
-            // same output — skip its multi-second cold start. (Won't fire for
-            // the combined variant, which shares this content path with `mine`
-            // and so always differs; combined is the rare case, so that's
-            // acceptable.)
+            // same output — skip its multi-second cold start.
             let unchanged = !cfg.skip_compile
-                && events_c_abs.exists()
-                && std::fs::read_to_string(&events_dest).map(|d| d == text).unwrap_or(false)
+                && events_c_sidecar.exists()
                 && stamp_matches(&events_stamp, &fingerprint(&text));
             if unchanged {
                 report.ok_step(format!("[{}] up to date {rel}", v.name), "unchanged - skipped");
-                events_c_rels.push(events_c_relpath(rel));
+                events_c_rels.push((events_c_relpath(rel), events_c_sidecar.clone()));
                 continue;
             }
             if let Some(parent) = events_dest.parent() {
@@ -3066,7 +3191,11 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                     continue 'relpaths;
                 }
             }
-            if events_dest.exists() {
+            // Back up only a file we're actually about to change - the two
+            // variants rewrite this path every run, and identical-content
+            // backups grew .bak/ without bound.
+            let on_disk = std::fs::read_to_string(&events_dest).ok();
+            if events_dest.exists() && on_disk.as_deref() != Some(text.as_str()) {
                 if let Some(parent) = events_dest.parent() {
                     let bak_dir = parent.join(".bak");
                     let _ = std::fs::create_dir_all(&bak_dir);
@@ -3078,9 +3207,11 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                     let _ = std::fs::copy(&events_dest, &bak);
                 }
             }
-            if let Err(e) = std::fs::write(&events_dest, &text) {
-                report.soft_fail(format!("write {rel}"), e.to_string());
-                continue 'relpaths;
+            if on_disk.as_deref() != Some(text.as_str()) {
+                if let Err(e) = std::fs::write(&events_dest, &text) {
+                    report.soft_fail(format!("write {rel}"), e.to_string());
+                    continue 'relpaths;
+                }
             }
             if !cfg.skip_compile {
                 // A stale stamp must never survive into a failed run: clear it
@@ -3089,7 +3220,18 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                 match run_resource_compiler(cfg, &events_dest.to_string_lossy()) {
                     Ok(detail) => {
                         events_dirty = true;
-                        let _ = std::fs::write(&events_stamp, fingerprint(&text));
+                        match std::fs::copy(&events_c_abs, &events_c_sidecar) {
+                            Ok(_) => {
+                                let _ = std::fs::write(&events_stamp, fingerprint(&text));
+                            }
+                            Err(e) => {
+                                report.soft_fail(
+                                    format!("[{}] cache compiled {rel}", v.name),
+                                    e.to_string(),
+                                );
+                                continue 'relpaths;
+                            }
+                        }
                         report.ok_step(format!("[{}] compile {rel}", v.name), detail);
                     }
                     Err(e) => {
@@ -3097,10 +3239,11 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                         continue 'relpaths;
                     }
                 }
+                events_c_rels.push((events_c_relpath(rel), events_c_sidecar));
             } else {
                 events_dirty = true;
+                events_c_rels.push((events_c_relpath(rel), events_c_abs.clone()));
             }
-            events_c_rels.push(events_c_relpath(rel));
         }
 
         // Whole-variant skip: if nothing was (re)compiled this run, every
@@ -3114,8 +3257,31 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
         // an app update rebuilds outputs even though the config didn't move
         // (v2 = imports stage every pack dir, not a whitelist).
         const STAGE_FORMAT: &str = "v2";
-        let build_stamp =
-            fingerprint(&format!("{STAGE_FORMAT}|{cfg:?}|imported:{}", v.with_imported));
+        // Pack paths alone can't detect an updated pack (re-download to the
+        // same path, in-place cache refresh) - fold each pack's identity in.
+        let packs_ident: String = cfg
+            .imported_mods
+            .iter()
+            .map(|m| {
+                let p = Path::new(m);
+                // A cache dir's marker files are rewritten on every refresh;
+                // a raw vpk carries its own len+mtime.
+                let probe = if p.is_dir() { p.join(".eim_cache_v") } else { p.to_path_buf() };
+                let meta = std::fs::metadata(&probe).ok();
+                format!(
+                    "{m}|{}|{};",
+                    meta.as_ref().map(|x| x.len()).unwrap_or(0),
+                    meta.and_then(|x| x.modified().ok())
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0)
+                )
+            })
+            .collect();
+        let build_stamp = fingerprint(&format!(
+            "{STAGE_FORMAT}|{cfg:?}|imported:{}|packs:{packs_ident}",
+            v.with_imported
+        ));
         let stamp_file = output_dir.join(v.name).join(".eim_buildstamp");
         let out_artifact = if cfg.output_mode == "vpk" {
             output_dir.join(v.name).join(&cfg.vpk_name)
@@ -3160,22 +3326,24 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                 for mod_vpk in &cfg.imported_mods {
                     let mut copied = 0usize;
                     let mut errs: Vec<String> = Vec::new();
-                    let asset_dirs = import_asset_dirs(helper, mod_vpk);
+                    let (asset_dirs, dirs_listed) = import_asset_dirs_listed(helper, mod_vpk);
                     let src_path = Path::new(mod_vpk);
                     if src_path.is_file() {
                         // Raw .vpk: unpack ONCE into a persistent cache keyed by
                         // the file's identity, then stage with plain copies —
                         // big packs stop paying the vpk-unpack cost every build.
                         // "v2" invalidates caches from the whitelist era (they
-                        // lack the pack's custom dirs).
+                        // lack the pack's custom dirs). The dir list rides the
+                        // identity so a differently-shaped listing refills.
                         let meta = std::fs::metadata(src_path).ok();
                         let ident = format!(
-                            "v2|{mod_vpk}|{}|{}",
+                            "v2|{mod_vpk}|{}|{}|{}",
                             meta.as_ref().map(|m| m.len()).unwrap_or(0),
                             meta.and_then(|m| m.modified().ok())
                                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                                 .map(|d| d.as_secs())
-                                .unwrap_or(0)
+                                .unwrap_or(0),
+                            asset_dirs.join(",")
                         );
                         let cache = output_dir.join(".modcache").join(fingerprint(&ident));
                         let ready = cache.join(".eim_complete");
@@ -3194,7 +3362,11 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                                     ok = false;
                                 }
                             }
-                            if ok {
+                            // A whitelist-fallback extraction (listing failed)
+                            // must stay unstamped: it may lack the pack's
+                            // custom dirs, and the marker would make that
+                            // permanent until the vpk's identity changes.
+                            if ok && dirs_listed {
                                 let _ = std::fs::write(&ready, "1");
                             }
                         }
@@ -3282,17 +3454,20 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                 if let Some(helper) = helper_opt {
                     match vpk::extract(helper, &a.source_vpk, &internal, &dest.to_string_lossy()) {
                         Ok(_) => staged += 1,
+                        // soft_fail, not a green step: the merged events file
+                        // references this sound, so shipping without it means
+                        // a dead array entry in-game (and a green run would
+                        // stamp the broken build "up to date").
                         Err(e) => {
-                            report.ok_step(format!("adopt {internal} (skipped)"), e);
+                            report.soft_fail(format!("adopt {internal}"), e);
                         }
                     }
                 }
             }
         }
-        for rel in &events_c_rels {
-            let src = compiled_root.join(rel);
+        for (rel, src) in &events_c_rels {
             if src.exists() {
-                match copy_into(&src, &stage, rel) {
+                match copy_into(src, &stage, rel) {
                     Ok(_) => staged += 1,
                     Err(e) => report.soft_fail(format!("stage: {rel}"), e.to_string()),
                 }
@@ -3428,8 +3603,32 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
             }
         }
         // Variant fully built — record what it was built from so the next
-        // run's whole-variant skip can trust it.
-        let _ = std::fs::write(&stamp_file, &build_stamp);
+        // run's whole-variant skip can trust it. ONLY on a fully-green run:
+        // a soft-failed staging packed an incomplete vpk, and a stamp would
+        // declare it current forever (the next run starts with a fresh
+        // report, so the in-run `report.ok` skip guard can't catch it).
+        // Exports never stamp - their subset config isn't "the" build.
+        if report.ok && !cfg.export_only {
+            let _ = std::fs::write(&stamp_file, &build_stamp);
+        }
+    }
+
+    // The combined variant stops being built once the last imported mod is
+    // removed — clear the leftover artifact (vpk + credits.txt) so a stale
+    // build can't be installed or its credits misattributed. Never on an
+    // export: its config always has no imports, and the user-chosen folder
+    // may well BE the normal output dir with a real combined/ build in it.
+    if cfg.imported_mods.is_empty() && !cfg.export_only {
+        let stale = output_dir.join("combined");
+        if stale.exists() {
+            match std::fs::remove_dir_all(&stale) {
+                Ok(()) => report.ok_step(
+                    "clear stale combined/",
+                    "no mods bundled anymore - removed the old combined build",
+                ),
+                Err(e) => report.soft_fail("clear stale combined/", e.to_string()),
+            }
+        }
     }
 
     // Report the output dir (contains mine/ and, if combined, combined/).
@@ -3445,8 +3644,19 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
 /// the classic game-content set if the pack can't be listed, so a transient
 /// helper failure can't produce an empty combined build.
 pub(crate) fn import_asset_dirs(helper: &str, mod_vpk: &str) -> Vec<String> {
+    import_asset_dirs_listed(helper, mod_vpk).0
+}
+
+/// Like `import_asset_dirs`, but also says whether the dirs came from a REAL
+/// listing (`true`) or the fixed fallback whitelist after a listing failure
+/// (`false`). Callers that persist completeness markers must not stamp a
+/// whitelist-based extraction as done - the pack's custom dirs would be
+/// missing until the vpk's identity changes.
+pub(crate) fn import_asset_dirs_listed(helper: &str, mod_vpk: &str) -> (Vec<String>, bool) {
     let mut dirs: std::collections::BTreeSet<String> = Default::default();
+    let mut listed = false;
     if let Ok(entries) = vpk::list(helper, mod_vpk, None) {
+        listed = true;
         for e in entries {
             if let Some((top, _)) = e.replace('\\', "/").split_once('/') {
                 let t = top.to_lowercase();
@@ -3463,15 +3673,30 @@ pub(crate) fn import_asset_dirs(helper: &str, mod_vpk: &str) -> Vec<String> {
         }
     }
     if dirs.is_empty() {
-        return [
-            "sounds/", "models/", "particles/", "materials/", "panorama/", "resource/",
-            "scripts/",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
+        return (
+            [
+                "sounds/", "models/", "particles/", "materials/", "panorama/", "resource/",
+                "scripts/",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+            false,
+        );
     }
-    dirs.into_iter().collect()
+    (dirs.into_iter().collect(), listed)
+}
+
+/// Junk soundevents a pack may bundle (vanilla snapshots, merge scratch),
+/// matched by PATH SEGMENT: a substring test would also drop an author's
+/// legit `soundevents/merged_music_pack.vsndevts`. Expects a lowercased path.
+pub(crate) fn junk_soundevents_path(lower: &str) -> bool {
+    lower.split('/').any(|seg| {
+        seg.contains("backup")
+            || seg.starts_with("newsoundevents")
+            || seg.starts_with("mergedsoundevents")
+            || seg.starts_with("mysoundevents")
+    })
 }
 
 // ---------------- Easy Compile (experimental) ----------------
@@ -4195,6 +4420,7 @@ mod tests {
             digimod: None,
             ui_overrides: ui,
             credits_text: None,
+            export_only: false,
         };
         let mut report = CompileReport::new();
         let (rels, dirty) =
@@ -4282,6 +4508,7 @@ mod tests {
             digimod: None,
             ui_overrides: vec![],
             credits_text: None,
+            export_only: false,
         };
 
         let report = run(&cfg);
@@ -4434,6 +4661,7 @@ mod tests {
             digimod: None,
             ui_overrides: vec![],
             credits_text: None,
+            export_only: false,
         };
 
         let report = run(&cfg);
@@ -4545,6 +4773,7 @@ mod tests {
             digimod: None,
             ui_overrides: vec![],
             credits_text: None,
+            export_only: false,
             poster_overrides: vec![PosterCompile {
                 sheet_id: "posters_bodega_comp1".into(),
                 materials: vec!["materials/overlays/posters_bodega_comp1.vmat".into()],
@@ -4657,6 +4886,44 @@ mod tests {
         assert!(!is_up_to_date(&song_with(None, None), false, true));
         // Global skip_compile bypasses the optimization entirely.
         assert!(!is_up_to_date(&song_with(Some("h"), Some("h")), true, true));
+    }
+
+    fn override_with(
+        current: Option<&str>,
+        last: Option<&str>,
+        reuse_from: Option<&str>,
+    ) -> SoundOverrideCompile {
+        SoundOverrideCompile {
+            target_ref: "sounds/music/match_intro/stock.vsnd".into(),
+            source_audio: "x.mp3".into(),
+            layers: vec![],
+            trim_start: 0.0,
+            trim_end: 1.0,
+            gain_db: 0.0,
+            fade_in: 0.0,
+            fade_out: 0.0,
+            looping: false,
+            current_hash: current.map(String::from),
+            last_compiled_hash: last.map(String::from),
+            reuse_from: reuse_from.map(String::from),
+        }
+    }
+
+    #[test]
+    fn reuse_prev_only_for_unchanged_uncompiled_target_with_hint() {
+        let rel = Some("sounds/music/match_intro/mysong.vsnd_c");
+        // Unchanged render, target path never compiled, prior location known -> reuse.
+        assert!(override_with(Some("h"), Some("h"), rel).can_reuse_prev(false, false));
+        // Target already compiled -> the plain up-to-date skip handles it.
+        assert!(!override_with(Some("h"), Some("h"), rel).can_reuse_prev(false, true));
+        // Params changed -> must re-render (the old file is a stale render).
+        assert!(!override_with(Some("h2"), Some("h"), rel).can_reuse_prev(false, false));
+        // Never compiled anywhere -> nothing to reuse.
+        assert!(!override_with(Some("h"), None, rel).can_reuse_prev(false, false));
+        // No prior-location hint (plain Replace-tab override) -> render.
+        assert!(!override_with(Some("h"), Some("h"), None).can_reuse_prev(false, false));
+        // skip_compile (tests) bypasses the shortcut.
+        assert!(!override_with(Some("h"), Some("h"), rel).can_reuse_prev(true, false));
     }
 
     #[test]

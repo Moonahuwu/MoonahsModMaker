@@ -96,6 +96,12 @@ pub struct EventView {
     pub entries: Vec<String>,
     /// The event's `vsnd_duration`, if present and parseable.
     pub vsnd_duration: Option<f64>,
+    /// Event-level `volume` modifier the game applies to every file the event
+    /// plays (ours included). Only the simple numeric form; randomized/operator
+    /// forms read as None.
+    pub volume: Option<f64>,
+    /// Event-level `pitch` modifier, same rules as `volume`.
+    pub pitch: Option<f64>,
 }
 
 /// One array found in a document (for combining other mods).
@@ -135,13 +141,17 @@ pub fn read_event_array(text: &str, event_name: &str, array_key: &str) -> Result
         ValueSpan::Array(lb, rb) => parse_array_entries(text, lb, rb),
         ValueSpan::Scalar(_, _, v) => vec![v],
     };
-    let vsnd_duration = duration_value_span(text, block)
-        .and_then(|(s, e)| text[s..e].trim().parse::<f64>().ok());
+    let scalar_num = |key: &str| {
+        scalar_value_span(text, block, key)
+            .and_then(|(s, e)| text[s..e].trim().parse::<f64>().ok())
+    };
     Ok(EventView {
         event_name: event_name.to_string(),
         array_key: array_key.to_string(),
         entries,
-        vsnd_duration,
+        vsnd_duration: scalar_num("vsnd_duration"),
+        volume: scalar_num("volume"),
+        pitch: scalar_num("pitch"),
     })
 }
 
@@ -179,7 +189,7 @@ pub fn list_arrays(text: &str) -> Result<Vec<ArrayInfo>> {
             while k < bc && matches!(b[k], b' ' | b'\t') {
                 k += 1;
             }
-            if before_ok && k < bc && b[k] == b'=' {
+            if before_ok && k < bc && b[k] == b'=' && !in_line_comment(text, kpos) {
                 // After '=': optional spaces, then the value must be '[' (array).
                 let mut v = k + 1;
                 while v < bc && matches!(b[v], b' ' | b'\t' | b'\n' | b'\r') {
@@ -321,6 +331,65 @@ pub fn apply_merges(text: &str, edits: &[EventMerge]) -> Result<String> {
     Ok(cur)
 }
 
+/// Copy a whole top-level event block verbatim from `src` into `dest`
+/// (spliced just before `dest`'s closing brace). Used when combining: a pack
+/// can ship an event the vanilla base doesn't have at all, and `add_entries`
+/// alone would drop it. No-op (returns `dest` unchanged) when `dest` already
+/// has the event - the array union handles that case.
+pub fn copy_event(dest: &str, src: &str, event_name: &str) -> Result<String> {
+    validate_header(dest)?;
+    validate_header(src)?;
+    if event_block(dest, event_name).is_ok() {
+        return Ok(dest.to_string());
+    }
+    let (bopen, bclose) = event_block(src, event_name)?;
+    // Take from the start of the key's line so indentation rides along.
+    let key = find_key_pos(src, 0, bopen, event_name)
+        .ok_or_else(|| Kv3Error::EventNotFound(event_name.to_string()))?;
+    let line_start = src[..key].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let mut block = src[line_start..=bclose].to_string();
+    // Match dest's line-ending style.
+    let (src_le, dest_le) = (detect_line_ending(src), detect_line_ending(dest));
+    if src_le != dest_le {
+        block = if src_le == "\r\n" {
+            block.replace("\r\n", "\n")
+        } else {
+            block.replace('\n', "\r\n")
+        };
+    }
+    // Insertion point: just before the document's closing brace.
+    let header_end = dest.find("-->").map(|i| i + 3).unwrap_or(0);
+    let obj_open = dest[header_end..]
+        .find('{')
+        .map(|i| header_end + i)
+        .ok_or(Kv3Error::Unterminated("document"))?;
+    let obj_close = matching_close(dest, obj_open, b'{', b'}')
+        .ok_or(Kv3Error::Unterminated("document"))?;
+    let mut out = dest.to_string();
+    out.insert_str(obj_close, &format!("{block}{dest_le}"));
+    Ok(out)
+}
+
+/// An event's `vsnd_duration` value, when the event has one.
+pub fn read_duration(text: &str, event_name: &str) -> Result<Option<f64>> {
+    validate_header(text)?;
+    let block = event_block(text, event_name)?;
+    Ok(duration_value_span(text, block).and_then(|(s, e)| text[s..e].trim().parse::<f64>().ok()))
+}
+
+/// Overwrite an event's `vsnd_duration` value in place. Events without a
+/// duration line are left unchanged (we splice values, never add keys).
+pub fn set_duration(text: &str, event_name: &str, value: f64) -> Result<String> {
+    validate_header(text)?;
+    let block = event_block(text, event_name)?;
+    let Some((vs, ve)) = duration_value_span(text, block) else {
+        return Ok(text.to_string());
+    };
+    let mut out = text.to_string();
+    out.replace_range(vs..ve, &format_duration(value));
+    Ok(out)
+}
+
 // ---------------------------------------------------------------------------
 // Merge partition (the heart of MERGE, NEVER REPLACE)
 // ---------------------------------------------------------------------------
@@ -413,6 +482,13 @@ fn top_level_entries(text: &str, open: usize, close: usize) -> Vec<(String, usiz
         }
         if i >= close {
             break;
+        }
+        if b[i] == b'/' && i + 1 < close && b[i + 1] == b'/' {
+            // Comment line between events - not a key.
+            while i < close && b[i] != b'\n' {
+                i += 1;
+            }
+            continue;
         }
         let ks = i;
         while i < close && !matches!(b[i], b' ' | b'\t' | b'\n' | b'\r' | b'=') {
@@ -549,10 +625,16 @@ fn find_value(
 
 /// Byte span of the `vsnd_duration` *value* (the number text) within a block.
 fn duration_value_span(text: &str, block: (usize, usize)) -> Option<(usize, usize)> {
+    scalar_value_span(text, block, "vsnd_duration")
+}
+
+/// Byte span of any scalar `key = value` *value* (the text after `=` up to the
+/// line end) within a block.
+fn scalar_value_span(text: &str, block: (usize, usize), key_name: &str) -> Option<(usize, usize)> {
     let (bopen, bclose) = block;
-    let key = find_key_pos(text, bopen, bclose, "vsnd_duration")?;
+    let key = find_key_pos(text, bopen, bclose, key_name)?;
     let b = text.as_bytes();
-    let mut j = key + "vsnd_duration".len();
+    let mut j = key + key_name.len();
     while j < bclose && matches!(b[j], b' ' | b'\t') {
         j += 1;
     }
@@ -589,7 +671,7 @@ fn find_key_pos(text: &str, from: usize, to: usize, key: &str) -> Option<usize> 
             j += 1;
         }
         let after_ok = j < to && b[j] == b'=';
-        if before_ok && after_ok {
+        if before_ok && after_ok && !in_line_comment(text, pos) {
             return Some(pos);
         }
         cur = pos + key.len();
@@ -616,6 +698,12 @@ fn matching_close(text: &str, open_pos: usize, open: u8, close: u8) -> Option<us
             }
         } else if c == b'"' {
             in_str = true;
+        } else if c == b'/' && i + 1 < b.len() && b[i + 1] == b'/' {
+            // `//` line comment: braces/quotes inside must not count.
+            while i < b.len() && b[i] != b'\n' {
+                i += 1;
+            }
+            continue;
         } else if c == open {
             depth += 1;
         } else if c == close {
@@ -629,6 +717,33 @@ fn matching_close(text: &str, open_pos: usize, open: u8, close: u8) -> Option<us
     None
 }
 
+/// True when `pos` sits inside a `//` line comment (scanning the line up to
+/// `pos`, string-aware). Keys/entries matched inside comments must not count.
+fn in_line_comment(text: &str, pos: usize) -> bool {
+    let b = text.as_bytes();
+    let line_start = text[..pos].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let mut i = line_start;
+    let mut in_str = false;
+    while i < pos {
+        let c = b[i];
+        if in_str {
+            if c == b'\\' {
+                i += 2;
+                continue;
+            }
+            if c == b'"' {
+                in_str = false;
+            }
+        } else if c == b'"' {
+            in_str = true;
+        } else if c == b'/' && i + 1 < b.len() && b[i + 1] == b'/' {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
 /// Extract the quoted entries between an array's `[` and `]`.
 fn parse_array_entries(text: &str, lbracket: usize, rbracket: usize) -> Vec<String> {
     let inner = &text[lbracket + 1..rbracket];
@@ -636,7 +751,12 @@ fn parse_array_entries(text: &str, lbracket: usize, rbracket: usize) -> Vec<Stri
     let mut out = Vec::new();
     let mut i = 0;
     while i < b.len() {
-        if b[i] == b'"' {
+        if b[i] == b'/' && i + 1 < b.len() && b[i + 1] == b'/' {
+            // A commented-out entry is not part of the pool.
+            while i < b.len() && b[i] != b'\n' {
+                i += 1;
+            }
+        } else if b[i] == b'"' {
             let start = i + 1;
             let mut j = start;
             while j < b.len() {
@@ -786,6 +906,48 @@ mod unit {
         // The sibling team array is untouched.
         let team = read_event_array(&out, "T", "vsnd_files").unwrap();
         assert_eq!(team.entries, vec!["team/stock.vsnd"]);
+    }
+
+    #[test]
+    fn copy_event_appends_missing_event_and_is_noop_when_present() {
+        // SYNTH2's "T" event doesn't exist in SYNTH -> copied wholesale.
+        let out = copy_event(SYNTH, SYNTH2, "T").unwrap();
+        let v = read_event_array(&out, "T", "vsnd_files_opponent_control").unwrap();
+        assert_eq!(v.entries, vec!["opp/stock.vsnd"]);
+        assert_eq!(v.vsnd_duration, Some(12.0));
+        // The original event is untouched.
+        assert_eq!(read_event(&out, "Evt").unwrap().entries.len(), 3);
+        // Already present -> byte-identical no-op.
+        assert_eq!(copy_event(&out, SYNTH2, "T").unwrap(), out);
+        // Still a well-formed document (a later copy parses).
+        assert!(list_arrays(&out).unwrap().len() >= 3);
+    }
+
+    #[test]
+    fn duration_read_and_max_style_overwrite() {
+        assert_eq!(read_duration(SYNTH, "Evt").unwrap(), Some(10.0));
+        let out = set_duration(SYNTH, "Evt", 60.0).unwrap();
+        assert!(out.contains("vsnd_duration = 60.0"));
+        // No duration key -> unchanged.
+        let no_dur = SYNTH.replace("\t\tvsnd_duration = 10.0\n", "");
+        assert_eq!(set_duration(&no_dur, "Evt", 60.0).unwrap(), no_dur);
+    }
+
+    #[test]
+    fn line_comments_are_inert() {
+        // A commented-out entry, a commented brace, and a commented key must
+        // not resurrect entries, desync brace matching, or shadow real keys.
+        let commented = "<!-- kv3 encoding:text:version{x} format:generic:version{y} -->\n{\n\t// Old = { disabled\n\tEvt = \n\t{\n\t\t// vsnd_files = \"decoy\"\n\t\tvsnd_files = \n\t\t[\n\t\t\t\"a/stock.vsnd\",\n\t\t\t// \"a/disabled.vsnd\",\n\t\t\t\"a/live.vsnd\",\n\t\t]\n\t\tvsnd_duration = 10.0\n\t}\n\tAfter = \n\t{\n\t\tvsnd_files = \"b/x.vsnd\"\n\t}\n}\n";
+        let v = read_event(commented, "Evt").unwrap();
+        assert_eq!(v.entries, vec!["a/stock.vsnd", "a/live.vsnd"]);
+        // The event after the comment-laden one still parses (no desync).
+        assert_eq!(read_event(commented, "After").unwrap().entries, vec!["b/x.vsnd"]);
+        let arrays = list_arrays(commented).unwrap();
+        assert_eq!(arrays.len(), 2);
+        // Union doesn't resurrect the commented entry.
+        let out = add_entries(commented, "Evt", "vsnd_files", &["a/new.vsnd".into()]).unwrap();
+        let v2 = read_event(&out, "Evt").unwrap();
+        assert_eq!(v2.entries, vec!["a/stock.vsnd", "a/live.vsnd", "a/new.vsnd"]);
     }
 
     #[test]

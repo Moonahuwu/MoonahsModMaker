@@ -117,26 +117,82 @@ fn primary_ip() -> Option<IpAddr> {
     sock.local_addr().ok().map(|a| a.ip())
 }
 
+/// Where is the RCON listener ACTUALLY bound? Read the OS TCP table instead
+/// of guessing interfaces: the engine binds a seemingly arbitrary adapter
+/// (observed: a WSL/Hyper-V virtual adapter at 192.168.208.1 while the real
+/// LAN IP had nothing), which made every guessed-address connect fail
+/// "refused" even though the server was fine.
+fn rcon_listener_ips() -> Vec<IpAddr> {
+    let mut out: Vec<IpAddr> = Vec::new();
+    let Ok(o) = crate::procutil::quiet("netstat").args(["-ano", "-p", "tcp"]).output() else {
+        return out;
+    };
+    let text = String::from_utf8_lossy(&o.stdout);
+    for line in text.lines() {
+        let l = line.trim();
+        if !l.to_ascii_uppercase().starts_with("TCP") || !l.contains("LISTENING") {
+            continue;
+        }
+        // "TCP    192.168.208.1:27015    0.0.0.0:0    LISTENING    51372"
+        let Some(local) = l.split_whitespace().nth(1) else { continue };
+        let Some((ip, port)) = local.rsplit_once(':') else { continue };
+        if port != RCON_PORT.to_string() {
+            continue;
+        }
+        // A wildcard bind is reachable via loopback; otherwise use the bound ip.
+        let parsed = if ip == "0.0.0.0" {
+            IpAddr::V4(Ipv4Addr::LOCALHOST)
+        } else if let Ok(p) = ip.parse::<IpAddr>() {
+            p
+        } else {
+            continue;
+        };
+        if !out.contains(&parsed) {
+            out.push(parsed);
+        }
+    }
+    out
+}
+
+/// Is a server's RCON/game TCP listener up right now? Pure OS-table lookup -
+/// no packets touch the game port (backs the pre-launch double-launch guard).
+pub fn server_listening() -> bool {
+    !rcon_listener_ips().is_empty()
+}
+
 /// Try the command against the most likely host addresses (LAN IP first, then
 /// loopback) so the caller doesn't have to know which interface the server bound.
 pub fn exec_auto(password: &str, command: &str) -> Result<String, String> {
-    let mut candidates: Vec<IpAddr> = Vec::new();
+    // The ACTUAL bound address first (from the TCP table), then the guessed
+    // primary LAN IP and loopback as fallbacks for table-read failures.
+    let mut candidates: Vec<IpAddr> = rcon_listener_ips();
     if let Some(ip) = primary_ip() {
-        candidates.push(ip);
+        if !candidates.contains(&ip) {
+            candidates.push(ip);
+        }
     }
-    candidates.push(IpAddr::V4(Ipv4Addr::LOCALHOST));
+    let lo = IpAddr::V4(Ipv4Addr::LOCALHOST);
+    if !candidates.contains(&lo) {
+        candidates.push(lo);
+    }
 
-    let mut last_err = "no candidate addresses".to_string();
+    // Report EVERY address tried: showing only the last error hid the LAN
+    // attempt (the one that matters - the server binds RCON to the LAN IP,
+    // loopback refusing is normal) and made boot-time failures unreadable.
+    let mut errs: Vec<String> = Vec::new();
     for ip in candidates {
         match exec(SocketAddr::new(ip, RCON_PORT), password, command) {
             Ok(out) => return Ok(out),
-            // A refused/failed TCP connect → try the next address. An auth failure
-            // is definitive (right host, wrong password) so surface it immediately.
+            // An auth failure is definitive (right host, wrong password) so
+            // surface it immediately; other errors → try the next address.
             Err(e) if e.starts_with("RCON auth failed") => return Err(e),
-            Err(e) => last_err = e,
+            Err(e) => errs.push(e),
         }
     }
-    Err(last_err)
+    Err(format!(
+        "{}. If the server is still loading the map, RCON isn't open yet - wait for it to finish booting and try again.",
+        errs.join("; ")
+    ))
 }
 
 #[cfg(test)]

@@ -9,10 +9,10 @@ import { useToast } from "./Toaster";
 import type { DigiEntry, DigimodConfig, DigiSound } from "../types";
 
 /**
- * Jumpscares/Deaths tab — configures the DigiMaster HUD mod, which compiles
+ * Jumpscares/Deaths tab — configures the MoonahMasterUI HUD mod, which compiles
  * from embedded templates: drop in videos (any format — converted to VP9 webm
  * at compile) or PNGs, optional sounds, set the chances, done. Existing
- * DigiMaster paks can be imported wholesale: config, webms, images, and
+ * MoonahMasterUI paks (and legacy DigiMaster ones) can be imported wholesale: config, webms, images, and
  * sounds all come back out as editable entries.
  */
 const VIDEO_FILTERS = [
@@ -294,7 +294,7 @@ export function DigimodTab({
     });
   }
 
-  // Installed DigiMaster paks — offered for one-click import.
+  // Installed MoonahMasterUI/DigiMaster paks — offered for one-click import.
   const [digiPaks, setDigiPaks] = useState<UiModVpk[]>([]);
   const [importing, setImporting] = useState<string | null>(null);
   useEffect(() => {
@@ -552,7 +552,7 @@ export function DigimodTab({
       <div className="rounded-xl border border-red-500/20 bg-gradient-to-br from-red-500/10 via-zinc-900/40 to-zinc-900/40 p-4">
         <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
           <div className="min-w-[10rem]">
-            <h2 className="text-base font-bold text-zinc-100">DigiMaster</h2>
+            <h2 className="text-base font-bold text-zinc-100">MoonahMasterUI</h2>
             <p className="text-[11px] leading-4 text-zinc-500">
               random jumpscares + death videos,
               <br />
@@ -585,12 +585,12 @@ export function DigimodTab({
           />
         </div>
         <p className="mt-2 text-[10px] text-zinc-600">
-          These compile in as the defaults - the in-game F8 menu ("DigiMaster") can still
+          These compile in as the defaults - the in-game F8 menu ("MoonahMasterUI") can still
           tweak them per session.
         </p>
       </div>
 
-      {/* One-click adoption of an already-installed DigiMaster pak. */}
+      {/* One-click adoption of an already-installed MoonahMasterUI (or legacy DigiMaster) pak. */}
       {digiPaks.length > 0 && (
         <div
           className={`rounded-xl border p-4 ${
@@ -790,9 +790,9 @@ export function DigimodTab({
 
       <p className="text-[11px] text-zinc-600">
         Compile bakes this into your mod: videos become VP9 webm (panorama's requirement),
-        PNGs compile to textures, sounds get their own Digi.* sound events. This overrides
+        PNGs compile to textures, sounds get their own Moonah.* sound events. This overrides
         the game's base HUD layout - merge other HUD mods in the Mod Combiner tab, and
-        remove your old DigiMaster pak from addons once this one is installed.
+        remove your old jumpscare pak from addons once this one is installed.
       </p>
     </div>
   );

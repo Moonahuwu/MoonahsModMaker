@@ -46,6 +46,17 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "publisher": "Moonah",
+    "copyright": "(c) 2026 Moonah",
+    "shortDescription": "Build and install custom Deadlock mods",
+    "longDescription": "Moonahs Mod Maker builds custom Deadlock mods (music, sounds, images, wall art, jumpscares, custom servers) and compiles them into ready-to-install VPKs.",
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "headerImage": "installer/header.bmp",
+        "sidebarImage": "installer/sidebar.bmp"
+      }
+    },
     "resources": {
       "../../tools/vpk-helper/dist/vpk-helper.exe": "vpk-helper.exe"
     },

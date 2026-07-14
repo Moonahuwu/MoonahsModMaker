@@ -63,6 +63,10 @@ export interface Settings {
   /** Experimental: reveal the Easy Compile tab (compile any source file to
    *  its _c form into a folder of your choice - UI vtex etc.). */
   experimentalEasyCompile: boolean;
+  /** Experimental: reveal the Mod combiner tab (bundle other mods' vpks into
+   *  the compiled pack). Off by default; the tab stays visible while mods are
+   *  already bundled so nothing ships invisibly or gets stranded. */
+  experimentalModCombiner: boolean;
   /** Easy Compile: where compiled files land (persisted between runs). */
   easyCompileOutDir: string;
   /** Include UI-tab sound changes in the compiled build. Off by default — UI
@@ -75,11 +79,16 @@ export interface Settings {
    *  matchmaking, so they're excluded unless you opt in. */
   includeGameplay: boolean;
   /** Per-entity exclusions from the gameplay build: override keys (hero ability
-   *  keys, item names, `file::entity` for world entities, or `__global__`) the
-   *  user marked "not included". Edits stay saved but are filtered out at compile. */
+   *  keys, item names, `file::entity` for world entities, or `__cat:<section>`
+   *  for whole categories) the user marked "not included". Edits stay saved but
+   *  are filtered out at compile. */
   excludedConfigKeys: string[];
   /** What the Randomize button is allowed to touch. */
   randomizer: { skipMovement: boolean; skipCast: boolean; skipScale: boolean; includeGuns: boolean; noNegative: boolean; randomizeItemTiers: boolean; heroStats: boolean; heroInvestment: boolean; unsorted: boolean };
+  /** After launching a host: auto-enable sv_cheats and restart the map once
+   *  the server is up (joining the launch-state map loads a broken world;
+   *  a fresh restart is the reliable join state). Default on. */
+  hostAutoPrep: boolean;
   /** Name of the currently-loaded profile (build config). Empty until the first
    *  profile is bootstrapped. The active profile owns `importedMods`. */
   activeProfile: string;
@@ -158,12 +167,14 @@ export const DEFAULT_SETTINGS: Settings = {
   experimentalServer: false,
   experimentalUiMaster: false,
   experimentalEasyCompile: false,
+  experimentalModCombiner: false,
   easyCompileOutDir: "",
   includeUiSounds: false,
   source2ViewerPath: "",
   includeGameplay: false,
   excludedConfigKeys: [],
   randomizer: { skipMovement: false, skipCast: false, skipScale: true, includeGuns: false, noNegative: true, randomizeItemTiers: false, heroStats: false, heroInvestment: false, unsorted: false },
+  hostAutoPrep: true,
   activeProfile: "",
   knownSoundEvents: [],
   knownSweepFiles: [],
@@ -219,10 +230,60 @@ export function useSettings() {
     return () => clearTimeout(id);
   }, [settings]);
 
-  const update = (patch: Partial<Settings>) =>
-    setSettings((s) => ({ ...s, ...patch }));
+  // Accepts a plain patch or a function of the previous settings - use the
+  // functional form when the patch is computed from current values (e.g.
+  // toggling entries in a list), so rapid updates can't clobber each other.
+  const update = (patch: Partial<Settings> | ((prev: Settings) => Partial<Settings>)) =>
+    setSettings((s) => ({ ...s, ...(typeof patch === "function" ? patch(s) : patch) }));
 
   return { settings, update, ready };
+}
+
+/** Category of a world-entity override. The SINGLE source of truth for both
+ *  the config editor's per-category chips and the compile gate - if these two
+ *  ever classified differently, a chip could silently stop excluding. */
+export function worldOverrideCategory(
+  file: string,
+  entity: string,
+): "minions" | "boxes" | "powerups" | "other" {
+  if (file.includes("npc_units")) return "minions";
+  if (file.includes("misc")) {
+    if (entity.includes("breakable")) return "boxes";
+    if (entity.includes("powerup") || entity.includes("pickup")) return "powerups";
+  }
+  return "other";
+}
+
+/** How many gameplay edits will actually ship, given the master gate and the
+ *  exclusion keys. Mirrors the compile-time filtering exactly (same helpers),
+ *  so the editor's "will ship X of Y" summary can't lie. */
+export function gameplayShipCounts(
+  includeGameplay: boolean,
+  excludedKeys: string[],
+  vdata: { abilityKey: string }[],
+  globalsCount: number,
+  world: { file: string; entity: string }[],
+  itemNames: Set<string>,
+): { total: number; shipped: number } {
+  const ex = new Set(excludedKeys);
+  const total = vdata.length + globalsCount + world.length;
+  if (!includeGameplay) return { total, shipped: 0 };
+  let shipped = 0;
+  for (const o of vdata) {
+    if (ex.has(o.abilityKey)) continue;
+    const isItem = itemNames.has(o.abilityKey);
+    if (isItem && ex.has("__cat:items")) continue;
+    if (!isItem && ex.has("__cat:heroes")) continue;
+    shipped++;
+  }
+  if (!ex.has("__cat:global")) shipped += globalsCount;
+  for (const o of world) {
+    if (ex.has(`${o.file}::${o.entity}`)) continue;
+    const cat = worldOverrideCategory(o.file, o.entity);
+    if (cat !== "other" && ex.has(`__cat:${cat}`)) continue;
+    shipped++;
+  }
+  return { total, shipped };
 }
 
 /** Where a slot's tracks compile to (and what their `.vsnd` refs start with):
@@ -375,6 +436,9 @@ export function buildCompileConfig(
       // up-to-date check must speak the same fingerprint.
       currentHash: songHash(song),
       lastCompiledHash: song.lastCompiledHash,
+      // Where this song's render landed when the slot still merged - lets an
+      // unchanged track move to the stock path without its source audio.
+      reuseFrom: `${slotSoundFolder(ev, s.soundFolder)}/${song.soundName}.vsnd_c`,
     };
   });
   const posterCompiles: PosterCompile[] = posterOverrides.map((p) => ({

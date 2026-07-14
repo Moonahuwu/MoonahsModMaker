@@ -1,7 +1,7 @@
 /* ========================================================
-   DIGI MASTER v2 — class-based styles for runtime panels.
+   MOONAH MASTER UI — class-based styles for runtime panels.
    No per-video #id selectors: every panel the engine spawns
-   gets .digi-media + a preset class, so new media never
+   gets .moonah-media + a preset class, so new media never
    needs a CSS edit.
    ======================================================== */
 #MediaOverlayContainer
@@ -12,8 +12,8 @@
     visibility: visible;
 }
 
-/* Every spawned panel starts invisible; .digi-show runs the entrance. */
-.digi-media
+/* Every spawned panel starts invisible; .moonah-show runs the entrance. */
+.moonah-media
 {
     opacity: 0;
     transition-property: opacity, transform;
@@ -21,20 +21,20 @@
 }
 
 /* ---- Preset: fullscreen (jumpscares) ------------------- */
-.digi-fullscreen
+.moonah-fullscreen
 {
     width: 100%;
     height: 100%;
     horizontal-align: center;
     vertical-align: center;
 }
-.digi-fullscreen.digi-show
+.moonah-fullscreen.moonah-show
 {
     opacity: 1.0;
 }
 
 /* ---- Preset: banner (deaths — slides in from the left) -- */
-.digi-banner
+.moonah-banner
 {
     width: 25%;
     height: 25%;
@@ -46,7 +46,7 @@
     transition-duration: 2.0s;
     transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
 }
-.digi-banner.digi-show
+.moonah-banner.moonah-show
 {
     transform: translateX(0px);
     opacity: 1.0;

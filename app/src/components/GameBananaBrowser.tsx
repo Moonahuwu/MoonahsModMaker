@@ -6,10 +6,12 @@ import {
   gamebananaDownload,
   gamebananaFiles,
   gamebananaSearch,
+  libraryAdd,
   type GbFile,
   type GbSearchItem,
 } from "../lib/api";
 import type { Settings } from "../lib/settings";
+import type { LibraryItem } from "../types";
 import { useToast } from "./Toaster";
 
 function fmtSize(bytes: number): string {
@@ -36,7 +38,6 @@ const SORTS: { key: string; label: string }[] = [
 ];
 
 export function GameBananaBrowser({
-  settings,
   update,
   onImportPack,
   onBundleMany,
@@ -45,8 +46,7 @@ export function GameBananaBrowser({
   onAddToSlot,
   onBack,
 }: {
-  settings: Settings;
-  update: (patch: Partial<Settings>) => void;
+  update: (patch: Partial<Settings> | ((prev: Settings) => Partial<Settings>)) => void;
   /** Open the import review for a downloaded vpk. */
   onImportPack: (vpk: string) => void;
   /** A download held several vpks: add them all to the bundle list. */
@@ -57,8 +57,9 @@ export function GameBananaBrowser({
    *  that slot instead of bundling the vpk. */
   seed?: { query: string; sounds: boolean; slotId?: string; slotLabel?: string } | null;
   onSeedConsumed?: () => void;
-  /** Slot mode: extract these downloaded vpks' sounds into the slot. */
-  onAddToSlot?: (slotId: string, vpks: string[], modName: string) => void;
+  /** Slot mode: extract these downloaded vpks' sounds into the slot; loose
+   *  audio files (Sound submissions) add straight in as tracks. */
+  onAddToSlot?: (slotId: string, vpks: string[], modName: string, audios: string[]) => void;
   /** Return to the slot this screen was opened from (no sidebar tab). */
   onBack?: () => void;
 }) {
@@ -158,16 +159,49 @@ export function GameBananaBrowser({
     push("info", `Downloading "${item.name}"…`);
     try {
       const res = await gamebananaDownload(item.modId, file.downloadUrl, file.name, item.model);
+      // Credits attach to every vpk from this page - the whole point. Slot
+      // mode keeps them too: if the picker's "Install the whole mod" bundles
+      // the vpk later, the attribution must already be there.
+      update((prev) => {
+        const credits = { ...(prev.importedModCredits ?? {}) };
+        for (const v of res.vpks) credits[v] = res.info;
+        return { importedModCredits: credits };
+      });
       // Slot mode: the user wants the mp3s, not the pack - the sounds inside
-      // extract straight into the slot they came from.
+      // extract straight into the slot they came from (packs that change more
+      // than that slot open a picker on the other side).
       if (targetSlot && onAddToSlot) {
-        onAddToSlot(targetSlot.id, res.vpks, item.name);
+        onAddToSlot(targetSlot.id, res.vpks, item.name, res.audios);
         return;
       }
-      // Credits attach to every vpk from this page - the whole point.
-      const credits = { ...(settings.importedModCredits ?? {}) };
-      for (const v of res.vpks) credits[v] = res.info;
-      update({ importedModCredits: credits });
+      // A Sound submission with no pak, just audio (bare mp3/wav or a zip of
+      // them): copy the files into the Sound Library so they're durable, then
+      // point the user there.
+      if (res.vpks.length === 0) {
+        const added: LibraryItem[] = [];
+        for (const a of res.audios) {
+          try {
+            const copy = await libraryAdd(a);
+            added.push({
+              id: crypto.randomUUID(),
+              name: copy.name,
+              path: copy.path,
+              source: item.name,
+              addedAt: new Date().toISOString(),
+            });
+          } catch (e) {
+            push("error", `${a.split(/[\\/]/).pop()}: ${e}`);
+          }
+        }
+        if (added.length > 0) {
+          update((prev) => ({ soundLibrary: [...(prev.soundLibrary ?? []), ...added] }));
+          push(
+            "success",
+            `Added ${added.length} sound${added.length > 1 ? "s" : ""} from "${item.name}" to your Sound Library - Copy one there and paste it into a slot`,
+          );
+        }
+        return;
+      }
       if (res.vpks.length === 1) {
         onImportPack(res.vpks[0]);
       } else {
@@ -217,7 +251,7 @@ export function GameBananaBrowser({
         <div className="mt-2 flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/5 px-3 py-1.5 text-xs text-emerald-300">
           <span>
             Get extracts a pack's sounds straight into <b>{targetSlot.label}</b> as tracks
-            - no vpk bundling.
+            - mods that change more than this slot open a picker first.
           </span>
           <button
             onClick={() => setTargetSlot(null)}

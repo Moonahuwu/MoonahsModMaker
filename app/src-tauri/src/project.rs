@@ -792,6 +792,175 @@ impl Project {
                     "sounds/music/music_stinger_t3_killed.vsnd",
                     "soundevents/music.vsndevts",
                 ),
+                // --- Tab: Sinners (the Sinner's Sacrifice soul vault: its
+                //     slot-machine music, hums and hit/jackpot sounds; the
+                //     game calls the events "Vault"). The escalating hit
+                //     jingles live on each event's `track_2.track_vsnd_files`
+                //     scalar (the melodic layer; `vsnd_files` on those events
+                //     is the shared heavy thud) - the merger promotes a scalar
+                //     to an array when a track is added. ---
+                slot(
+                    "sinners_music",
+                    "sinners",
+                    "Machine music (loop)",
+                    "Vault.Idle_Lp",
+                    "vsnd_files",
+                    "sounds/npc/neutrals/vaults/vault_music.vsnd",
+                    "soundevents/npc/neut_vaults.vsndevts",
+                ),
+                slot(
+                    "sinners_active_lp",
+                    "sinners",
+                    "Active hum (loop)",
+                    "Vault.Active_Lp",
+                    "vsnd_files",
+                    "sounds/world/vault/vault_active_lp.vsnd",
+                    "soundevents/npc/neut_vaults.vsndevts",
+                ),
+                slot(
+                    "sinners_critical_lp",
+                    "sinners",
+                    "Critical hum (loop)",
+                    "Vault.Critical_Lp",
+                    "vsnd_files",
+                    "sounds/world/vault/vault_foley_idle_lp.vsnd",
+                    "soundevents/npc/neut_vaults.vsndevts",
+                ),
+                slot(
+                    "sinners_start_active",
+                    "sinners",
+                    "Activation sting",
+                    "Vault.Start_Active",
+                    "vsnd_files",
+                    "sounds/mods/weapon/lucky/lucky_proc_01.vsnd",
+                    "soundevents/npc/neut_vaults.vsndevts",
+                ),
+                slot(
+                    "sinners_hit_heavy",
+                    "sinners",
+                    "Hit thud (heavy)",
+                    "Props.Vault.HeavyImpact",
+                    "vsnd_files",
+                    "sounds/npc/neutrals/vaults/vault_hit_heavy_01.vsnd",
+                    "soundevents/npc/neut_vaults.vsndevts",
+                ),
+                slot(
+                    "sinners_hit_success",
+                    "sinners",
+                    "Final hit (jackpot)",
+                    "Vault.HitSuccess",
+                    "vsnd_files",
+                    "sounds/npc/neutrals/vaults/vault_hit_stinger_05.vsnd",
+                    "soundevents/npc/neut_vaults.vsndevts",
+                ),
+                slot(
+                    "sinners_hit_fail",
+                    "sinners",
+                    "Final hit (failed)",
+                    "Vault.HitFail",
+                    "vsnd_files",
+                    "sounds/npc/neutrals/vaults/vault_hit_stinger_01.vsnd",
+                    "soundevents/npc/neut_vaults.vsndevts",
+                ),
+                slot(
+                    "sinners_ding",
+                    "sinners",
+                    "Success ding",
+                    "Vault.WheelSuccessDing",
+                    "vsnd_files",
+                    "sounds/mods/weapon/lucky/lucky_proc_01.vsnd",
+                    "soundevents/npc/neut_vaults.vsndevts",
+                ),
+                slot(
+                    "sinners_payout",
+                    "sinners",
+                    "Payout burst",
+                    "Props.Vault.Destruction",
+                    "vsnd_files",
+                    "sounds/npc/neutrals/vaults/vault_payout.vsnd",
+                    "soundevents/npc/neut_vaults.vsndevts",
+                ),
+                slot(
+                    "sinners_jingle_1",
+                    "sinners",
+                    "Hit jingle 1",
+                    "Vault.Impact.Stinger_01",
+                    "track_2.track_vsnd_files",
+                    "sounds/npc/neutrals/vaults/vault_hit_stinger_01.vsnd",
+                    "soundevents/npc/neut_vaults.vsndevts",
+                ),
+                slot(
+                    "sinners_jingle_2",
+                    "sinners",
+                    "Hit jingle 2",
+                    "Vault.Impact.Stinger_02",
+                    "track_2.track_vsnd_files",
+                    "sounds/npc/neutrals/vaults/vault_hit_stinger_02.vsnd",
+                    "soundevents/npc/neut_vaults.vsndevts",
+                ),
+                slot(
+                    "sinners_jingle_3",
+                    "sinners",
+                    "Hit jingle 3",
+                    "Vault.Impact.Stinger_03",
+                    "track_2.track_vsnd_files",
+                    "sounds/npc/neutrals/vaults/vault_hit_stinger_03.vsnd",
+                    "soundevents/npc/neut_vaults.vsndevts",
+                ),
+                slot(
+                    "sinners_jingle_4",
+                    "sinners",
+                    "Hit jingle 4",
+                    "Vault.Impact.Stinger_04",
+                    "track_2.track_vsnd_files",
+                    "sounds/npc/neutrals/vaults/vault_hit_stinger_04.vsnd",
+                    "soundevents/npc/neut_vaults.vsndevts",
+                ),
+                slot(
+                    "sinners_jingle_5",
+                    "sinners",
+                    "Hit jingle 5",
+                    "Vault.Impact.Stinger_05",
+                    "track_2.track_vsnd_files",
+                    "sounds/npc/neutrals/vaults/vault_hit_stinger_05.vsnd",
+                    "soundevents/npc/neut_vaults.vsndevts",
+                ),
+                slot(
+                    "sinners_jingle_1b",
+                    "sinners",
+                    "Hit jingle 1b",
+                    "Vault.Impact.Stinger_01b",
+                    "track_2.track_vsnd_files",
+                    "sounds/npc/neutrals/vaults/vault_hit_stinger_01b.vsnd",
+                    "soundevents/npc/neut_vaults.vsndevts",
+                ),
+                slot(
+                    "sinners_jingle_2b",
+                    "sinners",
+                    "Hit jingle 2b",
+                    "Vault.Impact.Stinger_02b",
+                    "track_2.track_vsnd_files",
+                    "sounds/npc/neutrals/vaults/vault_hit_stinger_02b.vsnd",
+                    "soundevents/npc/neut_vaults.vsndevts",
+                ),
+                slot(
+                    "sinners_jingle_3b",
+                    "sinners",
+                    "Hit jingle 3b",
+                    "Vault.Impact.Stinger_03b",
+                    "track_2.track_vsnd_files",
+                    "sounds/npc/neutrals/vaults/vault_hit_stinger_03b.vsnd",
+                    "soundevents/npc/neut_vaults.vsndevts",
+                ),
+                slot(
+                    "sinners_jingle_4b",
+                    "sinners",
+                    "Hit jingle 4b",
+                    "Vault.Impact.Stinger_04b",
+                    "track_2.track_vsnd_files",
+                    "sounds/npc/neutrals/vaults/vault_hit_stinger_04b.vsnd",
+                    "soundevents/npc/neut_vaults.vsndevts",
+                ),
                 // --- Tab: Heroes (Billy = "PunkGoat") ---
                 slot(
                     "hero_billy_blasted",
@@ -1227,6 +1396,18 @@ impl Project {
                     "sounds/gameplay/orbs/xp_orbs_local_player_deny_01.vsnd",
                     "soundevents/gameplay.vsndevts",
                 ),
+                // The vault's hit-window cue reuses the active-reload window
+                // sound - it reads as generic hit feedback, so it lives here
+                // rather than in the Sinners tab.
+                slot(
+                    "gameplay_vault_hit_window",
+                    "gameplay",
+                    "Vault hit window",
+                    "Vault.LightHitWindow",
+                    "vsnd_files",
+                    "sounds/mods/weapon/active_reload/item_active_reload_window_entered.vsnd",
+                    "soundevents/npc/neut_vaults.vsndevts",
+                ),
             ],
             icon_mods: vec![],
             sound_overrides: vec![],
@@ -1259,8 +1440,16 @@ mod tests {
         let p = Project::default_for_match_intro();
         let json = serde_json::to_string_pretty(&p).unwrap();
         let back: Project = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.events.len(), 81);
+        assert_eq!(back.events.len(), 100);
         assert_eq!(back.events[0].id, "intro_king");
+        // The Sinner's Sacrifice vault tab: normal arrays and the track_2
+        // scalar jingle slots both present.
+        assert!(back.events.iter().any(|e| e.id == "sinners_music"
+            && e.event_name == "Vault.Idle_Lp"
+            && e.group == "sinners"));
+        assert!(back.events.iter().any(|e| e.id == "sinners_jingle_1"
+            && e.array_key == "track_2.track_vsnd_files"
+            && e.events_relpath == "soundevents/npc/neut_vaults.vsndevts"));
         // The match-flow / stinger / brawl groups are present.
         assert!(back.events.iter().any(|e| e.id == "match_win"
             && e.event_name == "Music.Match.Win"

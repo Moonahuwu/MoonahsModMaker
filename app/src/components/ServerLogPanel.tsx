@@ -20,15 +20,31 @@ export function ServerLogPanel({ deadlockRoot }: { deadlockRoot: string }) {
   useEffect(() => {
     if (!deadlockRoot || paused) return;
     let alive = true;
-    const tick = () =>
+    let timer: number | undefined;
+    let last = "";
+    const tick = () => {
+      if (document.hidden) {
+        timer = window.setTimeout(tick, 6000);
+        return;
+      }
       readServerLog(deadlockRoot)
-        .then((t) => alive && setRaw(t))
-        .catch(() => {});
+        .then((t) => {
+          if (!alive) return;
+          // Back off while nothing changes (no server running / idle): a
+          // stale tail re-polls at 6s instead of hammering disk at 1.5s.
+          const delay = t === last ? 6000 : 1500;
+          last = t;
+          setRaw(t);
+          timer = window.setTimeout(tick, delay);
+        })
+        .catch(() => {
+          if (alive) timer = window.setTimeout(tick, 6000);
+        });
+    };
     tick();
-    const id = setInterval(tick, 1500);
     return () => {
       alive = false;
-      clearInterval(id);
+      if (timer !== undefined) clearTimeout(timer);
     };
   }, [deadlockRoot, paused]);
 

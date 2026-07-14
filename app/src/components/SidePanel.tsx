@@ -200,6 +200,7 @@ export function SidePanel({
   onRemoveEntry,
   onRestoreEntry,
   onDecodeStock,
+  onDecodeStockPath,
   onEditAdopted,
   onDownloadEntry,
   onDownloadSong,
@@ -229,6 +230,9 @@ export function SidePanel({
   onRemoveEntry: (eventName: string, ref: string) => void;
   onRestoreEntry: (eventName: string, ref: string) => void;
   onDecodeStock: (ref: string, vpk?: string) => Promise<string>;
+  /** Same decode but returns the local FILE PATH (layers feed it to ffmpeg;
+   *  the URL variant above is for playback only). */
+  onDecodeStockPath: (ref: string, vpk?: string) => Promise<string>;
   onEditAdopted: (slotId: string, ref: string, vpk: string, label: string) => void;
   onDownloadEntry: (ref: string, vpk?: string) => void;
   onDownloadSong: (sourceMp3: string) => void;
@@ -383,6 +387,22 @@ export function SidePanel({
               {view.vsndDuration.toFixed(1)}s
             </span>
           )}
+          {(() => {
+            // Event-level modifiers: the game applies these to every file the
+            // event plays, yours included - shown so an in-game loudness or
+            // pitch surprise is explainable from the app.
+            const mods: string[] = [];
+            if (view?.volume != null && view.volume !== 1) mods.push(`vol x${+view.volume.toFixed(2)}`);
+            if (view?.pitch != null && view.pitch !== 1) mods.push(`pitch x${+view.pitch.toFixed(2)}`);
+            return mods.length > 0 ? (
+              <span
+                title="The event itself applies these in-game, on top of your edits - every sound in this event (yours included) plays through them"
+                className="rounded bg-zinc-800/80 px-1.5 py-0.5 text-[11px] text-zinc-400"
+              >
+                {mods.join(" · ")}
+              </span>
+            ) : null;
+          })()}
           {moveTargets && onMoveToTab && (
             <select
               value={ev.group}
@@ -527,6 +547,11 @@ export function SidePanel({
                   onLoadStock={() => void loadStock(true)}
                   compareDefault={compareByDefault}
                   bodyRef={(el) => registerSongEl?.(s.id, el)}
+                  onFetchOriginal={
+                    ev.stockEntry && !unplayableRef(ev.stockEntry)
+                      ? () => onDecodeStockPath(ev.stockEntry)
+                      : undefined
+                  }
                 />
               )}
             </DraggableSong>

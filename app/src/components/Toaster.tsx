@@ -9,13 +9,21 @@ import {
 } from "react";
 
 type Kind = "info" | "success" | "error";
+/** Optional inline action (e.g. "Undo" after a destructive change). */
+interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
 interface Toast {
   id: number;
   kind: Kind;
   text: string;
+  action?: ToastAction;
 }
 
-const ToastCtx = createContext<{ push: (kind: Kind, text: string) => void }>({
+const ToastCtx = createContext<{
+  push: (kind: Kind, text: string, action?: ToastAction) => void;
+}>({
   push: () => {},
 });
 
@@ -33,12 +41,15 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const idRef = useRef(0);
 
-  const push = useCallback((kind: Kind, text: string) => {
+  const push = useCallback((kind: Kind, text: string, action?: ToastAction) => {
     const id = ++idRef.current;
-    setToasts((t) => [...t, { id, kind, text }]);
-    const ttl = kind === "error" ? 6000 : 3000;
+    setToasts((t) => [...t, { id, kind, text, action }]);
+    // Action toasts linger long enough to actually click the button.
+    const ttl = kind === "error" || action ? 6000 : 3000;
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), ttl);
   }, []);
+
+  const dismiss = (id: number) => setToasts((t) => t.filter((x) => x.id !== id));
 
   return (
     <ToastCtx.Provider value={{ push }}>
@@ -57,6 +68,17 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             >
               <span className="mt-0.5 font-bold opacity-80">{ICON[t.kind]}</span>
               <span className="leading-snug">{t.text}</span>
+              {t.action && (
+                <button
+                  onClick={() => {
+                    t.action!.onClick();
+                    dismiss(t.id);
+                  }}
+                  className="ml-auto shrink-0 self-center rounded border border-current/40 px-2 py-0.5 text-xs font-semibold opacity-90 transition hover:opacity-100"
+                >
+                  {t.action.label}
+                </button>
+              )}
             </motion.div>
           ))}
         </AnimatePresence>

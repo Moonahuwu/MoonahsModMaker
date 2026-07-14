@@ -1,5 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import { MotionConfig } from "motion/react";
 import App from "./App";
 import { ModMenuOverlay } from "./components/ModMenuOverlay";
 import { ToastProvider } from "./components/Toaster";
@@ -22,9 +23,13 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     {isOverlay ? (
       <ModMenuOverlay />
     ) : (
-      <ToastProvider>
-        <App />
-      </ToastProvider>
+      // reducedMotion="user": every motion/react animation collapses to a
+      // simple crossfade when Windows' "show animations" is off.
+      <MotionConfig reducedMotion="user">
+        <ToastProvider>
+          <App />
+        </ToastProvider>
+      </MotionConfig>
     )}
   </React.StrictMode>,
 );
