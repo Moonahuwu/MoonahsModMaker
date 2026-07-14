@@ -183,6 +183,12 @@ VIAddVersionKey "ProductVersion" "${VERSION}"
 !define LVM_SETTEXTBKCOLOR 0x1026
 !define MUI_BGCOLOR "${EIM_BG}"
 !define MUI_TEXTCOLOR "${EIM_FG}"
+; The finish page's Run/Desktop-shortcut checkboxes: themed checkboxes ignore
+; text color (NSIS bug #443) and MUI only strips the theme in high-contrast
+; mode - this makes that strip unconditional so MUI_TEXTCOLOR applies. The
+; generic sweep below can't reach them: the finish page is a full-window
+; dialog, not the #32770 the sweep finds.
+!define MUI_FORCECLASSICCONTROLS
 !define MUI_CUSTOMFUNCTION_GUIINIT EimDarkGuiInit
 !define MUI_CUSTOMFUNCTION_UNGUIINIT un.EimDarkGuiInit
 
