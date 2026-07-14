@@ -187,6 +187,12 @@ export function SetupSection({
               title="Compare to original by default"
               desc="Open the per-track original-vs-yours waveform panel automatically on each song."
             />
+            <Toggle
+              checked={settings.enableJumpscares}
+              onChange={(v) => update({ enableJumpscares: v })}
+              title="Jumpscares / Deaths (MoonahMasterUI)"
+              desc="Show the Jumpscares tab without the mod installed: start from a blank template, add your own videos and sounds, and compiling generates the whole mod for you. The tab always shows when the mod is detected in your addons."
+            />
           </div>
         </Section>
 

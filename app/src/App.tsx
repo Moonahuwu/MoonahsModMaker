@@ -835,10 +835,12 @@ export default function App() {
     if (settings.experimentalUiMaster) out.push(UIMASTER);
     if (settings.experimentalEasyCompile) out.push(EASY_COMPILE);
     out.push(POSTERS);
-    // Jumpscares only when the MoonahMasterUI engine is in the user's mods (or
-    // this project already configures it).
+    // Jumpscares when the MoonahMasterUI engine is in the user's mods, this
+    // project already configures it, or the settings toggle opts in (build
+    // your own from the blank template, no installed mod needed).
     if (
       digimodOn ||
+      settings.enableJumpscares ||
       (project?.digimod &&
         (project.digimod.scares.length > 0 ||
           project.digimod.deaths.length > 0 ||
@@ -866,6 +868,7 @@ export default function App() {
     settings.experimentalEasyCompile,
     settings.experimentalModCombiner,
     settings.importedMods,
+    settings.enableJumpscares,
     digimodOn,
   ]);
 

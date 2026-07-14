@@ -67,6 +67,11 @@ export interface Settings {
    *  the compiled pack). Off by default; the tab stays visible while mods are
    *  already bundled so nothing ships invisibly or gets stranded. */
   experimentalModCombiner: boolean;
+  /** Reveal the Jumpscares/Deaths (MoonahMasterUI) tab even when the mod
+   *  isn't detected in the addons: start from a blank template and generate
+   *  the whole mod from scratch. The tab also self-shows on detection or when
+   *  the project already configures it, independent of this toggle. */
+  enableJumpscares: boolean;
   /** Easy Compile: where compiled files land (persisted between runs). */
   easyCompileOutDir: string;
   /** Include UI-tab sound changes in the compiled build. Off by default — UI
@@ -168,6 +173,7 @@ export const DEFAULT_SETTINGS: Settings = {
   experimentalUiMaster: false,
   experimentalEasyCompile: false,
   experimentalModCombiner: false,
+  enableJumpscares: false,
   easyCompileOutDir: "",
   includeUiSounds: false,
   source2ViewerPath: "",
