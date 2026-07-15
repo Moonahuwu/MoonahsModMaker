@@ -352,7 +352,7 @@ export function SetupSection({
           className="inline-flex items-center gap-1.5 rounded-full border border-indigo-500/40 bg-indigo-500/10 px-2.5 py-1 text-[11px] font-medium text-indigo-300"
         >
           <DiscordIcon className="h-3.5 w-3.5" />
-          moonah
+          moonah00
         </span>
         {GAMEBANANA_URL ? (
           <button
