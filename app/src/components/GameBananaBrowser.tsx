@@ -86,6 +86,27 @@ export function GameBananaBrowser({
   // resolve late and stomp the results the user is actually looking at.
   const reqSeq = useRef(0);
 
+  // Infinite scroll: a sentinel under the grid loads the next page as it
+  // nears the viewport (600px ahead, so the seam is rarely visible). The
+  // callback rides a ref so the one observer always sees fresh state.
+  const moreRef = useRef<HTMLDivElement | null>(null);
+  const loadMoreRef = useRef<() => void>(() => {});
+  loadMoreRef.current = () => {
+    if (!complete && !loading) void load(activeQuery, page + 1, true);
+  };
+  useEffect(() => {
+    const el = moreRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) loadMoreRef.current();
+      },
+      { rootMargin: "600px" },
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, []);
+
   async function load(q: string, p: number, append: boolean, s = sort, m = model) {
     const req = ++reqSeq.current;
     setLoading(true);
@@ -568,16 +589,22 @@ export function GameBananaBrowser({
           Nothing found{activeQuery ? ` for "${activeQuery}"` : ""}.
         </p>
       )}
-      {!complete && !loading && (
-        <div className="mt-4 flex justify-center">
+      {/* Infinite scroll: the sentinel sits under the grid and pulls the next
+          page as it approaches the viewport. The button stays as a fallback
+          (and for keyboard users). */}
+      <div ref={moreRef} className="mt-4 flex justify-center">
+        {!complete && loading && items.length > 0 && (
+          <span className="text-xs text-zinc-500">Loading more…</span>
+        )}
+        {!complete && !loading && (
           <button
             onClick={() => void load(activeQuery, page + 1, true)}
             className="rounded-md border border-zinc-700 px-4 py-1.5 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-white"
           >
             Load more
           </button>
-        </div>
-      )}
+        )}
+      </div>
     </section>
   );
 }
