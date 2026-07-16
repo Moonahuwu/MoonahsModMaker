@@ -421,6 +421,76 @@ function routeGroupFor(relpath: string, eventName: string): string {
   return UNSORTED;
 }
 
+/** Misc-tab card: what the bundled mods put in the final pack that has no
+ *  editor tab (models, effects, textures, raw files) - so nothing ships
+ *  invisibly. Counts load lazily per mod. */
+function BundledExtrasCard({
+  mods,
+  names,
+  helperPath,
+  pakPath,
+}: {
+  mods: string[];
+  names: Record<string, string>;
+  helperPath: string;
+  pakPath: string;
+}) {
+  const [rows, setRows] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let live = true;
+    void (async () => {
+      for (const m of mods) {
+        try {
+          const c = await scanPackContents(helperPath, pakPath, m);
+          const parts = (
+            [
+              [c.overwrites.length, "replaced original sounds"],
+              [c.ownSounds.length, "own sound files"],
+              [c.models.length, "model files"],
+              [c.particles.length, "effect files"],
+              [c.materials.length, "texture files"],
+              [c.panorama.length, "UI files"],
+              [c.other.length, "other files"],
+            ] as [number, string][]
+          )
+            .filter(([n]) => n > 0)
+            .map(([n, label]) => `${n} ${label}`)
+            .join(" · ");
+          if (!live) return;
+          setRows((p) => ({ ...p, [m]: parts || "nothing beyond its sound events" }));
+        } catch {
+          if (live) setRows((p) => ({ ...p, [m]: "couldn't scan this pack" }));
+        }
+      }
+    })();
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mods.join("|")]);
+  if (mods.length === 0) return null;
+  return (
+    <div className="mb-4 rounded-lg border border-zinc-800 bg-zinc-900/40 p-3">
+      <span className="text-xs font-semibold text-zinc-300">Also in your final pack</span>
+      <p className="mt-0.5 text-[11px] leading-relaxed text-zinc-500">
+        Bundled mods ship files with no editor tab here (models, effects, textures…) -
+        they ride along byte-for-byte. Full file tree + per-file excludes: Options, then
+        Preview build, in the bottom bar. Remove a whole mod in the Mod combiner.
+      </p>
+      <div className="mt-2 flex flex-col gap-1">
+        {mods.map((m) => (
+          <div key={m} className="flex items-baseline gap-2 text-[11px]">
+            <span className="shrink-0 font-medium text-zinc-300" title={m}>
+              {names[m] || m.split(/[\\/]/).pop()}
+            </span>
+            <span className="min-w-0 truncate text-zinc-500">{rows[m] ?? "scanning…"}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /** A slot carries user content worth persisting. */
 function slotHasContent(e: EventProject): boolean {
   return (
@@ -646,6 +716,8 @@ export default function App() {
   // queue is done, the combiner's link picker offers them one at a time.
   const pendingAutoLink = useRef<string[]>([]);
   const [autoLink, setAutoLink] = useState<string | null>(null);
+  // A compile is running (the Backdrop sigil glows + spins faster).
+  const [compileBusy, setCompileBusy] = useState(false);
   // Refs sourced from stock-path replacement files: always converted into the
   // user's own tracks on import (there's nothing to "link" — the ref IS the
   // original's path), with the pack's file dropped from the bundle after.
@@ -1791,14 +1863,20 @@ export default function App() {
       try {
         const stockRefs = contents.overwrites.map((f) => f.replace(/_c$/, ""));
         if (stockRefs.length > 0) {
-          // Make sure the soundevents files this pack touches — and any HERO
-          // file its replacement sounds belong to (e.g. a Drifter ability mod
-          // when you've never opened Drifter) — are decompiled locally, so
-          // the reverse lookup can actually find the owning events.
+          // Make sure the soundevents files this pack touches — and any file
+          // its replacement sounds could belong to — are decompiled locally,
+          // so the reverse lookup can actually find the owning events:
+          // hero files for ability/weapon sounds, the per-hero VO file for
+          // voicelines (they do NOT live in hero/<name>.vsndevts), and every
+          // file the project's own slots use (covers the shared player/
+          // gameplay/music/world families, e.g. a parry-sound mod).
           const ensure = new Set<string>(events.map((e) => e.eventsRelpath));
+          for (const e of proj.events) ensure.add(e.eventsRelpath);
           for (const f of contents.overwrites) {
-            const m = f.match(/^sounds\/(?:abilities|vo|weapons)\/([a-z0-9_]+)\//);
+            const m = f.match(/^sounds\/(?:abilities|weapons)\/([a-z0-9_]+)\//);
             if (m) ensure.add(`soundevents/hero/${m[1]}.vsndevts`);
+            const vo = f.match(/^sounds\/vo\/([a-z0-9_]+)\//);
+            if (vo) ensure.add(`soundevents/vo/generated_vo_hero_${vo[1]}.vsndevts`);
           }
           const vroot = await ensureVanillaFiles([...ensure]);
           const hits = await eventsForRefs(vroot, stockRefs);
@@ -4054,7 +4132,7 @@ export default function App() {
       {/* Animated backdrop for the content pane (the opaque sidebar covers its
           own strip). Swap the placeholder inside Backdrop for the game-style
           animation when it lands. */}
-      <Backdrop accent={accentFor({ group: activeTab, side: "" })} />
+      <Backdrop accent={accentFor({ group: activeTab, side: "" })} busy={compileBusy} />
       {/* Left sidebar: brand + tabs — fixed, never scrolls. Opaque so the
           backdrop animation only shows through the main content area.
           Width is user-adjustable via the drag handle on its right edge. */}
@@ -4574,6 +4652,19 @@ export default function App() {
           )
         ) : (
           <>
+            {activeTab === UNSORTED && settings.importedMods.length > 0 && (
+              <BundledExtrasCard
+                mods={settings.importedMods}
+                names={Object.fromEntries(
+                  settings.importedMods.map((m) => [
+                    m,
+                    settings.importedModCredits?.[m]?.name || "",
+                  ]),
+                )}
+                helperPath={settings.vpkHelperPath}
+                pakPath={settings.deadlockPak}
+              />
+            )}
             {activeTab === "ui" && (
               <label className="mb-4 flex cursor-pointer items-start gap-2.5 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
                 <input
@@ -4607,6 +4698,7 @@ export default function App() {
           <CompileBar
             settings={settings}
             update={updateSettings}
+            onRunningChange={setCompileBusy}
             events={project.events}
             iconMods={project.iconMods ?? []}
             soundOverrides={project.soundOverrides ?? []}

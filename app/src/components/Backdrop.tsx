@@ -50,13 +50,18 @@ function useSigilSvg(file: string): string | null {
 const BASE_DEG_PER_SEC = 360 / 180;
 /** Category-switch kick: spin speeds up by this factor, then eases back. */
 const KICK = 7;
+/** While a compile runs the spin cruises at this multiple (with a soft glow),
+ *  easing back to 1 when the run ends. */
+const BUSY_CRUISE = 3;
 
-export function Backdrop({ accent = "#34d399" }: { accent?: string }) {
+export function Backdrop({ accent = "#34d399", busy = false }: { accent?: string; busy?: boolean }) {
   const outer = useSigilSvg("outer.svg");
   const inner = useSigilSvg("inner.svg");
   const outerRef = useRef<HTMLDivElement | null>(null);
   const innerRef = useRef<HTMLDivElement | null>(null);
   const speedRef = useRef(KICK); // boots with a kick too - settles on its own
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
 
   // Every category switch nudges the spin, which then fades back to cruise.
   useEffect(() => {
@@ -70,8 +75,10 @@ export function Backdrop({ accent = "#34d399" }: { accent?: string }) {
     const tick = (t: number) => {
       const dt = Math.min((t - last) / 1000, 0.1);
       last = t;
-      // Exponential ease back toward cruise speed (~2.5s to settle).
-      speedRef.current += (1 - speedRef.current) * Math.min(1, dt * 1.2);
+      // Exponential ease toward cruise speed (~2.5s to settle) - a compile
+      // in flight cruises faster until it's done.
+      const target = busyRef.current ? BUSY_CRUISE : 1;
+      speedRef.current += (target - speedRef.current) * Math.min(1, dt * 1.2);
       angle += BASE_DEG_PER_SEC * speedRef.current * dt;
       // Slow horizontal sway tied to the rotation phase — applied to BOTH
       // layers so the triangle never slides out of its circle (only the
@@ -92,7 +99,9 @@ export function Backdrop({ accent = "#34d399" }: { accent?: string }) {
 
   const layerStyle: React.CSSProperties = {
     color: accent,
-    transition: "color 1.2s ease", // tint crossfades between tabs
+    // Tint crossfades between tabs; the compile glow fades in and out.
+    transition: "color 1.2s ease, filter 1.2s ease",
+    filter: busy ? "drop-shadow(0 0 16px currentColor)" : "drop-shadow(0 0 0px transparent)",
   };
   return (
     <div

@@ -29,6 +29,7 @@ const pakName = (n: number) => `pak${String(n).padStart(2, "0")}_dir.vpk`;
 export function CompileBar({
   settings,
   update,
+  onRunningChange,
   events,
   iconMods,
   soundOverrides,
@@ -47,6 +48,8 @@ export function CompileBar({
 }: {
   settings: Settings;
   update: (patch: Partial<Settings>) => void;
+  /** A compile pipeline is running (drives the Backdrop's busy glow). */
+  onRunningChange?: (running: boolean) => void;
   events: EventProject[];
   iconMods: IconMod[];
   soundOverrides: SoundOverride[];
@@ -72,6 +75,10 @@ export function CompileBar({
   tabLabels: Record<string, string>;
 }) {
   const [running, setRunning] = useState(false);
+  useEffect(() => {
+    onRunningChange?.(running);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [running]);
   const [showOptions, setShowOptions] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [launching, setLaunching] = useState(false);
