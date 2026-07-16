@@ -152,6 +152,7 @@ pub fn run() {
             commands::pack_icons,
             commands::hero_images,
             commands::running_processes,
+            commands::file_stamp,
             commands::digimod_detected,
             commands::list_ui_mods,
             commands::import_digimod,

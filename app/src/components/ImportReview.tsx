@@ -191,6 +191,9 @@ export function ImportReview({
   review,
   onCancel,
   onConfirm,
+  onSkip,
+  queuedCount = 0,
+  defaults,
 }: {
   review: PackReview;
   onCancel: () => void;
@@ -205,6 +208,12 @@ export function ImportReview({
     mode: "linked" | "absorb",
     zeroGain: boolean,
   ) => void;
+  /** Skip this pack and open the next queued review (multi-import). */
+  onSkip?: () => void;
+  /** How many more packs wait after this one - shows the Skip button. */
+  queuedCount?: number;
+  /** Remembered choices from the last import (settings-persisted). */
+  defaults?: { mode: "linked" | "absorb"; zeroGain: boolean; bundle: boolean };
 }) {
   useEscape(onCancel);
   const allEventKeys = useMemo(
@@ -219,9 +228,9 @@ export function ImportReview({
     const prior = new Set(review.priorExcludes);
     return new Set(allFiles.filter((f) => !prior.has(f)));
   });
-  const [bundle, setBundle] = useState(true);
-  const [mode, setMode] = useState<"linked" | "absorb">("linked");
-  const [zeroGain, setZeroGain] = useState(false);
+  const [bundle, setBundle] = useState(defaults?.bundle ?? true);
+  const [mode, setMode] = useState<"linked" | "absorb">(defaults?.mode ?? "linked");
+  const [zeroGain, setZeroGain] = useState(defaults?.zeroGain ?? false);
 
   const segs = useMemo(
     () =>
@@ -413,88 +422,94 @@ export function ImportReview({
         </div>
 
         <footer className="border-t border-zinc-800 p-5 pt-4">
-          {/* How the selected sound events come in. */}
+          {/* How the selected sound events come in: a compact mode switch with
+              a one-line hint. Choices are remembered across imports. */}
           {allEventKeys.length > 0 && (
-            <div className="mb-3 flex flex-col gap-1.5">
-              <label className="flex cursor-pointer items-start gap-2.5">
-                <input
-                  type="radio"
-                  name="import-mode"
-                  checked={mode === "linked"}
-                  onChange={() => setMode("linked")}
-                  className="mt-0.5 accent-violet-500"
-                />
-                <span className="text-xs text-zinc-400">
-                  <span className="font-medium text-zinc-300">Keep linked to the pack</span>
-                  <span className="text-zinc-600">
-                    {" "}
-                    - tracks show a “{review.name.replace(/\.vpk$/i, "")}” tag so you always know
-                    where they came from; audio comes from the pack. (“replaces original” tracks
-                    are always converted into your own - they have no event entry to link.)
-                  </span>
-                </span>
-              </label>
-              <label className="flex cursor-pointer items-start gap-2.5">
-                <input
-                  type="radio"
-                  name="import-mode"
-                  checked={mode === "absorb"}
-                  onChange={() => setMode("absorb")}
-                  className="mt-0.5 accent-violet-500"
-                />
-                <span className="text-xs text-zinc-400">
-                  <span className="font-medium text-zinc-300">Make them my tracks</span>
-                  <span className="text-zinc-600">
-                    {" "}
-                    - every selected sound is converted into your own editable track
-                    (trim/gain/rename, compiled by you), as if you'd added the audio yourself.
-                  </span>
-                </span>
-              </label>
+            <div className="mb-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs text-zinc-400">Bring sounds in as</span>
+                <div className="flex overflow-hidden rounded-md border border-zinc-700">
+                  <button
+                    onClick={() => setMode("linked")}
+                    className={`px-3 py-1 text-xs transition ${
+                      mode === "linked"
+                        ? "bg-violet-600/25 font-medium text-violet-200"
+                        : "text-zinc-500 hover:text-zinc-300"
+                    }`}
+                  >
+                    Linked to the pack
+                  </button>
+                  <button
+                    onClick={() => setMode("absorb")}
+                    className={`border-l border-zinc-700 px-3 py-1 text-xs transition ${
+                      mode === "absorb"
+                        ? "bg-violet-600/25 font-medium text-violet-200"
+                        : "text-zinc-500 hover:text-zinc-300"
+                    }`}
+                  >
+                    My own tracks
+                  </button>
+                </div>
+              </div>
+              <p className="mt-1.5 text-[11px] leading-relaxed text-zinc-600">
+                {mode === "linked"
+                  ? `Tracks keep a "${review.name.replace(/\.vpk$/i, "")}" tag so you know where they came from. ("replaces original" tracks are always converted into your own.)`
+                  : "Every selected sound becomes your own editable track (trim, gain, rename), as if you'd added the audio yourself."}
+              </p>
             </div>
           )}
-          {allEventKeys.length > 0 && (
-            <label className="mb-1.5 flex cursor-pointer items-start gap-2.5">
+          <div className="flex flex-wrap gap-x-5 gap-y-1.5">
+            {allEventKeys.length > 0 && (
+              <label
+                className="flex cursor-pointer items-center gap-2 text-xs text-zinc-400"
+                title="Converted tracks come in as-is; unchecked adds the usual +6 dB boost new tracks get."
+              >
+                <input
+                  type="checkbox"
+                  checked={zeroGain}
+                  onChange={(e) => setZeroGain(e.target.checked)}
+                  className="accent-emerald-500"
+                />
+                Keep the mod's volume (0 dB)
+              </label>
+            )}
+            <label
+              className="flex cursor-pointer items-center gap-2 text-xs text-zinc-400"
+              title={`Included files ride along in your combined/ build; unchecked files above are left out.${
+                mode === "absorb" ? " Sounds you absorb are dropped from the bundle automatically." : ""
+              }`}
+            >
               <input
                 type="checkbox"
-                checked={zeroGain}
-                onChange={(e) => setZeroGain(e.target.checked)}
-                className="mt-0.5 accent-emerald-500"
+                checked={bundle}
+                onChange={(e) => setBundle(e.target.checked)}
+                className="accent-emerald-500"
               />
-              <span className="text-xs text-zinc-400">
-                Keep the mod's original volume (0 dB gain)
-                <span className="text-zinc-600">
-                  {" "}
-                  - converted tracks come in as-is; unchecked adds the usual +6 dB boost new
-                  tracks get.
-                </span>
-              </span>
+              Bundle files on compile
             </label>
-          )}
-          <label className="flex cursor-pointer items-start gap-2.5">
-            <input
-              type="checkbox"
-              checked={bundle}
-              onChange={(e) => setBundle(e.target.checked)}
-              className="mt-0.5 accent-emerald-500"
-            />
-            <span className="text-xs text-zinc-400">
-              Bundle the included files on compile
-              <span className="text-zinc-600">
-                {" "}
-                - they ride along in your <span className="font-mono">combined/</span> build.
-                Unchecked files above are left out.
-                {mode === "absorb" ? " Sounds you absorb are dropped from the bundle automatically." : ""}
+          </div>
+          <div className="mt-3 flex items-center justify-end gap-2">
+            {queuedCount > 0 && (
+              <span className="mr-auto text-[11px] text-zinc-600">
+                {queuedCount} more mod{queuedCount === 1 ? "" : "s"} queued after this one
               </span>
-            </span>
-          </label>
-          <div className="mt-3 flex justify-end gap-2">
+            )}
             <button
               onClick={onCancel}
+              title={queuedCount > 0 ? "Close and drop the queued mods too" : "Close without importing"}
               className="rounded-md border border-zinc-700 px-4 py-1.5 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-white"
             >
-              Cancel
+              Cancel{queuedCount > 0 ? " all" : ""}
             </button>
+            {queuedCount > 0 && onSkip && (
+              <button
+                onClick={onSkip}
+                title="Skip this mod and review the next one"
+                className="rounded-md border border-zinc-700 px-4 py-1.5 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-white"
+              >
+                Skip, next mod
+              </button>
+            )}
             <button
               onClick={() =>
                 onConfirm(selected, bundle, allFiles.filter((f) => !fileSel.has(f)), mode, zeroGain)

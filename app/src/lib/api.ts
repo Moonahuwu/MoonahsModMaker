@@ -1002,6 +1002,11 @@ export function runningProcesses(names: string[]): Promise<string[]> {
   return invoke("running_processes", { names });
 }
 
+/** Cheap file identity (`len|mtime`), "" if unreadable - game-update detection. */
+export function fileStamp(path: string): Promise<string> {
+  return invoke("file_stamp", { path });
+}
+
 export interface AppUpdate {
   current: string;
   latest: string;

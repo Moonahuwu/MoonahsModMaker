@@ -5465,6 +5465,26 @@ pub async fn clear_pushed_ui(citadel_dir: String) -> Result<u32, String> {
     .map_err(|e| e.to_string())?
 }
 
+/// A cheap identity stamp for a file (`len|mtime_secs`), or "" when it can't
+/// be read. Powers "the game updated" detection: the compile bar compares
+/// pak01_dir.vpk's stamp against the one saved at the last patch-fix and
+/// only surfaces "Fix for new patch" when they differ.
+#[tauri::command]
+pub fn file_stamp(path: String) -> String {
+    match std::fs::metadata(&path) {
+        Ok(m) => {
+            let secs = m
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            format!("{}|{}", m.len(), secs)
+        }
+        Err(_) => String::new(),
+    }
+}
+
 /// Which of `names` (case-insensitive exe names) are currently running.
 /// Powers the compile bar's "Deadlock / Source 2 Viewer is open" warning —
 /// both hold locks on the pak/addons that make compiles and installs fail

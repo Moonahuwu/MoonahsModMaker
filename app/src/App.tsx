@@ -284,6 +284,11 @@ function heroAbilSlotId(codename: string, eventName: string): string {
     .toLowerCase()}`;
 }
 
+/** Hero voiceline soundevents file → the owning hero's codename. Voicelines
+ *  live in their own per-hero vo file, NOT soundevents/hero/<code>.vsndevts,
+ *  so imports must recognize this path too or they land in Misc. */
+const VO_HERO_FILE_RE = /^soundevents\/vo\/generated_vo_hero_(.+)\.vsndevts$/;
+
 /** Dynamic per-item sound slots (Items tab), id-prefixed like hero slots. */
 const ITEM_SLOT_PREFIX = "itemsnd_";
 
@@ -458,7 +463,48 @@ function reconcileProject(saved: Project, def: Project): Project {
       ? { ...e, group: routeGroupFor(e.eventsRelpath, e.eventName) }
       : e,
   );
-  return { ...saved, events: enforceSoundNames(dedupeReimportedSongs(events)) };
+  return {
+    ...saved,
+    events: enforceSoundNames(dedupeReimportedSongs(migrateVoicelineSlots(events))),
+  };
+}
+
+/** One-time cleanup: older imports parked hero voiceline events in Misc under
+ *  imp_/auto_ ids, but the Heroes drill-in looks slots up by heroAbilSlotId -
+ *  those edits were invisible there. Re-id them to the drill-in slot, folding
+ *  content into an existing one (adopted refs dedupe against what it carries). */
+function migrateVoicelineSlots(events: EventProject[]): EventProject[] {
+  const moved = new Map<string, EventProject[]>();
+  const rest: EventProject[] = [];
+  for (const e of events) {
+    const m = isAutoSlot(e.id) ? e.eventsRelpath.match(VO_HERO_FILE_RE) : null;
+    if (m) {
+      const id = heroAbilSlotId(m[1], e.eventName);
+      moved.set(id, [...(moved.get(id) ?? []), e]);
+    } else rest.push(e);
+  }
+  if (!moved.size) return events;
+  const fold = (target: EventProject, extras: EventProject[]): EventProject =>
+    extras.reduce((t, e) => {
+      const have = new Set([
+        ...t.adopted.map((a) => a.reference),
+        ...t.songs.map((s) => s.importedRef).filter((r): r is string => !!r),
+      ]);
+      return {
+        ...t,
+        songs: [...t.songs, ...e.songs.filter((s) => !s.importedRef || !have.has(s.importedRef))],
+        adopted: [...t.adopted, ...e.adopted.filter((a) => !have.has(a.reference))],
+        excludedEntries: [...new Set([...t.excludedEntries, ...e.excludedEntries])],
+        removedEntries: [...new Set([...t.removedEntries, ...e.removedEntries])],
+      };
+    }, target);
+  const out = rest.map((e) => (moved.has(e.id) ? fold(e, moved.get(e.id)!) : e));
+  for (const [id, list] of moved) {
+    if (rest.some((e) => e.id === id)) continue;
+    const [first, ...more] = list;
+    out.push(fold({ ...first, id, group: "heroes" }, more));
+  }
+  return out;
 }
 
 /** One-time cleanup: re-importing a pack used to re-convert already-absorbed
@@ -591,6 +637,15 @@ export default function App() {
   // Mod-import review modal state (+ the scanned events awaiting confirm).
   const [packReview, setPackReview] = useState<PackReview | null>(null);
   const pendingImportEvents = useRef<ImportEvent[] | null>(null);
+  // Picking/dropping several vpks queues them here: reviews run one at a
+  // time, the next opening when the current one closes (confirm, cancel, or
+  // a failed scan). Stamped with the profile so a mid-queue profile switch
+  // drops the leftovers instead of importing into the wrong profile.
+  const importQueue = useRef<{ profile: string; vpks: string[] }>({ profile: "", vpks: [] });
+  // Packs that got bundled without credits during this run - once the whole
+  // queue is done, the combiner's link picker offers them one at a time.
+  const pendingAutoLink = useRef<string[]>([]);
+  const [autoLink, setAutoLink] = useState<string | null>(null);
   // Refs sourced from stock-path replacement files: always converted into the
   // user's own tracks on import (there's nothing to "link" — the ref IS the
   // original's path), with the pack's file dropped from the bundle after.
@@ -1296,23 +1351,11 @@ export default function App() {
           }
         }
 
-        // Dropped a mod .vpk → open the import review for it. Several at once
-        // fall back to plain bundle-list adds (one review at a time).
-        if (vpks.length === 1) {
+        // Dropped mod .vpk(s) → open the import review. Several at once queue
+        // up and review one at a time (same flow as the multi-select picker).
+        if (vpks.length > 0) {
           setActiveTab(MOD_COMBINER);
-          void startPackImport(vpks[0]);
-        } else if (vpks.length > 1) {
-          const cur = settingsRef.current.importedMods;
-          const next = [...cur];
-          for (const v of vpks) if (!next.includes(v)) next.push(v);
-          const addedN = next.length - cur.length;
-          if (addedN > 0) {
-            updateSettings({ importedMods: next });
-            setActiveTab(MOD_COMBINER);
-            push("success", `Added ${addedN} mods to bundle - import them one at a time to pick their sounds`);
-          } else {
-            push("info", "Those mod(s) are already in the combine list");
-          }
+          queuePackImports(vpks);
         }
 
         // Dropped audio → the library shelf when that tab is open, an OPEN
@@ -1687,6 +1730,47 @@ export default function App() {
 
   // Step 1 of importing a mod: scan the pack and open the review modal — the
   // user picks which sound events to break out and whether to bundle the rest.
+  /** Kick off reviews for one or more picked/dropped vpks. The first opens
+   *  now; the rest wait in the queue (appended to anything already waiting
+   *  in the same profile) and open one at a time as reviews close. */
+  function queuePackImports(vpks: string[]) {
+    if (vpks.length === 0) return;
+    const [first, ...rest] = vpks;
+    const profile = settingsRef.current.activeProfile;
+    const carry = importQueue.current.profile === profile ? importQueue.current.vpks : [];
+    importQueue.current = { profile, vpks: [...carry, ...rest] };
+    if (importQueue.current.vpks.length > 0) {
+      push(
+        "info",
+        `${importQueue.current.vpks.length} more mod(s) waiting - the next review opens when this one closes`,
+      );
+    }
+    void startPackImport(first);
+  }
+
+  /** Open the next queued review, if any. Returns false when the run is over. */
+  function advanceImportQueue(): boolean {
+    const q = importQueue.current;
+    if (q.vpks.length === 0) return false;
+    if (settingsRef.current.activeProfile !== q.profile) {
+      importQueue.current = { profile: "", vpks: [] };
+      pendingAutoLink.current = [];
+      push("info", "Dropped the queued mod imports - the profile changed. Re-pick them in the target profile.");
+      return false;
+    }
+    const [next, ...rest] = q.vpks;
+    importQueue.current = { ...q, vpks: rest };
+    void startPackImport(next);
+    return true;
+  }
+
+  /** A review closed (confirm/skip/cancel/failed scan): open the next queued
+   *  one, or - with the whole run over - offer credits for any pack that came
+   *  in without them (the combiner's "who made this?" picker). */
+  function reviewClosed() {
+    if (!advanceImportQueue()) setAutoLink(pendingAutoLink.current.shift() ?? null);
+  }
+
   async function startPackImport(vpk: string) {
     const proj = projectRef.current;
     const s = settingsRef.current;
@@ -1754,7 +1838,10 @@ export default function App() {
         const cur = curated.get(key);
         // `_shared.vsndevts` isn't a real hero — those events fall through to
         // the family router (a "_shared" drill-in would never render).
-        const heroMatch = ie.eventsRelpath.match(/^soundevents\/hero\/(?!_shared\.)(.+)\.vsndevts$/);
+        // Voicelines live in per-hero vo files and belong to Heroes too.
+        const heroMatch =
+          ie.eventsRelpath.match(/^soundevents\/hero\/(?!_shared\.)(.+)\.vsndevts$/) ??
+          ie.eventsRelpath.match(VO_HERO_FILE_RE);
         let group: string;
         let folds = false;
         let label = eventLabel(ie.eventName);
@@ -1817,6 +1904,7 @@ export default function App() {
       });
     } catch (e) {
       push("error", `Pack scan failed: ${e}`);
+      reviewClosed();
     }
   }
 
@@ -2057,14 +2145,17 @@ export default function App() {
         }
         // `_shared.vsndevts` isn't a real hero — those events fall through to
         // the family router (a "_shared" drill-in would never render).
-        const heroMatch = ie.eventsRelpath.match(/^soundevents\/hero\/(?!_shared\.)(.+)\.vsndevts$/);
+        // Voicelines live in per-hero vo files and belong to Heroes too.
+        const heroMatch =
+          ie.eventsRelpath.match(/^soundevents\/hero\/(?!_shared\.)(.+)\.vsndevts$/) ??
+          ie.eventsRelpath.match(VO_HERO_FILE_RE);
         const curated = curatedId.get(`${ie.eventsRelpath}::${ie.eventName}::${ie.arrayKey}`);
         if (curated && !isImportSlot(curated)) {
           // Fold into a curated/hero/item slot that already exists.
           const n = adoptInto(curated, () => slotsById.get(curated)!, ie.refs);
           if (n) (adoptedRefs += n), counts.folded++;
         } else if (heroMatch) {
-          // Hero ability sound → that hero's drill-in (Heroes tab).
+          // Hero ability sound / voiceline → that hero's drill-in (Heroes tab).
           const codename = heroMatch[1];
           const id = heroAbilSlotId(codename, ie.eventName);
           const n = adoptInto(id, () => mkSlot(id, "heroes", ie), ie.refs);
@@ -2282,8 +2373,17 @@ export default function App() {
         "success",
         `Import done - ${adoptedRefs} sound(s): ${counts.hero} hero, ${counts.item} item, ${counts.ui} UI, ${counts.sorted} sorted to tabs, ${counts.misc} misc, ${counts.folded} folded into existing${absorbNote}${exclNote}${iconNote}`,
       );
+      // Bundled with no attribution (GameBanana downloads arrive pre-linked):
+      // remember it for the "who made this?" pass once the run is over.
+      if (bundle && !settingsRef.current.importedModCredits?.[source]) {
+        pendingAutoLink.current.push(source);
+      }
     } catch (e) {
       push("error", `Import failed: ${e}`);
+    } finally {
+      // Queued multi-imports proceed only after this one fully commits -
+      // overlapping applies would race the settings writes above.
+      reviewClosed();
     }
   }
 
@@ -4182,22 +4282,23 @@ export default function App() {
           <ImportedMods
             settings={settings}
             update={updateSettings}
-            onImportPack={startPackImport}
+            onImportPack={(v) => queuePackImports(Array.isArray(v) ? v : [v])}
             digimod={project?.digimod ?? null}
             onDigimodChange={(next) =>
               setProject((prev) => (prev ? { ...prev, digimod: next } : prev))
             }
+            autoLinkFor={autoLink}
+            onAutoLinkDone={() => setAutoLink(pendingAutoLink.current.shift() ?? null)}
+            onBrowseGameBanana={() => {
+              setGbSeed(null);
+              setGbReturn(MOD_COMBINER);
+              setActiveTab(GAMEBANANA);
+            }}
           />
         ) : activeTab === GAMEBANANA ? (
           <GameBananaBrowser
             update={updateSettings}
-            onImportPack={startPackImport}
-            onBundleMany={(vpks) => {
-              const cur = settingsRef.current.importedMods;
-              const next = [...cur];
-              for (const v of vpks) if (!next.includes(v)) next.push(v);
-              updateSettings({ importedMods: next });
-            }}
+            onImportPack={(v) => queuePackImports(Array.isArray(v) ? v : [v])}
             seed={gbSeed}
             onSeedConsumed={() => setGbSeed(null)}
             onAddToSlot={(slotId, vpks, modName, audios) =>
@@ -4578,10 +4679,29 @@ export default function App() {
         {packReview && (
           <ImportReview
             review={packReview}
-            onCancel={() => setPackReview(null)}
-            onConfirm={(sel, bundle, excluded, mode, zeroGain) =>
-              void applyPackImport(packReview.vpk, sel, bundle, excluded, mode, zeroGain)
-            }
+            queuedCount={importQueue.current.vpks.length}
+            defaults={{
+              mode: settings.importMode,
+              zeroGain: settings.importZeroGain,
+              bundle: settings.importBundle,
+            }}
+            onCancel={() => {
+              setPackReview(null);
+              // Cancel bails on the whole run - Skip is the per-pack out.
+              const dropped = importQueue.current.vpks.length;
+              importQueue.current = { profile: "", vpks: [] };
+              if (dropped > 0) push("info", `Import cancelled - dropped ${dropped} queued mod(s)`);
+              reviewClosed();
+            }}
+            onSkip={() => {
+              setPackReview(null);
+              reviewClosed();
+            }}
+            onConfirm={(sel, bundle, excluded, mode, zeroGain) => {
+              // Remember the footer choices for next time.
+              updateSettings({ importMode: mode, importZeroGain: zeroGain, importBundle: bundle });
+              void applyPackImport(packReview.vpk, sel, bundle, excluded, mode, zeroGain);
+            }}
           />
         )}
       </AnimatePresence>

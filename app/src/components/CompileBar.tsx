@@ -6,6 +6,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   compileProject,
+  fileStamp,
   runningProcesses,
   installToGame,
   launchGame,
@@ -132,6 +133,27 @@ export function CompileBar({
       : lockRisks.some((p) => p.startsWith("deadlock") || p.startsWith("citadel"))
         ? "Deadlock is running - close it (or at least stay in the menu) or installs can fail on locked files"
         : "Source 2 Viewer is open - if it has the game pak loaded, compiles that read it can fail";
+
+  // Game-update detection: pak01's identity vs. the stamp saved at the last
+  // patch-fix. A mismatch surfaces the big "Fix for new patch" button; the
+  // rest of the time it stays out of the way (a copy lives under Options).
+  // First run just seeds the baseline - the wizard imported from this pak.
+  const [patchDetected, setPatchDetected] = useState(false);
+  const pakStampRef = useRef("");
+  useEffect(() => {
+    if (!settings.deadlockPak) return;
+    let cancelled = false;
+    void fileStamp(settings.deadlockPak).then((stamp) => {
+      if (cancelled || !stamp) return;
+      pakStampRef.current = stamp;
+      if (!settings.lastPakStamp) update({ lastPakStamp: stamp });
+      else setPatchDetected(stamp !== settings.lastPakStamp);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.deadlockPak]);
 
   // How many items changed since their last successful compile — the pulse +
   // chip on the Compile button, so a needed recompile is never a guess.
@@ -340,6 +362,11 @@ export function CompileBar({
       // stock-ref repair already happened.
       if (canCompile)
         await compile(fixed.events, { ...settings, vanillaRoot: fixed.vanillaRoot });
+      // The mods now match this pak - remember it so the "game updated"
+      // prompt stands down until the next real patch.
+      const stamp = pakStampRef.current || (await fileStamp(settings.deadlockPak));
+      if (stamp) update({ lastPakStamp: stamp });
+      setPatchDetected(false);
     } finally {
       setFixing(false);
     }
@@ -764,17 +791,19 @@ export function CompileBar({
                 </button>
               </span>
             </div>
+            {/* Where the mod lands in the game. The slot decides the in-game
+                pakNN name - shown in both modes so that's never a mystery. */}
             <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
-              <span className="w-12 font-medium text-zinc-400">Install</span>
+              <span className="w-16 font-medium text-zinc-400">Game slot</span>
               <div className="inline-flex overflow-hidden rounded-lg border border-zinc-700">
                 <button
                   onClick={() => update({ installSlot: null })}
                   className={`px-3 py-1 font-medium transition ${
                     auto ? "bg-zinc-100 text-zinc-900" : "text-zinc-400 hover:text-zinc-200"
                   }`}
-                  title="Pick the lowest free slot, then reuse it for later installs"
+                  title="Install into the lowest free addon slot"
                 >
-                  Add (next free)
+                  Auto (next free)
                 </button>
                 <button
                   onClick={() =>
@@ -783,9 +812,9 @@ export function CompileBar({
                   className={`px-3 py-1 font-medium transition ${
                     !auto ? "bg-zinc-100 text-zinc-900" : "text-zinc-400 hover:text-zinc-200"
                   }`}
-                  title="Always install into a specific pakNN_dir.vpk slot"
+                  title="Always install into this exact slot, replacing whatever is there (it gets backed up)"
                 >
-                  Replace slot
+                  Always slot
                 </button>
               </div>
 
@@ -814,15 +843,15 @@ export function CompileBar({
                 </label>
               )}
 
-              {auto && (
-                <span className="text-zinc-500">
-                  {slots?.nextFree
-                    ? `→ ${pakName(slots.nextFree)} (${slots.used.length}/${slots.maxSlot} slots used)`
+              <span className="text-zinc-500">
+                {auto
+                  ? slots?.nextFree
+                    ? `installs as ${pakName(slots.nextFree)} (${slots.used.length}/${slots.maxSlot} slots used)`
                     : slots
                       ? "no free slots - all 99 in use"
-                      : "set addons folder in Setup"}
-                </span>
-              )}
+                      : "set addons folder in Setup"
+                  : `installs as ${pakName(settings.installSlot ?? 1)}`}
+              </span>
 
               <label className="inline-flex items-center gap-1.5 text-zinc-400">
                 <input
@@ -869,20 +898,27 @@ export function CompileBar({
               </button>
             </div>
 
+            {/* The build folder on disk - separate from the game slot above.
+                Rarely touched, so it reads quieter. */}
             <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
-              <span className="w-12 font-medium text-zinc-400">Output</span>
+              <span className="w-16 font-medium text-zinc-400">Build file</span>
               <div className="inline-flex overflow-hidden rounded-lg border border-zinc-700">
-                {(["folder", "vpk"] as const).map((mode) => (
+                {(["vpk", "folder"] as const).map((mode) => (
                   <button
                     key={mode}
                     onClick={() => update({ outputMode: mode })}
+                    title={
+                      mode === "vpk"
+                        ? "Pack the build into a .vpk (what installing needs)"
+                        : "Leave the build as loose files - for inspecting or packing yourself"
+                    }
                     className={`px-3 py-1 font-medium transition ${
                       settings.outputMode === mode
                         ? "bg-zinc-100 text-zinc-900"
                         : "text-zinc-400 hover:text-zinc-200"
                     }`}
                   >
-                    {mode === "folder" ? "Folder only" : "Pack .vpk"}
+                    {mode === "folder" ? "Loose folder" : "Pack .vpk"}
                   </button>
                 ))}
               </div>
@@ -891,10 +927,19 @@ export function CompileBar({
                   value={settings.vpkName}
                   onChange={(e) => update({ vpkName: e.target.value })}
                   spellCheck={false}
+                  title="The file name in your output folder only - in the game it's renamed to the slot's pakNN name above"
                   className="w-36 rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 text-zinc-200 outline-none focus:border-violet-500/70"
                 />
               )}
               <span className="truncate text-zinc-600">→ {settings.outputDir}</span>
+              <button
+                onClick={() => void fixForNewPatch()}
+                disabled={busy || !settings.deadlockPak}
+                title="Re-pull the live game's sound data, repair drifted stock tracks, recompile. The big amber button offers this by itself when a game update is detected - this is the run-it-anyway trigger."
+                className="ml-auto rounded-md border border-zinc-700 px-3 py-1.5 font-medium text-zinc-400 transition hover:border-amber-500/60 hover:text-amber-200 disabled:opacity-40"
+              >
+                {fixing ? "Fixing…" : "⚙ Fix for new patch"}
+              </button>
             </div>
           </motion.div>
         )}
@@ -952,17 +997,23 @@ export function CompileBar({
         )}
       </AnimatePresence>
 
-      {/* Control row — the only row visible by default */}
+      {/* Control row — the only row visible by default. "Fix for new patch"
+          appears only when pak01 actually changed since the last fix (a copy
+          always lives under Options for manual runs). */}
       <div className="flex flex-wrap items-center gap-3">
-        <motion.button
-          whileTap={{ scale: 0.97 }}
-          onClick={() => void fixForNewPatch()}
-          disabled={busy || !settings.deadlockPak}
-          title="New game patch? Re-pull the live game's sound data from pak01, repair every drifted stock track, then recompile your mods against the new patch - all in one click."
-          className="rounded-lg border border-amber-500/50 bg-amber-500/10 px-4 py-2 text-sm font-semibold text-amber-200 transition hover:bg-amber-500/20 disabled:opacity-40"
-        >
-          {fixing ? "Fixing…" : "⚙ Fix for new patch"}
-        </motion.button>
+        {(patchDetected || fixing) && (
+          <motion.button
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            whileTap={{ scale: 0.97 }}
+            onClick={() => void fixForNewPatch()}
+            disabled={busy || !settings.deadlockPak}
+            title="Deadlock updated since your last fix. One click: re-pull the live game's sound data, repair every drifted stock track, then recompile your mods against the new patch."
+            className="rounded-lg border border-amber-500/50 bg-amber-500/10 px-4 py-2 text-sm font-semibold text-amber-200 transition hover:bg-amber-500/20 disabled:opacity-40"
+          >
+            {fixing ? "Fixing…" : "⚙ Game updated - fix my mods"}
+          </motion.button>
+        )}
 
         <button
           onClick={() => setShowOptions((v) => !v)}
@@ -971,7 +1022,7 @@ export function CompileBar({
               ? "border-zinc-500 text-zinc-200"
               : "border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200"
           }`}
-          title="Install slot, output mode and .vpk name"
+          title="Game slot, build output, export / preview, patch fix"
         >
           Options {showOptions ? "▴" : "▾"}
         </button>

@@ -40,17 +40,15 @@ const SORTS: { key: string; label: string }[] = [
 export function GameBananaBrowser({
   update,
   onImportPack,
-  onBundleMany,
   seed,
   onSeedConsumed,
   onAddToSlot,
   onBack,
 }: {
   update: (patch: Partial<Settings> | ((prev: Settings) => Partial<Settings>)) => void;
-  /** Open the import review for a downloaded vpk. */
-  onImportPack: (vpk: string) => void;
-  /** A download held several vpks: add them all to the bundle list. */
-  onBundleMany: (vpks: string[]) => void;
+  /** Open the import review for downloaded vpk(s) - several queue up and
+   *  review one at a time. */
+  onImportPack: (vpk: string | string[]) => void;
   /** A slot's "Find on GameBanana" jump: search this immediately on open.
    *  `sounds` locks the browser to the Sound submission type; `slotId` puts
    *  the browser in slot mode - Get extracts the pack's audio straight into
@@ -202,20 +200,83 @@ export function GameBananaBrowser({
         }
         return;
       }
-      if (res.vpks.length === 1) {
-        onImportPack(res.vpks[0]);
-      } else {
-        onBundleMany(res.vpks);
-        push(
-          "success",
-          `Added ${res.vpks.length} vpks from "${item.name}" - review them in the Mod combiner`,
-        );
-      }
+      // One vpk or several - the review queue handles both.
+      onImportPack(res.vpks.length === 1 ? res.vpks[0] : res.vpks);
     } catch (e) {
       push("error", `${e}`);
     } finally {
       setBusy((b) => (b === item.modId ? null : b));
     }
+  }
+
+  // Multi-select (bundle mode only): check several mods, then one "Get all"
+  // downloads them in turn and their import reviews queue one after another.
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const selKey = (i: GbSearchItem) => `${i.model}:${i.modId}`;
+  const toggleSel = (i: GbSearchItem) =>
+    setSel((prev) => {
+      const next = new Set(prev);
+      if (next.has(selKey(i))) next.delete(selKey(i));
+      else next.add(selKey(i));
+      return next;
+    });
+
+  async function getSelected() {
+    const picked = items.filter((i) => sel.has(selKey(i)));
+    if (picked.length === 0) return;
+    setBulkBusy(true);
+    const vpks: string[] = [];
+    const shelved: LibraryItem[] = [];
+    let failed = 0;
+    for (const [n, item] of picked.entries()) {
+      push("info", `Downloading "${item.name}" (${n + 1}/${picked.length})…`);
+      try {
+        const files = await gamebananaFiles(item.modId, item.model);
+        if (files.length === 0) {
+          push("error", `"${item.name}" has no downloadable files`);
+          failed++;
+          continue;
+        }
+        // Multi-file pages: take the most-downloaded file (the page's main
+        // release in practice) - Get a page individually to pick another.
+        const file = [...files].sort((a, b) => b.downloadCount - a.downloadCount)[0];
+        const res = await gamebananaDownload(item.modId, file.downloadUrl, file.name, item.model);
+        update((prev) => {
+          const credits = { ...(prev.importedModCredits ?? {}) };
+          for (const v of res.vpks) credits[v] = res.info;
+          return { importedModCredits: credits };
+        });
+        vpks.push(...res.vpks);
+        if (res.vpks.length === 0) {
+          for (const a of res.audios) {
+            try {
+              const copy = await libraryAdd(a);
+              shelved.push({
+                id: crypto.randomUUID(),
+                name: copy.name,
+                path: copy.path,
+                source: item.name,
+                addedAt: new Date().toISOString(),
+              });
+            } catch (e) {
+              push("error", `${a.split(/[\\/]/).pop()}: ${e}`);
+            }
+          }
+        }
+      } catch (e) {
+        push("error", `"${item.name}": ${e}`);
+        failed++;
+      }
+    }
+    if (shelved.length > 0) {
+      update((prev) => ({ soundLibrary: [...(prev.soundLibrary ?? []), ...shelved] }));
+      push("success", `${shelved.length} loose sound(s) went to your Sound Library`);
+    }
+    setSel(new Set());
+    setBulkBusy(false);
+    if (vpks.length > 0) onImportPack(vpks);
+    else if (failed === picked.length) push("error", "Nothing downloaded - see the errors above");
   }
 
   // While searching, "Most liked" re-sorts the loaded results exactly (the
@@ -358,6 +419,31 @@ export function GameBananaBrowser({
         </p>
       )}
 
+      {sel.size > 0 && (
+        <div className="sticky top-2 z-10 mt-3 flex items-center gap-3 rounded-lg border border-yellow-500/40 bg-zinc-950/95 px-3 py-2 text-xs shadow-lg">
+          <span className="font-medium text-yellow-200">
+            {sel.size} mod{sel.size === 1 ? "" : "s"} selected
+          </span>
+          <span className="hidden text-zinc-600 sm:inline">
+            downloads run in turn, then the reviews open one at a time
+          </span>
+          <button
+            onClick={() => setSel(new Set())}
+            disabled={bulkBusy}
+            className="ml-auto rounded-md border border-zinc-700 px-3 py-1 text-zinc-400 transition hover:border-zinc-500 hover:text-white disabled:opacity-40"
+          >
+            Clear
+          </button>
+          <button
+            onClick={() => void getSelected()}
+            disabled={bulkBusy}
+            className="rounded-md bg-emerald-600 px-4 py-1 font-medium text-white transition hover:bg-emerald-500 disabled:opacity-40"
+          >
+            {bulkBusy ? "Downloading…" : `Get all ${sel.size}`}
+          </button>
+        </div>
+      )}
+
       <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
         <AnimatePresence initial={false}>
           {visible.map((item) => (
@@ -366,8 +452,25 @@ export function GameBananaBrowser({
               layout
               initial={{ opacity: 0, y: 4 }}
               animate={{ opacity: 1, y: 0 }}
-              className="flex flex-col overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950/40 transition hover:border-zinc-600"
+              className={`relative flex flex-col overflow-hidden rounded-lg border bg-zinc-950/40 transition ${
+                sel.has(selKey(item))
+                  ? "border-yellow-500/60"
+                  : "border-zinc-800 hover:border-zinc-600"
+              }`}
             >
+              {!targetSlot && (
+                <label
+                  title="Select for a bulk Get"
+                  className="absolute left-1.5 top-1.5 z-10 flex cursor-pointer items-center rounded bg-zinc-950/80 p-1 backdrop-blur-sm"
+                >
+                  <input
+                    type="checkbox"
+                    checked={sel.has(selKey(item))}
+                    onChange={() => toggleSel(item)}
+                    className="accent-yellow-500"
+                  />
+                </label>
+              )}
               <button
                 onClick={() => void openUrl(item.pageUrl)}
                 title={`Open the GameBanana page\n${item.pageUrl}`}

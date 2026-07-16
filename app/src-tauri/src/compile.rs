@@ -3642,16 +3642,11 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
 /// array-union, never staged wholesale - this also catches working copies
 /// like MYSoundevents/NEWSoundevents) and obvious backup junk. Falls back to
 /// the classic game-content set if the pack can't be listed, so a transient
-/// helper failure can't produce an empty combined build.
-pub(crate) fn import_asset_dirs(helper: &str, mod_vpk: &str) -> Vec<String> {
-    import_asset_dirs_listed(helper, mod_vpk).0
-}
-
-/// Like `import_asset_dirs`, but also says whether the dirs came from a REAL
-/// listing (`true`) or the fixed fallback whitelist after a listing failure
-/// (`false`). Callers that persist completeness markers must not stamp a
-/// whitelist-based extraction as done - the pack's custom dirs would be
-/// missing until the vpk's identity changes.
+/// helper failure can't produce an empty combined build. The bool says
+/// whether the dirs came from a REAL listing (`true`) or the fixed fallback
+/// whitelist after a listing failure (`false`) - callers that persist
+/// completeness markers must not stamp a whitelist-based extraction as done,
+/// or the pack's custom dirs stay missing until the vpk's identity changes.
 pub(crate) fn import_asset_dirs_listed(helper: &str, mod_vpk: &str) -> (Vec<String>, bool) {
     let mut dirs: std::collections::BTreeSet<String> = Default::default();
     let mut listed = false;

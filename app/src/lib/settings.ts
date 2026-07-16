@@ -30,6 +30,15 @@ export interface Settings {
   /** Write a credits.txt next to the combined build - attribution for the
    *  bundled mods, ready to paste into a release description. */
   writeCreditsFile: boolean;
+  /** Remembered import-review choices - the review opens pre-set to however
+   *  you imported last time, so a preference sticks without re-clicking. */
+  importMode: "linked" | "absorb";
+  importZeroGain: boolean;
+  importBundle: boolean;
+  /** pak01_dir.vpk's identity (`len|mtime`) as of the last patch-fix (or first
+   *  seen). A mismatch on boot = the game updated - surfaces "Fix for new
+   *  patch" in the compile bar. "" = not seeded yet. */
+  lastPakStamp: string;
   /** The sound library: audio files copied into app-data `library/` for easy
    *  reuse across slots (drop them in, copy out via the sound clipboard). */
   soundLibrary: LibraryItem[];
@@ -159,6 +168,10 @@ export const DEFAULT_SETTINGS: Settings = {
   importedModExcludes: {},
   importedModCredits: {},
   writeCreditsFile: true,
+  importMode: "linked",
+  importZeroGain: false,
+  importBundle: true,
+  lastPakStamp: "",
   soundLibrary: [],
   addonsDir:
     "D:/SteamLibrary/steamapps/common/Deadlock/game/citadel/addons",
@@ -309,9 +322,29 @@ export function slotSoundFolder(
 /** Human-readable attribution for the bundled mods: GameBanana page info when
  *  one is linked, the bare file name otherwise. Feeds combined/credits.txt and
  *  the "Copy credits" button. Empty string when nothing is bundled. */
+/** Sentinel credits entry marking a bundled vpk as the user's OWN work - it
+ *  renders a "made by you" chip and is left out of credits.txt (the release
+ *  itself speaks for the releaser). Lives in importedModCredits so it rides
+ *  every existing migration (pack-cache re-keying etc.) for free. */
+export const MADE_BY_ME: GbModInfo = {
+  modId: -1,
+  pageUrl: "",
+  name: "",
+  author: "",
+  authorUrl: "",
+  credits: [],
+  md5Verified: false,
+};
+
+export function isMadeByMe(info: GbModInfo | undefined): boolean {
+  return !!info && info.modId === -1;
+}
+
 export function buildCreditsText(s: Settings): string {
-  if (s.importedMods.length === 0) return "";
-  const blocks = s.importedMods.map((m) => {
+  // Packs marked as the user's own need no attribution line.
+  const others = s.importedMods.filter((m) => !isMadeByMe(s.importedModCredits?.[m]));
+  if (others.length === 0) return "";
+  const blocks = others.map((m) => {
     const info = s.importedModCredits?.[m];
     if (!info) {
       const base = m.split(/[\\/]/).pop() ?? m;
