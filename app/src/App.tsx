@@ -2307,6 +2307,9 @@ export default function App() {
           const add = additions.get(id) ?? [];
           return add.length ? { ...slot, adopted: [...slot.adopted, ...add] } : slot;
         });
+      // Freshly-pooled entries for slots created this import (the `pools`
+      // closure predates them) - the replacement pass below needs them.
+      const freshPools = new Map<string, string[]>();
       if (created.length) {
         await ensureVanillaFiles(Array.from(new Set(created.map((e) => e.eventsRelpath))));
         const root = settingsRef.current.vanillaRoot.replace(/[/\\]+$/, "");
@@ -2322,9 +2325,56 @@ export default function App() {
           created.forEach((e, i) => {
             const v = newViews[i];
             if (v) next[e.id] = v;
+            if (v?.entries) freshPools.set(e.id, v.entries);
           });
           return next;
         });
+      }
+
+      // Replacement intent: most mods REPLACE a sound rather than add a
+      // variant next to it. An imported sound named exactly like one of the
+      // event's original entries is a replacement - flip that original off
+      // so both don't play. Differently-named sounds keep merging in as
+      // extra variants. (Stock-path overwrites are handled in the convert
+      // pass below - there the imported ref IS the original.) One-shot:
+      // re-enabling an entry by hand is never fought.
+      let autoReplaced = 0;
+      const stemOf = (r: string) => r.split("/").pop()?.toLowerCase() ?? r;
+      const replaceHits = new Map<string, string[]>();
+      for (const [id, adds] of additions) {
+        const slot = slotsById.get(id);
+        const originals = freshPools.get(id) ?? pools[id]?.entries ?? [];
+        if (!slot || originals.length === 0) continue;
+        const addedRefs = new Set(adds.map((a) => a.reference));
+        const stems = new Set([...addedRefs].map(stemOf));
+        const hits = originals.filter(
+          (r) =>
+            !addedRefs.has(r) &&
+            stems.has(stemOf(r)) &&
+            !slot.excludedEntries.includes(r) &&
+            !slot.removedEntries.includes(r),
+        );
+        if (hits.length) replaceHits.set(id, hits);
+      }
+      if (replaceHits.size > 0) {
+        autoReplaced += [...replaceHits.values()].reduce((n, h) => n + h.length, 0);
+        setProject((prev) =>
+          prev
+            ? {
+                ...prev,
+                events: prev.events.map((e) => {
+                  const hits = replaceHits
+                    .get(e.id)
+                    ?.filter(
+                      (r) => !e.excludedEntries.includes(r) && !e.removedEntries.includes(r),
+                    );
+                  return hits?.length
+                    ? { ...e, excludedEntries: [...e.excludedEntries, ...hits] }
+                    : e;
+                }),
+              }
+            : prev,
+        );
       }
       // Convert adopted entries into editable songs (decoded from the pack,
       // renamed to a clean sound name), dropping the adoption — the result
@@ -2358,6 +2408,7 @@ export default function App() {
           await Promise.all(Array.from({ length: 3 }, () => worker()));
           if (profileChanged()) return;
           absorbed = done.length;
+          autoReplaced += done.filter((d) => overwriteRefsSnapshot.has(d.reference)).length;
           if (done.length > 0) {
             setProject((prev) => {
               if (!prev) return prev;
@@ -2411,10 +2462,30 @@ export default function App() {
                       };
                     }),
                   ];
+                  // A stock-path overwrite's ref IS the original entry - now
+                  // that its audio is the user's track, flip the original off
+                  // so the stock copy doesn't play alongside it. (That's the
+                  // mod's whole intent: replace, not add a variant.)
+                  const stockTwins = list
+                    .map((d) => d.reference)
+                    .filter(
+                      (r) =>
+                        overwriteRefsSnapshot.has(r) &&
+                        !e.excludedEntries.includes(r) &&
+                        !e.removedEntries.includes(r),
+                    );
+                  const next = {
+                    ...e,
+                    songs,
+                    adopted: e.adopted.filter((a) => !drop.has(a.reference)),
+                    excludedEntries: stockTwins.length
+                      ? [...e.excludedEntries, ...stockTwins]
+                      : e.excludedEntries,
+                  };
                   // A converted replacement keeps the original's name — auto-
                   // engage "replace" so the array doesn't double-play it.
                   return withAutoReplace(
-                    { ...e, songs, adopted: e.adopted.filter((a) => !drop.has(a.reference)) },
+                    next,
                     addedNames,
                     settingsRef.current.soundFolder,
                     pools[e.id]?.entries,
@@ -2447,9 +2518,11 @@ export default function App() {
           ? ` · skipped ${skipped + removedExcluded} excluded (${EXCLUDED_IMPORT_TERMS.join(", ")})`
           : "";
       const absorbNote = absorbed > 0 ? ` · ${absorbed} converted into your own tracks` : "";
+      const replaceNote =
+        autoReplaced > 0 ? ` · ${autoReplaced} original(s) auto-replaced (same name)` : "";
       push(
         "success",
-        `Import done - ${adoptedRefs} sound(s): ${counts.hero} hero, ${counts.item} item, ${counts.ui} UI, ${counts.sorted} sorted to tabs, ${counts.misc} misc, ${counts.folded} folded into existing${absorbNote}${exclNote}${iconNote}`,
+        `Import done - ${adoptedRefs} sound(s): ${counts.hero} hero, ${counts.item} item, ${counts.ui} UI, ${counts.sorted} sorted to tabs, ${counts.misc} misc, ${counts.folded} folded into existing${absorbNote}${replaceNote}${exclNote}${iconNote}`,
       );
       // Bundled with no attribution (GameBanana downloads arrive pre-linked):
       // remember it for the "who made this?" pass once the run is over.
