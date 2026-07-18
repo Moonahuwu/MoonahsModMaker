@@ -3745,6 +3745,45 @@ fn easy_stem(raw: &str, used: &mut std::collections::HashSet<String>) -> String 
     stem
 }
 
+/// Stage `src` at `dest` as a REAL png. Files named `.png` are often actually
+/// JPEG or WebP (Twitter/Discord saves keep the wrong extension) and
+/// resourcecompiler's LoadFromPNG hard-fails on them, so anything whose magic
+/// bytes aren't PNG routes through ffmpeg instead of a raw copy. `dest` must
+/// end in `.png` (it picks ffmpeg's output format). Returns true when a
+/// conversion happened (false = it really was a png, copied as-is).
+pub(crate) fn stage_as_png(ffmpeg: Option<&str>, src: &str, dest: &Path) -> Result<bool, String> {
+    const PNG_MAGIC: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    let mut head = [0u8; 8];
+    let is_png = {
+        use std::io::Read;
+        let mut f = std::fs::File::open(src).map_err(|e| e.to_string())?;
+        f.read_exact(&mut head).is_ok() && head == PNG_MAGIC
+    };
+    if is_png {
+        std::fs::copy(src, dest).map_err(|e| e.to_string())?;
+        return Ok(false);
+    }
+    // -frames:v 1 guards animated inputs (gif/webp) - panorama images are stills.
+    let exe = ffmpeg.unwrap_or("ffmpeg");
+    let out = crate::procutil::quiet(exe)
+        .args(["-y", "-i", src, "-frames:v", "1"])
+        .arg(dest)
+        .output()
+        .map_err(|e| format!("running ffmpeg: {e}"))?;
+    if out.status.success() && dest.is_file() {
+        Ok(true)
+    } else {
+        Err(format!(
+            "not a decodable image: {}",
+            String::from_utf8_lossy(&out.stderr)
+                .trim()
+                .lines()
+                .last()
+                .unwrap_or("ffmpeg failed")
+        ))
+    }
+}
+
 fn easy_ffmpeg_convert(ffmpeg: Option<&str>, src: &str, dest: &Path) -> Result<(), String> {
     let exe = ffmpeg.unwrap_or("ffmpeg");
     let out = crate::procutil::quiet(exe)
@@ -3807,7 +3846,9 @@ pub fn easy_compile_blocking(req: &EasyCompileReq) -> Result<Vec<EasyCompiled>, 
         if EASY_RASTER.contains(&ext.as_str()) {
             let dest = img_dir.join(format!("{stem}.png"));
             let staged = if ext == "png" {
-                std::fs::copy(p, &dest).map(|_| ()).map_err(|e| e.to_string())
+                // Sniff-and-convert: "png"s that are really JPEG/WebP would
+                // fail the whole CompileImages run with LoadFromPNG.
+                stage_as_png(req.ffmpeg_path.as_deref(), f, &dest).map(|_| ())
             } else {
                 easy_ffmpeg_convert(req.ffmpeg_path.as_deref(), f, &dest)
             };
@@ -3942,6 +3983,24 @@ pub fn easy_compile_blocking(req: &EasyCompileReq) -> Result<Vec<EasyCompiled>, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stage_as_png_copies_real_pngs_and_rejects_junk() {
+        let dir = std::env::temp_dir().join("eim_stage_png_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        // 8-byte magic + junk body is enough for the sniff-copy path.
+        let src = dir.join("real.png");
+        std::fs::write(&src, [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3]).unwrap();
+        let dest = dir.join("out.png");
+        assert_eq!(stage_as_png(None, &src.to_string_lossy(), &dest), Ok(false));
+        assert!(dest.is_file());
+        // A text file wearing a .png name must never be copied through raw:
+        // it goes to ffmpeg, which can't decode it -> Err either way (ffmpeg
+        // missing from PATH also lands in Err).
+        let bad = dir.join("bad.png");
+        std::fs::write(&bad, b"not an image at all").unwrap();
+        assert!(stage_as_png(None, &bad.to_string_lossy(), &dir.join("out2.png")).is_err());
+    }
 
     const VDATA_SAMPLE: &str = "\
 <!-- kv3 -->
@@ -4846,7 +4905,8 @@ mod tests {
         }
         std::fs::write(root.join("readme.txt"), "x").unwrap();
         // Directory sources list without the helper (cached-pack path).
-        let dirs = import_asset_dirs("unused", &root.to_string_lossy());
+        let (dirs, listed) = import_asset_dirs_listed("unused", &root.to_string_lossy());
+        assert!(listed, "a real dir listing must not report the fallback");
         assert_eq!(dirs, vec!["enderpearl/", "particles/", "sounds/"]);
         let _ = std::fs::remove_dir_all(&root);
     }

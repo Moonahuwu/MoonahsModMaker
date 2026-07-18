@@ -692,7 +692,7 @@ export function ImportedMods({
         <p className="mt-1 text-xs text-zinc-500">
           HUD mods (anything overriding the in-game HUD layout) can't be bundled like the
           packs above - two HUDs can't coexist. Merging splices them together instead:
-          their HUD edits + your Jumpscares/Deaths ship as one. Installed HUD mods show up
+          their HUD edits + your Jumpscares ship as one. Installed HUD mods show up
           here automatically.
         </p>
         <div className="mt-3 flex flex-col gap-1.5">

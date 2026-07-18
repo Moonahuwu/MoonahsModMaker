@@ -4479,8 +4479,9 @@ pub fn load_settings(app: tauri::AppHandle) -> Result<Option<serde_json::Value>,
 
 // ---- Profiles --------------------------------------------------------------
 // A profile is a named, self-contained build config (the project + imported
-// mods) stored as one JSON file under app-data/profiles. Machine paths stay in
-// settings.json (global), so switching profiles never disturbs setup.
+// mods + compile/install prefs like the pinned game slot) stored as one JSON
+// file under app-data/profiles. Machine paths stay in settings.json (global),
+// so switching profiles never disturbs setup.
 
 fn profiles_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     use tauri::Manager;
@@ -4525,7 +4526,8 @@ pub fn list_profiles(app: tauri::AppHandle) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
-/// Save a profile's blob (frontend-owned shape: `{ project, importedMods }`).
+/// Save a profile's blob (frontend-owned shape:
+/// `{ project, importedMods, compilePrefs? }`).
 #[tauri::command]
 pub fn save_profile(
     app: tauri::AppHandle,

@@ -88,7 +88,7 @@ import { getCopiedSound } from "./lib/soundClipboard";
 import { CustomServer } from "./components/CustomServer";
 import { ProfileSwitcher } from "./components/ProfileSwitcher";
 import { useToast } from "./components/Toaster";
-import { useSettings, slotSoundFolder, sheetSiblingsKey, TOOLS_BUNDLE_URL } from "./lib/settings";
+import { useSettings, slotSoundFolder, sheetSiblingsKey, compilePrefsOf, DEATHS_RELEASED, TOOLS_BUNDLE_URL } from "./lib/settings";
 import { songHash, overrideHash, effectHash, posterHash } from "./lib/songHash";
 import type { EffectOverride, EventProject, EventView, PosterOverride, Project, Song, SongLayer, SoundOverride } from "./types";
 import { GameBananaBrowser } from "./components/GameBananaBrowser";
@@ -1106,6 +1106,9 @@ export default function App() {
           await saveProfile(firstName, {
             project: legacy ?? def,
             importedMods: settings.importedMods ?? [],
+            // The migrated profile is the one that owns the currently pinned
+            // game slot - adopt the global values as its compile prefs.
+            compilePrefs: compilePrefsOf(settings),
           });
           active = firstName;
           list = await listProfiles();
@@ -1122,6 +1125,10 @@ export default function App() {
         updateSettings({
           activeProfile: active,
           importedMods: blob?.importedMods ?? settings.importedMods ?? [],
+          // A profile saved before compile prefs existed keeps the current
+          // global values here (at boot they're this profile's own - it was
+          // the last one used); the next autosave stamps them in.
+          ...(blob?.compilePrefs ?? {}),
         });
         void load(proj);
         void healProjectSources(proj);
@@ -1133,14 +1140,34 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settingsReady]);
 
-  // Debounced autosave of the active profile (project + imported mods) on change.
+  // Debounced autosave of the active profile (project + imported mods +
+  // compile prefs) on change.
   useEffect(() => {
     if (!project || !hydrated.current || !settings.activeProfile) return;
     const name = settings.activeProfile;
-    const blob: ProfileBlob = { project, importedMods: settings.importedMods };
+    const blob: ProfileBlob = {
+      project,
+      importedMods: settings.importedMods,
+      compilePrefs: {
+        installSlot: settings.installSlot,
+        installAfterCompile: settings.installAfterCompile,
+        outputMode: settings.outputMode,
+        vpkName: settings.vpkName,
+      },
+    };
     const id = setTimeout(() => void saveProfile(name, blob), 600);
     return () => clearTimeout(id);
-  }, [project, settings.importedMods, settings.activeProfile]);
+  }, [
+    project,
+    settings.importedMods,
+    settings.activeProfile,
+    // The mirrored compile prefs - an install pinning the slot must reach
+    // the profile file, or the pin dies on the next switch.
+    settings.installSlot,
+    settings.installAfterCompile,
+    settings.outputMode,
+    settings.vpkName,
+  ]);
 
   // One-time migration: UI-tab edits used to always compile; the new
   // includeUiSounds gate defaults OFF. If this project already carries UI
@@ -1175,6 +1202,7 @@ export default function App() {
       await saveProfile(name, {
         project: projectRef.current,
         importedMods: settingsRef.current.importedMods,
+        compilePrefs: compilePrefsOf(settingsRef.current),
       });
     }
   }
@@ -1247,7 +1275,15 @@ export default function App() {
     setHeroAbilities(null);
     setSelectedAbility(null);
     setProject(proj);
-    updateSettings({ activeProfile: name, importedMods: blob?.importedMods ?? [] });
+    updateSettings({
+      activeProfile: name,
+      importedMods: blob?.importedMods ?? [],
+      // Restore this profile's compile prefs. A profile that never recorded
+      // any (pre-feature saves) gets its slot reset to auto: the global slot
+      // belongs to the profile being left, and installing over it would
+      // replace that profile's mod in the game.
+      ...(blob?.compilePrefs ?? { installSlot: null }),
+    });
     void load(proj);
     void healProjectSources(proj);
   }
@@ -1274,7 +1310,13 @@ export default function App() {
     try {
       await flushActiveProfile();
       const def = await newProject();
-      const blob: ProfileBlob = { project: def, importedMods: [] };
+      const blob: ProfileBlob = {
+        project: def,
+        importedMods: [],
+        // Fresh profile, fresh slot: auto picks the next free one on its
+        // first install and pins it from then on.
+        compilePrefs: { ...compilePrefsOf(settingsRef.current), installSlot: null },
+      };
       await saveProfile(name, blob);
       setProfiles(await listProfiles());
       applyProfile(name, blob, def);
@@ -1295,6 +1337,9 @@ export default function App() {
       const blob: ProfileBlob = {
         project: projectRef.current ?? def,
         importedMods: settingsRef.current.importedMods,
+        // The copy keeps every pref EXCEPT the pinned slot - two profiles
+        // sharing a slot would overwrite each other's install.
+        compilePrefs: { ...compilePrefsOf(settingsRef.current), installSlot: null },
       };
       await saveProfile(name, blob);
       setProfiles(await listProfiles());
@@ -2915,6 +2960,7 @@ export default function App() {
         await saveProfile(profileName, {
           project: { ...proj, events: finalEvents },
           importedMods: settingsRef.current.importedMods,
+          compilePrefs: compilePrefsOf(settingsRef.current),
         });
       }
       if (pendingBaseline) updateSettings(pendingBaseline);
@@ -4384,7 +4430,9 @@ export default function App() {
                       : activeTab === POSTERS
                         ? "Replace the world's posters, signs, ghost signs, and graffiti with your own images - drop a PNG onto a region and compile."
                         : activeTab === JUMPSCARES
-                          ? "Random jumpscares while you play + videos when you die - your MoonahMasterUI mod, configured here and rebuilt on compile."
+                          ? DEATHS_RELEASED
+                            ? "Random jumpscares while you play + videos when you die - your MoonahMasterUI mod, configured here and rebuilt on compile."
+                            : "Random jumpscares while you play - your MoonahMasterUI mod, configured here and rebuilt on compile."
                           : activeTab === UIMASTER
                             ? "Edit the game's UI files directly - decompiled to source, compiled back into your mod. Very experimental."
                             : null;

@@ -385,12 +385,27 @@ pub fn compile_digimod(
             if let Some(parent) = png.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            if let Err(err) = std::fs::copy(&e.source_media, &png) {
-                report.soft_fail(format!("jumpscare image: {}", e.name), err.to_string());
-                all_ok = false;
-                continue;
+            // Sniff-and-convert: files named .png are often really JPEG/WebP
+            // (saved-from-Twitter names) and LoadFromPNG fails the WHOLE
+            // image compile on them.
+            match crate::compile::stage_as_png(ffmpeg, &e.source_media, &png) {
+                Ok(converted) => {
+                    report.ok_step(
+                        format!("jumpscare image: {}", e.name),
+                        if converted {
+                            "converted to real PNG (the file wasn't one despite its name)"
+                        } else {
+                            "png - copied as-is"
+                        },
+                    );
+                    image_pngs.push((id.clone(), png));
+                }
+                Err(err) => {
+                    report.soft_fail(format!("jumpscare image: {}", e.name), err);
+                    all_ok = false;
+                    continue;
+                }
             }
-            image_pngs.push((id.clone(), png));
         } else {
             let dest = compiled_root.join(format!("panorama/videos/moonah/{id}.webm"));
             match to_webm(ffmpeg, &e.source_media, &dest) {

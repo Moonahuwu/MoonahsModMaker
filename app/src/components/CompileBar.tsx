@@ -19,7 +19,7 @@ import {
 import { cItemRoster } from "../lib/dataCache";
 import { BuildPreview, type PreviewMod, type YoursFile } from "./BuildPreview";
 import { ExportModal, type ExportExtra, type ExportSlot } from "./ExportModal";
-import { buildCompileConfig, directReplaceTarget, installSrcVpk, sheetSiblingsKey, slotSoundFolder, worldOverrideCategory, type Settings } from "../lib/settings";
+import { buildCompileConfig, directReplaceTarget, installSrcVpk, sheetSiblingsKey, slotSoundFolder, worldOverrideCategory, DEATHS_RELEASED, type Settings } from "../lib/settings";
 import { songStatus, overrideHash, effectHash, posterHash } from "../lib/songHash";
 import { useToast } from "./Toaster";
 import type { DigimodConfig, EffectOverride, EventProject, GlobalOverride, IconMod, PosterOverride, SoundOverride, UiFileOverride, VdataOverride, WorldOverride } from "../types";
@@ -204,7 +204,8 @@ export function CompileBar({
     posterOverrides.length > 0 ||
     (digimod != null &&
       (digimod.scares.length > 0 ||
-        digimod.deaths.length > 0 ||
+        // Deaths don't ship while unreleased, so alone they can't compile.
+        (DEATHS_RELEASED && digimod.deaths.length > 0) ||
         (digimod.mergeVpks?.length ?? 0) > 0)) ||
     uiOverrides.length > 0 ||
     (settings.includeGameplay &&

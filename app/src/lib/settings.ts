@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { CompileConfig, EffectCompile, EventCompile, GbModInfo, GlobalCompile, IconCompile, PosterCompile, SoundOverrideCompile, VdataCompile, WorldCompile } from "./api";
+import type { CompileConfig, EffectCompile, EventCompile, GbModInfo, GlobalCompile, IconCompile, PosterCompile, ProfileCompilePrefs, SoundOverrideCompile, VdataCompile, WorldCompile } from "./api";
 import { loadSettings, saveSettings } from "./api";
 import type { DigimodConfig, EffectOverride, EventProject, LibraryItem, PosterOverride, SoundOverride, UiFileOverride } from "../types";
 import { songHash, overrideHash, effectHash, posterHash } from "./songHash";
@@ -139,6 +139,12 @@ export interface Settings {
   >;
 }
 
+/** Release gate: the Deaths half of the Jumpscares feature is held back for
+ *  now (the death-detection poller is patch-fragile). Flip to true to bring
+ *  back the Deaths section, its chance slider, and death compiles - nothing
+ *  is deleted, saved death entries ride along untouched in the meantime. */
+export const DEATHS_RELEASED = false;
+
 const REPO = "C:/Users/ethob/Desktop/DeadlockModding/EasyIntroModder";
 const CSDK = "C:/Users/ethob/Desktop/DeadlockModding/Reduced_CSDK_12";
 
@@ -256,6 +262,19 @@ export function useSettings() {
     setSettings((s) => ({ ...s, ...(typeof patch === "function" ? patch(s) : patch) }));
 
   return { settings, update, ready };
+}
+
+/** The compile/install preferences a profile carries (mirrored into every
+ *  profile save). Settings stays the live copy the UI edits; these travel
+ *  with the profile so switching restores them - each profile keeps
+ *  replacing its own game slot. Machine paths stay global. */
+export function compilePrefsOf(s: Settings): ProfileCompilePrefs {
+  return {
+    installSlot: s.installSlot,
+    installAfterCompile: s.installAfterCompile,
+    outputMode: s.outputMode,
+    vpkName: s.vpkName,
+  };
 }
 
 /** Category of a world-entity override. The SINGLE source of truth for both
@@ -609,7 +628,11 @@ export function buildCompileConfig(
             scareChance: digimod.scareChance,
             deathChance: digimod.deathChance,
             scares: digimod.scares.filter((e) => e.sourceMedia).map(entry),
-            deaths: digimod.deaths.filter((e) => e.sourceMedia).map(entry),
+            // Deaths are held back from the build while unreleased - the
+            // entries stay saved in the project, they just don't compile.
+            deaths: DEATHS_RELEASED
+              ? digimod.deaths.filter((e) => e.sourceMedia).map(entry)
+              : [],
             sounds: sounds.map((s) => ({
               id: s.id,
               sourceAudio: s.sourceAudio,

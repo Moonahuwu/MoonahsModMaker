@@ -1339,11 +1339,27 @@ export function loadSettings<T = unknown>(): Promise<T | null> {
   return invoke("load_settings");
 }
 
+/** Compile/install preferences that travel WITH a profile - above all the
+ *  pinned game slot, so each profile keeps replacing the pakNN it installed
+ *  to before instead of stealing whatever slot the last profile used. */
+export interface ProfileCompilePrefs {
+  /** null = auto (next free slot, pinned after the first install). */
+  installSlot: number | null;
+  installAfterCompile: boolean;
+  outputMode: "folder" | "vpk";
+  vpkName: string;
+}
+
 /** A named build config: the project plus its imported mods. Machine paths are
  *  global (in settings), not part of a profile. */
 export interface ProfileBlob {
   project: Project;
   importedMods: string[];
+  /** Absent in profiles saved before per-profile compile settings shipped.
+   *  Loaders then keep the current global values, except on a profile SWITCH,
+   *  where the slot resets to auto (the global slot belongs to the profile
+   *  being left, and must not get overwritten by this one). */
+  compilePrefs?: ProfileCompilePrefs;
 }
 
 export function listProfiles(): Promise<string[]> {

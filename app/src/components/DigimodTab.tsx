@@ -6,6 +6,7 @@ import { cListUiMods } from "../lib/dataCache";
 import { videoThumb } from "../lib/videoThumbs";
 import { Waveform } from "./Waveform";
 import { useToast } from "./Toaster";
+import { DEATHS_RELEASED } from "../lib/settings";
 import type { DigiEntry, DigimodConfig, DigiSound } from "../types";
 
 /**
@@ -345,7 +346,12 @@ export function DigimodTab({
       const skipped = imp.scares.length + imp.deaths.length - scares.length - deaths.length;
       push(
         "success",
-        `Imported ${scares.length} scare(s) + ${deaths.length} death(s)` +
+        `Imported ${scares.length} scare(s)` +
+          (DEATHS_RELEASED
+            ? ` + ${deaths.length} death(s)`
+            : deaths.length > 0
+              ? ` (+${deaths.length} death(s) kept for a later update)`
+              : "") +
           (skipped > 0 ? ` (${skipped} already here)` : ""),
       );
       for (const w of imp.warnings) push("error", w);
@@ -420,7 +426,10 @@ export function DigimodTab({
     patch({ [list]: config[list].filter((e) => e.id !== id) } as Partial<DigimodConfig>);
   }
 
-  const empty = config.scares.length === 0 && config.deaths.length === 0;
+  // Hidden deaths don't count - a deaths-only config still shows the empty
+  // hint instead of a blank page.
+  const empty =
+    config.scares.length === 0 && (!DEATHS_RELEASED || config.deaths.length === 0);
 
   const renderList = (list: "scares" | "deaths", title: string, hint: string) => (
     <div className="rounded-xl border border-zinc-800 bg-zinc-900/40">
@@ -554,7 +563,7 @@ export function DigimodTab({
           <div className="min-w-[10rem]">
             <h2 className="text-base font-bold text-zinc-100">MoonahMasterUI</h2>
             <p className="text-[11px] leading-4 text-zinc-500">
-              random jumpscares + death videos,
+              {DEATHS_RELEASED ? "random jumpscares + death videos," : "random jumpscares while you play,"}
               <br />
               rebuilt into your mod on compile
             </p>
@@ -575,14 +584,16 @@ export function DigimodTab({
             value={config.scareChance}
             onChange={(v) => patch({ scareChance: v })}
           />
-          <SettingSlider
-            label="Death video chance"
-            suffix="%"
-            min={0}
-            max={100}
-            value={config.deathChance}
-            onChange={(v) => patch({ deathChance: v })}
-          />
+          {DEATHS_RELEASED && (
+            <SettingSlider
+              label="Death video chance"
+              suffix="%"
+              min={0}
+              max={100}
+              value={config.deathChance}
+              onChange={(v) => patch({ deathChance: v })}
+            />
+          )}
         </div>
         <p className="mt-2 text-[10px] text-zinc-600">
           These compile in as the defaults - the in-game F8 menu ("MoonahMasterUI") can still
@@ -629,7 +640,9 @@ export function DigimodTab({
       )}
 
       {renderList("scares", "Jumpscares", "random RNG rolls while you play")}
-      {renderList("deaths", "Deaths", "plays when your respawn timer appears")}
+      {/* Deaths are held back for now (DEATHS_RELEASED) - saved entries stay
+          in the project untouched and come back when the gate flips. */}
+      {DEATHS_RELEASED && renderList("deaths", "Deaths", "plays when your respawn timer appears")}
 
       {/* Shared sound library: each row compiles to its own Digi.* event. */}
       <div className="rounded-xl border border-zinc-800 bg-zinc-900/40">
