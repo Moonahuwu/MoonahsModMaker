@@ -1196,7 +1196,14 @@ export default function App() {
           /* browser preview: no Tauri path API */
         }
       }
-      if (!s.firstRunDone || cleared.size > 0) void autodetect(true);
+      if (!s.firstRunDone || cleared.size > 0) {
+        void autodetect(true);
+      } else {
+        // Every-boot self-heal: fill any EMPTY paths (e.g. ffmpeg after the
+        // tools bundle was downloaded but never wired up) without touching
+        // paths the user set deliberately.
+        void autodetect(true, true);
+      }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settingsReady]);
@@ -3051,15 +3058,20 @@ export default function App() {
   // Best-effort auto-detect of tool/game paths; fills in what it finds.
   // `silent` = no toasts (the first-run auto-pass, where empty results are
   // expected and the wizard's checklist already shows the outcome).
-  async function autodetect(silent = false) {
+  // `onlyEmpty` = never overwrite a path the user already has set - the
+  // every-boot self-heal pass, so e.g. a downloaded-but-never-wired ffmpeg
+  // gets picked up without stomping deliberate custom paths.
+  async function autodetect(silent = false, onlyEmpty = false) {
     try {
       const d = await autodetectPaths();
+      const s = settingsRef.current;
       const patch: Partial<typeof settings> = {};
-      if (d.csdkRoot) patch.csdkRoot = d.csdkRoot;
-      if (d.deadlockPak) patch.deadlockPak = d.deadlockPak;
-      if (d.addonsDir) patch.addonsDir = d.addonsDir;
-      if (d.vpkHelper) patch.vpkHelperPath = d.vpkHelper;
-      if (d.ffmpeg && d.ffmpeg !== "ffmpeg") patch.ffmpegPath = d.ffmpeg;
+      if (d.csdkRoot && !(onlyEmpty && s.csdkRoot)) patch.csdkRoot = d.csdkRoot;
+      if (d.deadlockPak && !(onlyEmpty && s.deadlockPak)) patch.deadlockPak = d.deadlockPak;
+      if (d.addonsDir && !(onlyEmpty && s.addonsDir)) patch.addonsDir = d.addonsDir;
+      if (d.vpkHelper && !(onlyEmpty && s.vpkHelperPath)) patch.vpkHelperPath = d.vpkHelper;
+      if (d.ffmpeg && d.ffmpeg !== "ffmpeg" && !(onlyEmpty && s.ffmpegPath))
+        patch.ffmpegPath = d.ffmpeg;
       const found = Object.keys(patch).length;
       if (found > 0) {
         updateSettings(patch);

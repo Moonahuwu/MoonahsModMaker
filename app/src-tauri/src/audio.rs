@@ -160,6 +160,20 @@ fn require_input(path: &str) -> Result<(), String> {
     ))
 }
 
+/// Spawn failures for ffmpeg/ffprobe: "program not found" means the tool was
+/// never set up on this machine - say so, and say the fix, instead of the
+/// raw OS error (a real support case opened with just "running ffprobe:
+/// program not found").
+fn spawn_err(tool: &str, e: &std::io::Error) -> String {
+    if e.kind() == std::io::ErrorKind::NotFound {
+        format!(
+            "ffmpeg isn't set up on this PC ({tool} not found). Open Setup (the cog, top right) and hit \"Auto detect\" - or if you haven't yet, use the setup wizard's \"Download the compile tools\" button, the bundle includes ffmpeg. Without it the app can't read or convert audio."
+        )
+    } else {
+        format!("running {tool}: {e}")
+    }
+}
+
 pub fn probe_duration(ffmpeg_path: Option<&str>, path: &str) -> Result<f64, String> {
     require_input(path)?;
     let ffmpeg = ffmpeg_path.unwrap_or("ffmpeg");
@@ -175,7 +189,7 @@ pub fn probe_duration(ffmpeg_path: Option<&str>, path: &str) -> Result<f64, Stri
             path,
         ])
         .output()
-        .map_err(|e| format!("running {ffprobe}: {e}"))?;
+        .map_err(|e| spawn_err(&ffprobe, &e))?;
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
@@ -247,7 +261,7 @@ pub fn render_to(
     }
     let result = cmd
         .output()
-        .map_err(|e| format!("running {ffmpeg}: {e}"))?;
+        .map_err(|e| spawn_err(ffmpeg, &e))?;
     if result.status.success() {
         Ok(())
     } else {
