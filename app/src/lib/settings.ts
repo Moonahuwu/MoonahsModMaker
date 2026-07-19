@@ -139,11 +139,13 @@ export interface Settings {
   >;
 }
 
-/** Release gate: the Deaths half of the Jumpscares feature is held back for
- *  now (the death-detection poller is patch-fragile). Flip to true to bring
- *  back the Deaths section, its chance slider, and death compiles - nothing
- *  is deleted, saved death entries ride along untouched in the meantime. */
-export const DEATHS_RELEASED = false;
+/** Release gate: the Deaths half of the Jumpscares feature is held back from
+ *  the public for now (the death-detection poller is patch-fragile). DEV-only
+ *  on purpose: the dev app (npm run tauri dev) shows and compiles Deaths for
+ *  local testing, while every release build hides them - it can't ship by
+ *  accident. Saved death entries ride along untouched either way. Replace
+ *  with `true` to release Deaths to everyone. */
+export const DEATHS_RELEASED = import.meta.env.DEV;
 
 const REPO = "C:/Users/ethob/Desktop/DeadlockModding/EasyIntroModder";
 const CSDK = "C:/Users/ethob/Desktop/DeadlockModding/Reduced_CSDK_12";
