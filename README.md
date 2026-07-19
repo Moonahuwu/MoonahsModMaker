@@ -70,7 +70,7 @@ welcome - the stack is mostly portable already:
   which would need to run through Wine. Sound compiles are the likely-easy
   case; texture compiles initialize a GPU device and need real testing.
 
-If you want to take a swing at it, open an issue and we'll coordinate.
+I'm trying to figure 
 
 ## Notes
 
