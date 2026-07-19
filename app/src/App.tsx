@@ -3102,16 +3102,19 @@ export default function App() {
     }
   }
 
-  // First-run / one-click setup: detect tool+game paths, then pull the current
-  // game's music data in as the merge base — so a new user is ready to compile
-  // without typing any paths or supplying a ModFiles snapshot.
+  // First-run / one-click setup: detect tool+game paths, download the compile
+  // tools when none exist (they're REQUIRED - nothing compiles without them,
+  // so it's part of the automatic flow, not an optional extra click), then
+  // pull the current game's music data in as the merge base — a new user is
+  // ready to compile without typing any paths or supplying a ModFiles snapshot.
   async function runFirstSetup() {
     let helper = settingsRef.current.vpkHelperPath;
     let pak = settingsRef.current.deadlockPak;
+    let csdk = settingsRef.current.csdkRoot;
     try {
       const d = await autodetectPaths();
       const patch: Partial<typeof settings> = {};
-      if (d.csdkRoot) patch.csdkRoot = d.csdkRoot;
+      if (d.csdkRoot) (patch.csdkRoot = d.csdkRoot), (csdk = d.csdkRoot);
       if (d.deadlockPak) (patch.deadlockPak = d.deadlockPak), (pak = d.deadlockPak);
       if (d.addonsDir) patch.addonsDir = d.addonsDir;
       if (d.vpkHelper) (patch.vpkHelperPath = d.vpkHelper), (helper = d.vpkHelper);
@@ -3119,6 +3122,15 @@ export default function App() {
       if (Object.keys(patch).length) updateSettings(patch);
     } catch (e) {
       push("error", `Auto-detect failed: ${e}`);
+    }
+    // No compiler found anywhere? Download the tools bundle as part of setup.
+    try {
+      const compilerOk =
+        !!csdk &&
+        (await checkPaths([`${csdk}/game/bin_tools/win64/resourcecompiler.exe`]))[0] === true;
+      if (!compilerOk) await downloadToolsBundle();
+    } catch {
+      /* downloadToolsBundle already toasts its own errors */
     }
     // Pull live game music data in as the merge base (fixes the need for a local
     // ModFiles snapshot + drifted stock refs). Uses the just-detected paths.

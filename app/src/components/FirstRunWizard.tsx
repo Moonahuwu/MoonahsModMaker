@@ -76,9 +76,11 @@ export function FirstRunWizard({
           Welcome to Moonah's Mod Maker
         </h2>
         <p className="mt-2 text-sm leading-relaxed text-zinc-400">
-          Let's get set up. This finds your Deadlock install, the CSDK compiler,
-          ffmpeg, and the bundled VPK helper, then imports the game's current music
-          data so your tracks merge cleanly. You can change anything later in Setup.
+          Let's get set up. This finds your Deadlock install and the bundled VPK
+          helper, downloads the compile tools if you don't have them (~430 MB,
+          includes ffmpeg - they're required, nothing compiles without them),
+          then imports the game's current music data so your tracks merge
+          cleanly. You can change anything later in Setup.
         </p>
 
         <div className="mt-4 flex flex-col gap-1.5 rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
@@ -103,8 +105,16 @@ export function FirstRunWizard({
           })}
         </div>
 
-        {/* No compiler found after setup ran → offer the one-click download. */}
-        {checks["Compiler"] === false && phase !== "running" && (
+        {phase === "running" && (
+          <p className="mt-2 text-[11px] text-zinc-500">
+            If the compile tools need downloading this takes a few minutes -
+            leave the window open.
+          </p>
+        )}
+
+        {/* Compiler still missing after setup ran → offer a manual retry of
+            the download (setup normally grabs it automatically). */}
+        {checks["Compiler"] === false && phase === "done" && (
           <button
             onClick={() => {
               setDownloading(true);
@@ -115,7 +125,7 @@ export function FirstRunWizard({
           >
             {downloading
               ? "Downloading compile tools… (~430 MB, a few minutes)"
-              : "⬇ Download the compile tools for me (~430 MB)"}
+              : "⬇ Retry the compile tools download (~430 MB)"}
           </button>
         )}
 
