@@ -114,6 +114,7 @@ pub fn run() {
             commands::list_editable_events,
             commands::list_soundevent_files,
             commands::download_tools,
+            commands::download_ffmpeg,
             commands::import_pack_events,
             commands::item_sound_index,
             commands::autodetect_paths,

@@ -46,6 +46,7 @@ import {
   type ImportEvent,
   listSoundeventFiles,
   downloadTools,
+  downloadFfmpeg,
   sanitizeName,
   vpkExtractAudio,
   listProfiles,
@@ -90,7 +91,7 @@ import { getCopiedSound } from "./lib/soundClipboard";
 import { CustomServer } from "./components/CustomServer";
 import { ProfileSwitcher } from "./components/ProfileSwitcher";
 import { useToast } from "./components/Toaster";
-import { useSettings, slotSoundFolder, sheetSiblingsKey, compilePrefsOf, DEATHS_RELEASED, TOOLS_BUNDLE_URL, type Settings } from "./lib/settings";
+import { useSettings, slotSoundFolder, sheetSiblingsKey, compilePrefsOf, DEATHS_RELEASED, FFMPEG_BUNDLE_URL, TOOLS_BUNDLE_URL, type Settings } from "./lib/settings";
 import { songHash, overrideHash, effectHash, posterHash } from "./lib/songHash";
 import type { EffectOverride, EventProject, EventView, PosterOverride, Project, Song, SongLayer, SoundOverride } from "./types";
 import { GameBananaBrowser } from "./components/GameBananaBrowser";
@@ -1197,12 +1198,29 @@ export default function App() {
         }
       }
       if (!s.firstRunDone || cleared.size > 0) {
-        void autodetect(true);
+        await autodetect(true);
       } else {
         // Every-boot self-heal: fill any EMPTY paths (e.g. ffmpeg after the
         // tools bundle was downloaded but never wired up) without touching
         // paths the user set deliberately.
-        void autodetect(true, true);
+        await autodetect(true, true);
+      }
+      // ffmpeg is non-negotiable (nothing audio works without it) - when
+      // there's none configured, none bundled, and none on PATH, install the
+      // small ffmpeg-only bundle automatically. First-run is excluded: the
+      // wizard's full tools download includes ffmpeg already.
+      if (s.firstRunDone && !settingsRef.current.ffmpegPath) {
+        try {
+          const det = await autodetectPaths();
+          if (!det.ffmpeg) {
+            push("info", "Setting up audio tools: downloading ffmpeg (~110 MB)…");
+            const p = await downloadFfmpeg(FFMPEG_BUNDLE_URL);
+            updateSettings({ ffmpegPath: p });
+            push("success", "ffmpeg installed - audio is ready");
+          }
+        } catch (e) {
+          push("error", `Couldn't set up ffmpeg automatically: ${e}`);
+        }
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps

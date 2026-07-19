@@ -1021,8 +1021,15 @@ pub async fn download_tools(app: tauri::AppHandle, url: String) -> Result<ToolsP
             ));
         }
         let _ = std::fs::remove_file(&zip);
-        // The bundle unpacks to <tools>/EIM_Tools/{csdk,ffmpeg}.
-        let root = tools_root.join("EIM_Tools");
+        // Bundle layout drifted between versions: v1 wrapped everything in an
+        // EIM_Tools/ folder, v2 has csdk/ and ffmpeg/ at the top level.
+        // Accept both - expecting only the wrapper made every v2 download
+        // end in "resourcecompiler.exe not found".
+        let root = if tools_root.join("EIM_Tools").join("csdk").is_dir() {
+            tools_root.join("EIM_Tools")
+        } else {
+            tools_root.clone()
+        };
         let csdk = root.join("csdk");
         let compiler = csdk
             .join("game")
@@ -1044,6 +1051,66 @@ pub async fn download_tools(app: tauri::AppHandle, url: String) -> Result<ToolsP
                 String::new()
             },
         })
+    })
+    .await
+    .map_err(|e| format!("download task panicked: {e}"))?
+}
+
+/// Automatic ffmpeg setup: download the small ffmpeg-only bundle (~110 MB,
+/// static ffmpeg + ffprobe) into app-data `tools/ffmpeg/` and return the
+/// ffmpeg.exe path. Called by the frontend on boot when no ffmpeg is
+/// configured anywhere - the app can't read or convert audio without it.
+#[tauri::command]
+pub async fn download_ffmpeg(app: tauri::AppHandle, url: String) -> Result<String, String> {
+    use tauri::Manager;
+    let tools_root = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("tools");
+    tauri::async_runtime::spawn_blocking(move || {
+        let sys32 = std::env::var("WINDIR")
+            .map(|w| std::path::PathBuf::from(w).join("System32"))
+            .unwrap_or_else(|_| std::path::PathBuf::from(r"C:\Windows\System32"));
+        let pick = |name: &str| -> String {
+            let native = sys32.join(format!("{name}.exe"));
+            if native.exists() {
+                native.to_string_lossy().into_owned()
+            } else {
+                name.to_string()
+            }
+        };
+        std::fs::create_dir_all(&tools_root).map_err(|e| e.to_string())?;
+        let zip = tools_root.join("eim_ffmpeg_download.zip");
+        let out = crate::procutil::quiet(pick("curl"))
+            .args(["-L", "--fail", "-sS", "-o", &zip.to_string_lossy(), &url])
+            .output()
+            .map_err(|e| format!("launching curl: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "download failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+        let out = crate::procutil::quiet(pick("tar"))
+            .args(["-xf", &zip.to_string_lossy(), "-C", &tools_root.to_string_lossy()])
+            .output()
+            .map_err(|e| format!("launching tar: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "extract failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+        let _ = std::fs::remove_file(&zip);
+        let ffmpeg = tools_root.join("ffmpeg").join("ffmpeg.exe");
+        if !ffmpeg.exists() {
+            return Err(format!(
+                "bundle unpacked but ffmpeg.exe not found at {}",
+                ffmpeg.display()
+            ));
+        }
+        Ok(ffmpeg.to_string_lossy().into_owned())
     })
     .await
     .map_err(|e| format!("download task panicked: {e}"))?
@@ -1552,10 +1619,13 @@ pub fn autodetect_paths(app: tauri::AppHandle) -> DetectedPaths {
     // The one-click tools bundle (app-data tools/) wins: it's what the wizard
     // installs for users without a CSDK, and must survive a settings reset.
     let app_data = app.path().app_data_dir().ok();
-    let bundled_csdk = app_data
-        .as_ref()
-        .map(|d| d.join("tools").join("EIM_Tools").join("csdk"))
-        .filter(|c| c.join("game/bin_tools/win64/resourcecompiler.exe").exists());
+    // Both bundle layouts: v1 wrapped in EIM_Tools/, v2 bare at tools/.
+    let bundled_csdk = app_data.as_ref().and_then(|d| {
+        ["EIM_Tools/csdk", "csdk"]
+            .iter()
+            .map(|rel| d.join("tools").join(rel))
+            .find(|c| c.join("game/bin_tools/win64/resourcecompiler.exe").exists())
+    });
     let csdk = bundled_csdk.or_else(|| find_csdk(&home, exe_dir.as_deref()));
     let resource_compiler = csdk.as_ref().map(|c| {
         c.join("game/bin_tools/win64/resourcecompiler.exe").to_string_lossy().replace('\\', "/")
@@ -1564,8 +1634,12 @@ pub fn autodetect_paths(app: tauri::AppHandle) -> DetectedPaths {
     // Bundled ffmpeg beats relying on PATH (fresh machines rarely have one).
     let bundled_ffmpeg = app_data
         .as_ref()
-        .map(|d| d.join("tools").join("EIM_Tools").join("ffmpeg").join("ffmpeg.exe"))
-        .filter(|f| f.exists())
+        .and_then(|d| {
+            ["EIM_Tools/ffmpeg", "ffmpeg"]
+                .iter()
+                .map(|rel| d.join("tools").join(rel).join("ffmpeg.exe"))
+                .find(|f| f.exists())
+        })
         .map(|f| f.to_string_lossy().replace('\\', "/"));
 
     DetectedPaths {

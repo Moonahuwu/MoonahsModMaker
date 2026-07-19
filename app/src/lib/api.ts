@@ -473,6 +473,13 @@ export function downloadTools(
   return invoke("download_tools", { url });
 }
 
+/** Download + unpack the ffmpeg-only bundle into app-data `tools/ffmpeg/`;
+ *  resolves to the ffmpeg.exe path. Used by the boot auto-setup when no
+ *  ffmpeg exists anywhere on the machine. */
+export function downloadFfmpeg(url: string): Promise<string> {
+  return invoke("download_ffmpeg", { url });
+}
+
 /** One event's adoptable entries when importing a mod pack (the entries whose
  *  audio ships inside the pack). */
 export interface ImportEvent {

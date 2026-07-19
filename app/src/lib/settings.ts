@@ -167,6 +167,12 @@ const IS_DEV = import.meta.env.DEV;
 export const TOOLS_BUNDLE_URL =
   "https://github.com/Moonahuwu/MoonahsModMaker/releases/download/tools-v2/EIM_Tools_v2.zip";
 
+/** The ffmpeg-only bundle (~110 MB static ffmpeg + ffprobe) - auto-installed
+ *  on boot when no ffmpeg is configured or on PATH, since nothing audio works
+ *  without it. Lives as an extra asset on the same tools release. */
+export const FFMPEG_BUNDLE_URL =
+  "https://github.com/Moonahuwu/MoonahsModMaker/releases/download/tools-v2/EIM_ffmpeg.zip";
+
 export const DEFAULT_SETTINGS: Settings = {
   csdkRoot: IS_DEV ? CSDK : "",
   addonName: "eim_intro_music",
