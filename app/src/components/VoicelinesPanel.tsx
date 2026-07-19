@@ -96,11 +96,28 @@ export function VoicelinesPanel({
     });
   }
 
-  function toggleSelected(name: string) {
+  // Range selection: a plain click sets the anchor; a shift-click applies the
+  // anchor's state (select or deselect) to every row between the two.
+  const anchor = useRef<{ index: number; on: boolean } | null>(null);
+
+  function clickSelect(name: string, index: number, shift: boolean) {
     setSelected((prev) => {
       const next = new Set(prev);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
+      if (shift && anchor.current) {
+        const a = Math.min(anchor.current.index, index);
+        const b = Math.max(anchor.current.index, index);
+        for (let i = a; i <= b; i++) {
+          const n = shown[i]?.eventName;
+          if (!n) continue;
+          if (anchor.current.on) next.add(n);
+          else next.delete(n);
+        }
+      } else {
+        const on = !next.has(name);
+        if (on) next.add(name);
+        else next.delete(name);
+        anchor.current = { index, on };
+      }
       return next;
     });
   }
@@ -154,6 +171,7 @@ export function VoicelinesPanel({
           onChange={(e) => {
             setQuery(e.target.value);
             setLimit(PAGE);
+            anchor.current = null; // list order changes - old index is stale
           }}
           placeholder="Search voicelines…"
           className="ml-auto w-56 rounded-md border border-zinc-700 bg-zinc-900/70 px-2.5 py-1 text-sm text-zinc-200 placeholder-zinc-600 outline-none focus:border-zinc-500"
@@ -162,6 +180,7 @@ export function VoicelinesPanel({
           onClick={() => {
             setSelectMode(!selectMode);
             setSelected(new Set());
+            anchor.current = null;
           }}
           style={selectMode ? { borderColor: accent, color: accent } : undefined}
           title="Pick several voicelines, then replace them all with one audio file"
@@ -234,16 +253,20 @@ export function VoicelinesPanel({
       )}
 
       <div className="flex flex-col gap-1.5">
-        {shown.map((vl) => {
+        {shown.map((vl, idx) => {
           const isOpen = expanded.has(vl.eventName);
           const modded = hasContent?.(vl.eventName) ?? false;
           const isSel = selected.has(vl.eventName);
           return (
             <div
               key={vl.eventName}
-              onClick={selectMode ? () => toggleSelected(vl.eventName) : undefined}
+              onClick={
+                selectMode
+                  ? (e) => clickSelect(vl.eventName, idx, e.shiftKey)
+                  : undefined
+              }
               className={`rounded-lg border border-zinc-800 bg-zinc-900/40${
-                selectMode ? " cursor-pointer" : ""
+                selectMode ? " cursor-pointer select-none" : ""
               }${isSel ? " bg-zinc-800/70" : ""}`}
               style={isSel || modded ? { borderColor: accent } : undefined}
             >
@@ -252,8 +275,12 @@ export function VoicelinesPanel({
                   <input
                     type="checkbox"
                     checked={isSel}
-                    onChange={() => toggleSelected(vl.eventName)}
-                    onClick={(e) => e.stopPropagation()}
+                    onChange={() => {}}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      clickSelect(vl.eventName, idx, e.shiftKey);
+                    }}
+                    title="Click to select - shift-click selects the whole range from your last click"
                     className="h-4 w-4 shrink-0"
                     style={{ accentColor: accent }}
                   />
