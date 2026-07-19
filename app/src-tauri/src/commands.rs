@@ -1028,14 +1028,22 @@ pub async fn download_tools(app: tauri::AppHandle, url: String) -> Result<ToolsP
                 compiler.display()
             ));
         }
-        let ffmpeg = root.join("ffmpeg").join("ffmpeg.exe");
-        Ok(ToolsPaths {
-            csdk_root: csdk.to_string_lossy().into_owned(),
-            ffmpeg_path: if ffmpeg.exists() {
+        // The bundle's ffmpeg is a Windows exe - only usable as-is on Windows.
+        // On Linux the system ffmpeg (package manager) is used instead.
+        #[cfg(windows)]
+        let ffmpeg_path = {
+            let ffmpeg = root.join("ffmpeg").join("ffmpeg.exe");
+            if ffmpeg.exists() {
                 ffmpeg.to_string_lossy().into_owned()
             } else {
                 String::new()
-            },
+            }
+        };
+        #[cfg(not(windows))]
+        let ffmpeg_path = String::new();
+        Ok(ToolsPaths {
+            csdk_root: csdk.to_string_lossy().into_owned(),
+            ffmpeg_path,
         })
     })
     .await
@@ -1586,11 +1594,15 @@ pub fn autodetect_paths(app: tauri::AppHandle) -> DetectedPaths {
     });
 
     // Bundled ffmpeg beats relying on PATH (fresh machines rarely have one).
+    // Windows only: the bundle ships a Windows exe; Linux uses system ffmpeg.
+    #[cfg(windows)]
     let bundled_ffmpeg = app_data
         .as_ref()
         .map(|d| d.join("tools").join("EIM_Tools").join("ffmpeg").join("ffmpeg.exe"))
         .filter(|f| f.exists())
         .map(|f| f.to_string_lossy().replace('\\', "/"));
+    #[cfg(not(windows))]
+    let bundled_ffmpeg: Option<String> = None;
 
     DetectedPaths {
         csdk_root: csdk.map(|c| c.to_string_lossy().replace('\\', "/")),

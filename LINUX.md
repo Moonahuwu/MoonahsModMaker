@@ -3,38 +3,58 @@
 This branch carries the Linux port. Status: **compiles + packaged by CI,
 untested on real hardware**. If you're the brave tester, this file is for you.
 
-## What's done
+## Setup
 
-- Native Linux build of the app (Tauri/webkit2gtk) - built automatically by
-  the `linux-build` GitHub Actions workflow on this branch. Grab the AppImage
-  from the latest run's artifacts (Actions tab).
-- The vpk-helper (browse/extract/decode game files) publishes as a native
-  linux-x64 binary - no Wine involved for any of the browsing features.
-- Steam + Deadlock detection via `~/.steam` / `~/.local/share/Steam` /
-  flatpak paths, including `libraryfolders.vdf` for extra drives.
-- Platform tool swaps: curl/tar/md5sum/ps instead of the Windows built-ins.
-- **Compiling goes through Wine**: Valve's `resourcecompiler` is Windows-only,
-  so the compile pipeline runs it as `wine resourcecompiler.exe ...` with
-  paths translated to Wine's `Z:\` view. The app tells you if Wine is missing.
+1. **Install the two system tools** the app can't bring itself:
 
-## What needs you (the tester)
+   ```sh
+   # Debian/Ubuntu
+   sudo apt install wine ffmpeg
+   # Arch
+   sudo pacman -S wine ffmpeg
+   # Fedora
+   sudo dnf install wine ffmpeg
+   ```
 
-1. Install `wine` (any recent version) and `ffmpeg` from your package manager.
-2. Run the AppImage. Point Setup at your Deadlock install if autodetect
-   misses it. Use the wizard's "Download the compile tools" button - the
-   bundle's Windows compiler is exactly what Wine runs.
-3. The key experiments, in order of expected pain:
-   - Browse heroes/sounds (native helper, should just work).
-   - Compile a SOUND mod (one music slot). Wine runs resourcecompiler headless.
-   - Compile an IMAGE mod (hero portrait). This initializes a GPU device in
-     resourcecompiler - the most likely thing to fail under Wine; if it does,
-     note whether sound-only compiles still succeed.
-   - Install to game + launch (installs are plain file copies; launching goes
-     through `steam://` via xdg-open).
+   Wine is what runs Valve's Windows-only `resourcecompiler` during compiles;
+   ffmpeg does all audio/image processing. Any recent versions are fine.
+
+2. **Get the app**: repo → Actions tab → latest green `linux-build` run →
+   download the `moonahs-mod-maker-linux` artifact (you must be signed in to
+   GitHub). Unzip, then:
+
+   ```sh
+   chmod +x "Moonahs Mod Maker"*.AppImage && ./"Moonahs Mod Maker"*.AppImage
+   ```
+
+   (There's also a `.deb` in the artifact if you prefer installing it.)
+
+3. **First-run wizard**: it auto-detects Steam and Deadlock on launch
+   (`~/.steam`, `~/.local/share/Steam`, flatpak). If the Game pak / Addons
+   lines show ✗, open Setup (⚙) and point them at your install manually,
+   e.g. `.../steamapps/common/Deadlock/game/citadel/pak01_dir.vpk`.
+
+4. **Click "Download the compile tools" (~430 MB)** in the wizard. Yes, the
+   bundle contains Windows binaries - that's intentional, Wine runs them.
+   The bundle's `ffmpeg.exe` is ignored on Linux; your system ffmpeg from
+   step 1 is used instead.
+
+5. Done - the wizard's checklist should be all green except things you skip.
+
+## What to test (in order of expected pain)
+
+1. Browse heroes/sounds/items (native helper - should just work).
+2. Compile a SOUND mod: drop an mp3 on a music slot, hit Compile. Wine runs
+   resourcecompiler headless here.
+3. Compile an IMAGE mod (hero portrait or wall art). This initializes a GPU
+   device inside resourcecompiler - the most likely thing to fail under Wine.
+   If it fails, note whether sound-only compiles still succeed.
+4. Install to game + launch (installs are plain file copies; launch goes
+   through `steam://` via xdg-open).
 
 ## Known not-ported (gated off, not broken)
 
-- One-click app updates (grab new builds from CI/releases instead).
+- One-click app updates (grab new builds from the Actions artifacts instead).
 - Custom-server hosting (launches Windows console processes).
 
 ## Report back
