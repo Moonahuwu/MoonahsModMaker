@@ -1205,21 +1205,34 @@ export default function App() {
         // paths the user set deliberately.
         await autodetect(true, true);
       }
-      // ffmpeg is non-negotiable (nothing audio works without it) - when
-      // there's none configured, none bundled, and none on PATH, install the
-      // small ffmpeg-only bundle automatically. First-run is excluded: the
-      // wizard's full tools download includes ffmpeg already.
-      if (s.firstRunDone && !settingsRef.current.ffmpegPath) {
+      // The compile tools and ffmpeg are REQUIRED - the app can't build or
+      // even read audio without them. Whenever they're missing (wizard was
+      // skipped, download failed once, settings reset), install them
+      // automatically on boot. First-run is excluded only because the wizard
+      // itself runs the same download as part of its one-click setup.
+      if (s.firstRunDone) {
         try {
           const det = await autodetectPaths();
-          if (!det.ffmpeg) {
+          const cur = settingsRef.current;
+          const compilerOk =
+            !!det.csdkRoot ||
+            (!!cur.csdkRoot &&
+              (
+                await checkPaths([`${cur.csdkRoot}/game/bin_tools/win64/resourcecompiler.exe`])
+              )[0] === true);
+          if (!compilerOk) {
+            // Full bundle: compiler + ffmpeg in one go.
+            push("info", "Setting up the required compile tools (~430 MB)… the app can't build mods without them");
+            await downloadToolsBundle();
+          } else if (!cur.ffmpegPath && !det.ffmpeg) {
+            // Compiler is fine, only ffmpeg is missing - small bundle.
             push("info", "Setting up audio tools: downloading ffmpeg (~110 MB)…");
             const p = await downloadFfmpeg(FFMPEG_BUNDLE_URL);
             updateSettings({ ffmpegPath: p });
             push("success", "ffmpeg installed - audio is ready");
           }
         } catch (e) {
-          push("error", `Couldn't set up ffmpeg automatically: ${e}`);
+          push("error", `Couldn't set up the tools automatically: ${e}`);
         }
       }
     })();
