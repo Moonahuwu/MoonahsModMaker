@@ -32,6 +32,12 @@ jobs:
         working-directory: app
         run: npm ci
 
+      # The tauri build script validates bundle resources, so the helper
+      # binary must exist BEFORE any cargo invocation.
+      - name: Publish vpk-helper (linux-x64)
+        working-directory: app
+        run: npm run build:helper
+
       # check, not test: several backend tests read local game files that are
       # git-ignored (ModFiles/), so they can only run on a dev machine.
       - name: Rust check (catches unix-only cfg errors)
