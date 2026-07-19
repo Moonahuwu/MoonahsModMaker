@@ -3286,6 +3286,96 @@ export default function App() {
     void load(next ?? undefined);
   }
 
+  /** Bulk replace: ONE audio file into MANY voicelines at once. Each selected
+   *  line gets its slot materialized, any existing custom track swapped for
+   *  the file, and its stock clip disabled - so each one qualifies for the
+   *  direct-replace shortcut (compiles at the stock path, no events-file
+   *  edit). Returns true when it applied (the panel clears its selection). */
+  async function bulkReplaceVoicelines(vls: VoiceLine[]): Promise<boolean> {
+    const codename = selectedHero;
+    if (!codename || vls.length === 0) return false;
+    const file = await openDialog({
+      multiple: false,
+      filters: [{ name: "Audio", extensions: ["mp3", "wav", "flac", "ogg", "m4a", "aac"] }],
+      title: `Replace ${vls.length} voiceline(s) with which audio file?`,
+    });
+    if (!file || Array.isArray(file)) return false;
+    try {
+      // If a slot ever falls back to a real merge, its VO events file must
+      // exist in the merge base - ensure them all up front.
+      await ensureVanillaFiles([...new Set(vls.map((v) => v.eventsRelpath))]);
+      const ffmpegPath = settingsRef.current.ffmpegPath || undefined;
+      const dur = (await probeAudio(file, ffmpegPath)).duration;
+      const sanitized = await sanitizeName(baseName(file));
+      const prev = projectRef.current;
+      if (!prev) return false;
+      // Reserve unique compile names up front - all N songs land in ONE
+      // setProject pass, so uniqueSoundName's project scan can't see them.
+      const taken = new Set(prev.events.flatMap((e) => e.songs.map((s) => s.soundName)));
+      const nameFor = () => {
+        let n = sanitized;
+        let i = 2;
+        while (taken.has(n)) n = `${sanitized}_${i++}`;
+        taken.add(n);
+        return n;
+      };
+      const byId = new Map(vls.map((v) => [heroAbilSlotId(codename, v.eventName), v]));
+      const have = new Set(prev.events.map((e) => e.id));
+      const newSlots: EventProject[] = [...byId.entries()]
+        .filter(([id]) => !have.has(id))
+        .map(([id, v]) => ({
+          id,
+          group: "heroes",
+          side: v.label,
+          eventName: v.eventName,
+          arrayKey: v.arrayKey,
+          stockEntry: "",
+          vsndDurationMode: "auto" as const,
+          vsndDurationManual: null,
+          songs: [],
+          previousOwnedNames: [],
+          excludedEntries: [],
+          removedEntries: [],
+          adopted: [],
+          eventsRelpath: v.eventsRelpath,
+        }));
+      const applyTo = (e: EventProject): EventProject => {
+        const v = byId.get(e.id);
+        if (!v) return e;
+        const song: Song = {
+          id: crypto.randomUUID(),
+          label: baseName(file),
+          soundName: nameFor(),
+          sourceMp3: file,
+          trimStart: 0,
+          trimEnd: dur,
+          gainDb: DEFAULT_GAIN_DB,
+          fadeIn: 0,
+          fadeOut: 0,
+          looping: false,
+          lastCompiledHash: null,
+          order: 0,
+        };
+        const excluded =
+          v.stockRef &&
+          !e.excludedEntries.includes(v.stockRef) &&
+          !e.removedEntries.includes(v.stockRef)
+            ? [...e.excludedEntries, v.stockRef]
+            : e.excludedEntries;
+        // Replace, not stack: bulk apply swaps out any existing custom track.
+        return { ...e, songs: [song], excludedEntries: excluded };
+      };
+      const next = { ...prev, events: [...prev.events.map(applyTo), ...newSlots.map(applyTo)] };
+      setProject(next);
+      void load(next);
+      push("success", `Replaced ${vls.length} voiceline(s) with "${baseName(file)}"`);
+      return true;
+    } catch (e) {
+      push("error", `Bulk replace failed: ${e}`);
+      return false;
+    }
+  }
+
   // Materialize an item's sound slots (created empty, pruned if unused). Returns
   // the updated project so the caller can pool the new slots immediately.
   function ensureItemSlots(itemName: string, sounds: HeroAbilitySound[]): Project | null {
@@ -4764,6 +4854,7 @@ export default function App() {
               onBack={() => setShowVoicelines(false)}
               onPreview={(ref) => decodeStock(ref)}
               onOpen={(vl) => void openVoiceline(vl)}
+              onBulkReplace={bulkReplaceVoicelines}
               renderSound={renderSound}
               hasContent={(name) => {
                 if (!selectedHero) return false;

@@ -19,6 +19,7 @@ export function VoicelinesPanel({
   onBack,
   onPreview,
   onOpen,
+  onBulkReplace,
   renderSound,
   modifiedFilter,
   hasContent,
@@ -32,6 +33,9 @@ export function VoicelinesPanel({
   onPreview: (ref: string) => Promise<string>;
   /** Materialize the editor slot for a voiceline (lazy, on first expand). */
   onOpen: (vl: VoiceLine) => void;
+  /** Bulk replace: apply ONE picked audio file to every given voiceline.
+   *  Resolves true when applied (the selection clears then). */
+  onBulkReplace: (vls: VoiceLine[]) => Promise<boolean>;
   /** Render the editor panel for an opened voiceline. */
   renderSound: (sound: { eventName: string; label: string }) => React.ReactNode;
   /** "Modified only": when set, list only voicelines this returns true for. */
@@ -42,6 +46,11 @@ export function VoicelinesPanel({
   const [query, setQuery] = useState("");
   const [limit, setLimit] = useState(PAGE);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // Multi-select ("Deadlock Forge"-style): pick many lines, then apply one
+  // audio file to all of them at once.
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [applying, setApplying] = useState(false);
   const [playing, setPlaying] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   // Media elements keep playing after DOM removal — stop on unmount.
@@ -70,6 +79,29 @@ export function VoicelinesPanel({
       }
       return next;
     });
+  }
+
+  function toggleSelected(name: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  }
+
+  async function applySelected() {
+    const chosen = (voicelines ?? []).filter((v) => selected.has(v.eventName));
+    if (chosen.length === 0) return;
+    setApplying(true);
+    try {
+      if (await onBulkReplace(chosen)) {
+        setSelected(new Set());
+        setSelectMode(false);
+      }
+    } finally {
+      setApplying(false);
+    }
   }
 
   async function preview(vl: VoiceLine) {
@@ -113,7 +145,56 @@ export function VoicelinesPanel({
           placeholder="Search voicelines…"
           className="ml-auto w-56 rounded-md border border-zinc-700 bg-zinc-900/70 px-2.5 py-1 text-sm text-zinc-200 placeholder-zinc-600 outline-none focus:border-zinc-500"
         />
+        <button
+          onClick={() => {
+            setSelectMode((v) => !v);
+            setSelected(new Set());
+          }}
+          style={selectMode ? { borderColor: accent, color: accent } : undefined}
+          title="Pick several voicelines, then replace them all with one audio file"
+          className="rounded-md border border-zinc-700 px-2.5 py-1 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-white"
+        >
+          {selectMode ? "✕ Cancel select" : "☑ Select multiple"}
+        </button>
       </div>
+
+      {/* Bulk action bar: pick lines below, then one file replaces them all. */}
+      {selectMode && (
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900/70 px-3 py-2">
+          <span className="text-xs font-medium text-zinc-300">
+            {selected.size} selected
+          </span>
+          <button
+            onClick={() =>
+              setSelected(new Set(filtered.map((v) => v.eventName)))
+            }
+            className="rounded-md border border-zinc-700 px-2 py-0.5 text-xs text-zinc-400 transition hover:border-zinc-500 hover:text-zinc-200"
+            title={query ? "Select every line matching the search" : "Select every line"}
+          >
+            Select all {filtered.length}
+          </button>
+          <button
+            onClick={() => setSelected(new Set())}
+            disabled={selected.size === 0}
+            className="rounded-md border border-zinc-700 px-2 py-0.5 text-xs text-zinc-400 transition hover:border-zinc-500 hover:text-zinc-200 disabled:opacity-40"
+          >
+            Clear
+          </button>
+          <span className="text-[11px] text-zinc-600">
+            tip: search first, then Select all - e.g. every "laugh" line at once
+          </span>
+          <button
+            onClick={() => void applySelected()}
+            disabled={selected.size === 0 || applying}
+            style={{ backgroundColor: accent }}
+            className="ml-auto rounded-md px-3 py-1 text-xs font-semibold text-zinc-950 transition hover:opacity-90 disabled:opacity-40"
+          >
+            {applying
+              ? "Applying…"
+              : `Replace ${selected.size || ""} with one audio file…`}
+          </button>
+        </div>
+      )}
 
       {loading && !voicelines && (
         <p className="py-8 text-center text-sm text-zinc-500">Loading voicelines…</p>
@@ -133,15 +214,32 @@ export function VoicelinesPanel({
         {shown.map((vl) => {
           const isOpen = expanded.has(vl.eventName);
           const modded = hasContent?.(vl.eventName) ?? false;
+          const isSel = selected.has(vl.eventName);
           return (
             <div
               key={vl.eventName}
-              className="rounded-lg border border-zinc-800 bg-zinc-900/40"
-              style={modded ? { borderColor: accent } : undefined}
+              onClick={selectMode ? () => toggleSelected(vl.eventName) : undefined}
+              className={`rounded-lg border border-zinc-800 bg-zinc-900/40${
+                selectMode ? " cursor-pointer" : ""
+              }${isSel ? " bg-zinc-800/70" : ""}`}
+              style={isSel || modded ? { borderColor: accent } : undefined}
             >
               <div className="flex items-center gap-2 px-3 py-1.5">
+                {selectMode && (
+                  <input
+                    type="checkbox"
+                    checked={isSel}
+                    onChange={() => toggleSelected(vl.eventName)}
+                    onClick={(e) => e.stopPropagation()}
+                    className="h-4 w-4 shrink-0"
+                    style={{ accentColor: accent }}
+                  />
+                )}
                 <button
-                  onClick={() => void preview(vl)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void preview(vl);
+                  }}
                   disabled={!vl.stockRef}
                   title={vl.stockRef ? "Preview stock clip (the original - your replacement plays in game)" : "No stock clip"}
                   className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-zinc-700 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-white disabled:opacity-30"
@@ -158,13 +256,15 @@ export function VoicelinesPanel({
                 <span className="min-w-0 flex-1 truncate text-sm text-zinc-200" title={vl.eventName}>
                   {vl.label}
                 </span>
-                <button
-                  onClick={() => toggle(vl)}
-                  style={isOpen || modded ? { borderColor: accent, color: accent } : undefined}
-                  className="shrink-0 rounded-md border border-zinc-700 px-2.5 py-0.5 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-white"
-                >
-                  {isOpen ? "Close" : modded ? "Edit ✓" : "Replace"}
-                </button>
+                {!selectMode && (
+                  <button
+                    onClick={() => toggle(vl)}
+                    style={isOpen || modded ? { borderColor: accent, color: accent } : undefined}
+                    className="shrink-0 rounded-md border border-zinc-700 px-2.5 py-0.5 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-white"
+                  >
+                    {isOpen ? "Close" : modded ? "Edit ✓" : "Replace"}
+                  </button>
+                )}
               </div>
               {isOpen && (
                 <motion.div
