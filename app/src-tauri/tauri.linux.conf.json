@@ -1,0 +1,9 @@
+{
+  "bundle": {
+    "targets": ["appimage", "deb"],
+    "resources": {
+      "../../tools/vpk-helper/dist/vpk-helper.exe": null,
+      "../../tools/vpk-helper/dist/vpk-helper": "vpk-helper"
+    }
+  }
+}

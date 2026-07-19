@@ -1,0 +1,51 @@
+name: linux-build
+
+# Experimental Linux build (branch `linux`): produces an AppImage + .deb as
+# workflow artifacts. Compiling mods on Linux additionally requires Wine at
+# runtime (Valve's resourcecompiler is a Windows binary) - see LINUX.md.
+on:
+  push:
+    branches: [linux]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System deps (Tauri v2 on Ubuntu 22.04)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Install frontend deps
+        working-directory: app
+        run: npm ci
+
+      # check, not test: several backend tests read local game files that are
+      # git-ignored (ModFiles/), so they can only run on a dev machine.
+      - name: Rust check (catches unix-only cfg errors)
+        run: cargo check --workspace
+
+      - name: Build app (AppImage + deb)
+        working-directory: app
+        run: npm run tauri build
+
+      - name: Upload bundles
+        uses: actions/upload-artifact@v4
+        with:
+          name: moonahs-mod-maker-linux
+          path: |
+            target/release/bundle/appimage/*.AppImage
+            target/release/bundle/deb/*.deb
+          if-no-files-found: error

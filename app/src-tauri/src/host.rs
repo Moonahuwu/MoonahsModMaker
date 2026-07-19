@@ -225,9 +225,14 @@ const STEAM_APP_ID: &str = "1422450";
 /// is provided and the Steam handoff can't be started.
 pub fn launch_game(root: Option<&Path>) -> Result<(), String> {
     let url = format!("steam://rungameid/{STEAM_APP_ID}");
-    // `explorer <url>` hands the URL to the registered protocol handler without
-    // flashing a console window, then exits once Steam takes over.
-    if std::process::Command::new("explorer").arg(&url).spawn().is_ok() {
+    // Hand the URL to the OS protocol handler (starts Steam if needed) without
+    // flashing a console window, then exit once Steam takes over. Windows:
+    // `explorer <url>`; elsewhere `xdg-open`.
+    #[cfg(windows)]
+    let opener = "explorer";
+    #[cfg(not(windows))]
+    let opener = "xdg-open";
+    if std::process::Command::new(opener).arg(&url).spawn().is_ok() {
         return Ok(());
     }
     // Fallback: launch the client exe directly (needs Steam already running).

@@ -720,8 +720,15 @@ pub(crate) fn run_compiler_raw(
     game_info_dir: &str,
     inputs: &[String],
 ) -> Result<String, String> {
+    if !crate::platform::wine_available() {
+        return Err(
+            "Wine is required to run Valve's resourcecompiler on this platform - install wine and retry".into(),
+        );
+    }
     let exe = Path::new(resource_compiler);
-    let mut cmd = crate::procutil::quiet(exe);
+    // Direct on Windows, through Wine elsewhere; path ARGUMENTS must then be
+    // spelled the way a Windows program sees them (Z:\ mapping).
+    let mut cmd = crate::platform::windows_tool(exe);
     if let Some(dir) = exe.parent() {
         if !dir.as_os_str().is_empty() {
             cmd.current_dir(dir); // binlaunch needs to run from the bin dir
@@ -732,11 +739,11 @@ pub(crate) fn run_compiler_raw(
     // particle-schema mismatch that otherwise aborts). This is how the community
     // tools (e.g. DeadPacker) drive resourcecompiler.
     for input in inputs {
-        cmd.args(["-i", input]);
+        cmd.args(["-i", &crate::platform::tool_path(input)]);
     }
     cmd.args([
         "-game",
-        game_info_dir,
+        &crate::platform::tool_path(game_info_dir),
         "-f",
         "-danger_mode_ignore_schema_mismatches",
     ]);

@@ -984,19 +984,12 @@ pub async fn download_tools(app: tauri::AppHandle, url: String) -> Result<ToolsP
         .map_err(|e| e.to_string())?
         .join("tools");
     tauri::async_runtime::spawn_blocking(move || {
-        // Prefer the Windows-native curl/tar in System32: a bare name could
-        // resolve to MSYS/GNU builds on PATH, and GNU tar treats `C:` in a
-        // path as a remote host ("Cannot connect to C: resolve failed").
-        let sys32 = std::env::var("WINDIR")
-            .map(|w| std::path::PathBuf::from(w).join("System32"))
-            .unwrap_or_else(|_| std::path::PathBuf::from(r"C:\Windows\System32"));
+        // Platform-picked curl/tar (on Windows the System32-native ones: a
+        // bare name could resolve to MSYS/GNU builds on PATH, and GNU tar
+        // treats `C:` in a path as a remote host).
         let pick = |name: &str| -> String {
-            let native = sys32.join(format!("{name}.exe"));
-            if native.exists() {
-                native.to_string_lossy().into_owned()
-            } else {
-                name.to_string()
-            }
+            let p = if name == "curl" { crate::platform::curl_exe() } else { crate::platform::tar_exe() };
+            p.to_string_lossy().into_owned()
         };
         std::fs::create_dir_all(&tools_root).map_err(|e| e.to_string())?;
         let zip = tools_root.join("eim_tools_download.zip");
@@ -1142,14 +1135,25 @@ pub struct HostState {
 /// every 2.5s while someone is playing caused server frame stalls and flaky
 /// loopback sessions. tasklist is slow-ish but this runs on a worker thread.
 fn host_pid_alive(pid: u32) -> bool {
-    let out = match crate::procutil::quiet("tasklist")
-        .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
-        .output()
+    #[cfg(windows)]
     {
-        Ok(o) => o,
-        Err(_) => return false,
-    };
-    String::from_utf8_lossy(&out.stdout).contains(&format!("\"{pid}\""))
+        let out = match crate::procutil::quiet("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+            .output()
+        {
+            Ok(o) => o,
+            Err(_) => return false,
+        };
+        String::from_utf8_lossy(&out.stdout).contains(&format!("\"{pid}\""))
+    }
+    #[cfg(not(windows))]
+    {
+        crate::procutil::quiet("ps")
+            .args(["-p", &pid.to_string()])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
 }
 
 /// Launch the installed client as a dedicated host on `map`. Refuses when a
@@ -1379,9 +1383,11 @@ fn exists(p: &std::path::Path) -> bool {
     p.exists()
 }
 
-/// Read Steam's install path: the per-user registry key first, then the
-/// machine-wide one (Steam installed from an admin/other account leaves HKCU
-/// empty), then the stock location as a last resort.
+/// Read Steam's install path. Windows: the per-user registry key first, then
+/// the machine-wide one (Steam installed from an admin/other account leaves
+/// HKCU empty), then the stock location. Linux: the usual homedir locations
+/// (native, XDG, flatpak).
+#[cfg(windows)]
 fn steam_path() -> Option<std::path::PathBuf> {
     let reg_value = |key: &str, name: &str| -> Option<std::path::PathBuf> {
         let out = crate::procutil::quiet("reg").args(["query", key, "/v", name]).output().ok()?;
@@ -1403,6 +1409,19 @@ fn steam_path() -> Option<std::path::PathBuf> {
             let stock = std::path::PathBuf::from(r"C:\Program Files (x86)\Steam");
             stock.join("steamapps").is_dir().then_some(stock)
         })
+}
+
+#[cfg(not(windows))]
+fn steam_path() -> Option<std::path::PathBuf> {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from)?;
+    [
+        home.join(".steam/steam"),
+        home.join(".local/share/Steam"),
+        home.join(".var/app/com.valvesoftware.Steam/.local/share/Steam"),
+        home.join(".steam/root"),
+    ]
+    .into_iter()
+    .find(|p| p.join("steamapps").is_dir())
 }
 
 /// All Steam library roots: the base install plus every `path` in
@@ -1485,10 +1504,14 @@ fn find_csdk(home: &std::path::Path, exe_dir: Option<&std::path::Path>) -> Optio
 
 /// Locate the bundled/dev vpk-helper relative to the running exe.
 fn find_vpk_helper(exe_dir: Option<&std::path::Path>, resource_dir: Option<&std::path::Path>) -> Option<String> {
+    // `vpk-helper.exe` on Windows, bare `vpk-helper` on unix (same .NET
+    // publish, different RID) - probe both so one list serves both builds.
     let mut candidates: Vec<std::path::PathBuf> = Vec::new();
     for base in [exe_dir, resource_dir].into_iter().flatten() {
-        candidates.push(base.join("vpk-helper.exe"));
-        candidates.push(base.join("vpk-helper").join("vpk-helper.exe"));
+        for name in ["vpk-helper.exe", "vpk-helper"] {
+            candidates.push(base.join(name));
+            candidates.push(base.join("vpk-helper").join(name));
+        }
         candidates.push(base.join("vpk-helper.dll"));
     }
     // Dev checkout: walk parents looking for the helper. Prefer the self-contained
@@ -1498,6 +1521,7 @@ fn find_vpk_helper(exe_dir: Option<&std::path::Path>, resource_dir: Option<&std:
         for _ in 0..6 {
             for rel in [
                 "tools/vpk-helper/dist/vpk-helper.exe",
+                "tools/vpk-helper/dist/vpk-helper",
                 "tools/vpk-helper/bin/Release/net10.0/win-x64/vpk-helper.exe",
                 "tools/vpk-helper/bin/Release/net10.0/vpk-helper.exe",
                 "tools/vpk-helper/bin/Release/net10.0/vpk-helper.dll",
@@ -5514,14 +5538,10 @@ pub fn file_stamp(path: String) -> String {
 /// in confusing ways.
 #[tauri::command]
 pub fn running_processes(names: Vec<String>) -> Vec<String> {
-    let out = match crate::procutil::quiet("tasklist").args(["/FO", "CSV", "/NH"]).output() {
-        Ok(o) => o,
-        Err(_) => return vec![],
-    };
-    let text = String::from_utf8_lossy(&out.stdout).to_lowercase();
+    let text = crate::platform::process_list_lowercase();
     names
         .into_iter()
-        .filter(|n| text.contains(&format!("\"{}\"", n.to_lowercase())))
+        .filter(|n| text.contains(&n.to_lowercase()))
         .collect()
 }
 
@@ -5543,7 +5563,7 @@ pub struct AppUpdate {
 pub async fn check_app_update() -> Option<AppUpdate> {
     tauri::async_runtime::spawn_blocking(|| {
         let current = env!("CARGO_PKG_VERSION").to_string();
-        let out = crate::procutil::quiet(r"C:\Windows\System32\curl.exe")
+        let out = crate::procutil::quiet(crate::platform::curl_exe())
             .args([
                 "-s",
                 "-m",
@@ -5570,6 +5590,11 @@ pub async fn check_app_update() -> Option<AppUpdate> {
             .unwrap_or("https://github.com/Moonahuwu/MoonahsModMaker/releases")
             .to_string();
         // Prefer the NSIS setup exe among the release assets (one-click path).
+        // Not on unix: the Windows installer can't run there, so the banner
+        // falls back to linking the release page.
+        #[cfg(not(windows))]
+        let setup_asset: Option<String> = None;
+        #[cfg(windows)]
         let setup_asset = body
             .get("assets")
             .and_then(|a| a.as_array())
@@ -5595,10 +5620,17 @@ pub async fn check_app_update() -> Option<AppUpdate> {
 /// it from there.
 #[tauri::command]
 pub async fn install_app_update(app: tauri::AppHandle, setup_url: String) -> Result<(), String> {
+    #[cfg(not(windows))]
+    {
+        let _ = (app, setup_url);
+        return Err("one-click update isn't available on this platform - grab the new build from GitHub releases".into());
+    }
+    #[cfg(windows)]
+    {
     let dest = std::env::temp_dir().join("moonahs_mod_maker_update_setup.exe");
     let dest2 = dest.clone();
     tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
-        let out = crate::procutil::quiet(r"C:\Windows\System32\curl.exe")
+        let out = crate::procutil::quiet(crate::platform::curl_exe())
             .args(["-sL", "-m", "300", "-H", "User-Agent: MoonahsModMaker", "-o"])
             .arg(&dest2)
             .arg(&setup_url)
@@ -5616,6 +5648,7 @@ pub async fn install_app_update(app: tauri::AppHandle, setup_url: String) -> Res
         .map_err(|e| format!("launching installer: {e}"))?;
     app.exit(0);
     Ok(())
+    }
 }
 
 #[derive(serde::Serialize, Debug, Clone)]
@@ -5665,7 +5698,7 @@ pub async fn gamebanana_mod_info(
 
 /// GET a GameBanana apiv11 URL and parse the JSON.
 fn gb_fetch_json(url: &str) -> Result<serde_json::Value, String> {
-    let out = crate::procutil::quiet(r"C:\Windows\System32\curl.exe")
+    let out = crate::procutil::quiet(crate::platform::curl_exe())
         .args(["-s", "-m", "15", "-H", "User-Agent: MoonahsModMaker", url])
         .output()
         .map_err(|e| format!("launching curl: {e}"))?;
@@ -5764,21 +5797,10 @@ fn parse_gamebanana_ref(input: &str) -> Option<(String, u64)> {
     digits.parse().ok().map(|n| (model.into(), n))
 }
 
-/// MD5 of a file via Windows' built-in certutil (no hash crate needed). The
-/// hash is on the second output line; older Windows spaces the hex pairs.
+/// MD5 of a file via the platform's built-in hasher (certutil / md5sum) - no
+/// hash crate needed.
 fn file_md5(path: &str) -> Option<String> {
-    let out = crate::procutil::quiet(r"C:\Windows\System32\certutil.exe")
-        .args(["-hashfile", path, "MD5"])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .nth(1)
-        .map(|l| l.replace(' ', "").trim().to_lowercase())
-        .filter(|h| h.len() == 32 && h.chars().all(|c| c.is_ascii_hexdigit()))
+    crate::platform::file_md5(path)
 }
 
 const GB_DEADLOCK_GAME_ID: u32 = 20948;
@@ -6040,17 +6062,10 @@ pub async fn gamebanana_download(
         let dir = dest_root.join(format!("{}{mod_id}", if model == "Sound" { "s" } else { "" }));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        // Windows-native curl/tar (see download_tools for why not bare names).
-        let sys32 = std::env::var("WINDIR")
-            .map(|w| std::path::PathBuf::from(w).join("System32"))
-            .unwrap_or_else(|_| std::path::PathBuf::from(r"C:\Windows\System32"));
+        // Platform-picked curl/tar (see download_tools for why not bare names).
         let pick = |name: &str| -> String {
-            let native = sys32.join(format!("{name}.exe"));
-            if native.exists() {
-                native.to_string_lossy().into_owned()
-            } else {
-                name.to_string()
-            }
+            let p = if name == "curl" { crate::platform::curl_exe() } else { crate::platform::tar_exe() };
+            p.to_string_lossy().into_owned()
         };
         let dest = dir.join(&safe_name);
         let out = crate::procutil::quiet(pick("curl"))

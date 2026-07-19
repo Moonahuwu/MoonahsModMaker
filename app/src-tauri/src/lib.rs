@@ -5,6 +5,7 @@ mod digimod;
 mod host;
 mod install;
 mod paths;
+mod platform;
 mod procutil;
 mod project;
 mod rcon;
