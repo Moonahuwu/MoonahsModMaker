@@ -1,56 +1,79 @@
 # Moonah's Mod Maker
 
-A local desktop app for building custom Deadlock sound/UI mods — match-intro tracks,
-map music (urn/Idol, midboss, powerups, team objectives), hero ability sounds and
-voicelines, shop-item sounds, and custom item icons — and compiling them into a
-ready-to-install `.vpk`.
+A desktop app for making Deadlock mods without touching a compiler or a text
+editor: replace music and sounds, swap images and wall art, bundle other
+mods together, and build everything into a ready-to-install `.vpk` with one
+button.
 
-> Formerly **EasyIntroModder** — renamed as the scope grew well beyond the intro.
+**[Download on GameBanana](https://gamebanana.com/tools/23422)** · or grab the
+installer from [Releases](https://github.com/Moonahuwu/MoonahsModMaker/releases).
+The app updates itself when a new version is released.
 
-It merges your entries into the game's shared sound-event files (`music.vsndevts`,
-`hero/*.vsndevts`) **without disturbing other mods**: it only touches the array
-entries it owns and leaves the stock track and every foreign entry intact.
+## What it can do
 
-## Features
+- **Music & sounds**: match intro, map objectives (urn, mid-boss, rifts,
+  powerups), shop, per-hero abilities and voicelines, per-item sounds, and a
+  browser to replace any of the game's ~79k sound files directly.
+- **Audio editing built in**: trim, gain, fades, layered mixes, waveform
+  preview, compare against the original in-game sound.
+- **Images**: hero portraits, ability icons, and in-world posters/graffiti
+  (drop a PNG on a map region).
+- **Jumpscares (MoonahMasterUI)**: a generated HUD mod that plays your videos
+  and sounds at random moments in-game.
+- **Mod combiner**: bundle other creators' packs into one build, with imported
+  events editable per slot and a generated credits file. Includes an in-app
+  GameBanana browser.
+- **One-click everything**: compile, install into an addon slot, launch the
+  game. When Deadlock updates, a single "Fix for new patch" re-pulls the game
+  data and rebuilds your pack.
 
-- **Tabs** for Deadlock Intro (King / Mother), Urn Music (carry, contest team/enemy,
-  stingers), and Heroes (Billy's Blasted E).
-- Drag-and-drop an mp3 onto a slot; **trim, gain, and fade-out** with live preview.
-- **Waveform** of your clip, plus play/compare against the original in-game track.
-- **Enable/disable or remove** any stock or other-mod entry per slot.
-- One **Compile** button: ffmpeg → `resourcecompiler` → merge → backups → recreate
-  folder structure → optional `pak01_dir.vpk` (via a bundled ValvePak helper).
+Sound edits are **merged, never replaced**: the app splices only the entries
+it owns into the game's shared sound-event files, so stock tracks and other
+mods stay byte-for-byte intact.
 
-## Layout
+## Building from source
 
-| Path | What |
-|------|------|
-| `crates/kv3-core/` | Surgical KV3 (`.vsndevts`) reader/merger — edits only owned array entries, byte-preserving. |
-| `app/` | Tauri 2 + React/TS/Tailwind frontend. |
-| `app/src-tauri/` | Rust backend (audio/ffmpeg, compile pipeline, vpk + project model). |
-| `tools/vpk-helper/` | C# CLI over ValvePak/ValveResourceFormat (pack / extract / decode). |
-
-## Build / run
-
-Requires Rust, Node, .NET SDK, and ffmpeg on PATH.
+Requires Rust, Node, the .NET SDK, and ffmpeg on PATH.
 
 ```sh
 cd app
 npm install
-npm run tauri dev      # dev with hot reload
-npm run tauri build    # standalone build
+npm run tauri dev      # dev app with hot reload
+npm run tauri build    # release build + installers
 ```
 
-Tests:
+Tests: `cargo test` (KV3 merger + backend). The C# VPK helper builds with
+`npm run build:helper` (from `app/`).
 
-```sh
-cargo test                                   # Rust (kv3-core + backend)
-cd tools/vpk-helper && dotnet build -c Release
-```
+Compiling mods needs Valve game data and the community Reduced CSDK compiler;
+the app's first-run wizard downloads a trimmed tools bundle (~430 MB) so end
+users never need the full SDK.
+
+| Path | What |
+|------|------|
+| `crates/kv3-core/` | Surgical KV3 merger - edits only owned entries, byte-preserving |
+| `app/src/` | React/TS frontend |
+| `app/src-tauri/` | Rust backend: audio, compile pipeline, install, project model |
+| `tools/vpk-helper/` | C# CLI over ValvePak/ValveResourceFormat (pack, extract, decode) |
+
+## Linux?
+
+Windows-only for now. A native port is realistic and contributions are
+welcome - the stack is mostly portable already:
+
+- Tauri builds natively on Linux (webkit2gtk), the vpk-helper is
+  cross-platform .NET, and ffmpeg is everywhere.
+- The Windows-specific bits are small and localized: path autodetect
+  (registry lookups in `commands.rs`), the updater (NSIS), the tools
+  downloader (System32 curl/tar), and process listing (`tasklist`).
+- The one hard dependency is Valve's `resourcecompiler.exe` (Windows-only),
+  which would need to run through Wine. Sound compiles are the likely-easy
+  case; texture compiles initialize a GPU device and need real testing.
+
+If you want to take a swing at it, open an issue and we'll coordinate.
 
 ## Notes
 
-- Extracted Valve game content (the `ModFiles/`, `sounds/`, `compilerstuff/`
-  folders) and build output are **git-ignored** — they're not shared here.
-- Compilation uses the community **Reduced CSDK** toolchain; paths are configured
-  in the app's Setup panel.
+- Extracted Valve game content (`ModFiles/`, `sounds/`, `soundevents/`,
+  `VanillaFiles/`) and build output are git-ignored - not part of this repo.
+- Made by Moonah. Discord: `moonah00`.
