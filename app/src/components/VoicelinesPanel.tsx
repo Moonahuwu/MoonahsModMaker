@@ -171,9 +171,11 @@ export function VoicelinesPanel({
         </button>
       </div>
 
-      {/* Bulk action bar: pick lines below, then one file replaces them all. */}
+      {/* Bulk action bar: pick lines below, then one file replaces them all.
+          Sticky: it follows the scroll so applying never means a trip back to
+          the top of a 1400-line list. */}
       {selectMode && (
-        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900/70 px-3 py-2">
+        <div className="sticky top-2 z-20 mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900/95 px-3 py-2 shadow-lg shadow-black/40 backdrop-blur">
           <span className="text-xs font-medium text-zinc-300">
             {selected.size} selected
           </span>
