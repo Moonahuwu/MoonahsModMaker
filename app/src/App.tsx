@@ -2,10 +2,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { appDataDir } from "@tauri-apps/api/path";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   autodetectPaths,
+  checkPaths,
   checkSoundRefs,
   copyToDownloads,
   decodeStock as decodeStockApi,
@@ -88,7 +90,7 @@ import { getCopiedSound } from "./lib/soundClipboard";
 import { CustomServer } from "./components/CustomServer";
 import { ProfileSwitcher } from "./components/ProfileSwitcher";
 import { useToast } from "./components/Toaster";
-import { useSettings, slotSoundFolder, sheetSiblingsKey, compilePrefsOf, DEATHS_RELEASED, TOOLS_BUNDLE_URL } from "./lib/settings";
+import { useSettings, slotSoundFolder, sheetSiblingsKey, compilePrefsOf, DEATHS_RELEASED, TOOLS_BUNDLE_URL, type Settings } from "./lib/settings";
 import { songHash, overrideHash, effectHash, posterHash } from "./lib/songHash";
 import type { EffectOverride, EventProject, EventView, PosterOverride, Project, Song, SongLayer, SoundOverride } from "./types";
 import { GameBananaBrowser } from "./components/GameBananaBrowser";
@@ -1136,6 +1138,65 @@ export default function App() {
         hydrated.current = false;
         push("error", String(e));
       }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settingsReady]);
+
+  // Fresh-install path bootstrap: released builds start with EMPTY paths (no
+  // phantom dev-machine defaults). Heal installs that already SAVED those
+  // phantom defaults (clear any that don't exist on this machine), fill
+  // outputDir/vanillaRoot from app-data, and auto-detect the game/tool paths
+  // right away on first run (and after a heal) so the wizard opens showing
+  // real results instead of waiting for a click.
+  useEffect(() => {
+    if (!settingsReady) return;
+    (async () => {
+      const s = settingsRef.current;
+      const OLD_DEFAULTS: [keyof Settings & string, string][] = [
+        ["csdkRoot", "C:/Users/ethob/Desktop/DeadlockModding/Reduced_CSDK_12"],
+        [
+          "vpkHelperPath",
+          "C:/Users/ethob/Desktop/DeadlockModding/EasyIntroModder/tools/vpk-helper/dist/vpk-helper.exe",
+        ],
+        [
+          "deadlockPak",
+          "D:/SteamLibrary/steamapps/common/Deadlock/game/citadel/pak01_dir.vpk",
+        ],
+        ["vanillaRoot", "C:/Users/ethob/Desktop/DeadlockModding/EasyIntroModder/ModFiles"],
+        ["outputDir", "C:/Users/ethob/Desktop/DeadlockModding/EasyIntroModder/output"],
+        ["addonsDir", "D:/SteamLibrary/steamapps/common/Deadlock/game/citadel/addons"],
+      ];
+      const cleared = new Set<string>();
+      const stored = OLD_DEFAULTS.filter(([k, v]) => s[k] === v);
+      if (stored.length) {
+        try {
+          const there = await checkPaths(stored.map(([, v]) => v));
+          const patch: Record<string, string> = {};
+          stored.forEach(([k], i) => {
+            if (there[i] === false) {
+              patch[k] = "";
+              cleared.add(k);
+            }
+          });
+          if (cleared.size) updateSettings(patch as Partial<Settings>);
+        } catch {
+          /* browser preview: no backend */
+        }
+      }
+      if (!s.outputDir || !s.vanillaRoot || cleared.has("outputDir") || cleared.has("vanillaRoot")) {
+        try {
+          const base = (await appDataDir()).replace(/[\\/]+$/, "").replace(/\\/g, "/");
+          updateSettings({
+            ...(s.outputDir && !cleared.has("outputDir") ? {} : { outputDir: `${base}/output` }),
+            ...(s.vanillaRoot && !cleared.has("vanillaRoot")
+              ? {}
+              : { vanillaRoot: `${base}/vanilla` }),
+          });
+        } catch {
+          /* browser preview: no Tauri path API */
+        }
+      }
+      if (!s.firstRunDone || cleared.size > 0) void autodetect(true);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settingsReady]);
@@ -2988,7 +3049,9 @@ export default function App() {
   }
 
   // Best-effort auto-detect of tool/game paths; fills in what it finds.
-  async function autodetect() {
+  // `silent` = no toasts (the first-run auto-pass, where empty results are
+  // expected and the wizard's checklist already shows the outcome).
+  async function autodetect(silent = false) {
     try {
       const d = await autodetectPaths();
       const patch: Partial<typeof settings> = {};
@@ -3000,12 +3063,12 @@ export default function App() {
       const found = Object.keys(patch).length;
       if (found > 0) {
         updateSettings(patch);
-        push("success", `Auto-detected ${found} path(s)`);
-      } else {
+        if (!silent) push("success", `Auto-detected ${found} path(s)`);
+      } else if (!silent) {
         push("info", "Couldn't auto-detect any paths - set them manually");
       }
     } catch (e) {
-      push("error", `Auto-detect failed: ${e}`);
+      if (!silent) push("error", `Auto-detect failed: ${e}`);
     }
   }
 

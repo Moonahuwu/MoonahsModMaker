@@ -1379,23 +1379,30 @@ fn exists(p: &std::path::Path) -> bool {
     p.exists()
 }
 
-/// Read Steam's install path from the registry (`HKCU\Software\Valve\Steam`).
+/// Read Steam's install path: the per-user registry key first, then the
+/// machine-wide one (Steam installed from an admin/other account leaves HKCU
+/// empty), then the stock location as a last resort.
 fn steam_path() -> Option<std::path::PathBuf> {
-    let out = crate::procutil::quiet("reg")
-        .args(["query", r"HKCU\SOFTWARE\Valve\Steam", "/v", "SteamPath"])
-        .output()
-        .ok()?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    // Line looks like: `    SteamPath    REG_SZ    c:/program files (x86)/steam`
-    for line in text.lines() {
-        if let Some(idx) = line.find("REG_SZ") {
-            let val = line[idx + "REG_SZ".len()..].trim();
-            if !val.is_empty() {
-                return Some(std::path::PathBuf::from(val));
+    let reg_value = |key: &str, name: &str| -> Option<std::path::PathBuf> {
+        let out = crate::procutil::quiet("reg").args(["query", key, "/v", name]).output().ok()?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        // Line looks like: `    SteamPath    REG_SZ    c:/program files (x86)/steam`
+        for line in text.lines() {
+            if let Some(idx) = line.find("REG_SZ") {
+                let val = line[idx + "REG_SZ".len()..].trim();
+                if !val.is_empty() {
+                    return Some(std::path::PathBuf::from(val));
+                }
             }
         }
-    }
-    None
+        None
+    };
+    reg_value(r"HKCU\SOFTWARE\Valve\Steam", "SteamPath")
+        .or_else(|| reg_value(r"HKLM\SOFTWARE\WOW6432Node\Valve\Steam", "InstallPath"))
+        .or_else(|| {
+            let stock = std::path::PathBuf::from(r"C:\Program Files (x86)\Steam");
+            stock.join("steamapps").is_dir().then_some(stock)
+        })
 }
 
 /// All Steam library roots: the base install plus every `path` in
@@ -1542,17 +1549,31 @@ pub fn autodetect_paths(app: tauri::AppHandle) -> DetectedPaths {
     });
     let addons_dir = addons_dir.filter(|p| std::path::Path::new(p).is_dir());
 
-    let csdk = find_csdk(&home, exe_dir.as_deref());
+    // The one-click tools bundle (app-data tools/) wins: it's what the wizard
+    // installs for users without a CSDK, and must survive a settings reset.
+    let app_data = app.path().app_data_dir().ok();
+    let bundled_csdk = app_data
+        .as_ref()
+        .map(|d| d.join("tools").join("EIM_Tools").join("csdk"))
+        .filter(|c| c.join("game/bin_tools/win64/resourcecompiler.exe").exists());
+    let csdk = bundled_csdk.or_else(|| find_csdk(&home, exe_dir.as_deref()));
     let resource_compiler = csdk.as_ref().map(|c| {
         c.join("game/bin_tools/win64/resourcecompiler.exe").to_string_lossy().replace('\\', "/")
     });
+
+    // Bundled ffmpeg beats relying on PATH (fresh machines rarely have one).
+    let bundled_ffmpeg = app_data
+        .as_ref()
+        .map(|d| d.join("tools").join("EIM_Tools").join("ffmpeg").join("ffmpeg.exe"))
+        .filter(|f| f.exists())
+        .map(|f| f.to_string_lossy().replace('\\', "/"));
 
     DetectedPaths {
         csdk_root: csdk.map(|c| c.to_string_lossy().replace('\\', "/")),
         resource_compiler,
         deadlock_pak,
         addons_dir,
-        ffmpeg: if ffmpeg_on_path() { Some("ffmpeg".into()) } else { None },
+        ffmpeg: bundled_ffmpeg.or_else(|| ffmpeg_on_path().then(|| "ffmpeg".into())),
         vpk_helper: find_vpk_helper(exe_dir.as_deref(), resource_dir.as_deref())
             .map(|p| p.replace('\\', "/")),
     }

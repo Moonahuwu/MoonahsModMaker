@@ -150,6 +150,13 @@ export const DEATHS_RELEASED = import.meta.env.DEV;
 const REPO = "C:/Users/ethob/Desktop/DeadlockModding/EasyIntroModder";
 const CSDK = "C:/Users/ethob/Desktop/DeadlockModding/Reduced_CSDK_12";
 
+/** Dev-machine path conveniences. Released builds must start EMPTY: shipping
+ *  the dev machine's paths made fresh installs look configured while pointing
+ *  at folders that don't exist there ("compiler not mapped" support cases).
+ *  Empty paths get filled by autodetect/the wizard, and outputDir/vanillaRoot
+ *  fall back to app-data on boot (App.tsx bootstrap). */
+const IS_DEV = import.meta.env.DEV;
+
 /** Where the one-click setup downloads the prebuilt tools bundle (trimmed CSDK
  *  compiler + static ffmpeg, built by `EIM_Tools_v2.zip` at the repo root's
  *  sibling folder). v2 adds `game/citadel/shaders_{vulkan,pc}_*.vpk` (~51MB)
@@ -161,15 +168,16 @@ export const TOOLS_BUNDLE_URL =
   "https://github.com/Moonahuwu/MoonahsModMaker/releases/download/tools-v2/EIM_Tools_v2.zip";
 
 export const DEFAULT_SETTINGS: Settings = {
-  csdkRoot: CSDK,
+  csdkRoot: IS_DEV ? CSDK : "",
   addonName: "eim_intro_music",
-  vpkHelperPath: `${REPO}/tools/vpk-helper/dist/vpk-helper.exe`,
-  deadlockPak:
-    "D:/SteamLibrary/steamapps/common/Deadlock/game/citadel/pak01_dir.vpk",
+  vpkHelperPath: IS_DEV ? `${REPO}/tools/vpk-helper/dist/vpk-helper.exe` : "",
+  deadlockPak: IS_DEV
+    ? "D:/SteamLibrary/steamapps/common/Deadlock/game/citadel/pak01_dir.vpk"
+    : "",
   ffmpegPath: "",
   soundFolder: "sounds/music/match_intro",
-  vanillaRoot: `${REPO}/ModFiles`,
-  outputDir: `${REPO}/output`,
+  vanillaRoot: IS_DEV ? `${REPO}/ModFiles` : "",
+  outputDir: IS_DEV ? `${REPO}/output` : "",
   outputMode: "vpk",
   vpkName: "pak01_dir.vpk",
   importedMods: [],
@@ -181,8 +189,9 @@ export const DEFAULT_SETTINGS: Settings = {
   importBundle: true,
   lastPakStamp: "",
   soundLibrary: [],
-  addonsDir:
-    "D:/SteamLibrary/steamapps/common/Deadlock/game/citadel/addons",
+  addonsDir: IS_DEV
+    ? "D:/SteamLibrary/steamapps/common/Deadlock/game/citadel/addons"
+    : "",
   installAfterCompile: false,
   patchGameinfo: true,
   installSlot: null,
