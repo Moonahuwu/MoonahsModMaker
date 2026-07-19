@@ -4824,9 +4824,13 @@ export default function App() {
             iconMods={project.iconMods ?? []}
             soundOverrides={project.soundOverrides ?? []}
             effectOverrides={settings.experimentalEffects ? (project.effectOverrides ?? []) : []}
-            vdataOverrides={project.vdataOverrides ?? []}
-            globalOverrides={project.globalOverrides ?? []}
-            worldOverrides={project.worldOverrides ?? []}
+            // Custom Server hidden = gameplay edits stay OUT of the build,
+            // like effects/UI Master: the experimental toggle is
+            // authoritative, and includeGameplay's own switch lives inside
+            // the hidden tab where nobody can reach it.
+            vdataOverrides={settings.experimentalServer ? (project.vdataOverrides ?? []) : []}
+            globalOverrides={settings.experimentalServer ? (project.globalOverrides ?? []) : []}
+            worldOverrides={settings.experimentalServer ? (project.worldOverrides ?? []) : []}
             posterOverrides={project.posterOverrides ?? []}
             digimod={project.digimod ?? null}
             uiOverrides={settings.experimentalUiMaster ? (project.uiOverrides ?? []) : []}
