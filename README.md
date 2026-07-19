@@ -70,7 +70,7 @@ welcome - the stack is mostly portable already:
   which would need to run through Wine. Sound compiles are the likely-easy
   case; texture compiles initialize a GPU device and need real testing.
 
-I'm trying to figure 
+I'm trying to figure out a easy solution to this but if you want a crack at it here's the code! I used a lot of claude to help me make this project, apologies for the sphagetti code as it's my first rust project.
 
 ## Notes
 
