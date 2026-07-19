@@ -3376,6 +3376,33 @@ export default function App() {
     }
   }
 
+  /** Bulk revert: strip the custom audio (and the stock-clip exclusions that
+   *  came with it) from many voicelines at once - the lines fall back to the
+   *  stock clips. Emptied slots get pruned on the next launch. */
+  async function bulkClearVoicelines(vls: VoiceLine[]): Promise<boolean> {
+    const codename = selectedHero;
+    const prev = projectRef.current;
+    if (!codename || !prev || vls.length === 0) return false;
+    const ids = new Set(vls.map((v) => heroAbilSlotId(codename, v.eventName)));
+    let touched = 0;
+    const next = {
+      ...prev,
+      events: prev.events.map((e) => {
+        if (!ids.has(e.id) || !slotHasContent(e)) return e;
+        touched++;
+        return { ...e, songs: [], excludedEntries: [], removedEntries: [] };
+      }),
+    };
+    if (touched === 0) {
+      push("info", "Nothing to remove - the selected lines have no custom audio");
+      return true;
+    }
+    setProject(next);
+    void load(next);
+    push("success", `Removed audio from ${touched} voiceline(s) - back to stock`);
+    return true;
+  }
+
   // Materialize an item's sound slots (created empty, pruned if unused). Returns
   // the updated project so the caller can pool the new slots immediately.
   function ensureItemSlots(itemName: string, sounds: HeroAbilitySound[]): Project | null {
@@ -4855,13 +4882,18 @@ export default function App() {
               onPreview={(ref) => decodeStock(ref)}
               onOpen={(vl) => void openVoiceline(vl)}
               onBulkReplace={bulkReplaceVoicelines}
+              onBulkClear={bulkClearVoicelines}
               renderSound={renderSound}
+              // Highlight only lines with actual custom AUDIO. slotHasContent
+              // also counts exclusion-only slots (e.g. the disabled stock ref
+              // left behind after deleting a track), which read as phantom
+              // edits in a 1400-line list.
               hasContent={(name) => {
                 if (!selectedHero) return false;
                 const slot = project?.events.find(
                   (e) => e.id === heroAbilSlotId(selectedHero, name),
                 );
-                return !!slot && slotHasContent(slot);
+                return !!slot && (slot.songs.length > 0 || slot.adopted.length > 0);
               }}
               modifiedFilter={
                 modifiedOnly && selectedHero
@@ -4869,7 +4901,7 @@ export default function App() {
                       const slot = project?.events.find(
                         (e) => e.id === heroAbilSlotId(selectedHero, name),
                       );
-                      return !!slot && slotHasContent(slot);
+                      return !!slot && (slot.songs.length > 0 || slot.adopted.length > 0);
                     }
                   : null
               }

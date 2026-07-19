@@ -20,6 +20,7 @@ export function VoicelinesPanel({
   onPreview,
   onOpen,
   onBulkReplace,
+  onBulkClear,
   renderSound,
   modifiedFilter,
   hasContent,
@@ -36,6 +37,9 @@ export function VoicelinesPanel({
   /** Bulk replace: apply ONE picked audio file to every given voiceline.
    *  Resolves true when applied (the selection clears then). */
   onBulkReplace: (vls: VoiceLine[]) => Promise<boolean>;
+  /** Bulk revert: remove custom audio from every given voiceline (back to
+   *  the stock clip). Resolves true when applied. */
+  onBulkClear: (vls: VoiceLine[]) => Promise<boolean>;
   /** Render the editor panel for an opened voiceline. */
   renderSound: (sound: { eventName: string; label: string }) => React.ReactNode;
   /** "Modified only": when set, list only voicelines this returns true for. */
@@ -47,8 +51,19 @@ export function VoicelinesPanel({
   const [limit, setLimit] = useState(PAGE);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   // Multi-select ("Deadlock Forge"-style): pick many lines, then apply one
-  // audio file to all of them at once.
-  const [selectMode, setSelectMode] = useState(false);
+  // audio file to (or remove audio from) all of them at once. The mode is a
+  // sticky preference - it survives hero switches and restarts.
+  const [selectMode, setSelectModeRaw] = useState(
+    () => localStorage.getItem("eim.vlSelectMode") === "1",
+  );
+  const setSelectMode = (v: boolean) => {
+    setSelectModeRaw(v);
+    try {
+      localStorage.setItem("eim.vlSelectMode", v ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  };
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [applying, setApplying] = useState(false);
   const [playing, setPlaying] = useState<string | null>(null);
@@ -90,15 +105,13 @@ export function VoicelinesPanel({
     });
   }
 
-  async function applySelected() {
+  async function applySelected(action: "replace" | "clear") {
     const chosen = (voicelines ?? []).filter((v) => selected.has(v.eventName));
     if (chosen.length === 0) return;
     setApplying(true);
     try {
-      if (await onBulkReplace(chosen)) {
-        setSelected(new Set());
-        setSelectMode(false);
-      }
+      const run = action === "replace" ? onBulkReplace : onBulkClear;
+      if (await run(chosen)) setSelected(new Set());
     } finally {
       setApplying(false);
     }
@@ -147,7 +160,7 @@ export function VoicelinesPanel({
         />
         <button
           onClick={() => {
-            setSelectMode((v) => !v);
+            setSelectMode(!selectMode);
             setSelected(new Set());
           }}
           style={selectMode ? { borderColor: accent, color: accent } : undefined}
@@ -178,16 +191,24 @@ export function VoicelinesPanel({
             disabled={selected.size === 0}
             className="rounded-md border border-zinc-700 px-2 py-0.5 text-xs text-zinc-400 transition hover:border-zinc-500 hover:text-zinc-200 disabled:opacity-40"
           >
-            Clear
+            Deselect
           </button>
           <span className="text-[11px] text-zinc-600">
             tip: search first, then Select all - e.g. every "laugh" line at once
           </span>
           <button
-            onClick={() => void applySelected()}
+            onClick={() => void applySelected("clear")}
+            disabled={selected.size === 0 || applying}
+            title="Remove your custom audio from the selected lines - they go back to the stock clips"
+            className="ml-auto rounded-md border border-red-500/40 px-3 py-1 text-xs font-medium text-red-300 transition hover:bg-red-500/10 disabled:opacity-40"
+          >
+            Remove audio{selected.size ? ` from ${selected.size}` : ""}
+          </button>
+          <button
+            onClick={() => void applySelected("replace")}
             disabled={selected.size === 0 || applying}
             style={{ backgroundColor: accent }}
-            className="ml-auto rounded-md px-3 py-1 text-xs font-semibold text-zinc-950 transition hover:opacity-90 disabled:opacity-40"
+            className="rounded-md px-3 py-1 text-xs font-semibold text-zinc-950 transition hover:opacity-90 disabled:opacity-40"
           >
             {applying
               ? "Applying…"
