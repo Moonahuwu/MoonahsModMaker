@@ -413,8 +413,13 @@ fn rebuild_entries(existing: &[String], edit: &EventMerge) -> Vec<String> {
     let mut out = Vec::with_capacity(existing.len() + edit.owned_in_order.len() + 1);
     // Stock first, unless the user disabled it. An empty stock entry means "no
     // designated stock" (e.g. dynamic ability slots) — existing entries are then
-    // all preserved as foreign and ours are appended.
-    if !edit.stock_entry.is_empty() && !excluded.contains(edit.stock_entry.as_str()) {
+    // all preserved as foreign and ours are appended. A stock entry we ALSO own
+    // (a replacement track compiled onto the original's path) is emitted once,
+    // in owned order, not duplicated here.
+    if !edit.stock_entry.is_empty()
+        && !excluded.contains(edit.stock_entry.as_str())
+        && !edit.owned_in_order.contains(&edit.stock_entry)
+    {
         out.push(edit.stock_entry.clone());
     }
     for e in existing {
@@ -887,6 +892,23 @@ mod unit {
         // stock dropped, foreign1 dropped, old_owned (untracked foreign) kept,
         // our new entry appended.
         assert_eq!(v.entries, vec!["a/old_owned.vsnd", "a/new.vsnd"]);
+    }
+
+    #[test]
+    fn owned_track_on_the_stock_path_is_not_duplicated() {
+        // A replacement track compiled onto the original's path: the stock
+        // entry string is ALSO an owned entry. It must appear exactly once.
+        let out = apply_merge(SYNTH, &edit(&["a/stock.vsnd", "a/new.vsnd"], &[], None)).unwrap();
+        let v = read_event(&out, "Evt").unwrap();
+        assert_eq!(
+            v.entries,
+            vec![
+                "a/foreign1.vsnd",
+                "a/old_owned.vsnd",
+                "a/stock.vsnd",
+                "a/new.vsnd"
+            ]
+        );
     }
 
     #[test]

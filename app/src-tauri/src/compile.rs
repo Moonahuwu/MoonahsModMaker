@@ -666,13 +666,26 @@ fn events_c_relpath(events_game_relpath: &str) -> String {
 
 /// Build the kv3-core merge for one event, and the new auto/manual duration.
 fn event_merge(ev: &EventCompile, sound_folder: &str, current_duration: Option<f64>) -> EventMerge {
-    let mut owned_in_order: Vec<String> = ev
+    let song_refs: Vec<String> = ev
         .songs
         .iter()
         .map(|s| vsnd_ref(sound_folder, &s.sound_name))
         .collect();
+    let mut owned_in_order = song_refs.clone();
     // Adopted entries (from other mods) are also "ours" — include their refs.
     owned_in_order.extend(ev.adopted.iter().map(|a| a.reference.clone()));
+    // A track named after a stock sound that compiles into the stock folder
+    // (imported stock-path replacements do exactly this) lands on the ORIGINAL's
+    // reference string. The exclusion recorded to silence that original must not
+    // also silence our replacement — otherwise the merge empties the array and
+    // the event plays NOTHING in-game. Adopted-entry exclusions still stand:
+    // that's the mechanism that toggles a bundled mod's sound off.
+    let excluded: Vec<String> = ev
+        .excluded
+        .iter()
+        .filter(|r| !song_refs.contains(r))
+        .cloned()
+        .collect();
 
     // vsnd_duration is per-event (shared by all its arrays), so only the primary
     // `vsnd_files` slot manages it — secondary arrays (e.g. opponent control)
@@ -699,7 +712,7 @@ fn event_merge(ev: &EventCompile, sound_folder: &str, current_duration: Option<f
         owned_in_order,
         previous_owned: ev.previous_owned.clone(),
         new_duration,
-        excluded: ev.excluded.clone(),
+        excluded,
     }
 }
 
@@ -4389,6 +4402,64 @@ mod tests {
         let m = event_merge(&ev, "sounds/music/match_intro", Some(27.0));
         assert_eq!(m.new_duration, Some(27.0));
         assert_eq!(m.owned_in_order, vec!["sounds/music/match_intro/x.vsnd"]);
+    }
+
+    #[test]
+    fn stock_path_replacement_track_survives_its_own_exclusion() {
+        // An imported stock-path replacement: the track keeps the stock name,
+        // the slot's folder IS the stock dir, and the import recorded the
+        // original's ref in excluded so it doesn't double-play. The merge must
+        // keep OUR entry (same string) and only drop truly-foreign exclusions -
+        // this used to empty the array and the event played nothing in-game.
+        let ev = EventCompile {
+            event_name: "VampireBat.Rake.Cast".into(),
+            array_key: "vsnd_files".into(),
+            stock_entry: "sounds/abilities/x/rake_01.vsnd".into(),
+            sound_folder: Some("sounds/abilities/x".into()),
+            duration_mode: "auto".into(),
+            duration_manual: None,
+            previous_owned: vec![],
+            excluded: vec![
+                "sounds/abilities/x/rake_01.vsnd".into(),
+                "sounds/abilities/x/rake_02.vsnd".into(),
+                "sounds/abilities/x/other_stock.vsnd".into(),
+            ],
+            events_relpath: "soundevents/hero/x.vsndevts".into(),
+            adopted: vec![AdoptedRef {
+                reference: "sounds/abilities/x/rake_02.vsnd".into(),
+                source_vpk: "pack".into(),
+            }],
+            songs: vec![SongCompile {
+                sound_name: "rake_01".into(),
+                source_audio: "x.mp3".into(),
+                trim_start: 0.0,
+                trim_end: 1.0,
+                gain_db: 0.0,
+                fade_in: 0.0,
+                fade_out: 0.0,
+                looping: false,
+                layers: vec![],
+                current_hash: None,
+                last_compiled_hash: None,
+            }],
+        };
+        let m = event_merge(&ev, "sounds/abilities/x", None);
+        // The song's own ref is no longer excluded; the adopted entry's
+        // exclusion (its disable mechanism) and the foreign one both stand.
+        assert_eq!(
+            m.excluded,
+            vec![
+                "sounds/abilities/x/rake_02.vsnd".to_string(),
+                "sounds/abilities/x/other_stock.vsnd".to_string()
+            ]
+        );
+        assert_eq!(
+            m.owned_in_order,
+            vec![
+                "sounds/abilities/x/rake_01.vsnd".to_string(),
+                "sounds/abilities/x/rake_02.vsnd".to_string()
+            ]
+        );
     }
 
     #[test]

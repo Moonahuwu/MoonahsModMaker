@@ -2314,6 +2314,9 @@ export default function App() {
       );
       const additions = new Map<string, { reference: string; sourceVpk: string; label: string }[]>();
 
+      // Refs skipped because a prior import already brought them in - lets the
+      // summary say "already in your project" instead of a confusing "0".
+      let alreadyPresent = 0;
       // Get-or-create a target slot by id and fold in fresh adopted refs.
       const adoptInto = (id: string, make: () => EventProject, refs: string[]): number => {
         if (!slotsById.has(id)) {
@@ -2329,6 +2332,7 @@ export default function App() {
           ...(additions.get(id)?.map((a) => a.reference) ?? []),
         ]);
         const fresh = refs.filter((r) => !have.has(r));
+        alreadyPresent += refs.length - fresh.length;
         if (!fresh.length) return 0;
         const add = additions.get(id) ?? [];
         add.push(...fresh.map((r) => ({ reference: r, sourceVpk: source, label: shortRef(r) })));
@@ -2664,10 +2668,18 @@ export default function App() {
       const absorbNote = absorbed > 0 ? ` · ${absorbed} converted into your own tracks` : "";
       const replaceNote =
         autoReplaced > 0 ? ` · ${autoReplaced} original(s) auto-replaced (same name)` : "";
-      push(
-        "success",
-        `Import done - ${adoptedRefs} sound(s): ${counts.hero} hero, ${counts.item} item, ${counts.ui} UI, ${counts.sorted} sorted to tabs, ${counts.misc} misc, ${counts.folded} folded into existing${absorbNote}${replaceNote}${exclNote}${iconNote}`,
-      );
+      const dupNote = alreadyPresent > 0 ? ` · ${alreadyPresent} already in your project` : "";
+      if (adoptedRefs === 0 && alreadyPresent > 0) {
+        push(
+          "success",
+          `Nothing new to add - all ${alreadyPresent} sound(s) from this pack are already in your project (a previous import placed them)${exclNote}${iconNote}`,
+        );
+      } else {
+        push(
+          "success",
+          `Import done - ${adoptedRefs} sound(s): ${counts.hero} hero, ${counts.item} item, ${counts.ui} UI, ${counts.sorted} sorted to tabs, ${counts.misc} misc, ${counts.folded} folded into existing${absorbNote}${replaceNote}${dupNote}${exclNote}${iconNote}`,
+        );
+      }
       // Bundled with no attribution (GameBanana downloads arrive pre-linked):
       // remember it for the "who made this?" pass once the run is over.
       if (bundle && !settingsRef.current.importedModCredits?.[source]) {
