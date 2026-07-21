@@ -93,7 +93,7 @@ import { ProfileSwitcher } from "./components/ProfileSwitcher";
 import { useToast } from "./components/Toaster";
 import { useSettings, slotSoundFolder, sheetSiblingsKey, compilePrefsOf, DEATHS_RELEASED, FFMPEG_BUNDLE_URL, TOOLS_BUNDLE_URL, type Settings } from "./lib/settings";
 import { songHash, overrideHash, effectHash, posterHash } from "./lib/songHash";
-import type { EffectOverride, EventProject, EventView, PosterOverride, Project, Song, SongLayer, SoundOverride } from "./types";
+import type { AttributeOverride, EffectOverride, EventProject, EventView, PosterOverride, Project, Song, SongLayer, SoundOverride } from "./types";
 import { GameBananaBrowser } from "./components/GameBananaBrowser";
 import { LibraryTab } from "./components/LibraryTab";
 import { EasyCompileTab } from "./components/EasyCompileTab";
@@ -500,7 +500,8 @@ function slotHasContent(e: EventProject): boolean {
     e.songs.length > 0 ||
     e.adopted.length > 0 ||
     e.excludedEntries.length > 0 ||
-    e.removedEntries.length > 0
+    e.removedEntries.length > 0 ||
+    (e.attributeOverrides?.length ?? 0) > 0
   );
 }
 
@@ -2830,6 +2831,11 @@ export default function App() {
     );
   }
 
+  // Replace a slot's event-attribute overrides (Sound settings section).
+  function setSlotAttributes(slotId: string, attrs: AttributeOverride[]) {
+    patchSlot(slotId, (e) => ({ ...e, attributeOverrides: attrs }));
+  }
+
   function restoreEntry(slotId: string, ref: string) {
     patchSlot(slotId, (e) => ({
       ...e,
@@ -4252,6 +4258,7 @@ export default function App() {
       missingRefs={missingSoundRefs}
       onAddFiles={(slotId) => void addSlotFiles(slotId)}
       onFindOnline={findSoundOnline}
+      onAttributesChange={setSlotAttributes}
       registerSongEl={(songId, el) => (songEls.current[songId] = el)}
     />
   );

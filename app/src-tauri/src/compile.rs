@@ -73,6 +73,18 @@ pub struct EventCompile {
     #[serde(default)]
     pub adopted: Vec<AdoptedRef>,
     pub songs: Vec<SongCompile>,
+    /// Scalar event attributes to override (volume, pitch, team offsets, custom
+    /// keys). Spliced into the event right after the array merge.
+    #[serde(default)]
+    pub attributes: Vec<AttrCompile>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttrCompile {
+    pub key: String,
+    /// JSON number, bool, or string; rendered to KV3 text at apply time.
+    pub value: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -649,6 +661,25 @@ fn vsnd_c_relpath(sound_folder: &str, sound_name: &str) -> String {
 /// The `.vsnd` reference string written into the array.
 fn vsnd_ref(sound_folder: &str, sound_name: &str) -> String {
     format!("{}/{}.vsnd", sound_folder.trim_matches('/'), sound_name)
+}
+
+/// Render a JSON attribute value as KV3 scalar text. Numbers keep a decimal
+/// point (the game's files always write `3.0`, not `3`), bools are bare,
+/// strings are quoted (embedded quotes dropped - KV3 text has no escape for
+/// them worth risking). Null/array/object are not representable.
+fn render_kv3_scalar(v: &serde_json::Value) -> Option<String> {
+    match v {
+        serde_json::Value::Number(n) => n.as_f64().map(|f| {
+            if f.fract() == 0.0 {
+                format!("{f:.1}")
+            } else {
+                format!("{f}")
+            }
+        }),
+        serde_json::Value::Bool(b) => Some(b.to_string()),
+        serde_json::Value::String(s) => Some(format!("\"{}\"", s.replace(['"', '\n', '\r'], ""))),
+        _ => None,
+    }
 }
 
 /// The folder an event's tracks compile into: its own `sound_folder` when set
@@ -3136,6 +3167,28 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                         Ok(t) => {
                             text = t;
                             applied += 1;
+                            // Attribute overrides ride the same slot: splice
+                            // them right after the array merge so the stamp
+                            // fingerprint below sees the final text (a changed
+                            // attribute re-compiles the file for free).
+                            if !ev.attributes.is_empty() {
+                                let edits: Vec<kv3_core::ScalarEdit> = ev
+                                    .attributes
+                                    .iter()
+                                    .filter_map(|a| {
+                                        render_kv3_scalar(&a.value).map(|value| {
+                                            kv3_core::ScalarEdit { key: a.key.clone(), value }
+                                        })
+                                    })
+                                    .collect();
+                                match kv3_core::apply_scalars(&text, &ev.event_name, &edits) {
+                                    Ok(t) => text = t,
+                                    Err(e) => report.soft_fail(
+                                        format!("[{}] attributes {}", v.name, ev.event_name),
+                                        e.to_string(),
+                                    ),
+                                }
+                            }
                         }
                         // The game drifts between patches — an event/array we own may
                         // have been removed or renamed. We can't merge into what's
@@ -4384,6 +4437,7 @@ mod tests {
             excluded: vec![],
             events_relpath: "soundevents/music.vsndevts".into(),
             adopted: vec![],
+            attributes: vec![],
             songs: vec![SongCompile {
                 sound_name: "x".into(),
                 source_audio: "x.mp3".into(),
@@ -4402,6 +4456,24 @@ mod tests {
         let m = event_merge(&ev, "sounds/music/match_intro", Some(27.0));
         assert_eq!(m.new_duration, Some(27.0));
         assert_eq!(m.owned_in_order, vec!["sounds/music/match_intro/x.vsnd"]);
+    }
+
+    #[test]
+    fn kv3_scalar_rendering_matches_game_style() {
+        use serde_json::json;
+        assert_eq!(render_kv3_scalar(&json!(3)).as_deref(), Some("3.0"));
+        assert_eq!(render_kv3_scalar(&json!(-4.5)).as_deref(), Some("-4.5"));
+        assert_eq!(render_kv3_scalar(&json!(true)).as_deref(), Some("true"));
+        assert_eq!(
+            render_kv3_scalar(&json!("MusicMixgroup")).as_deref(),
+            Some("\"MusicMixgroup\"")
+        );
+        // Quote-smuggling is stripped, not escaped.
+        assert_eq!(
+            render_kv3_scalar(&json!("a\"b")).as_deref(),
+            Some("\"ab\"")
+        );
+        assert_eq!(render_kv3_scalar(&serde_json::Value::Null), None);
     }
 
     #[test]
@@ -4429,6 +4501,7 @@ mod tests {
                 reference: "sounds/abilities/x/rake_02.vsnd".into(),
                 source_vpk: "pack".into(),
             }],
+            attributes: vec![],
             songs: vec![SongCompile {
                 sound_name: "rake_01".into(),
                 source_audio: "x.mp3".into(),
@@ -4475,6 +4548,7 @@ mod tests {
             excluded: vec![],
             events_relpath: "soundevents/music.vsndevts".into(),
             adopted: vec![],
+            attributes: vec![],
             songs: vec![],
         };
         let m = event_merge(&ev, "sounds/music/match_intro", Some(27.0));
@@ -4609,6 +4683,7 @@ mod tests {
                 excluded: vec![],
                 events_relpath: "soundevents/music.vsndevts".into(),
                 adopted: vec![],
+                attributes: vec![],
                 songs: vec![SongCompile {
                     sound_name: "eim_e2e".into(),
                     source_audio: format!(r"{csdk}\content\citadel\wunderwaffe\wunderwaffeshoot1.mp3"),

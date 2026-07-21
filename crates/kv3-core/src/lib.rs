@@ -390,6 +390,67 @@ pub fn set_duration(text: &str, event_name: &str, value: f64) -> Result<String> 
     Ok(out)
 }
 
+/// One scalar attribute edit: set `key = value` on an event. `value` is
+/// already-rendered KV3 text (e.g. `3.0`, `true`, `"MusicMixgroup"`) — the
+/// caller is responsible for quoting strings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScalarEdit {
+    pub key: String,
+    pub value: String,
+}
+
+/// Whether a key is safe for `apply_scalars`: plain snake_case, and NOT one of
+/// the spans the array merge manages (`vsnd_files*`, `vsnd_duration`) — the two
+/// paths must never fight over one byte range.
+pub fn is_scalar_attr_key(key: &str) -> bool {
+    !key.is_empty()
+        && key
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        && !key.starts_with("vsnd_files")
+        && key != "vsnd_duration"
+}
+
+/// Set scalar attributes (volume, pitch, volume_offset_team, ...) on one event,
+/// byte-surgically: an existing `key = ...` line has just its value replaced; a
+/// missing key is inserted as a new line at the end of the event block (before
+/// the closing brace), indented like its siblings. Keys rejected by
+/// [`is_scalar_attr_key`] are skipped. Everything else in the document is
+/// preserved byte-for-byte.
+pub fn apply_scalars(text: &str, event_name: &str, edits: &[ScalarEdit]) -> Result<String> {
+    validate_header(text)?;
+    let mut out = text.to_string();
+    for e in edits {
+        if !is_scalar_attr_key(&e.key) {
+            continue;
+        }
+        // Re-locate the block each round: earlier splices shift offsets.
+        let block = event_block(&out, event_name)?;
+        if let Some((vs, ve)) = scalar_value_span(&out, block, &e.key) {
+            out.replace_range(vs..ve, &e.value);
+        } else {
+            let (bopen, bclose) = block;
+            let line_start = out[..bclose].rfind('\n').map(|i| i + 1).unwrap_or(0);
+            if line_start > bopen {
+                // Multi-line block: a new line above the closing brace, one
+                // indent level deeper than the brace itself.
+                let le = detect_line_ending(&out);
+                let brace_indent: String = out[line_start..bclose]
+                    .chars()
+                    .take_while(|c| *c == '\t' || *c == ' ')
+                    .collect();
+                out.insert_str(line_start, &format!("{brace_indent}\t{} = {}{le}", e.key, e.value));
+            } else {
+                // Inline `{ ... }` block: KV3 separates pairs by whitespace,
+                // so splice the pair right after the opening brace.
+                out.insert_str(bopen + 1, &format!(" {} = {}", e.key, e.value));
+            }
+        }
+    }
+    Ok(out)
+}
+
 // ---------------------------------------------------------------------------
 // Merge partition (the heart of MERGE, NEVER REPLACE)
 // ---------------------------------------------------------------------------
@@ -892,6 +953,47 @@ mod unit {
         // stock dropped, foreign1 dropped, old_owned (untracked foreign) kept,
         // our new entry appended.
         assert_eq!(v.entries, vec!["a/old_owned.vsnd", "a/new.vsnd"]);
+    }
+
+    #[test]
+    fn apply_scalars_replaces_existing_and_inserts_missing() {
+        let edits = [
+            ScalarEdit { key: "vsnd_duration".into(), value: "99.0".into() }, // rejected key
+            ScalarEdit { key: "volume".into(), value: "-6.0".into() },        // insert (absent)
+            ScalarEdit { key: "base".into(), value: "\"Base2\"".into() },     // replace existing
+            ScalarEdit { key: "volume_offset_opponent".into(), value: "-100.0".into() }, // insert
+        ];
+        let out = apply_scalars(SYNTH, "Evt", &edits).unwrap();
+        // Managed key untouched, existing replaced, missing inserted before the
+        // closing brace at sibling indentation.
+        assert!(out.contains("vsnd_duration = 10.0"));
+        assert!(out.contains("base = \"Base2\""));
+        assert!(out.contains("\n\t\tvolume = -6.0\n"));
+        assert!(out.contains("\n\t\tvolume_offset_opponent = -100.0\n\t}"));
+        // The array is untouched and the document still parses.
+        let v = read_event(&out, "Evt").unwrap();
+        assert_eq!(
+            v.entries,
+            vec!["a/stock.vsnd", "a/foreign1.vsnd", "a/old_owned.vsnd"]
+        );
+        assert_eq!(v.volume, Some(-6.0));
+    }
+
+    #[test]
+    fn apply_scalars_replace_is_offset_stable_across_edits() {
+        // Two inserts + a replace in one call: later edits must respect the
+        // offsets shifted by earlier ones (block is re-located each round).
+        let edits = [
+            ScalarEdit { key: "pitch".into(), value: "1.2".into() },
+            ScalarEdit { key: "volume".into(), value: "3.0".into() },
+            ScalarEdit { key: "pitch".into(), value: "0.8".into() }, // replaces its own insert
+        ];
+        let out = apply_scalars(SYNTH, "Evt", &edits).unwrap();
+        let v = read_event(&out, "Evt").unwrap();
+        assert_eq!(v.pitch, Some(0.8));
+        assert_eq!(v.volume, Some(3.0));
+        // Sibling event untouched byte-for-byte outside our block: duration intact.
+        assert_eq!(v.vsnd_duration, Some(10.0));
     }
 
     #[test]

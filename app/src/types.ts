@@ -89,6 +89,16 @@ export interface EventProject {
   removedEntries: string[];
   adopted: AdoptedEntry[];
   eventsRelpath: string;
+  /** Scalar sound-event attributes the user overrides (volume, pitch,
+   *  volumeOffsetTeam-style keys, custom). Spliced into the event on compile;
+   *  absent/empty = leave the event untouched. */
+  attributeOverrides?: AttributeOverride[];
+}
+
+/** One overridden scalar attribute on a slot's sound event. */
+export interface AttributeOverride {
+  key: string;
+  value: number | boolean | string;
 }
 
 export interface AdoptedEntry {

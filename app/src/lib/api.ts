@@ -103,6 +103,8 @@ export interface EventCompile {
   eventsRelpath: string;
   adopted: { reference: string; sourceVpk: string }[];
   songs: SongCompile[];
+  /** Scalar event attributes to splice after the array merge. */
+  attributes: { key: string; value: number | boolean | string }[];
 }
 
 export interface CompileConfig {

@@ -1,6 +1,6 @@
 import { AnimatePresence, motion, Reorder, useDragControls } from "motion/react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { EventProject, EventView, Song } from "../types";
+import type { AttributeOverride, EventProject, EventView, Song } from "../types";
 import { clearCopiedSound, copySound, useCopiedSound } from "../lib/soundClipboard";
 import { SongCard } from "./SongCard";
 
@@ -181,6 +181,223 @@ function EntryRow({
   );
 }
 
+/** Keys the merge manages itself - never editable as free-form attributes. */
+const RESERVED_ATTR_KEYS = /^vsnd_files|^vsnd_duration$/;
+const VALID_ATTR_KEY = /^[a-z0-9_]+$/;
+
+/** The dB offset that effectively mutes a sound for one side. */
+const MUTE_DB = -100;
+
+/** One numeric attribute row: empty input = no override (game default). */
+function AttrNumberField({
+  label,
+  hint,
+  value,
+  placeholder,
+  step,
+  onChange,
+}: {
+  label: string;
+  hint: string;
+  value: number | undefined;
+  placeholder?: string;
+  step?: number;
+  onChange: (v: number | null) => void;
+}) {
+  return (
+    <label className="flex items-center justify-between gap-2" title={hint}>
+      <span className="text-[11px] text-zinc-500">{label}</span>
+      <input
+        type="number"
+        step={step ?? 0.1}
+        value={value ?? ""}
+        placeholder={placeholder ?? "default"}
+        onChange={(e) => {
+          const raw = e.target.value;
+          if (raw === "") return onChange(null);
+          const n = Number(raw);
+          if (Number.isFinite(n)) onChange(n);
+        }}
+        className="w-24 rounded-md border border-zinc-700/70 bg-zinc-900/80 px-2 py-1 text-right text-xs text-zinc-200 outline-none transition placeholder:text-zinc-600 focus:border-zinc-500"
+      />
+    </label>
+  );
+}
+
+/** Per-event scalar attribute editor: curated fields (volume, pitch, per-team
+ *  volume offsets) plus free-form custom keys. Only overridden values are
+ *  spliced into the shared events file on compile - everything else stays
+ *  byte-identical (same MERGE, NEVER REPLACE rule as the track arrays). */
+function AttributeEditor({
+  ev,
+  view,
+  onChange,
+}: {
+  ev: EventProject;
+  view: EventView | undefined;
+  onChange: (attrs: AttributeOverride[]) => void;
+}) {
+  const attrs = ev.attributeOverrides ?? [];
+  const [customKey, setCustomKey] = useState("");
+  const [customValue, setCustomValue] = useState("");
+
+  const get = (key: string) => attrs.find((a) => a.key === key)?.value;
+  const getNum = (key: string) => {
+    const v = get(key);
+    return typeof v === "number" ? v : undefined;
+  };
+  const set = (key: string, value: number | boolean | string | null) => {
+    const next = attrs.filter((a) => a.key !== key);
+    if (value !== null) next.push({ key, value });
+    onChange(next);
+  };
+
+  const CURATED = ["volume", "pitch", "volume_offset_team", "volume_offset_opponent"];
+  const custom = attrs.filter((a) => !CURATED.includes(a.key));
+
+  const enemyMuted = getNum("volume_offset_opponent") === MUTE_DB;
+  const teamMuted = getNum("volume_offset_team") === MUTE_DB;
+
+  const addCustom = () => {
+    const key = customKey.trim();
+    if (!VALID_ATTR_KEY.test(key) || RESERVED_ATTR_KEYS.test(key)) return;
+    const raw = customValue.trim();
+    if (!raw) return;
+    const value: number | boolean | string =
+      raw === "true" ? true : raw === "false" ? false : Number.isFinite(Number(raw)) ? Number(raw) : raw;
+    set(key, value);
+    setCustomKey("");
+    setCustomValue("");
+  };
+
+  return (
+    <details className="mt-3 rounded-lg border border-zinc-800 px-3 py-2">
+      <summary className="cursor-pointer text-xs text-zinc-500 transition hover:text-zinc-300">
+        Sound settings
+        {attrs.length > 0 && (
+          <span className="ml-1.5 rounded bg-sky-500/10 px-1.5 py-0.5 text-[10px] text-sky-300">
+            {attrs.length} changed
+          </span>
+        )}
+      </summary>
+      <div className="mt-2 flex flex-col gap-2">
+        <p className="text-[10px] leading-relaxed text-zinc-600">
+          These edit the sound event itself, so they apply to every track it plays
+          (yours and the originals you leave on). Empty = keep the game's value.
+          Only your changed values are written; the rest of the shared file stays
+          untouched.
+        </p>
+        <AttrNumberField
+          label="Volume"
+          hint="Event volume. Most events use small numbers (1 = normal-ish); some use dB-style negatives. The chip in the header shows the game's current value."
+          value={getNum("volume")}
+          placeholder={view?.volume != null ? String(view.volume) : "default"}
+          onChange={(v) => set("volume", v)}
+        />
+        <AttrNumberField
+          label="Pitch"
+          hint="Playback speed/pitch multiplier: 1 = normal, 0.5 = half speed, 2 = double"
+          value={getNum("pitch")}
+          placeholder={view?.pitch != null ? String(view.pitch) : "default"}
+          onChange={(v) => set("pitch", v)}
+        />
+        <div className="mt-1 border-t border-zinc-800/60 pt-2">
+          <p className="mb-1.5 text-[10px] text-zinc-600" title="The game supports per-side volume offsets in dB on most events">
+            Team hearing - volume offset in dB per side (negative = quieter, -100 = effectively muted)
+          </p>
+          <div className="flex flex-col gap-2">
+            <AttrNumberField
+              label="Your team (dB)"
+              hint="volume_offset_team: added to the volume your own team hears"
+              value={getNum("volume_offset_team")}
+              step={1}
+              onChange={(v) => set("volume_offset_team", v)}
+            />
+            <AttrNumberField
+              label="Enemy team (dB)"
+              hint="volume_offset_opponent: added to the volume the enemy team hears"
+              value={getNum("volume_offset_opponent")}
+              step={1}
+              onChange={(v) => set("volume_offset_opponent", v)}
+            />
+            <div className="flex gap-1.5">
+              <button
+                onClick={() => set("volume_offset_opponent", enemyMuted ? null : MUTE_DB)}
+                className={`rounded-md border px-2 py-1 text-[10px] transition ${
+                  enemyMuted
+                    ? "border-sky-500/50 bg-sky-500/10 text-sky-300"
+                    : "border-zinc-700/70 text-zinc-500 hover:border-zinc-500 hover:text-zinc-300"
+                }`}
+                title="Sets the enemy-side offset to -100 dB so only your team hears this sound"
+              >
+                {enemyMuted ? "Only my team hears it ✓" : "Only my team hears it"}
+              </button>
+              <button
+                onClick={() => set("volume_offset_team", teamMuted ? null : MUTE_DB)}
+                className={`rounded-md border px-2 py-1 text-[10px] transition ${
+                  teamMuted
+                    ? "border-sky-500/50 bg-sky-500/10 text-sky-300"
+                    : "border-zinc-700/70 text-zinc-500 hover:border-zinc-500 hover:text-zinc-300"
+                }`}
+                title="Sets your team's offset to -100 dB so only the enemy hears this sound"
+              >
+                {teamMuted ? "Only the enemy hears it ✓" : "Only the enemy hears it"}
+              </button>
+            </div>
+          </div>
+        </div>
+        <div className="mt-1 border-t border-zinc-800/60 pt-2">
+          <p className="mb-1.5 text-[10px] text-zinc-600">
+            Custom attribute - any key from the game's soundevents (e.g.
+            pitch_rand_min, delay, mixer_mixgroup). Numbers, true/false and text
+            are supported.
+          </p>
+          {custom.map((a) => (
+            <div key={a.key} className="mb-1.5 flex items-center justify-between gap-2">
+              <span className="truncate font-mono text-[11px] text-zinc-400">
+                {a.key} = {String(a.value)}
+              </span>
+              <button
+                onClick={() => set(a.key, null)}
+                title="Remove this override"
+                className="shrink-0 rounded px-1.5 text-[11px] text-zinc-600 transition hover:bg-red-500/15 hover:text-red-300"
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+          <div className="flex items-center gap-1.5">
+            <input
+              value={customKey}
+              onChange={(e) => setCustomKey(e.target.value.toLowerCase())}
+              placeholder="key"
+              className="min-w-0 flex-1 rounded-md border border-zinc-700/70 bg-zinc-900/80 px-2 py-1 font-mono text-[11px] text-zinc-200 outline-none transition placeholder:text-zinc-600 focus:border-zinc-500"
+            />
+            <input
+              value={customValue}
+              onChange={(e) => setCustomValue(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && addCustom()}
+              placeholder="value"
+              className="w-20 rounded-md border border-zinc-700/70 bg-zinc-900/80 px-2 py-1 font-mono text-[11px] text-zinc-200 outline-none transition placeholder:text-zinc-600 focus:border-zinc-500"
+            />
+            <button
+              onClick={addCustom}
+              disabled={
+                !VALID_ATTR_KEY.test(customKey.trim()) ||
+                RESERVED_ATTR_KEYS.test(customKey.trim()) ||
+                !customValue.trim()
+              }
+              className="shrink-0 rounded-md border border-zinc-700/70 px-2 py-1 text-[11px] text-zinc-400 transition enabled:hover:border-zinc-500 enabled:hover:text-zinc-200 disabled:opacity-40"
+            >
+              + add
+            </button>
+          </div>
+        </div>
+      </div>
+    </details>
+  );
+}
+
 export function SidePanel({
   ev,
   view,
@@ -210,6 +427,7 @@ export function SidePanel({
   onPasteSong,
   onAddFiles,
   onFindOnline,
+  onAttributesChange,
   registerSongEl,
 }: {
   ev: EventProject;
@@ -247,6 +465,8 @@ export function SidePanel({
   onAddFiles: (slotId: string) => void;
   /** Right half: jump to the GameBanana tab searching for this sound. */
   onFindOnline: (ev: EventProject) => void;
+  /** Replace this slot's event-attribute overrides (Sound settings section). */
+  onAttributesChange: (slotId: string, attrs: AttributeOverride[]) => void;
   /** Registers each song's EXPANDED card body for drop targeting (audio
    *  dropped on an open card becomes a layer of that track). */
   registerSongEl?: (songId: string, el: HTMLElement | null) => void;
@@ -613,6 +833,9 @@ export function SidePanel({
           </div>
         )}
       </motion.div>
+
+      {/* Event-level attribute overrides (volume, pitch, team hearing, custom) */}
+      <AttributeEditor ev={ev} view={view} onChange={(attrs) => onAttributesChange(ev.id, attrs)} />
     </motion.section>
   );
 }

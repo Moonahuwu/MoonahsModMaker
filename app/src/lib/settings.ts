@@ -430,6 +430,8 @@ export function directReplaceTarget(
   if (!pool) return null;
   if (ev.songs.length !== 1 || ev.adopted.length !== 0 || ev.vsndDurationMode !== "auto")
     return null;
+  // Attribute overrides edit the event itself - the slot needs a real merge.
+  if ((ev.attributeOverrides?.length ?? 0) > 0) return null;
   const clipLen = Math.max(0, ev.songs[0].trimEnd - ev.songs[0].trimStart);
   if (pool.vsndDuration !== null && clipLen > pool.vsndDuration) return null;
   const disabled = new Set([...ev.excludedEntries, ...ev.removedEntries]);
@@ -485,7 +487,8 @@ export function buildCompileConfig(
         ev.adopted.length > 0 ||
         ev.excludedEntries.length > 0 ||
         ev.removedEntries.length > 0 ||
-        ev.previousOwnedNames.length > 0),
+        ev.previousOwnedNames.length > 0 ||
+        (ev.attributeOverrides?.length ?? 0) > 0),
   );
   const directCompiles: SoundOverrideCompile[] = directSlots.map((ev) => {
     const song = ev.songs[0];
@@ -576,6 +579,7 @@ export function buildCompileConfig(
     adopted: ev.adopted
       .filter((a) => !ev.removedEntries.includes(a.reference))
       .map((a) => ({ reference: a.reference, sourceVpk: a.sourceVpk })),
+    attributes: (ev.attributeOverrides ?? []).map((a) => ({ key: a.key, value: a.value })),
     songs: ev.songs.map((song) => ({
       soundName: song.soundName,
       sourceAudio: song.sourceMp3,

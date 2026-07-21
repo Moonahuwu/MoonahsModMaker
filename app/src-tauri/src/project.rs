@@ -370,6 +370,20 @@ pub struct EventProject {
     /// `soundevents/hero/punkgoat.vsndevts`).
     #[serde(default = "default_events_relpath")]
     pub events_relpath: String,
+    /// Scalar sound-event attributes the user overrides (volume, pitch,
+    /// volume_offset_team, volume_offset_opponent, custom keys). Spliced into
+    /// the event on compile; empty = leave the event's attributes untouched.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attribute_overrides: Vec<AttributeOverride>,
+}
+
+/// One overridden scalar attribute on a slot's sound event. `value` is JSON
+/// (number, bool, or string) and is rendered to KV3 at compile time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttributeOverride {
+    pub key: String,
+    pub value: serde_json::Value,
 }
 
 fn default_events_relpath() -> String {
@@ -446,6 +460,7 @@ fn slot(
         removed_entries: vec![],
         adopted: vec![],
         events_relpath: events_relpath.into(),
+        attribute_overrides: vec![],
     }
 }
 
