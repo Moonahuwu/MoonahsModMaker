@@ -2330,10 +2330,9 @@ export default function App() {
       let alreadyPresent = 0;
       // Same REF as an existing converted track, possibly different AUDIO (two
       // mods replacing the same stock sound): compared byte-for-byte after the
-      // main pass - identical stays skipped, different swaps to this pack's
-      // version ("newest import wins").
-      const collisions: { slotId: string; songId: string; reference: string; label: string }[] =
-        [];
+      // main pass - identical stays skipped, different is ADDED as an extra
+      // "_2"-style variant next to the existing track.
+      const collisions: { slotId: string; reference: string; label: string }[] = [];
       // Same REF as an existing LINKED (adopted) entry from another pack - the
       // common shape of "re-imported the updated version of a mod". Compared
       // the same way; different audio re-points the entry at this pack.
@@ -2358,7 +2357,7 @@ export default function App() {
           if (!have.has(r)) continue;
           const existing = slot.songs.find((x) => x.importedRef === r);
           if (existing && !collisions.some((c) => c.slotId === id && c.reference === r)) {
-            collisions.push({ slotId: id, songId: existing.id, reference: r, label: shortRef(r) });
+            collisions.push({ slotId: id, reference: r, label: shortRef(r) });
           }
           const linked = slot.adopted.find((a) => a.reference === r);
           if (
@@ -2700,81 +2699,116 @@ export default function App() {
       // Same-name collisions: this pack ships audio at a ref an earlier import
       // already claimed. Compare the actual bytes - identical means truly
       // already-imported (skip stands); different means a DIFFERENT mod over
-      // the same stock sound, and the newest import wins: the track swaps to
-      // this pack's audio and carries the mod's name so you can tell which mod
-      // owns it now.
-      let updatedTracks = 0;
+      // the same stock sound. The existing track is kept; the new audio is
+      // ADDED next to it as an extra variant named "<original>_2" style and
+      // labeled with the mod's name, so both mods' sounds play in rotation.
+      let addedVariants = 0;
       if (collisions.length > 0) {
         const packLabel = packDisplayName(source);
-        const swaps: {
+        const adds: {
           slotId: string;
-          songId: string;
           reference: string;
           label: string;
           mp3: string;
           duration: number;
+          baseName: string;
+          looping: boolean;
         }[] = [];
         let next = 0;
         const worker = async () => {
           while (next < collisions.length) {
             const c = collisions[next++];
             try {
+              // Every track already carrying this ref (the original import plus
+              // any variants added by earlier packs): identical to ANY of them
+              // means this exact audio is already in the slot.
+              const twins =
+                projectRef.current?.events
+                  .find((e) => e.id === c.slotId)
+                  ?.songs.filter((x) => x.importedRef === c.reference) ?? [];
+              if (twins.length === 0) continue;
               const mp3 = await decodeStockApi(s.vpkHelperPath, source, c.reference);
-              const song = projectRef.current?.events
-                .find((e) => e.id === c.slotId)
-                ?.songs.find((x) => x.id === c.songId);
-              if (!song) continue;
-              if (await filesIdentical(song.sourceMp3, mp3)) continue;
+              let dup = false;
+              for (const t of twins) {
+                if (await filesIdentical(t.sourceMp3, mp3)) {
+                  dup = true;
+                  break;
+                }
+              }
+              if (dup) continue;
               const info = await probeAudio(mp3, s.ffmpegPath || undefined);
-              swaps.push({ ...c, mp3, duration: info.duration, label: `${c.label} (${packLabel})` });
+              adds.push({
+                slotId: c.slotId,
+                reference: c.reference,
+                label: `${c.label} (${packLabel})`,
+                mp3,
+                duration: info.duration,
+                baseName: twins[0].soundName,
+                looping: twins[0].looping,
+              });
             } catch {
-              /* un-decodable - leave the existing track alone */
+              /* un-decodable - leave the slot alone */
             }
           }
         };
         await Promise.all(Array.from({ length: 3 }, () => worker()));
         if (profileChanged()) return;
-        updatedTracks = swaps.length;
-        if (swaps.length > 0) {
-          const bySlot = new Map<string, typeof swaps>();
-          for (const sw of swaps) {
-            const l = bySlot.get(sw.slotId) ?? [];
-            l.push(sw);
-            bySlot.set(sw.slotId, l);
+        addedVariants = adds.length;
+        if (adds.length > 0) {
+          const bySlot = new Map<string, typeof adds>();
+          for (const a of adds) {
+            const l = bySlot.get(a.slotId) ?? [];
+            l.push(a);
+            bySlot.set(a.slotId, l);
           }
-          setProject((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  events: prev.events.map((e) => {
-                    const list = bySlot.get(e.id);
-                    if (!list) return e;
-                    return {
-                      ...e,
-                      songs: e.songs.map((song) => {
-                        const sw = list.find((x) => x.songId === song.id);
-                        return sw
-                          ? {
-                              ...song,
-                              label: sw.label,
-                              sourceMp3: sw.mp3,
-                              trimStart: 0,
-                              trimEnd: sw.duration,
-                              lastCompiledHash: null,
-                            }
-                          : song;
-                      }),
-                    };
-                  }),
-                }
-              : prev,
-          );
-          // The swapped audio now compiles from YOUR track - drop this pack's
-          // raw copies from the bundle so they don't ship on top of it.
+          setProject((prev) => {
+            if (!prev) return prev;
+            // Sound names are unique project-wide (they become file names).
+            const used = new Set(prev.events.flatMap((e) => e.songs.map((x) => x.soundName)));
+            const claim = (base: string): string => {
+              let i = 2;
+              while (used.has(`${base}_${i}`)) i++;
+              const n = `${base}_${i}`;
+              used.add(n);
+              return n;
+            };
+            return {
+              ...prev,
+              events: prev.events.map((e) => {
+                const list = bySlot.get(e.id);
+                if (!list) return e;
+                let order = e.songs.length;
+                return {
+                  ...e,
+                  songs: [
+                    ...e.songs,
+                    ...list.map((a) => ({
+                      id: crypto.randomUUID(),
+                      label: a.label,
+                      sourceMp3: a.mp3,
+                      soundName: claim(a.baseName),
+                      trimStart: 0,
+                      trimEnd: a.duration,
+                      gainDb: zeroGain ? 0 : DEFAULT_GAIN_DB,
+                      fadeIn: 0,
+                      fadeOut: 0,
+                      looping: a.looping,
+                      order: order++,
+                      lastCompiledHash: null,
+                      importedRef: a.reference,
+                    })),
+                  ],
+                };
+              }),
+            };
+          });
+          // The variant compiles from YOUR new track - drop this pack's raw
+          // copy at the original path from the bundle so it doesn't also
+          // overwrite the file your FIRST track compiles to.
           if (bundle) {
             updateSettings((cur) => {
               const merged = { ...(cur.importedModExcludes ?? {}) };
-              const extra = swaps.map((x) => x.reference.replace(/\.vsnd$/, ".vsnd_c"));
+              const extra = adds.map((x) => x.reference.replace(/\.vsnd$/, ".vsnd_c"));
               merged[source] = Array.from(
                 new Set([...(merged[source] ?? excludedFiles), ...extra]),
               );
@@ -2859,14 +2893,17 @@ export default function App() {
       const absorbNote = absorbed > 0 ? ` · ${absorbed} converted into your own tracks` : "";
       const replaceNote =
         autoReplaced > 0 ? ` · ${autoReplaced} original(s) auto-replaced (same name)` : "";
-      const swappedTotal = updatedTracks + updatedAdopted;
-      const identical = Math.max(0, alreadyPresent - swappedTotal);
+      const identical = Math.max(0, alreadyPresent - addedVariants - updatedAdopted);
       const dupNote = identical > 0 ? ` · ${identical} already in your project` : "";
-      const swapNote =
-        swappedTotal > 0
-          ? ` · ${swappedTotal} sound(s) swapped to this pack's version (same name, different sound)`
+      const variantNote =
+        addedVariants > 0
+          ? ` · ${addedVariants} added as "_2" variant(s) next to your existing track (same name, different sound)`
           : "";
-      if (adoptedRefs === 0 && swappedTotal === 0 && alreadyPresent > 0) {
+      const adoptNote =
+        updatedAdopted > 0
+          ? ` · ${updatedAdopted} linked sound(s) updated to this pack's version`
+          : "";
+      if (adoptedRefs === 0 && addedVariants === 0 && updatedAdopted === 0 && alreadyPresent > 0) {
         push(
           "success",
           `Nothing new to add - all ${alreadyPresent} sound(s) from this pack are already in your project with identical audio (a previous import placed them)${exclNote}${iconNote}`,
@@ -2874,7 +2911,7 @@ export default function App() {
       } else {
         push(
           "success",
-          `Import done - ${adoptedRefs} sound(s): ${counts.hero} hero, ${counts.item} item, ${counts.ui} UI, ${counts.sorted} sorted to tabs, ${counts.misc} misc, ${counts.folded} folded into existing${absorbNote}${replaceNote}${swapNote}${dupNote}${exclNote}${iconNote}`,
+          `Import done - ${adoptedRefs} sound(s): ${counts.hero} hero, ${counts.item} item, ${counts.ui} UI, ${counts.sorted} sorted to tabs, ${counts.misc} misc, ${counts.folded} folded into existing${absorbNote}${replaceNote}${variantNote}${adoptNote}${dupNote}${exclNote}${iconNote}`,
         );
       }
       // Bundled with no attribution (GameBanana downloads arrive pre-linked):
