@@ -11,6 +11,7 @@ import {
   checkSoundRefs,
   copyToDownloads,
   decodeStock as decodeStockApi,
+  filesIdentical,
   healMissingSources,
   type HealItem,
   downloadEntry,
@@ -1886,6 +1887,15 @@ export default function App() {
     return (ref.split("/").pop() ?? ref).replace(/\.vsnd$/, "");
   }
 
+  /** Friendly mod name for a pack path: the vpk/cache-dir stem, minus the app
+   *  cache's `_hash` suffix (or the parent folder for a generic pakNN_dir.vpk). */
+  function packDisplayName(vpk: string): string {
+    const parts = vpk.replace(/\\/g, "/").split("/").filter(Boolean);
+    const file = parts.pop() ?? vpk;
+    const stem = file.replace(/\.vpk$/i, "").replace(/_[0-9a-f]{8}$/i, "");
+    return /^pak\d+_dir$/i.test(stem) ? (parts.pop() ?? stem) : stem;
+  }
+
   // Download a copy of an existing entry (decoded from its vpk) into Downloads.
   async function downloadEntryTo(ref: string, vpk?: string) {
     const s = settingsRef.current;
@@ -2318,6 +2328,16 @@ export default function App() {
       // Refs skipped because a prior import already brought them in - lets the
       // summary say "already in your project" instead of a confusing "0".
       let alreadyPresent = 0;
+      // Same REF as an existing converted track, possibly different AUDIO (two
+      // mods replacing the same stock sound): compared byte-for-byte after the
+      // main pass - identical stays skipped, different swaps to this pack's
+      // version ("newest import wins").
+      const collisions: { slotId: string; songId: string; reference: string; label: string }[] =
+        [];
+      // Same REF as an existing LINKED (adopted) entry from another pack - the
+      // common shape of "re-imported the updated version of a mod". Compared
+      // the same way; different audio re-points the entry at this pack.
+      const adoptedCollisions: { slotId: string; reference: string; oldVpk: string }[] = [];
       // Get-or-create a target slot by id and fold in fresh adopted refs.
       const adoptInto = (id: string, make: () => EventProject, refs: string[]): number => {
         if (!slotsById.has(id)) {
@@ -2334,6 +2354,21 @@ export default function App() {
         ]);
         const fresh = refs.filter((r) => !have.has(r));
         alreadyPresent += refs.length - fresh.length;
+        for (const r of refs) {
+          if (!have.has(r)) continue;
+          const existing = slot.songs.find((x) => x.importedRef === r);
+          if (existing && !collisions.some((c) => c.slotId === id && c.reference === r)) {
+            collisions.push({ slotId: id, songId: existing.id, reference: r, label: shortRef(r) });
+          }
+          const linked = slot.adopted.find((a) => a.reference === r);
+          if (
+            linked &&
+            linked.sourceVpk !== source &&
+            !adoptedCollisions.some((c) => c.slotId === id && c.reference === r)
+          ) {
+            adoptedCollisions.push({ slotId: id, reference: r, oldVpk: linked.sourceVpk });
+          }
+        }
         if (!fresh.length) return 0;
         const add = additions.get(id) ?? [];
         add.push(...fresh.map((r) => ({ reference: r, sourceVpk: source, label: shortRef(r) })));
@@ -2662,6 +2697,161 @@ export default function App() {
         }
       }
 
+      // Same-name collisions: this pack ships audio at a ref an earlier import
+      // already claimed. Compare the actual bytes - identical means truly
+      // already-imported (skip stands); different means a DIFFERENT mod over
+      // the same stock sound, and the newest import wins: the track swaps to
+      // this pack's audio and carries the mod's name so you can tell which mod
+      // owns it now.
+      let updatedTracks = 0;
+      if (collisions.length > 0) {
+        const packLabel = packDisplayName(source);
+        const swaps: {
+          slotId: string;
+          songId: string;
+          reference: string;
+          label: string;
+          mp3: string;
+          duration: number;
+        }[] = [];
+        let next = 0;
+        const worker = async () => {
+          while (next < collisions.length) {
+            const c = collisions[next++];
+            try {
+              const mp3 = await decodeStockApi(s.vpkHelperPath, source, c.reference);
+              const song = projectRef.current?.events
+                .find((e) => e.id === c.slotId)
+                ?.songs.find((x) => x.id === c.songId);
+              if (!song) continue;
+              if (await filesIdentical(song.sourceMp3, mp3)) continue;
+              const info = await probeAudio(mp3, s.ffmpegPath || undefined);
+              swaps.push({ ...c, mp3, duration: info.duration, label: `${c.label} (${packLabel})` });
+            } catch {
+              /* un-decodable - leave the existing track alone */
+            }
+          }
+        };
+        await Promise.all(Array.from({ length: 3 }, () => worker()));
+        if (profileChanged()) return;
+        updatedTracks = swaps.length;
+        if (swaps.length > 0) {
+          const bySlot = new Map<string, typeof swaps>();
+          for (const sw of swaps) {
+            const l = bySlot.get(sw.slotId) ?? [];
+            l.push(sw);
+            bySlot.set(sw.slotId, l);
+          }
+          setProject((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  events: prev.events.map((e) => {
+                    const list = bySlot.get(e.id);
+                    if (!list) return e;
+                    return {
+                      ...e,
+                      songs: e.songs.map((song) => {
+                        const sw = list.find((x) => x.songId === song.id);
+                        return sw
+                          ? {
+                              ...song,
+                              label: sw.label,
+                              sourceMp3: sw.mp3,
+                              trimStart: 0,
+                              trimEnd: sw.duration,
+                              lastCompiledHash: null,
+                            }
+                          : song;
+                      }),
+                    };
+                  }),
+                }
+              : prev,
+          );
+          // The swapped audio now compiles from YOUR track - drop this pack's
+          // raw copies from the bundle so they don't ship on top of it.
+          if (bundle) {
+            updateSettings((cur) => {
+              const merged = { ...(cur.importedModExcludes ?? {}) };
+              const extra = swaps.map((x) => x.reference.replace(/\.vsnd$/, ".vsnd_c"));
+              merged[source] = Array.from(
+                new Set([...(merged[source] ?? excludedFiles), ...extra]),
+              );
+              return { importedModExcludes: merged };
+            });
+          }
+        }
+      }
+
+      // Linked-entry collisions: same ref, another pack. Different audio means
+      // the user imported an updated (or competing) mod - re-point the adopted
+      // entry at this pack so compile extracts the NEW audio. A vanished old
+      // cache also re-points (heals). Identical audio is left alone.
+      let updatedAdopted = 0;
+      if (adoptedCollisions.length > 0) {
+        const changed: typeof adoptedCollisions = [];
+        let nextA = 0;
+        const workerA = async () => {
+          while (nextA < adoptedCollisions.length) {
+            const c = adoptedCollisions[nextA++];
+            try {
+              const newMp3 = await decodeStockApi(s.vpkHelperPath, source, c.reference);
+              let same = false;
+              try {
+                const oldMp3 = await decodeStockApi(s.vpkHelperPath, c.oldVpk, c.reference);
+                same = await filesIdentical(oldMp3, newMp3);
+              } catch {
+                /* old pack gone - treat as changed so the entry heals to this pack */
+              }
+              if (!same) changed.push(c);
+            } catch {
+              /* this pack's copy un-decodable - leave the entry alone */
+            }
+          }
+        };
+        await Promise.all(Array.from({ length: 3 }, () => workerA()));
+        if (profileChanged()) return;
+        updatedAdopted = changed.length;
+        if (changed.length > 0) {
+          const bySlot = new Map<string, Set<string>>();
+          for (const c of changed) {
+            const set = bySlot.get(c.slotId) ?? new Set<string>();
+            set.add(c.reference);
+            bySlot.set(c.slotId, set);
+          }
+          setProject((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  events: prev.events.map((e) => {
+                    const refsToSwap = bySlot.get(e.id);
+                    if (!refsToSwap) return e;
+                    return {
+                      ...e,
+                      adopted: e.adopted.map((a) =>
+                        refsToSwap.has(a.reference) ? { ...a, sourceVpk: source } : a,
+                      ),
+                    };
+                  }),
+                }
+              : prev,
+          );
+          // The old pack's raw copy at this path must not ship over the new
+          // one in the combined build - exclude it from the old bundle.
+          if (bundle) {
+            updateSettings((cur) => {
+              const merged = { ...(cur.importedModExcludes ?? {}) };
+              for (const c of changed) {
+                const rel = c.reference.replace(/\.vsnd$/, ".vsnd_c");
+                merged[c.oldVpk] = Array.from(new Set([...(merged[c.oldVpk] ?? []), rel]));
+              }
+              return { importedModExcludes: merged };
+            });
+          }
+        }
+      }
+
       const exclNote =
         removedExcluded || skipped
           ? ` · skipped ${skipped + removedExcluded} excluded (${EXCLUDED_IMPORT_TERMS.join(", ")})`
@@ -2669,16 +2859,22 @@ export default function App() {
       const absorbNote = absorbed > 0 ? ` · ${absorbed} converted into your own tracks` : "";
       const replaceNote =
         autoReplaced > 0 ? ` · ${autoReplaced} original(s) auto-replaced (same name)` : "";
-      const dupNote = alreadyPresent > 0 ? ` · ${alreadyPresent} already in your project` : "";
-      if (adoptedRefs === 0 && alreadyPresent > 0) {
+      const swappedTotal = updatedTracks + updatedAdopted;
+      const identical = Math.max(0, alreadyPresent - swappedTotal);
+      const dupNote = identical > 0 ? ` · ${identical} already in your project` : "";
+      const swapNote =
+        swappedTotal > 0
+          ? ` · ${swappedTotal} sound(s) swapped to this pack's version (same name, different sound)`
+          : "";
+      if (adoptedRefs === 0 && swappedTotal === 0 && alreadyPresent > 0) {
         push(
           "success",
-          `Nothing new to add - all ${alreadyPresent} sound(s) from this pack are already in your project (a previous import placed them)${exclNote}${iconNote}`,
+          `Nothing new to add - all ${alreadyPresent} sound(s) from this pack are already in your project with identical audio (a previous import placed them)${exclNote}${iconNote}`,
         );
       } else {
         push(
           "success",
-          `Import done - ${adoptedRefs} sound(s): ${counts.hero} hero, ${counts.item} item, ${counts.ui} UI, ${counts.sorted} sorted to tabs, ${counts.misc} misc, ${counts.folded} folded into existing${absorbNote}${replaceNote}${dupNote}${exclNote}${iconNote}`,
+          `Import done - ${adoptedRefs} sound(s): ${counts.hero} hero, ${counts.item} item, ${counts.ui} UI, ${counts.sorted} sorted to tabs, ${counts.misc} misc, ${counts.folded} folded into existing${absorbNote}${replaceNote}${swapNote}${dupNote}${exclNote}${iconNote}`,
         );
       }
       // Bundled with no attribution (GameBanana downloads arrive pre-linked):

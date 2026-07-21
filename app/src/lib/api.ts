@@ -374,6 +374,11 @@ export function decodeStock(
   return invoke("decode_stock", { helperPath, pakPath, stockRef });
 }
 
+/** Byte-identical file check (import dedupe: same name vs same sound). */
+export function filesIdentical(a: string, b: string): Promise<boolean> {
+  return invoke("files_identical", { a, b });
+}
+
 /** A stale decoded-audio source path + the .vsnd ref that produced it (when known). */
 export interface HealItem {
   path: string;

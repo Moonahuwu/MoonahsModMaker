@@ -796,6 +796,30 @@ fn decode_stock_blocking(
     crate::vpk::decode(helper_path, pak_path, &internal, &out_base.to_string_lossy())
 }
 
+/// Whether two files have byte-identical contents. Used by the import flow to
+/// tell "this pack ships the SAME audio I already imported" (skip) from "same
+/// file name, different sound" (swap to the new pack's version). A missing
+/// file reads as NOT identical, so a broken/pruned decode cache heals by
+/// re-importing.
+#[tauri::command]
+pub async fn files_identical(a: String, b: String) -> Result<bool, String> {
+    // Byte compares of audio files - off the UI thread.
+    tauri::async_runtime::spawn_blocking(move || {
+        let (Ok(ma), Ok(mb)) = (std::fs::metadata(&a), std::fs::metadata(&b)) else {
+            return Ok(false);
+        };
+        if ma.len() != mb.len() {
+            return Ok(false);
+        }
+        let (Ok(ba), Ok(bb)) = (std::fs::read(&a), std::fs::read(&b)) else {
+            return Ok(false);
+        };
+        Ok(ba == bb)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// One stale track/layer source path to repair, plus the `.vsnd` reference
 /// that originally produced it when the project still knows it.
 #[derive(serde::Deserialize)]

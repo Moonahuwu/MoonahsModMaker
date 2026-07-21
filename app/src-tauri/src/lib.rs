@@ -109,6 +109,7 @@ pub fn run() {
             commands::pack_vpk,
             commands::extract_vpk,
             commands::decode_stock,
+            commands::files_identical,
             commands::heal_missing_sources,
             commands::refresh_vanilla,
             commands::list_editable_events,
