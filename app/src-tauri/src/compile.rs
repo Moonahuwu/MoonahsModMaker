@@ -182,6 +182,11 @@ pub struct CompileConfig {
     /// the `.vmat_c` + `.vtex_c` at the vanilla paths (whole-material override).
     #[serde(default)]
     pub poster_overrides: Vec<PosterCompile>,
+    /// Hero skin-texture overrides: decompile a hero material from the pak,
+    /// swap/hue-rotate its color map, recompile the `.vmat`, and stage the
+    /// `.vmat_c` + `.vtex_c` at the vanilla paths (whole-material override).
+    #[serde(default)]
+    pub hero_textures: Vec<HeroTexCompile>,
     /// UI Master: edited panorama layout/style sources, compiled and staged
     /// at the game's own paths (whole-file overrides). Experimental.
     #[serde(default)]
@@ -478,6 +483,38 @@ fn default_cover() -> String {
 }
 
 impl PosterCompile {
+    fn up_to_date(&self, skip_compile: bool, compiled_exists: bool) -> bool {
+        !skip_compile
+            && self.current_hash.is_some()
+            && self.current_hash == self.last_compiled_hash
+            && compiled_exists
+    }
+}
+
+/// One hero skin-texture override: swap the material's color map for user art
+/// (stretched to the vanilla map's size so the UVs line up) and/or hue-rotate
+/// it, then recompile the material at the vanilla path.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeroTexCompile {
+    /// Vanilla material path (no `_c`), e.g.
+    /// `models/heroes_wip/abrams/materials/abrams_upper_body.vmat`.
+    pub vmat: String,
+    /// Friendly label for report steps, e.g. `Abrams - Upper Body`.
+    pub label: String,
+    /// Absolute path to the user's art. None = vanilla art (hue-only recolor).
+    #[serde(default)]
+    pub source_image: Option<String>,
+    /// Hue rotation in degrees (-180..180, 0 = none).
+    #[serde(default)]
+    pub hue: f32,
+    #[serde(default)]
+    pub current_hash: Option<String>,
+    #[serde(default)]
+    pub last_compiled_hash: Option<String>,
+}
+
+impl HeroTexCompile {
     fn up_to_date(&self, skip_compile: bool, compiled_exists: bool) -> bool {
         !skip_compile
             && self.current_hash.is_some()
@@ -1184,7 +1221,9 @@ fn compile_effect_overrides(
 
 /// Parse `"Texture<Param>" "materials/....png|tga"` references out of a
 /// decompiled `.vmat` (layered params like `TextureColor1` included). Returns
-/// (param, content-relative path) pairs in file order.
+/// (param, content-relative path) pairs in file order. Hero materials keep
+/// their textures next to the model (`models/heroes_*/...`), so both content
+/// roots count as a path (vector literals like `"[0.0 0.0 0.0]"` don't match).
 fn vmat_texture_refs(text: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for line in text.lines() {
@@ -1196,7 +1235,7 @@ fn vmat_texture_refs(text: &str) -> Vec<(String, String)> {
         let vrest = &rest[q + 1 + vstart + 1..];
         let Some(vend) = vrest.find('"') else { continue };
         let val = &vrest[..vend];
-        if val.starts_with("materials/") {
+        if val.starts_with("materials/") || val.starts_with("models/") {
             out.push((param, val.to_string()));
         }
     }
@@ -1430,6 +1469,207 @@ fn poster_staged_rels(compiled_root: &Path, vmat_rel: &str, texture_refs: &[(Str
         }
     }
     rels
+}
+
+// ---- Hero skin textures -----------------------------------------------------
+
+/// Hero materials reference a few stock helper textures outside their own
+/// folder (e.g. `materials/default/default_mask.tga`) that `material` doesn't
+/// reconstruct - resourcecompiler would abort on the missing sources. Decode
+/// each missing ref's compiled `.vtex_c` from the pak to a PNG at the same
+/// stem and point the vmat at it.
+fn resolve_missing_texture_refs(
+    helper: &str,
+    pak: &str,
+    content_root: &Path,
+    vmat_abs: &Path,
+) -> Result<(), String> {
+    let text = std::fs::read_to_string(vmat_abs).map_err(|e| e.to_string())?;
+    let mut out = text.clone();
+    for (_, tex_rel) in vmat_texture_refs(&text) {
+        if content_root.join(&tex_rel).exists() {
+            continue;
+        }
+        let (dir, file) = tex_rel.rsplit_once('/').unwrap_or(("", tex_rel.as_str()));
+        let (stem, ext) = file.rsplit_once('.').unwrap_or((file, ""));
+        let new_rel = if dir.is_empty() { format!("{stem}.png") } else { format!("{dir}/{stem}.png") };
+        let new_abs = content_root.join(&new_rel);
+        // Shared refs (default masks) decode once per run; later materials
+        // just repoint at the already-decoded PNG.
+        if !new_abs.exists() {
+            // Compiled textures live at `<dir>/<stem>_<ext>_<hash>.vtex_c`.
+            let prefix = if dir.is_empty() {
+                format!("{stem}_{ext}_")
+            } else {
+                format!("{dir}/{stem}_{ext}_")
+            };
+            let vtex = crate::vpk::list(helper, pak, Some(&prefix))?
+                .into_iter()
+                .find(|p| p.ends_with(".vtex_c"))
+                .ok_or_else(|| format!("no compiled texture in the pak for {tex_rel}"))?;
+            let dest_dir = content_root.join(dir);
+            std::fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
+            let decoded =
+                crate::vpk::texture_batch(helper, pak, &dest_dir.to_string_lossy(), &[vtex.clone()])?;
+            let png = decoded
+                .first()
+                .map(|(_, p)| p.clone())
+                .ok_or_else(|| format!("decoding {vtex} produced nothing"))?;
+            if Path::new(&png) != new_abs {
+                std::fs::rename(&png, &new_abs).map_err(|e| e.to_string())?;
+            }
+        }
+        out = out.replace(&format!("\"{tex_rel}\""), &format!("\"{new_rel}\""));
+    }
+    if out != text {
+        std::fs::write(vmat_abs, out).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Swap/recolor each hero material's color map and recompile the material at
+/// its vanilla path (the model is never touched, so the UVs stay put).
+/// Returns compiled-root-relative `_c` paths to stage.
+fn compile_hero_textures(
+    cfg: &CompileConfig,
+    content_root: &Path,
+    compiled_root: &Path,
+    report: &mut CompileReport,
+) -> Result<(Vec<String>, bool), ()> {
+    let mut staged: Vec<String> = Vec::new();
+    let mut dirty = false;
+    if cfg.hero_textures.is_empty() {
+        return Ok((staged, false));
+    }
+    let helper = match cfg.vpk_helper_path.as_deref() {
+        Some(h) => h,
+        None => {
+            report.soft_fail("hero textures", "vpkHelperPath not set");
+            return Ok((staged, true));
+        }
+    };
+    let pak = match cfg.pak_path.as_deref() {
+        Some(p) => p,
+        None => {
+            report.soft_fail("hero textures", "pakPath not set (needed to read the vanilla material)");
+            return Ok((staged, true));
+        }
+    };
+    let ffmpeg = cfg.ffmpeg_path.as_deref();
+
+    // Per-material failures are soft: one broken skin shouldn't sink the build.
+    'overrides: for ov in &cfg.hero_textures {
+        let vmat_rel = ov.vmat.trim_matches('/').to_string();
+        let vmat_abs = content_root.join(&vmat_rel);
+        let compiled_ok = compiled_root.join(format!("{vmat_rel}_c")).exists();
+        if vmat_abs.exists() && ov.up_to_date(cfg.skip_compile, compiled_ok) {
+            if let Ok(text) = std::fs::read_to_string(&vmat_abs) {
+                staged.extend(poster_staged_rels(compiled_root, &vmat_rel, &vmat_texture_refs(&text)));
+                report.ok_step(
+                    format!("hero texture up to date: {}", ov.label),
+                    "unchanged - skipped",
+                );
+                continue;
+            }
+        }
+
+        dirty = true;
+        // Fresh vanilla decompile so a removed/changed edit never lingers in
+        // the previously-composited art.
+        if let Err(e) = crate::vpk::material_from_vpk(
+            helper,
+            pak,
+            &format!("{vmat_rel}_c"),
+            &content_root.to_string_lossy(),
+        ) {
+            report.soft_fail(format!("decompile material: {}", ov.label), e);
+            continue 'overrides;
+        }
+        if let Err(e) = resolve_missing_texture_refs(helper, pak, content_root, &vmat_abs) {
+            report.soft_fail(format!("hero texture: {}", ov.label), e);
+            continue 'overrides;
+        }
+        let text = match std::fs::read_to_string(&vmat_abs) {
+            Ok(t) => t,
+            Err(e) => {
+                report.soft_fail(format!("read material: {vmat_rel}"), e.to_string());
+                continue 'overrides;
+            }
+        };
+        let refs = vmat_texture_refs(&text);
+        let color_rel = refs
+            .iter()
+            .find(|(p, _)| p.starts_with("TextureColor"))
+            .map(|(_, v)| v.clone());
+        let Some(color_rel) = color_rel else {
+            report.soft_fail(format!("hero texture: {}", ov.label), "material has no color texture");
+            continue 'overrides;
+        };
+        let color_abs = content_root.join(&color_rel);
+        let (w, h) = match crate::commands::png_dimensions(&color_abs) {
+            Ok(d) => d,
+            Err(e) => {
+                report.soft_fail(format!("hero texture: {}", ov.label), e);
+                continue 'overrides;
+            }
+        };
+
+        // Swap in the user's art (stretched to the vanilla map's size - UVs
+        // address the full frame) and/or hue-rotate the vanilla art.
+        if let Some(src) = ov.source_image.as_deref().filter(|s| !s.is_empty()) {
+            if let Err(e) = render_icon(ffmpeg, src, w, h, ov.hue, &color_abs.to_string_lossy()) {
+                report.soft_fail(format!("hero texture art: {}", ov.label), e);
+                continue 'overrides;
+            }
+            let hue_note = if ov.hue.abs() > 0.01 {
+                format!(", hue {:+.0}", ov.hue)
+            } else {
+                String::new()
+            };
+            report.ok_step(
+                format!("hero texture: {}", ov.label),
+                format!("custom art {w}x{h}{hue_note}"),
+            );
+        } else if ov.hue.abs() > 0.01 {
+            let tmp = color_abs.with_extension("eim_tmp.png");
+            if let Err(e) =
+                render_icon(ffmpeg, &color_abs.to_string_lossy(), w, h, ov.hue, &tmp.to_string_lossy())
+            {
+                report.soft_fail(format!("hero texture hue: {}", ov.label), e);
+                continue 'overrides;
+            }
+            if let Err(e) = std::fs::rename(&tmp, &color_abs) {
+                report.soft_fail(format!("hero texture hue: {}", ov.label), e.to_string());
+                continue 'overrides;
+            }
+            report.ok_step(format!("hero texture: {}", ov.label), format!("hue {:+.0}", ov.hue));
+        } else {
+            report.soft_fail(
+                format!("hero texture: {}", ov.label),
+                "no art and no hue change - nothing to apply",
+            );
+            continue 'overrides;
+        }
+
+        // resourcecompiler must only see source params.
+        if let Ok(t) = std::fs::read_to_string(&vmat_abs) {
+            let _ = std::fs::write(&vmat_abs, strip_compiled_textures(&t));
+        }
+        if cfg.skip_compile {
+            continue;
+        }
+        match run_resource_compiler(cfg, &vmat_abs.to_string_lossy()) {
+            Ok(detail) => report.ok_step(format!("compile (hero texture): {vmat_rel}"), detail),
+            Err(e) => {
+                report.soft_fail(format!("compile (hero texture): {vmat_rel}"), e);
+                continue 'overrides;
+            }
+        }
+        staged.extend(poster_staged_rels(compiled_root, &vmat_rel, &refs));
+    }
+    staged.sort();
+    staged.dedup();
+    Ok((staged, dirty))
 }
 
 /// Composite every poster override into its atlas sheet and recompile the
@@ -2545,6 +2785,7 @@ fn estimate_steps(cfg: &CompileConfig) -> usize {
         .map(|p| p.sheet_id.as_str())
         .collect::<std::collections::HashSet<_>>()
         .len();
+    est += 2 * cfg.hero_textures.len();
     if let Some(dm) = &cfg.digimod {
         est += 3
             + dm.scares.len()
@@ -2905,6 +3146,11 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
     // recompile once (staged into every variant, like icons).
     let (poster_outputs, posters_dirty) = compile_posters(cfg, content_root, compiled_root, report)?;
 
+    // Hero skin textures: decompile hero materials, swap/hue-rotate the color
+    // map, recompile once (staged into every variant, like posters).
+    let (herotex_outputs, herotex_dirty) =
+        compile_hero_textures(cfg, content_root, compiled_root, report)?;
+
     // Gameplay config edits: rewrite abilities.vdata once (staged into every
     // variant). Custom Server tab.
     let vdata_dirty = compile_vdata_overrides(cfg, content_root, compiled_root, report)?;
@@ -2931,6 +3177,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
     // skip too (the build stamp guards config changes like removals/toggles).
     let overrides_dirty = effects_dirty
         || posters_dirty
+        || herotex_dirty
         || vdata_dirty
         || global_dirty
         || world_dirty
@@ -3606,6 +3853,17 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
             match copy_into(&src, &stage, rel) {
                 Ok(_) => staged += 1,
                 Err(e) => report.soft_fail(format!("stage poster: {rel}"), e.to_string()),
+            }
+        }
+        // Stage hero skin textures (recompiled .vmat_c + .vtex_c at the game's paths).
+        for rel in &herotex_outputs {
+            let src = compiled_root.join(rel);
+            if cfg.skip_compile && !src.exists() {
+                continue;
+            }
+            match copy_into(&src, &stage, rel) {
+                Ok(_) => staged += 1,
+                Err(e) => report.soft_fail(format!("stage hero texture: {rel}"), e.to_string()),
             }
         }
         // Stage the gameplay-config override (recompiled abilities.vdata_c).
@@ -4616,6 +4874,7 @@ mod tests {
             global_overrides: vec![],
             world_overrides: vec![],
             poster_overrides: vec![],
+            hero_textures: vec![],
             digimod: None,
             ui_overrides: ui,
             credits_text: None,
@@ -4705,6 +4964,7 @@ mod tests {
             global_overrides: vec![],
             world_overrides: vec![],
             poster_overrides: vec![],
+            hero_textures: vec![],
             digimod: None,
             ui_overrides: vec![],
             credits_text: None,
@@ -4858,6 +5118,7 @@ mod tests {
             global_overrides: vec![],
             world_overrides: vec![],
             poster_overrides: vec![],
+            hero_textures: vec![],
             digimod: None,
             ui_overrides: vec![],
             credits_text: None,
@@ -4990,6 +5251,7 @@ mod tests {
                 current_hash: Some("p1".into()),
                 last_compiled_hash: None,
             }],
+            hero_textures: vec![],
         };
 
         let report = run(&cfg);
@@ -5029,6 +5291,106 @@ mod tests {
         let _ = std::fs::remove_dir_all(&compiled_root);
         let _ = std::fs::remove_dir_all(&out);
         let _ = std::fs::remove_file(&art);
+    }
+
+    /// Real hero skin-texture pipeline: decompile Abrams' upper-body material
+    /// from the pak, hue-rotate the color map, recompile, pack. Run with:
+    ///   cargo test -p app --lib -- --ignored e2e_hero_texture --nocapture
+    #[test]
+    #[ignore]
+    fn e2e_hero_texture() {
+        let csdk = r"C:\Users\ethob\Desktop\DeadlockModding\Reduced_CSDK_12";
+        let addon = "eim_herotex_e2e_addon";
+        let content_root = format!(r"{csdk}\content\citadel_addons\{addon}");
+        let compiled_root = format!(r"{csdk}\game\citadel_addons\{addon}");
+        let out = std::env::temp_dir().join("eim_herotex_e2e_out");
+        let _ = std::fs::remove_dir_all(&out);
+        let _ = std::fs::remove_dir_all(&content_root);
+        let _ = std::fs::remove_dir_all(&compiled_root);
+
+        let mut cfg = CompileConfig {
+            content_root: content_root.clone(),
+            compiled_root: compiled_root.clone(),
+            game_info_dir: format!(r"{csdk}\game\citadel"),
+            sound_folder: "sounds/music/match_intro".into(),
+            resource_compiler: format!(r"{csdk}\game\bin_tools\win64\resourcecompiler.exe"),
+            ffmpeg_path: None,
+            vpk_helper_path: Some(
+                r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\tools\vpk-helper\bin\Release\net10.0\vpk-helper.dll".into(),
+            ),
+            vanilla_root: r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\ModFiles".into(),
+            pak_path: Some(
+                r"D:\SteamLibrary\steamapps\common\Deadlock\game\citadel\pak01_dir.vpk".into(),
+            ),
+            output_dir: out.to_string_lossy().into_owned(),
+            output_mode: "vpk".into(),
+            vpk_name: "pak01_dir.vpk".into(),
+            write_encoding_txt: true,
+            skip_compile: false,
+            imported_mods: vec![],
+            imported_mod_excludes: Default::default(),
+            events: vec![],
+            icon_mods: vec![],
+            sound_overrides: vec![],
+            effect_overrides: vec![],
+            vdata_overrides: vec![],
+            global_overrides: vec![],
+            world_overrides: vec![],
+            digimod: None,
+            ui_overrides: vec![],
+            credits_text: None,
+            export_only: false,
+            poster_overrides: vec![],
+            hero_textures: vec![HeroTexCompile {
+                vmat: "models/heroes_wip/abrams/materials/abrams_upper_body.vmat".into(),
+                label: "Abrams - Upper Body (e2e)".into(),
+                source_image: None,
+                hue: 120.0,
+                current_hash: Some("h1".into()),
+                last_compiled_hash: None,
+            }],
+        };
+
+        let report = run(&cfg);
+        for s in &report.steps {
+            println!("[{}] {} :: {}", if s.ok { "OK" } else { "FAIL" }, s.name, s.detail);
+        }
+        assert!(report.ok, "hero texture pipeline failed");
+
+        let vmat_c = Path::new(&compiled_root)
+            .join("models/heroes_wip/abrams/materials/abrams_upper_body.vmat_c");
+        assert!(vmat_c.exists(), "vmat_c not produced");
+        let mats = Path::new(&compiled_root).join("models/heroes_wip/abrams/materials");
+        let has_vtex = std::fs::read_dir(&mats).unwrap().flatten().any(|e| {
+            let n = e.file_name().to_string_lossy().to_string();
+            n.starts_with("abrams_upper_body_color") && n.ends_with(".vtex_c")
+        });
+        assert!(has_vtex, "color vtex_c not produced");
+        // The stripped source vmat must have no Compiled Textures block left
+        // and no unresolved .tga refs (the default masks decode to PNGs).
+        let src = std::fs::read_to_string(
+            Path::new(&content_root)
+                .join("models/heroes_wip/abrams/materials/abrams_upper_body.vmat"),
+        )
+        .unwrap();
+        assert!(!src.contains("Compiled Textures"));
+        assert!(!src.contains(".tga\""), "unresolved tga ref survived:\n{src}");
+        let vpk = out.join("mine").join("pak01_dir.vpk");
+        assert!(vpk.exists(), "vpk not produced");
+
+        // Second run with matching hashes should skip (up-to-date) but still
+        // stage the previously produced files.
+        cfg.hero_textures[0].last_compiled_hash = Some("h1".into());
+        let report2 = run(&cfg);
+        assert!(report2.ok, "second run failed");
+        assert!(report2
+            .steps
+            .iter()
+            .any(|s| s.name.contains("hero texture up to date")));
+
+        let _ = std::fs::remove_dir_all(&content_root);
+        let _ = std::fs::remove_dir_all(&compiled_root);
+        let _ = std::fs::remove_dir_all(&out);
     }
 
     /// Custom pack dirs (enderpearl/) must ride into the combined build;

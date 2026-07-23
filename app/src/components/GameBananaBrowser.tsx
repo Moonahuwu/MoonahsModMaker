@@ -3,10 +3,12 @@ import { AnimatePresence, motion } from "motion/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { StockWaveform } from "./StockWaveform";
 import {
+  gamebananaCategories,
   gamebananaDownload,
   gamebananaFiles,
   gamebananaSearch,
   libraryAdd,
+  type GbCategory,
   type GbFile,
   type GbSearchItem,
 } from "../lib/api";
@@ -81,6 +83,26 @@ export function GameBananaBrowser({
   const [previewFor, setPreviewFor] = useState<number | null>(null);
   // Slot mode: Get extracts the pack's sounds into this slot (no bundling).
   const [targetSlot, setTargetSlot] = useState<{ id: string; label: string } | null>(null);
+  // Category browse: a GameBanana category id narrows the feed SERVER-side
+  // (hero skin categories, the Sound sections…). Search and category are
+  // mutually exclusive - the site search can't filter by category.
+  const [catFilter, setCatFilter] = useState<GbCategory | null>(null);
+  // Root-category chips per submission type (fetched once each, best-effort).
+  const [cats, setCats] = useState<Partial<Record<"Mod" | "Sound", GbCategory[]>>>({});
+  useEffect(() => {
+    if (cats[model]) return;
+    let stale = false;
+    void gamebananaCategories(model)
+      .then((list) => {
+        if (!stale) setCats((prev) => ({ ...prev, [model]: list }));
+      })
+      .catch(() => {
+        /* chips just don't render */
+      });
+    return () => {
+      stale = true;
+    };
+  }, [model, cats]);
 
   // A newer request always wins: without this, a slow earlier search can
   // resolve late and stomp the results the user is actually looking at.
@@ -107,12 +129,12 @@ export function GameBananaBrowser({
     return () => obs.disconnect();
   }, []);
 
-  async function load(q: string, p: number, append: boolean, s = sort, m = model) {
+  async function load(q: string, p: number, append: boolean, s = sort, m = model, cat = catFilter) {
     const req = ++reqSeq.current;
     setLoading(true);
     setError(null);
     try {
-      const res = await gamebananaSearch(q, p, s, m);
+      const res = await gamebananaSearch(q, p, s, m, q ? undefined : (cat?.id ?? undefined));
       if (req !== reqSeq.current) return;
       setItems((prev) => {
         if (!append) return res.items;
@@ -145,11 +167,44 @@ export function GameBananaBrowser({
     const m = seed.sounds ? "Sound" : "Mod";
     setModel(m);
     setQuery(seed.query);
+    setCatFilter(null);
     setTargetSlot(seed.slotId ? { id: seed.slotId, label: seed.slotLabel ?? "the slot" } : null);
-    void load(seed.query, 1, false, sort, m);
+    void load(seed.query, 1, false, sort, m, null);
     onSeedConsumed?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seed]);
+
+  /** Browse one category (chip row or a card's category chip). Clears any
+   *  text search - the two can't combine on the site's API. */
+  function browseCategory(c: GbCategory | null) {
+    setQuery("");
+    setCatFilter(c);
+    void load("", 1, false, sort, model, c);
+  }
+
+  /** A card's category chip: jump to the most specific category the mod is
+   *  filed under - for Mod submissions that's usually the hero. */
+  function browseFromChip(i: GbSearchItem) {
+    const id = i.subCategoryId || i.categoryId;
+    if (!id) return;
+    browseCategory({ id, name: i.subCategory || i.category, count: 0 });
+  }
+
+  /** Where did the query actually match? The site search also matches page
+   *  DESCRIPTIONS - that's how a hero's name surfaces mods for other heroes.
+   *  Strong = every word appears in the title/author/category; loose = only
+   *  somewhere in the page text. Loose results stay visible, just ranked
+   *  below a labeled divider instead of mixed in. */
+  function strongMatch(i: GbSearchItem, phrase: string): boolean {
+    const hay = `${i.name} ${i.author} ${i.category} ${i.subCategory}`.toLowerCase();
+    if (hay.includes(phrase)) return true;
+    const words = phrase.split(/[^a-z0-9]+/).filter((w) => w.length >= 2);
+    if (words.length === 0) return true;
+    // Short words match on boundaries only ("mo" must not hit "mod").
+    return words.every((w) =>
+      w.length <= 3 ? new RegExp(`\\b${w}\\b`).test(hay) : hay.includes(w),
+    );
+  }
 
   async function getMod(item: GbSearchItem) {
     setBusy(item.modId);
@@ -302,172 +357,22 @@ export function GameBananaBrowser({
 
   // While searching, "Most liked" re-sorts the loaded results exactly (the
   // endpoint only offers a popularity order); browse feeds come pre-sorted.
-  const visible = (() => {
-    const v = items.filter((i) => showMature || !i.nsfw);
-    return activeQuery && sort === "likes" ? [...v].sort((a, b) => b.likes - a.likes) : v;
+  // Query results then split into strong matches and the loose tail.
+  const { strong, loose } = (() => {
+    let v = items.filter((i) => showMature || !i.nsfw);
+    if (activeQuery && sort === "likes") v = [...v].sort((a, b) => b.likes - a.likes);
+    const phrase = activeQuery.trim().toLowerCase();
+    if (!phrase) return { strong: v, loose: [] as GbSearchItem[] };
+    return {
+      strong: v.filter((i) => strongMatch(i, phrase)),
+      loose: v.filter((i) => !strongMatch(i, phrase)),
+    };
   })();
+  const visibleCount = strong.length + loose.length;
   const hiddenCount = items.filter((i) => !showMature && i.nsfw).length;
 
-  return (
-    <section className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5">
-      <div className="flex items-center gap-3">
-        {onBack && (
-          <button
-            onClick={onBack}
-            className="rounded-md border border-zinc-700 px-2.5 py-1 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-white"
-          >
-            ← Back
-          </button>
-        )}
-        <h3 className="text-sm font-semibold text-zinc-200">Browse GameBanana</h3>
-        <span className="ml-auto text-[11px] text-zinc-600">
-          downloads count on the author's page
-        </span>
-      </div>
-      <p className="mt-2 text-xs leading-relaxed text-zinc-500">
-        Search Deadlock mods and pull one straight into your build - the vpk opens in the
-        normal import review, and the page's author + credits attach automatically for
-        your credits list.
-      </p>
-      {targetSlot && (
-        <div className="mt-2 flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/5 px-3 py-1.5 text-xs text-emerald-300">
-          <span>
-            Get extracts a pack's sounds straight into <b>{targetSlot.label}</b> as tracks
-            - mods that change more than this slot open a picker first.
-          </span>
-          <button
-            onClick={() => setTargetSlot(null)}
-            title="Switch to normal mode (bundle the whole vpk instead)"
-            className="ml-auto shrink-0 rounded px-1.5 py-0.5 text-emerald-400/70 transition hover:bg-emerald-500/15 hover:text-emerald-200"
-          >
-            ✕
-          </button>
-        </div>
-      )}
-
-      <div className="mt-3 flex gap-2">
-        <input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && void load(query, 1, false)}
-          placeholder="Search mods: music, urn, jumpscare, a hero's name…"
-          spellCheck={false}
-          className="flex-1 rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-xs text-zinc-200 outline-none focus:border-yellow-500/70"
-        />
-        <button
-          onClick={() => void load(query, 1, false)}
-          disabled={loading}
-          className="rounded-md bg-yellow-600/90 px-4 py-1.5 text-xs font-medium text-white transition hover:bg-yellow-500 disabled:opacity-50"
-        >
-          Search
-        </button>
-        {activeQuery && (
-          <button
-            onClick={() => {
-              setQuery("");
-              void load("", 1, false);
-            }}
-            className="rounded-md border border-zinc-700 px-3 py-1.5 text-xs text-zinc-400 transition hover:border-zinc-500 hover:text-white"
-          >
-            Clear
-          </button>
-        )}
-      </div>
-
-      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11px] text-zinc-500">
-        <div className="flex items-center overflow-hidden rounded-md border border-zinc-700">
-          {(["Mod", "Sound"] as const).map((m) => (
-            <button
-              key={m}
-              onClick={() => {
-                if (m === model) return;
-                setModel(m);
-                void load(activeQuery, 1, false, sort, m);
-              }}
-              title={
-                m === "Sound"
-                  ? "GameBanana's dedicated sound-mod section"
-                  : "Everything: skins, HUDs, sounds…"
-              }
-              className={`px-2.5 py-0.5 transition ${
-                model === m
-                  ? "bg-yellow-500/15 font-medium text-yellow-300"
-                  : "text-zinc-500 hover:text-zinc-300"
-              }`}
-            >
-              {m === "Mod" ? "Mods" : "Sounds"}
-            </button>
-          ))}
-        </div>
-        <div className="flex items-center gap-1" title="Order the results">
-          {SORTS.map((s) => (
-            <button
-              key={s.key}
-              onClick={() => {
-                setSort(s.key);
-                void load(activeQuery, 1, false, s.key);
-              }}
-              title={
-                activeQuery && s.key === "downloads"
-                  ? "While searching, the site offers popularity order (closest to downloads)"
-                  : undefined
-              }
-              className={`rounded px-2 py-0.5 transition ${
-                sort === s.key
-                  ? "bg-yellow-500/15 text-yellow-300"
-                  : "text-zinc-500 hover:text-zinc-300"
-              }`}
-            >
-              {s.label}
-            </button>
-          ))}
-        </div>
-        <label className="ml-auto flex cursor-pointer items-center gap-1.5">
-          <input
-            type="checkbox"
-            checked={showMature}
-            onChange={(e) => setShowMature(e.target.checked)}
-            className="accent-yellow-500"
-          />
-          Show mature-rated mods
-        </label>
-        {hiddenCount > 0 && !showMature && <span>({hiddenCount} hidden)</span>}
-      </div>
-
-      {error && (
-        <p className="mt-3 text-xs text-red-400">
-          Couldn't reach GameBanana: {error}
-        </p>
-      )}
-
-      {sel.size > 0 && (
-        <div className="sticky top-2 z-10 mt-3 flex items-center gap-3 rounded-lg border border-yellow-500/40 bg-zinc-950/95 px-3 py-2 text-xs shadow-lg">
-          <span className="font-medium text-yellow-200">
-            {sel.size} mod{sel.size === 1 ? "" : "s"} selected
-          </span>
-          <span className="hidden text-zinc-600 sm:inline">
-            downloads run in turn, then the reviews open one at a time
-          </span>
-          <button
-            onClick={() => setSel(new Set())}
-            disabled={bulkBusy}
-            className="ml-auto rounded-md border border-zinc-700 px-3 py-1 text-zinc-400 transition hover:border-zinc-500 hover:text-white disabled:opacity-40"
-          >
-            Clear
-          </button>
-          <button
-            onClick={() => void getSelected()}
-            disabled={bulkBusy}
-            className="rounded-md bg-emerald-600 px-4 py-1 font-medium text-white transition hover:bg-emerald-500 disabled:opacity-40"
-          >
-            {bulkBusy ? "Downloading…" : `Get all ${sel.size}`}
-          </button>
-        </div>
-      )}
-
-      <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
-        <AnimatePresence initial={false}>
-          {visible.map((item) => (
+  /** One result card - shared by the strong grid and the loose tail. */
+  const card = (item: GbSearchItem) => (
             <motion.div
               key={`${item.model}-${item.modId}-${activeQuery}`}
               layout
@@ -519,12 +424,19 @@ export function GameBananaBrowser({
                 </span>
                 <div className="mt-auto flex items-center gap-2 pt-1.5">
                   {item.category && (
-                    <span
-                      className="truncate rounded bg-zinc-800/80 px-1.5 py-0.5 text-[10px] text-zinc-400"
-                      title={item.category}
+                    <button
+                      onClick={() => browseFromChip(item)}
+                      disabled={!(item.subCategoryId || item.categoryId)}
+                      title={
+                        item.subCategoryId || item.categoryId
+                          ? `Browse everything in ${item.subCategory || item.category}`
+                          : undefined
+                      }
+                      className="truncate rounded bg-zinc-800/80 px-1.5 py-0.5 text-[10px] text-zinc-400 transition enabled:hover:bg-zinc-700/80 enabled:hover:text-yellow-300"
                     >
                       {item.category}
-                    </span>
+                      {item.subCategory ? ` · ${item.subCategory}` : ""}
+                    </button>
                   )}
                   <span className="ml-auto shrink-0 text-[10px] tabular-nums text-zinc-600">
                     ♥ {fmtCount(item.likes)}
@@ -577,16 +489,238 @@ export function GameBananaBrowser({
                 )}
               </div>
             </motion.div>
+  );
+
+  return (
+    <section className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5">
+      <div className="flex items-center gap-3">
+        {onBack && (
+          <button
+            onClick={onBack}
+            className="rounded-md border border-zinc-700 px-2.5 py-1 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-white"
+          >
+            ← Back
+          </button>
+        )}
+        <h3 className="text-sm font-semibold text-zinc-200">Browse GameBanana</h3>
+        <span className="ml-auto text-[11px] text-zinc-600">
+          downloads count on the author's page
+        </span>
+      </div>
+      <p className="mt-2 text-xs leading-relaxed text-zinc-500">
+        Search Deadlock mods and pull one straight into your build - the vpk opens in the
+        normal import review, and the page's author + credits attach automatically for
+        your credits list.
+      </p>
+      {targetSlot && (
+        <div className="mt-2 flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/5 px-3 py-1.5 text-xs text-emerald-300">
+          <span>
+            Get extracts a pack's sounds straight into <b>{targetSlot.label}</b> as tracks
+            - mods that change more than this slot open a picker first.
+          </span>
+          <button
+            onClick={() => setTargetSlot(null)}
+            title="Switch to normal mode (bundle the whole vpk instead)"
+            className="ml-auto shrink-0 rounded px-1.5 py-0.5 text-emerald-400/70 transition hover:bg-emerald-500/15 hover:text-emerald-200"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      <div className="mt-3 flex gap-2">
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key !== "Enter") return;
+            setCatFilter(null);
+            void load(query, 1, false, sort, model, null);
+          }}
+          placeholder="Search mods: music, urn, jumpscare, a hero's name…"
+          spellCheck={false}
+          className="flex-1 rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-xs text-zinc-200 outline-none focus:border-yellow-500/70"
+        />
+        <button
+          onClick={() => {
+            setCatFilter(null);
+            void load(query, 1, false, sort, model, null);
+          }}
+          disabled={loading}
+          className="rounded-md bg-yellow-600/90 px-4 py-1.5 text-xs font-medium text-white transition hover:bg-yellow-500 disabled:opacity-50"
+        >
+          Search
+        </button>
+        {(activeQuery || catFilter) && (
+          <button
+            onClick={() => {
+              setQuery("");
+              browseCategory(null);
+            }}
+            className="rounded-md border border-zinc-700 px-3 py-1.5 text-xs text-zinc-400 transition hover:border-zinc-500 hover:text-white"
+          >
+            Clear
+          </button>
+        )}
+      </div>
+
+      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11px] text-zinc-500">
+        <div className="flex items-center overflow-hidden rounded-md border border-zinc-700">
+          {(["Mod", "Sound"] as const).map((m) => (
+            <button
+              key={m}
+              onClick={() => {
+                if (m === model) return;
+                setModel(m);
+                // Category ids are per-type - a Mod category means nothing
+                // to the Sound index, so the filter resets on switch.
+                setCatFilter(null);
+                void load(activeQuery, 1, false, sort, m, null);
+              }}
+              title={
+                m === "Sound"
+                  ? "GameBanana's dedicated sound-mod section"
+                  : "Everything: skins, HUDs, sounds…"
+              }
+              className={`px-2.5 py-0.5 transition ${
+                model === m
+                  ? "bg-yellow-500/15 font-medium text-yellow-300"
+                  : "text-zinc-500 hover:text-zinc-300"
+              }`}
+            >
+              {m === "Mod" ? "Mods" : "Sounds"}
+            </button>
           ))}
+        </div>
+        <div className="flex items-center gap-1" title="Order the results">
+          {SORTS.map((s) => (
+            <button
+              key={s.key}
+              onClick={() => {
+                setSort(s.key);
+                void load(activeQuery, 1, false, s.key);
+              }}
+              title={
+                activeQuery && s.key === "downloads"
+                  ? "While searching, the site offers popularity order (closest to downloads)"
+                  : undefined
+              }
+              className={`rounded px-2 py-0.5 transition ${
+                sort === s.key
+                  ? "bg-yellow-500/15 text-yellow-300"
+                  : "text-zinc-500 hover:text-zinc-300"
+              }`}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+        <label className="ml-auto flex cursor-pointer items-center gap-1.5">
+          <input
+            type="checkbox"
+            checked={showMature}
+            onChange={(e) => setShowMature(e.target.checked)}
+            className="accent-yellow-500"
+          />
+          Show mature-rated mods
+        </label>
+        {hiddenCount > 0 && !showMature && <span>({hiddenCount} hidden)</span>}
+      </div>
+
+      {/* Category chips (browse mode only - the site search can't filter).
+          A card's category chip can land on a subcategory (a hero) that isn't
+          in the root list; it shows as an extra removable chip. */}
+      {!activeQuery && (cats[model]?.length ?? 0) > 0 && (
+        <div className="mt-2 flex flex-wrap items-center gap-1 text-[11px]">
+          <button
+            onClick={() => browseCategory(null)}
+            className={`rounded px-2 py-0.5 transition ${
+              !catFilter ? "bg-yellow-500/15 text-yellow-300" : "text-zinc-500 hover:text-zinc-300"
+            }`}
+          >
+            All
+          </button>
+          {cats[model]!.map((c) => (
+            <button
+              key={c.id}
+              onClick={() => browseCategory(catFilter?.id === c.id ? null : c)}
+              className={`rounded px-2 py-0.5 transition ${
+                catFilter?.id === c.id
+                  ? "bg-yellow-500/15 text-yellow-300"
+                  : "text-zinc-500 hover:text-zinc-300"
+              }`}
+            >
+              {c.name} <span className="text-zinc-600">{fmtCount(c.count)}</span>
+            </button>
+          ))}
+          {catFilter && !cats[model]!.some((c) => c.id === catFilter.id) && (
+            <button
+              onClick={() => browseCategory(null)}
+              title="Stop filtering by this category"
+              className="rounded bg-yellow-500/15 px-2 py-0.5 text-yellow-300 transition hover:bg-yellow-500/25"
+            >
+              {catFilter.name} ✕
+            </button>
+          )}
+        </div>
+      )}
+
+      {error && (
+        <p className="mt-3 text-xs text-red-400">
+          Couldn't reach GameBanana: {error}
+        </p>
+      )}
+
+      {sel.size > 0 && (
+        <div className="sticky top-2 z-10 mt-3 flex items-center gap-3 rounded-lg border border-yellow-500/40 bg-zinc-950/95 px-3 py-2 text-xs shadow-lg">
+          <span className="font-medium text-yellow-200">
+            {sel.size} mod{sel.size === 1 ? "" : "s"} selected
+          </span>
+          <span className="hidden text-zinc-600 sm:inline">
+            downloads run in turn, then the reviews open one at a time
+          </span>
+          <button
+            onClick={() => setSel(new Set())}
+            disabled={bulkBusy}
+            className="ml-auto rounded-md border border-zinc-700 px-3 py-1 text-zinc-400 transition hover:border-zinc-500 hover:text-white disabled:opacity-40"
+          >
+            Clear
+          </button>
+          <button
+            onClick={() => void getSelected()}
+            disabled={bulkBusy}
+            className="rounded-md bg-emerald-600 px-4 py-1 font-medium text-white transition hover:bg-emerald-500 disabled:opacity-40"
+          >
+            {bulkBusy ? "Downloading…" : `Get all ${sel.size}`}
+          </button>
+        </div>
+      )}
+
+      <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
+        <AnimatePresence initial={false}>
+          {strong.map((item) => card(item))}
+          {loose.length > 0 && (
+            <div
+              key="loose-divider"
+              className="col-span-full flex items-center gap-2 pt-2 text-[11px] text-zinc-600"
+            >
+              <span className="h-px flex-1 bg-zinc-800" />
+              {loose.length} looser match{loose.length === 1 ? "" : "es"} - "{activeQuery}"
+              only appears in the page text, not the title or category
+              <span className="h-px flex-1 bg-zinc-800" />
+            </div>
+          )}
+          {loose.map((item) => card(item))}
         </AnimatePresence>
       </div>
 
       {loading && (
         <p className="mt-4 text-center text-xs text-zinc-500">Loading…</p>
       )}
-      {!loading && visible.length === 0 && !error && (
+      {!loading && visibleCount === 0 && !error && (
         <p className="mt-4 text-center text-xs text-zinc-600">
-          Nothing found{activeQuery ? ` for "${activeQuery}"` : ""}.
+          Nothing found
+          {activeQuery ? ` for "${activeQuery}"` : catFilter ? ` in ${catFilter.name}` : ""}.
         </p>
       )}
       {/* Infinite scroll: the sentinel sits under the grid and pulls the next

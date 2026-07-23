@@ -20,9 +20,9 @@ import { cItemRoster } from "../lib/dataCache";
 import { BuildPreview, type PreviewMod, type YoursFile } from "./BuildPreview";
 import { ExportModal, type ExportExtra, type ExportSlot } from "./ExportModal";
 import { buildCompileConfig, directReplaceTarget, installSrcVpk, sheetSiblingsKey, slotSoundFolder, worldOverrideCategory, DEATHS_RELEASED, type Settings } from "../lib/settings";
-import { songStatus, overrideHash, effectHash, posterHash } from "../lib/songHash";
+import { songStatus, overrideHash, effectHash, posterHash, heroTexHash } from "../lib/songHash";
 import { useToast } from "./Toaster";
-import type { DigimodConfig, EffectOverride, EventProject, GlobalOverride, IconMod, PosterOverride, SoundOverride, UiFileOverride, VdataOverride, WorldOverride } from "../types";
+import type { DigimodConfig, EffectOverride, EventProject, GlobalOverride, HeroTextureOverride, IconMod, PosterOverride, SoundOverride, UiFileOverride, VdataOverride, WorldOverride } from "../types";
 
 const pakName = (n: number) => `pak${String(n).padStart(2, "0")}_dir.vpk`;
 
@@ -38,6 +38,7 @@ export function CompileBar({
   globalOverrides,
   worldOverrides,
   posterOverrides,
+  heroTextures,
   digimod,
   uiOverrides,
   pools,
@@ -58,6 +59,7 @@ export function CompileBar({
   globalOverrides: GlobalOverride[];
   worldOverrides: WorldOverride[];
   posterOverrides: PosterOverride[];
+  heroTextures: HeroTextureOverride[];
   digimod: DigimodConfig | null;
   uiOverrides: UiFileOverride[];
   /** Live event views by slot id - unlocks the direct-replace shortcut (a
@@ -177,8 +179,10 @@ export function CompileBar({
         posterHash(p, sheetSiblingsKey(posterOverrides, p.sheetId)) !== p.lastCompiledHash
       )
         n++;
+    for (const t of heroTextures)
+      if (!t.lastCompiledHash || heroTexHash(t) !== t.lastCompiledHash) n++;
     return n;
-  }, [events, soundOverrides, effectOverrides, posterOverrides]);
+  }, [events, soundOverrides, effectOverrides, posterOverrides, heroTextures]);
 
   /** Launch Deadlock (used by the one-shot button and the success banner). */
   async function launchOnly() {
@@ -202,6 +206,7 @@ export function CompileBar({
     soundOverrides.length > 0 ||
     effectOverrides.length > 0 ||
     posterOverrides.length > 0 ||
+    heroTextures.length > 0 ||
     (digimod != null &&
       (digimod.scares.length > 0 ||
         // Deaths don't ship while unreleased, so alone they can't compile.
@@ -310,7 +315,7 @@ export function CompileBar({
             return cat === "other" || !ex.has(`__cat:${cat}`);
           })
         : [];
-      const config = buildCompileConfig(s, evts, false, iconMods, soundOverrides, effectOverrides, gameplay, global, world, posterOverrides, digimod, uiOverrides, pools);
+      const config = buildCompileConfig(s, evts, false, iconMods, soundOverrides, effectOverrides, gameplay, global, world, posterOverrides, digimod, uiOverrides, pools, heroTextures);
       const r = await compileProject(config);
       setReport(r);
       if (r.ok) {
@@ -779,6 +784,7 @@ export function CompileBar({
                 <span>{posterOverrides.filter((p) => p.erase).length} hidden decal(s)</span>
               )}
               {iconMods.length > 0 && <span>{iconMods.length} image(s)</span>}
+              {heroTextures.length > 0 && <span>{heroTextures.length} hero texture(s)</span>}
               {effectOverrides.length > 0 && <span>{effectOverrides.length} effect(s)</span>}
               {modCount > 0 && <span>{modCount} merged mod(s)</span>}
               <span className="ml-auto flex items-center gap-1.5 text-zinc-500">

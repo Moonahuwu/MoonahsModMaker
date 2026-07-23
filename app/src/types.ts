@@ -207,6 +207,7 @@ export interface Project {
   globalOverrides?: GlobalOverride[];
   worldOverrides?: WorldOverride[];
   posterOverrides?: PosterOverride[];
+  heroTextures?: HeroTextureOverride[];
   digimod?: DigimodConfig | null;
   uiOverrides?: UiFileOverride[];
 }
@@ -297,6 +298,24 @@ export interface PosterOverride {
   /** Erase mode: no art — the region's trans mask is blanked so the decal is
    *  invisible in-game (hides vanilla tags overlapping your own art). */
   erase?: boolean;
+  lastCompiledHash?: string | null;
+}
+
+/** One hero skin-texture override: the color map of one hero material swapped
+ *  for user art (painted over the exported UV template) and/or hue-rotated.
+ *  Compiles like a poster: recompiled material staged at the vanilla path. */
+export interface HeroTextureOverride {
+  /** `herotex_${codename}_${material stem}` */
+  id: string;
+  /** Hero codename (no `hero_` prefix). */
+  hero: string;
+  label: string;
+  /** Vanilla material path (no `_c`). */
+  vmat: string;
+  /** Absolute path to the user's art; null/absent = vanilla art (hue only). */
+  sourceImage?: string | null;
+  /** Hue rotation in degrees (-180..180, 0 = none). */
+  hue: number;
   lastCompiledHash?: string | null;
 }
 

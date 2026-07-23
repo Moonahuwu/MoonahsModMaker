@@ -28,3 +28,17 @@ body {
   height: 0;
   display: none;
 }
+
+/* Hue sliders (Hero textures): gradient track + a thumb filled with the
+   currently chosen color. Namespaced class - never restyles bare inputs. */
+.eim-hue-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  border: 2px solid #fafafa;
+  background: var(--eim-hue-thumb, #fafafa);
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.6);
+  cursor: pointer;
+}

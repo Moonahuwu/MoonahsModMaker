@@ -5151,7 +5151,7 @@ pub struct PosterSheet {
 }
 
 /// Read a PNG's pixel dimensions from its IHDR chunk.
-fn png_dimensions(path: &std::path::Path) -> Result<(u32, u32), String> {
+pub(crate) fn png_dimensions(path: &std::path::Path) -> Result<(u32, u32), String> {
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
     if bytes.len() < 24 || &bytes[..8] != b"\x89PNG\r\n\x1a\n" {
         return Err("not a png".into());
@@ -5895,6 +5895,16 @@ fn gb_urlencode(s: &str) -> String {
     out
 }
 
+/// Category id out of a GameBanana category blob: the trailing digits of its
+/// profile URL (`…/mods/cats/41492`) - the objects carry no `_idRow`.
+fn gb_cat_id(cat: &serde_json::Value) -> u64 {
+    let url = gb_str(cat, "_sProfileUrl");
+    url.rsplit('/')
+        .next()
+        .and_then(|tail| tail.parse::<u64>().ok())
+        .unwrap_or(0)
+}
+
 #[derive(serde::Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct GbSearchItem {
@@ -5905,6 +5915,13 @@ pub struct GbSearchItem {
     pub name: String,
     pub author: String,
     pub category: String,
+    /// Root-category id (0 = unknown) - lets a card's category chip jump to
+    /// browsing that whole category.
+    pub category_id: u64,
+    /// The direct subcategory, when the root has one - for Mod submissions
+    /// this is usually the HERO the mod belongs to ("Skins · Drifter").
+    pub sub_category: String,
+    pub sub_category_id: u64,
     pub page_url: String,
     /// 220px preview image on GameBanana's CDN; "" when the mod has none.
     pub thumb_url: String,
@@ -5929,13 +5946,17 @@ pub struct GbSearchPage {
 /// query is empty, the site search scoped to Deadlock otherwise. `sort`
 /// ("downloads" | "likes" | "new") reorders the BROWSE feed via {model}/Index;
 /// query searches are always relevance-ranked by the site. `model` picks the
-/// submission type: "Mod" (default) or "Sound" (sound mods only).
+/// submission type: "Mod" (default) or "Sound" (sound mods only). `category`
+/// (a GameBanana category id) browses just that category - hero skin
+/// categories and the Sound sections (In-Game Music, Abilities…) both work;
+/// it applies to browse mode only (the site search can't filter by category).
 #[tauri::command]
 pub async fn gamebanana_search(
     query: String,
     page: u32,
     sort: Option<String>,
     model: Option<String>,
+    category: Option<u64>,
 ) -> Result<GbSearchPage, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let q = query.trim().to_string();
@@ -5950,7 +5971,15 @@ pub async fn gamebanana_search(
             Some("new") => Some("Generic_Newest"),
             _ => None,
         };
-        let url = if !q.is_empty() {
+        let url = if q.is_empty() && category.is_some() {
+            // Category browse: the Index endpoint filters by category id and
+            // still honors the sort chips (default order = newest first).
+            let cat = category.unwrap_or(0);
+            let s = index_sort.unwrap_or("Generic_Newest");
+            format!(
+                "https://gamebanana.com/apiv11/{model}/Index?_nPerpage=15&_aFilters%5BGeneric_Game%5D={GB_DEADLOCK_GAME_ID}&_aFilters%5BGeneric_Category%5D={cat}&_sSort={s}&_nPage={page}"
+            )
+        } else if !q.is_empty() {
             // The search endpoint's own orders: best_match, popularity, date.
             // No downloads order exists, so "downloads" rides popularity (the
             // closest ranking the site offers while searching).
@@ -6003,14 +6032,16 @@ pub async fn gamebanana_search(
                         }
                     })
                     .unwrap_or_default();
+                let root_cat = r.get("_aRootCategory");
+                let sub_cat = r.get("_aSubCategory");
                 Some(GbSearchItem {
                     mod_id,
                     name,
                     author: r.get("_aSubmitter").map(|s| gb_str(s, "_sName")).unwrap_or_default(),
-                    category: r
-                        .get("_aRootCategory")
-                        .map(|c| gb_str(c, "_sName"))
-                        .unwrap_or_default(),
+                    category: root_cat.map(|c| gb_str(c, "_sName")).unwrap_or_default(),
+                    category_id: root_cat.map(gb_cat_id).unwrap_or(0),
+                    sub_category: sub_cat.map(|c| gb_str(c, "_sName")).unwrap_or_default(),
+                    sub_category_id: sub_cat.map(gb_cat_id).unwrap_or(0),
                     page_url: match gb_str(r, "_sProfileUrl") {
                         u if u.is_empty() => format!(
                             "https://gamebanana.com/{}/{mod_id}",
@@ -6041,6 +6072,48 @@ pub async fn gamebanana_search(
                 .and_then(|v| v.as_bool())
                 .unwrap_or(true),
         })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[derive(serde::Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct GbCategory {
+    pub id: u64,
+    pub name: String,
+    /// Submissions filed under it (shown on the chip; 0-item cats are culled).
+    pub count: u64,
+}
+
+/// The game's root categories for a submission type - Mods: Skins, HUD,
+/// Model Replacement…; Sounds: In-Game Music, Abilities, VOs, Killsounds….
+/// Drives the browse-mode category chips.
+#[tauri::command]
+pub async fn gamebanana_categories(model: Option<String>) -> Result<Vec<GbCategory>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let model = match model.as_deref() {
+            Some("Sound") => "Sound",
+            _ => "Mod",
+        };
+        let url = format!(
+            "https://gamebanana.com/apiv11/{model}/Categories?_idGameRow={GB_DEADLOCK_GAME_ID}&_sSort=a_to_z&_nPerpage=50"
+        );
+        let body = gb_fetch_json(&url)?;
+        let empty = vec![];
+        let cats = body.as_array().unwrap_or(&empty);
+        Ok(cats
+            .iter()
+            .filter_map(|c| {
+                let id = c.get("_idRow")?.as_u64()?;
+                let name = gb_str(c, "_sName");
+                let count = c.get("_nItemCount").and_then(|v| v.as_u64()).unwrap_or(0);
+                if name.is_empty() || count == 0 {
+                    return None;
+                }
+                Some(GbCategory { id, name, count })
+            })
+            .collect())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -6129,11 +6202,6 @@ pub async fn gamebanana_download(
         };
         let safe_name = file_name.replace(['/', '\\'], "_");
         let lower = safe_name.to_lowercase();
-        if lower.ends_with(".rar") || lower.ends_with(".7z") {
-            return Err(
-                "that file is a .rar/.7z archive - download it from the mod page and drop the .vpk onto this window instead".into(),
-            );
-        }
         // Fresh dir per mod so an older version's files can't mix in.
         let dir = dest_root.join(format!("{}{mod_id}", if model == "Sound" { "s" } else { "" }));
         let _ = std::fs::remove_dir_all(&dir);
@@ -6174,17 +6242,8 @@ pub async fn gamebanana_download(
         }
         // Verify the pull against the page BEFORE unpacking.
         let info = gb_mod_info_blocking(model, mod_id, Some(&dest.to_string_lossy()))?;
-        if lower.ends_with(".zip") {
-            let out = crate::procutil::quiet(pick("tar"))
-                .args(["-xf", &dest.to_string_lossy(), "-C", &dir.to_string_lossy()])
-                .output()
-                .map_err(|e| format!("launching tar: {e}"))?;
-            if !out.status.success() {
-                return Err(format!(
-                    "unpack failed: {}",
-                    String::from_utf8_lossy(&out.stderr).trim()
-                ));
-            }
+        if lower.ends_with(".zip") || lower.ends_with(".rar") || lower.ends_with(".7z") {
+            extract_archive(&dest, &dir)?;
             let _ = std::fs::remove_file(&dest);
         }
         let mut vpks: Vec<String> = Vec::new();
@@ -6199,6 +6258,116 @@ pub async fn gamebanana_download(
             );
         }
         Ok(GbDownloadResult { vpks, audios, info })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Unpack a mod archive into `dest_dir`. `.zip` rides through the
+/// Windows-native tar (see download_tools for why not bare names); `.7z` and
+/// `.rar` decode in-process - Windows 10's bundled bsdtar predates RAR5/7z
+/// read support, so tar can't be trusted for those.
+fn extract_archive(archive: &std::path::Path, dest_dir: &std::path::Path) -> Result<(), String> {
+    let lower = archive.to_string_lossy().to_lowercase();
+    if lower.ends_with(".7z") {
+        return sevenz_rust2::decompress_file(archive, dest_dir)
+            .map_err(|e| format!("unpacking the .7z: {e}"));
+    }
+    if lower.ends_with(".rar") {
+        let mut arc = unrar::Archive::new(archive)
+            .open_for_processing()
+            .map_err(|e| format!("opening the .rar: {e}"))?;
+        while let Some(header) =
+            arc.read_header().map_err(|e| format!("reading the .rar: {e}"))?
+        {
+            arc = if header.entry().is_file() {
+                header
+                    .extract_with_base(dest_dir)
+                    .map_err(|e| format!("unpacking the .rar: {e}"))?
+            } else {
+                header.skip().map_err(|e| format!("reading the .rar: {e}"))?
+            };
+        }
+        return Ok(());
+    }
+    let sys32 = std::env::var("WINDIR")
+        .map(|w| std::path::PathBuf::from(w).join("System32"))
+        .unwrap_or_else(|_| std::path::PathBuf::from(r"C:\Windows\System32"));
+    let native = sys32.join("tar.exe");
+    let tar = if native.exists() {
+        native.to_string_lossy().into_owned()
+    } else {
+        "tar".to_string()
+    };
+    let out = crate::procutil::quiet(tar)
+        .args(["-xf", &archive.to_string_lossy(), "-C", &dest_dir.to_string_lossy()])
+        .output()
+        .map_err(|e| format!("launching tar: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "unpack failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
+#[derive(serde::Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveContents {
+    pub vpks: Vec<String>,
+    pub audios: Vec<String>,
+}
+
+/// Unpack a dropped/picked mod archive (.zip/.rar/.7z) into app-data
+/// `archives/` and return the mountable vpk(s) + loose audio inside - the
+/// same shape the GameBanana download returns, so archives ride the exact
+/// same import flow as a bare .vpk.
+#[tauri::command]
+pub async fn extract_mod_archive(
+    app: tauri::AppHandle,
+    path: String,
+) -> Result<ArchiveContents, String> {
+    use tauri::Manager;
+    let dest_root = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("archives");
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let src = std::path::PathBuf::from(&path);
+        if !src.exists() {
+            return Err("that archive doesn't exist anymore".into());
+        }
+        // One dir per archive path (short hash disambiguates same-named
+        // archives from different folders), wiped fresh per unpack so an
+        // updated archive can't mix with the old version's files.
+        let mut h = DefaultHasher::new();
+        path.hash(&mut h);
+        let stem = src
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .replace(|c: char| !c.is_ascii_alphanumeric(), "_");
+        let dir = dest_root.join(format!("{stem}_{:08x}", h.finish() as u32));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        extract_archive(&src, &dir)?;
+        let mut vpks: Vec<String> = Vec::new();
+        find_dir_vpks(&dir, &mut vpks);
+        vpks.sort();
+        let mut audios: Vec<String> = Vec::new();
+        find_audio_files(&dir, &mut audios);
+        audios.sort();
+        if vpks.is_empty() && audios.is_empty() {
+            let _ = std::fs::remove_dir_all(&dir);
+            return Err(
+                "unpacked fine, but there's no .vpk or audio inside - this doesn't look like a pak or sound mod".into(),
+            );
+        }
+        Ok(ArchiveContents { vpks, audios })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -6425,22 +6594,43 @@ fn hero_images_impl(
     display_stem: String,
 ) -> Result<Vec<HeroImage>, String> {
     use tauri::Manager;
-    let dir = app
+    let base = app
         .path()
         .app_data_dir()
         .map_err(|e| e.to_string())?
-        .join("hero_portraits")
-        .join("hero_images")
-        .join(&codename);
+        .join("hero_portraits");
+    let dir = base.join("hero_images").join(&codename);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
+    // The image files are keyed by the CARD code from the hero's vdata block,
+    // which can differ from the vdata codename (Grey Talon is hero_orion but
+    // every image is archer_*). Same resolution the roster grid uses.
+    let heroes_vdata = base.join("heroes.vdata");
+    if !heroes_vdata.exists() {
+        crate::vpk::decompile_from_vpk(
+            &helper_path,
+            &pak_path,
+            "scripts/heroes.vdata_c",
+            &heroes_vdata.to_string_lossy(),
+        )?;
+    }
+    let img_stem = std::fs::read_to_string(&heroes_vdata)
+        .ok()
+        .and_then(|text| {
+            parse_heroes_vdata(&text)
+                .into_iter()
+                .find(|h| h.code == codename)
+                .and_then(|h| h.card_code)
+        })
+        .unwrap_or_else(|| codename.clone());
+
     let kinds: Vec<(&str, String)> = vec![
-        ("card", format!("panorama/images/heroes/{codename}_card_psd.vtex_c")),
-        ("card_critical", format!("panorama/images/heroes/{codename}_card_critical_psd.vtex_c")),
-        ("card_gloat", format!("panorama/images/heroes/{codename}_card_gloat_psd.vtex_c")),
-        ("vertical", format!("panorama/images/heroes/{codename}_vertical_psd.vtex_c")),
-        ("sm", format!("panorama/images/heroes/{codename}_sm_psd.vtex_c")),
-        ("mm", format!("panorama/images/heroes/{codename}_mm_psd.vtex_c")),
+        ("card", format!("panorama/images/heroes/{img_stem}_card_psd.vtex_c")),
+        ("card_critical", format!("panorama/images/heroes/{img_stem}_card_critical_psd.vtex_c")),
+        ("card_gloat", format!("panorama/images/heroes/{img_stem}_card_gloat_psd.vtex_c")),
+        ("vertical", format!("panorama/images/heroes/{img_stem}_vertical_psd.vtex_c")),
+        ("sm", format!("panorama/images/heroes/{img_stem}_sm_psd.vtex_c")),
+        ("mm", format!("panorama/images/heroes/{img_stem}_mm_psd.vtex_c")),
         ("background", format!("panorama/images/heroes/backgrounds/{display_stem}_bg_psd.vtex_c")),
     ];
     // Decode any not-yet-cached textures in one helper pass.
@@ -6548,6 +6738,176 @@ pub fn poster_sheet(
     Ok(PosterSheet { color_png: color_abs.to_string_lossy().to_string(), width, height })
 }
 
+/// One replaceable hero material: its color map (the UV-unwrapped skin
+/// texture) decoded into the app-data cache for preview/template export.
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct HeroMaterial {
+    /// Material stem, e.g. `abrams_upper_body`.
+    pub name: String,
+    /// Vanilla material path (no `_c`), the compile target, e.g.
+    /// `models/heroes_wip/abrams/materials/abrams_upper_body.vmat`.
+    pub vmat: String,
+    /// Decoded color map PNG in the app-data cache.
+    pub color_png: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Find `m_strModelName = resource_name:"models/..."` inside the
+/// `hero_<code>` block of the decompiled heroes.vdata. The model dir names
+/// use dev names (gen_man, hornet_v3...) that don't match display names -
+/// vdata is the only reliable codename -> model mapping.
+fn hero_model_path(vdata: &str, code: &str) -> Option<String> {
+    let open = format!("hero_{code}");
+    let mut in_hero = false;
+    for line in vdata.lines() {
+        let t = line.trim();
+        if let Some(k) = t.strip_suffix('=').map(str::trim) {
+            if let Some(c) = k.strip_prefix("hero_") {
+                if c.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
+                    if in_hero {
+                        break; // reached the next hero
+                    }
+                    in_hero = k == open;
+                    continue;
+                }
+            }
+        }
+        if !in_hero {
+            continue;
+        }
+        if let Some(rest) = t.strip_prefix("m_strModelName") {
+            if let Some(v) = between(rest, "\"", "\"") {
+                if v.starts_with("models/") {
+                    return Some(v.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// List a hero's model materials with their color maps decoded (cached).
+/// Only materials that carry a color texture are returned - those are the
+/// swappable/recolorable skins.
+fn hero_materials_impl(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+    codename: String,
+    refresh: Option<bool>,
+) -> Result<Vec<HeroMaterial>, String> {
+    use tauri::Manager;
+    let refresh = refresh.unwrap_or(false);
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("hero_textures");
+    std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
+
+    // Serve the cached list unless a refresh was requested (or a decoded PNG
+    // was cleaned away underneath us).
+    let cache = base.join(format!("mats_v1_{codename}.json"));
+    if !refresh {
+        if let Ok(text) = std::fs::read_to_string(&cache) {
+            if let Ok(cached) = serde_json::from_str::<Vec<HeroMaterial>>(&text) {
+                if !cached.is_empty()
+                    && cached.iter().all(|m| std::path::Path::new(&m.color_png).exists())
+                {
+                    return Ok(cached);
+                }
+            }
+        }
+    }
+
+    // The hero's model dir (from heroes.vdata) carries its materials.
+    let heroes = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("hero_portraits")
+        .join("heroes.vdata");
+    if !heroes.exists() {
+        if let Some(parent) = heroes.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        crate::vpk::decompile_from_vpk(
+            &helper_path,
+            &pak_path,
+            "scripts/heroes.vdata_c",
+            &heroes.to_string_lossy(),
+        )?;
+    }
+    let heroes_text = std::fs::read_to_string(&heroes).map_err(|e| e.to_string())?;
+    let model = hero_model_path(&heroes_text, &codename)
+        .ok_or_else(|| format!("no model path for hero '{codename}'"))?;
+    let model_dir = model.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+    let mat_prefix = format!("{model_dir}/materials/");
+
+    // Direct children only: accessory models (abrams_book/...) keep their own
+    // materials dirs and belong to props, not the hero's skin.
+    let vmat_cs: Vec<String> = crate::vpk::list(&helper_path, &pak_path, Some(&mat_prefix))?
+        .into_iter()
+        .filter(|p| {
+            p.starts_with(&mat_prefix)
+                && p.ends_with(".vmat_c")
+                && !p[mat_prefix.len()..].contains('/')
+        })
+        .collect();
+    if vmat_cs.is_empty() {
+        return Err(format!("no materials found under {mat_prefix}"));
+    }
+
+    let mut out = Vec::new();
+    for vmat_c in vmat_cs {
+        let vmat_rel = vmat_c.strip_suffix("_c").unwrap_or(&vmat_c).to_string();
+        let vmat_abs = base.join(&vmat_rel);
+        if refresh || !vmat_abs.exists() {
+            // Some materials (invis shells, smoke passes) may not decompile
+            // cleanly - skip them rather than failing the whole list.
+            if crate::vpk::material_from_vpk(&helper_path, &pak_path, &vmat_c, &base.to_string_lossy())
+                .is_err()
+            {
+                continue;
+            }
+        }
+        let Ok(text) = std::fs::read_to_string(&vmat_abs) else { continue };
+        let color_rel = text
+            .lines()
+            .filter_map(|l| {
+                let t = l.trim();
+                let rest = t.strip_prefix("\"TextureColor")?;
+                let v = rest.split('"').nth(2)?;
+                (v.starts_with("materials/") || v.starts_with("models/")).then(|| v.to_string())
+            })
+            .next();
+        let Some(color_rel) = color_rel else { continue };
+        let color_abs = base.join(&color_rel);
+        if !color_abs.exists() {
+            continue;
+        }
+        let Ok((width, height)) = png_dimensions(&color_abs) else { continue };
+        let stem = vmat_rel
+            .rsplit('/')
+            .next()
+            .unwrap_or(&vmat_rel)
+            .trim_end_matches(".vmat")
+            .to_string();
+        out.push(HeroMaterial {
+            name: stem,
+            vmat: vmat_rel,
+            color_png: color_abs.to_string_lossy().to_string(),
+            width,
+            height,
+        });
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    let _ = std::fs::write(&cache, serde_json::to_string(&out).unwrap_or_default());
+    Ok(out)
+}
+
 // ---------------------------------------------------------------------------
 // Async wrappers: the game-data derivations above are heavy (vpk-helper
 // subprocesses, texture decodes) — as sync commands they'd run ON THE UI
@@ -6611,6 +6971,13 @@ pub async fn browse_game_sounds(app: tauri::AppHandle, helper_path: String, pak_
 }
 
 #[tauri::command]
+pub async fn hero_materials(app: tauri::AppHandle, helper_path: String, pak_path: String, codename: String, refresh: Option<bool>) -> Result<Vec<HeroMaterial>, String> {
+    tauri::async_runtime::spawn_blocking(move || hero_materials_impl(app, helper_path, pak_path, codename, refresh))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub async fn hero_images(app: tauri::AppHandle, helper_path: String, pak_path: String, codename: String, display_stem: String) -> Result<Vec<HeroImage>, String> {
     tauri::async_runtime::spawn_blocking(move || hero_images_impl(app, helper_path, pak_path, codename, display_stem))
         .await
@@ -6620,6 +6987,54 @@ pub async fn hero_images(app: tauri::AppHandle, helper_path: String, pak_path: S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hero_image_stem_comes_from_card_code() {
+        // Grey Talon: vdata codename `orion`, image assets `archer_*`. The
+        // card code from m_strIconHeroCard is what the image paths must use.
+        let vdata = concat!(
+            "\thero_orion = \n\t{\n",
+            "\t\tm_strIconHeroCard = panorama:\"file://{images}/heroes/archer_card.psd\"\n",
+            "\t}\n",
+            "\thero_bebop = \n\t{\n",
+            "\t\tm_strIconHeroCard = panorama:\"file://{images}/heroes/bebop_card.psd\"\n",
+            "\t}\n",
+        );
+        let heroes = parse_heroes_vdata(vdata);
+        let stem_of = |code: &str| {
+            heroes
+                .iter()
+                .find(|h| h.code == code)
+                .and_then(|h| h.card_code.clone())
+                .unwrap_or_else(|| code.to_string())
+        };
+        assert_eq!(stem_of("orion"), "archer");
+        assert_eq!(stem_of("bebop"), "bebop");
+        assert_eq!(stem_of("nocard"), "nocard"); // fallback = codename
+    }
+
+    #[test]
+    fn hero_model_path_finds_only_its_hero() {
+        let vdata = concat!(
+            "\thero_atlas = \n\t{\n",
+            "\t\tm_strModelName = resource_name:\"models/heroes_wip/abrams/abrams.vmdl\"\n",
+            "\t}\n",
+            "\thero_inferno = \n\t{\n",
+            "\t\tm_strModelName = resource_name:\"models/heroes_wip/inferno/inferno.vmdl\"\n",
+            "\t}\n",
+        );
+        assert_eq!(
+            hero_model_path(vdata, "atlas").as_deref(),
+            Some("models/heroes_wip/abrams/abrams.vmdl")
+        );
+        assert_eq!(
+            hero_model_path(vdata, "inferno").as_deref(),
+            Some("models/heroes_wip/inferno/inferno.vmdl")
+        );
+        // Unknown hero, and a prefix that must not match hero_infernale-style keys.
+        assert_eq!(hero_model_path(vdata, "nope"), None);
+        assert_eq!(hero_model_path(vdata, "infern"), None);
+    }
 
     #[test]
     fn gamebanana_ref_parsing() {
@@ -6673,7 +7088,7 @@ mod tests {
     #[test]
     #[ignore]
     fn live_gamebanana_search_and_files() {
-        let feed = tauri::async_runtime::block_on(gamebanana_search(String::new(), 1, None, None))
+        let feed = tauri::async_runtime::block_on(gamebanana_search(String::new(), 1, None, None, None))
             .expect("feed should load");
         assert!(feed.items.len() >= 10, "the Deadlock feed has pages of mods");
         assert!(!feed.is_complete);
@@ -6684,6 +7099,7 @@ mod tests {
             1,
             Some("downloads".into()),
             None,
+            None,
         ))
         .expect("sorted feed should load");
         assert!(by_dl.items.len() >= 10);
@@ -6692,7 +7108,7 @@ mod tests {
             "most-downloaded should differ from the default feed's first item"
         );
 
-        let hits = tauri::async_runtime::block_on(gamebanana_search("music".into(), 1, None, None))
+        let hits = tauri::async_runtime::block_on(gamebanana_search("music".into(), 1, None, None, None))
             .expect("search should load");
         assert!(!hits.items.is_empty(), "searching music finds sound mods");
 
@@ -6702,6 +7118,7 @@ mod tests {
             1,
             None,
             Some("Sound".into()),
+            None,
         ))
         .expect("sound search should load");
         assert!(!sounds.items.is_empty(), "hero-name sound search finds sounds");
@@ -6718,9 +7135,48 @@ mod tests {
             1,
             Some("new".into()),
             Some("Sound".into()),
+            None,
         ))
         .expect("date-ordered search should load");
         assert!(!by_new.items.is_empty());
+
+        // Hero categories: Mod searches carry the hero subcategory ("Skins ·
+        // Drifter"), and browsing by that category id filters server-side.
+        let hero = tauri::async_runtime::block_on(gamebanana_search(
+            "drifter".into(),
+            1,
+            None,
+            None,
+            None,
+        ))
+        .expect("hero search should load");
+        let carded = hero
+            .items
+            .iter()
+            .find(|i| i.sub_category.eq_ignore_ascii_case("drifter") && i.sub_category_id > 0)
+            .expect("a drifter-categorized mod with a category id");
+        let in_cat = tauri::async_runtime::block_on(gamebanana_search(
+            String::new(),
+            1,
+            None,
+            None,
+            Some(carded.sub_category_id),
+        ))
+        .expect("category browse should load");
+        assert!(!in_cat.items.is_empty());
+        assert!(
+            in_cat.items.iter().all(|i| i.sub_category.eq_ignore_ascii_case("drifter")),
+            "category browse stays inside the hero's category"
+        );
+
+        // Category chips: both submission types list their root categories.
+        let mod_cats = tauri::async_runtime::block_on(gamebanana_categories(None))
+            .expect("mod categories should load");
+        assert!(mod_cats.iter().any(|c| c.name == "Skins"));
+        let sound_cats =
+            tauri::async_runtime::block_on(gamebanana_categories(Some("Sound".into())))
+                .expect("sound categories should load");
+        assert!(sound_cats.iter().any(|c| c.name == "In-Game Music"));
 
         let files = tauri::async_runtime::block_on(gamebanana_files(623518, None))
             .expect("files should load");
@@ -6733,6 +7189,64 @@ mod tests {
         ))
         .expect("sound files should load");
         assert!(!sfiles.is_empty(), "sound submissions ship files too");
+    }
+
+    /// Real-file smoke test of every archive format the import flow accepts.
+    /// Ignored by default: builds a .7z + .zip on the fly, and reads a real
+    /// downloaded .rar (rars can't be created locally) - run with
+    /// `cargo test -p app --lib -- --ignored extract_archive_formats`.
+    #[test]
+    #[ignore]
+    fn extract_archive_formats() {
+        let root = std::env::temp_dir().join("eim_extract_archive_test");
+        let _ = std::fs::remove_dir_all(&root);
+        let payload = root.join("payload");
+        std::fs::create_dir_all(&payload).unwrap();
+        std::fs::write(payload.join("test_pak_dir.vpk"), b"not a real pak").unwrap();
+
+        // .7z: round-trip through our own compressor.
+        let seven = root.join("mod.7z");
+        sevenz_rust2::compress_to_path(&payload, &seven).unwrap();
+        let out7 = root.join("out7");
+        extract_archive(&seven, &out7).unwrap();
+        let mut vpks = Vec::new();
+        find_dir_vpks(&out7, &mut vpks);
+        assert_eq!(vpks.len(), 1, "7z should yield the vpk: {vpks:?}");
+
+        // .zip: created by bsdtar (-a picks the format from the name).
+        let zip = root.join("mod.zip");
+        let ok = std::process::Command::new("tar")
+            .args(["-a", "-cf"])
+            .arg(&zip)
+            .arg("-C")
+            .arg(&payload)
+            .arg("test_pak_dir.vpk")
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "tar -a -cf failed");
+        let outz = root.join("outz");
+        std::fs::create_dir_all(&outz).unwrap();
+        extract_archive(&zip, &outz).unwrap();
+        let mut vpks = Vec::new();
+        find_dir_vpks(&outz, &mut vpks);
+        assert_eq!(vpks.len(), 1, "zip should yield the vpk: {vpks:?}");
+
+        // .rar: a real GameBanana mod download (has a pak01_dir.vpk inside a
+        // subfolder, so path handling is covered too), if present locally.
+        let rar = std::path::Path::new(r"D:\Downloads 2.0\deltarune_sounds_billy.rar");
+        if rar.exists() {
+            let outr = root.join("outr");
+            std::fs::create_dir_all(&outr).unwrap();
+            extract_archive(rar, &outr).unwrap();
+            let mut vpks = Vec::new();
+            find_dir_vpks(&outr, &mut vpks);
+            assert_eq!(vpks.len(), 1, "rar should yield the vpk: {vpks:?}");
+            println!("rar contents: {vpks:?}");
+        } else {
+            println!("no local rar sample - skipped the .rar leg");
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import type { CompileConfig, EffectCompile, EventCompile, GbModInfo, GlobalCompile, IconCompile, PosterCompile, ProfileCompilePrefs, SoundOverrideCompile, VdataCompile, WorldCompile } from "./api";
+import type { CompileConfig, EffectCompile, EventCompile, GbModInfo, GlobalCompile, HeroTexCompile, IconCompile, PosterCompile, ProfileCompilePrefs, SoundOverrideCompile, VdataCompile, WorldCompile } from "./api";
 import { loadSettings, saveSettings } from "./api";
-import type { DigimodConfig, EffectOverride, EventProject, LibraryItem, PosterOverride, SoundOverride, UiFileOverride } from "../types";
-import { songHash, overrideHash, effectHash, posterHash } from "./songHash";
+import type { DigimodConfig, EffectOverride, EventProject, HeroTextureOverride, LibraryItem, PosterOverride, SoundOverride, UiFileOverride } from "../types";
+import { songHash, overrideHash, effectHash, posterHash, heroTexHash } from "./songHash";
 
 // User-facing settings. We derive the verbose CompileConfig paths from a CSDK
 // root + addon name so the user only manages a few friendly fields.
@@ -469,6 +469,7 @@ export function buildCompileConfig(
   digimod: DigimodConfig | null = null,
   uiOverrides: UiFileOverride[] = [],
   pools: Record<string, { vsndDuration: number | null; entries?: string[] } | undefined> = {},
+  heroTextures: HeroTextureOverride[] = [],
 ): CompileConfig {
   const explicitOverrideRefs = new Set(soundOverrides.map((o) => o.targetRef));
   const directTargets = new Map<string, string>();
@@ -535,6 +536,18 @@ export function buildCompileConfig(
     currentHash: posterHash(p, sheetSiblingsKey(posterOverrides, p.sheetId)),
     lastCompiledHash: p.lastCompiledHash ?? null,
   }));
+  // Hero skin textures: overrides with neither art nor a hue change are
+  // no-ops - drop them rather than soft-failing in the report.
+  const heroTexCompiles: HeroTexCompile[] = heroTextures
+    .filter((t) => t.sourceImage || Math.abs(t.hue) > 0.01)
+    .map((t) => ({
+      vmat: t.vmat,
+      label: t.label,
+      sourceImage: t.sourceImage ?? null,
+      hue: t.hue,
+      currentHash: heroTexHash(t),
+      lastCompiledHash: t.lastCompiledHash ?? null,
+    }));
   const iconCompiles: IconCompile[] = iconMods
     .filter((m) => m.enabled !== false)
     .map((m) => ({
@@ -629,6 +642,7 @@ export function buildCompileConfig(
     globalOverrides,
     worldOverrides,
     posterOverrides: posterCompiles,
+    heroTextures: heroTexCompiles,
     // Entries without media can't compile — drop them rather than failing.
     // Sounds/soundIds map to the shared library shape the backend expects.
     digimod: digimod

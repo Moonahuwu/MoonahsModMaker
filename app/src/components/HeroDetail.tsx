@@ -1,6 +1,8 @@
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import type { HeroAbility, HeroImage, HeroSound } from "../lib/api";
+import type { HeroAbility, HeroImage, HeroMaterialInfo, HeroSound } from "../lib/api";
+import type { HeroTextureOverride } from "../types";
 import { HeroSoundsSection } from "./HeroSoundsSection";
 
 const IMAGE_KIND_LABELS: Record<string, string> = {
@@ -70,6 +72,14 @@ export function HeroDetail({
   customImages,
   onPickImage,
   onRemoveImage,
+  materials,
+  materialsLoading,
+  textures,
+  onPickTexture,
+  onRemoveTexture,
+  onTextureHue,
+  onTextureHueAll,
+  onShowTemplate,
 }: {
   heroName: string;
   backgroundSrc: string | null;
@@ -97,9 +107,59 @@ export function HeroDetail({
   customImages: Record<string, { src: string; enabled: boolean }>;
   onPickImage: (img: HeroImage) => void;
   onRemoveImage: (img: HeroImage) => void;
+  /** The hero's swappable skin textures (model material color maps);
+   *  null = loading not started/finished yet. */
+  materials: HeroMaterialInfo[] | null;
+  materialsLoading: boolean;
+  /** material name → your override for it. */
+  textures: Record<string, HeroTextureOverride>;
+  onPickTexture: (mat: HeroMaterialInfo) => void;
+  onRemoveTexture: (mat: HeroMaterialInfo) => void;
+  onTextureHue: (mat: HeroMaterialInfo, hue: number) => void;
+  /** Master hue: apply one rotation to every material at once. */
+  onTextureHueAll: (hue: number) => void;
+  /** Show the vanilla color map (the UV template) in Explorer. */
+  onShowTemplate: (mat: HeroMaterialInfo) => void;
 }) {
   const active = abilities?.find((a) => a.ability === selectedAbility) ?? null;
   const contentOf = (name: string) => (hasContent ? hasContent(name) : false);
+  // Per-material base color for the hue-slider gradients: the average color of
+  // the shown art (custom art when set, else the vanilla map), normalized so
+  // the strip stays readable. Falls back to the hero accent when a thumbnail
+  // can't be sampled (e.g. canvas taint).
+  const fallbackBase = useMemo(() => normalizeBase(hexToRgb(accent) ?? [224, 86, 79]), [accent]);
+  const [hueBases, setHueBases] = useState<Record<string, [number, number, number]>>({});
+  const sampledKeys = useRef(new Set<string>());
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      for (const mat of materials ?? []) {
+        const src = textures[mat.name]?.sourceImage || mat.colorPng;
+        const key = `${mat.name}|${src}`;
+        if (sampledKeys.current.has(key)) continue;
+        sampledKeys.current.add(key);
+        const avg = await avgColorOf(convertFileSrc(src));
+        if (cancelled) return;
+        if (avg) setHueBases((b) => ({ ...b, [mat.name]: normalizeBase(avg) }));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [materials, textures]);
+  // The master slider mirrors the cards: a uniform hue shows as itself,
+  // per-card differences show as "mix" until the master is dragged.
+  const matHues = (materials ?? []).map((m) => textures[m.name]?.hue ?? 0);
+  const hueUniform = matHues.length > 0 && matHues.every((h) => h === matHues[0]);
+  const masterHue = hueUniform ? matHues[0] : 0;
+  const masterBase = useMemo(() => {
+    const list = (materials ?? [])
+      .map((m) => hueBases[m.name])
+      .filter(Boolean) as [number, number, number][];
+    if (!list.length) return fallbackBase;
+    const sum = list.reduce((a, c) => [a[0] + c[0], a[1] + c[1], a[2] + c[2]] as [number, number, number]);
+    return normalizeBase([sum[0] / list.length, sum[1] / list.length, sum[2] / list.length]);
+  }, [materials, hueBases, fallbackBase]);
   // The images grid also offers the 4 ability icons (same IconMod pipeline);
   // width 0 = "use the pick handler's default size".
   const allImages: HeroImage[] = [
@@ -325,6 +385,119 @@ export function HeroDetail({
         </details>
       )}
 
+      {/* Hero skin textures: each card is one model material's color map (the
+          UV-unwrapped skin). Replace it with art painted over the exported
+          template, or hue-shift the vanilla art - the model itself is never
+          touched, so everything stays vanilla-shaped. */}
+      {(materialsLoading || (materials?.length ?? 0) > 0) && (
+        <details className="mt-5 rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
+          <summary className="cursor-pointer text-sm font-semibold text-zinc-200">
+            ▩ Hero textures
+            <span className="ml-2 text-xs font-normal text-zinc-500">
+              skin color maps: swap the art or hue shift
+            </span>
+            {Object.keys(textures).length > 0 && (
+              <span className="ml-2 rounded bg-emerald-500/15 px-1.5 text-[10px] font-semibold text-emerald-300">
+                {Object.keys(textures).length} edited
+              </span>
+            )}
+          </summary>
+          {materialsLoading && !materials ? (
+            <p className="mt-3 text-sm text-zinc-500">Loading textures… (first open decodes them, give it a moment)</p>
+          ) : (
+            <>
+              <p className="mt-2 text-[11px] text-zinc-500">
+                Template opens the vanilla map in Explorer - paint over a copy (keep the
+                layout, it must line up with the model's UVs), then Replace. Hue tints
+                the whole map, custom art included.
+              </p>
+              {/* Master hue: one drag recolors every material below. */}
+              <div className="mt-3 flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2">
+                <span className="shrink-0 text-[11px] font-semibold text-zinc-300">Whole character</span>
+                <HueSlider base={masterBase} value={masterHue} onChange={onTextureHueAll} className="flex-1" />
+                <span className="w-9 shrink-0 text-right text-[10px] tabular-nums text-zinc-400">
+                  {hueUniform ? (masterHue > 0 ? `+${masterHue}` : masterHue) : "mix"}
+                </span>
+                <button
+                  onClick={() => onTextureHueAll(0)}
+                  title="Reset every material's hue to 0 (custom art stays)"
+                  className="shrink-0 rounded border border-zinc-700 px-1.5 text-[10px] text-zinc-300 hover:border-zinc-500"
+                >
+                  Reset
+                </button>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+                {(materials ?? []).map((mat) => {
+                  const ov = textures[mat.name];
+                  const hue = ov?.hue ?? 0;
+                  const shown = ov?.sourceImage ? ov.sourceImage : mat.colorPng;
+                  return (
+                    <div
+                      key={mat.name}
+                      className="flex flex-col gap-1.5 rounded-lg border border-zinc-800 bg-zinc-950/60 p-2"
+                      style={ov ? { borderColor: "#34d39966" } : undefined}
+                    >
+                      <div className="relative h-28 overflow-hidden rounded bg-zinc-900">
+                        <img
+                          src={convertFileSrc(shown)}
+                          className="absolute inset-0 h-full w-full object-contain p-1"
+                          style={hue ? { filter: `hue-rotate(${hue}deg)` } : undefined}
+                          alt=""
+                        />
+                      </div>
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="truncate text-[11px] text-zinc-300" title={mat.vmat}>
+                          {prettyMaterialName(mat.name, heroName)}
+                          <span className="ml-1 text-[9px] text-zinc-600">
+                            {mat.width}×{mat.height}
+                          </span>
+                        </span>
+                        <span className="flex shrink-0 gap-1">
+                          <button
+                            onClick={() => onShowTemplate(mat)}
+                            title="Show the vanilla color map in Explorer (your painting template)"
+                            className="rounded border border-zinc-700 px-1.5 text-[10px] text-zinc-300 hover:border-zinc-500"
+                          >
+                            ⧉ Template
+                          </button>
+                          <button
+                            onClick={() => onPickTexture(mat)}
+                            className="rounded border border-zinc-700 px-1.5 text-[10px] text-zinc-300 hover:border-zinc-500"
+                          >
+                            {ov?.sourceImage ? "Swap" : "Replace…"}
+                          </button>
+                          {ov && (
+                            <button
+                              onClick={() => onRemoveTexture(mat)}
+                              title="Back to vanilla"
+                              className="rounded px-1 text-[10px] text-red-400/80 hover:text-red-300"
+                            >
+                              ✕
+                            </button>
+                          )}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[9px] text-zinc-500">Hue</span>
+                        <HueSlider
+                          base={hueBases[mat.name] ?? fallbackBase}
+                          value={hue}
+                          onChange={(v) => onTextureHue(mat, v)}
+                          className="w-full"
+                        />
+                        <span className="w-8 shrink-0 text-right text-[9px] tabular-nums text-zinc-400">
+                          {hue > 0 ? `+${hue}` : hue}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </details>
+      )}
+
       {/* Selected ability's sounds (inline) */}
       <AnimatePresence mode="wait">
         {active && (
@@ -376,6 +549,159 @@ export function HeroDetail({
       />
     </div>
   );
+}
+
+/** A hue-rotation slider whose track previews the actual resulting colors:
+ *  each stop is the material's base color run through the same hue-rotate
+ *  matrix the compile's ffmpeg pass applies, and the thumb fills with the
+ *  currently chosen color (via the eim-hue-slider CSS var). */
+function HueSlider({
+  base,
+  value,
+  onChange,
+  className,
+}: {
+  base: [number, number, number];
+  value: number;
+  onChange: (v: number) => void;
+  className?: string;
+}) {
+  const stops = [-180, -135, -90, -45, 0, 45, 90, 135, 180]
+    .map((d) => cssRgb(hueRotateRgb(base, d)))
+    .join(",");
+  return (
+    <input
+      type="range"
+      min={-180}
+      max={180}
+      step={5}
+      value={value}
+      onChange={(e) => onChange(Number(e.target.value))}
+      className={`eim-hue-slider h-2 cursor-pointer appearance-none rounded-full ${className ?? ""}`}
+      style={
+        {
+          background: `linear-gradient(to right, ${stops})`,
+          "--eim-hue-thumb": cssRgb(hueRotateRgb(base, value)),
+        } as React.CSSProperties
+      }
+    />
+  );
+}
+
+/** The CSS `hue-rotate(deg)` color matrix (the same linear approximation the
+ *  compile's ffmpeg pass uses), applied to one RGB triple. */
+function hueRotateRgb([r, g, b]: [number, number, number], deg: number): [number, number, number] {
+  const a = (deg * Math.PI) / 180;
+  const c = Math.cos(a);
+  const s = Math.sin(a);
+  const m = [
+    0.213 + c * 0.787 - s * 0.213, 0.715 - c * 0.715 - s * 0.715, 0.072 - c * 0.072 + s * 0.928,
+    0.213 - c * 0.213 + s * 0.143, 0.715 + c * 0.285 + s * 0.14, 0.072 - c * 0.072 - s * 0.283,
+    0.213 - c * 0.213 - s * 0.787, 0.715 - c * 0.715 + s * 0.715, 0.072 + c * 0.928 + s * 0.072,
+  ];
+  const cl = (x: number) => Math.max(0, Math.min(255, Math.round(x)));
+  return [
+    cl(m[0] * r + m[1] * g + m[2] * b),
+    cl(m[3] * r + m[4] * g + m[5] * b),
+    cl(m[6] * r + m[7] * g + m[8] * b),
+  ];
+}
+
+const cssRgb = ([r, g, b]: [number, number, number]) => `rgb(${r},${g},${b})`;
+
+function hexToRgb(hex: string): [number, number, number] | null {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+/** Keep gradient strips readable: pin the sampled color's saturation and
+ *  lightness into a colorful band. Very dark/gray maps would otherwise render
+ *  a near-black track (hue rotation genuinely can't recolor those, but the
+ *  slider should still look like a control). */
+function normalizeBase([r, g, b]: [number, number, number]): [number, number, number] {
+  const [h, s, l] = rgbToHsl(r, g, b);
+  return hslToRgb(h, Math.max(s, 0.6), Math.min(Math.max(l, 0.42), 0.58));
+}
+
+function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
+  r /= 255;
+  g /= 255;
+  b /= 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  if (max === min) return [0, 0, l];
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h = 0;
+  if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) * 60;
+  else if (max === g) h = ((b - r) / d + 2) * 60;
+  else h = ((r - g) / d + 4) * 60;
+  return [h, s, l];
+}
+
+function hslToRgb(h: number, s: number, l: number): [number, number, number] {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const hp = (((h % 360) + 360) % 360) / 60;
+  const x = c * (1 - Math.abs((hp % 2) - 1));
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  if (hp < 1) [r, g, b] = [c, x, 0];
+  else if (hp < 2) [r, g, b] = [x, c, 0];
+  else if (hp < 3) [r, g, b] = [0, c, x];
+  else if (hp < 4) [r, g, b] = [0, x, c];
+  else if (hp < 5) [r, g, b] = [x, 0, c];
+  else [r, g, b] = [c, 0, x];
+  const m = l - c / 2;
+  return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)];
+}
+
+/** Average color of an image (alpha-weighted, downsampled via canvas).
+ *  Returns null if the image can't be sampled (load error, canvas taint). */
+async function avgColorOf(url: string): Promise<[number, number, number] | null> {
+  try {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = () => reject(new Error("load"));
+      img.src = url;
+    });
+    const c = document.createElement("canvas");
+    c.width = 16;
+    c.height = 16;
+    const ctx = c.getContext("2d");
+    if (!ctx) return null;
+    ctx.drawImage(img, 0, 0, 16, 16);
+    const d = ctx.getImageData(0, 0, 16, 16).data;
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    let w = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      const a = d[i + 3] / 255;
+      r += d[i] * a;
+      g += d[i + 1] * a;
+      b += d[i + 2] * a;
+      w += a;
+    }
+    if (w < 1) return null;
+    return [r / w, g / w, b / w];
+  } catch {
+    return null;
+  }
+}
+
+/** "abrams_upper_body" -> "Upper Body" (drop the hero-name prefix when the
+ *  material stem carries one; hazev2_head style prefixes stay as-is). */
+function prettyMaterialName(name: string, heroName: string): string {
+  let s = name;
+  const heroKey = heroName.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+  if (s.startsWith(heroKey + "_")) s = s.slice(heroKey.length + 1);
+  return s.replace(/_/g, " ").trim().replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 /** "ability_doorman_luggage_cart" -> "Luggage Cart" (drop the hero prefix). */

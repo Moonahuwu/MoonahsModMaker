@@ -5,6 +5,7 @@ import {
   heroConfig,
   heroDetail,
   heroImages,
+  heroMaterials,
   heroRoster,
   heroSounds,
   heroVoicelines,
@@ -20,6 +21,7 @@ import {
   type GlobalStat,
   type HeroAbility,
   type HeroImage,
+  type HeroMaterialInfo,
   type HeroPortrait,
   type HeroSound,
   type ItemCard,
@@ -90,6 +92,13 @@ export function heroStem(displayName: string): string {
 
 export function cHeroImages(helper: string, pak: string, codename: string, stem: string): Promise<HeroImage[]> {
   return cached(`heroImages|${helper}|${pak}|${codename}`, () => heroImages(helper, pak, codename, stem));
+}
+
+/** The hero's swappable skin textures (color maps). Loaded on first drill-in
+ *  only - each hero is several material decompiles, too heavy for the boot
+ *  warm-up. */
+export function cHeroMaterials(helper: string, pak: string, codename: string, refresh = false): Promise<HeroMaterialInfo[]> {
+  return cached(`heroMaterials|${helper}|${pak}|${codename}`, () => heroMaterials(helper, pak, codename, refresh), refresh);
 }
 
 export function cItemSoundIndex(helper: string, pak: string): Promise<ItemSoundRef[]> {

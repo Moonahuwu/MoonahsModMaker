@@ -488,8 +488,8 @@ export function ImportedMods({
   async function browseImport() {
     const sel = await open({
       multiple: true,
-      title: "Import mod(s) (pak_dir.vpk)",
-      filters: [{ name: "VPK", extensions: ["vpk"] }],
+      title: "Import mod(s) (.vpk, or a .zip/.rar/.7z with one inside)",
+      filters: [{ name: "Mod pack", extensions: ["vpk", "zip", "rar", "7z"] }],
     });
     if (!sel || sel.length === 0) return;
     onImportPack(sel);
@@ -499,7 +499,9 @@ export function ImportedMods({
     <section className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5">
       <h3 className="text-sm font-semibold text-zinc-200">Import a mod</h3>
       <p className="mt-2 text-xs leading-relaxed text-zinc-500">
-        Pick one or several <span className="font-mono">.vpk</span>s (or{" "}
+        Pick one or several <span className="font-mono">.vpk</span>s, or a{" "}
+        <span className="font-mono">.zip</span>/<span className="font-mono">.rar</span>/
+        <span className="font-mono">.7z</span> with one inside (or{" "}
         <span className="text-zinc-400">drag them onto the window</span>). Each opens a
         review: choose which sounds become editable tracks in your tabs and what rides
         along in your build. Nothing of yours is ever removed.

@@ -51,6 +51,11 @@ pub struct Project {
     /// recompiled `.vmat_c` + `.vtex_c` at the vanilla material path.
     #[serde(default)]
     pub poster_overrides: Vec<PosterOverride>,
+    /// Hero skin-texture overrides: swap a hero material's color map for user
+    /// art (same UVs) and/or hue-rotate it, then recompile the material and
+    /// stage the `.vmat_c` + `.vtex_c` at the vanilla paths.
+    #[serde(default)]
+    pub hero_textures: Vec<HeroTextureOverride>,
 }
 
 /// One replaced poster: user art composited into `rect` of the atlas sheet that
@@ -102,6 +107,35 @@ pub struct PosterOverride {
 
 fn cover_fit() -> String {
     "cover".into()
+}
+
+/// One hero skin-texture override: the color map of one hero material replaced
+/// with user art (painted over the exported UV template, so UVs line up) and/or
+/// hue-rotated. The compile decompiles the vanilla material, swaps/recolors the
+/// color texture, recompiles, and stages at the vanilla path - the model file
+/// is never touched.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeroTextureOverride {
+    /// Stable id, `"herotex_{codename}_{material stem}"`.
+    pub id: String,
+    /// Hero codename (no `hero_` prefix), e.g. `abrams`.
+    pub hero: String,
+    /// Friendly label for reports/UI, e.g. `Abrams - Upper Body`.
+    pub label: String,
+    /// Vanilla material path (no `_c`), e.g.
+    /// `models/heroes_wip/abrams/materials/abrams_upper_body.vmat`.
+    pub vmat: String,
+    /// Absolute path to the user's replacement art (png/jpg/webp). None =
+    /// keep the vanilla art (hue-only recolor).
+    #[serde(default)]
+    pub source_image: Option<String>,
+    /// Hue rotation in degrees applied to the color map (-180..180, 0 = none).
+    #[serde(default)]
+    pub hue: f32,
+    /// Hash recorded after the last successful compile (null = never compiled).
+    #[serde(default)]
+    pub last_compiled_hash: Option<String>,
 }
 
 /// One edited field on a flat-scalar world entity (minion / box / powerup),
@@ -1431,6 +1465,7 @@ impl Project {
             global_overrides: vec![],
             world_overrides: vec![],
             poster_overrides: vec![],
+            hero_textures: vec![],
         }
     }
 

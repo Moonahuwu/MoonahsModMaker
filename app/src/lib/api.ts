@@ -139,6 +139,7 @@ export interface CompileConfig {
   globalOverrides?: GlobalCompile[];
   worldOverrides?: WorldCompile[];
   posterOverrides?: PosterCompile[];
+  heroTextures?: HeroTexCompile[];
   digimod?: DigimodCompile | null;
   uiOverrides?: UiFileCompile[];
 }
@@ -279,6 +280,17 @@ export interface PosterCompile {
   fit: string;
   rotation: number;
   erase: boolean;
+  currentHash: string;
+  lastCompiledHash?: string | null;
+}
+
+export interface HeroTexCompile {
+  /** Vanilla material path (no `_c`). */
+  vmat: string;
+  label: string;
+  /** User art; null = vanilla art (hue-only recolor). */
+  sourceImage?: string | null;
+  hue: number;
   currentHash: string;
   lastCompiledHash?: string | null;
 }
@@ -1073,6 +1085,12 @@ export interface GbSearchItem {
   name: string;
   author: string;
   category: string;
+  /** Root-category id (0 = unknown) - a card's chip can browse the category. */
+  categoryId: number;
+  /** Direct subcategory when the root has one - for Mods usually the HERO the
+   *  mod belongs to ("Skins · Drifter"). "" = none. */
+  subCategory: string;
+  subCategoryId: number;
   pageUrl: string;
   /** 220px preview on GameBanana's CDN; "" when the mod has none. */
   thumbUrl: string;
@@ -1099,13 +1117,28 @@ export function gamebananaSearch(
   page: number,
   sort?: string,
   model?: string,
+  categoryId?: number,
 ): Promise<GbSearchPage> {
   return invoke("gamebanana_search", {
     query,
     page,
     sort: sort ?? null,
     model: model ?? null,
+    category: categoryId ?? null,
   });
+}
+
+export interface GbCategory {
+  id: number;
+  name: string;
+  /** Submissions filed under it (shown on the browse chip). */
+  count: number;
+}
+
+/** The game's root categories for a submission type - Mods: Skins, HUD…;
+ *  Sounds: In-Game Music, Abilities, VOs…. Drives the browse category chips. */
+export function gamebananaCategories(model?: string): Promise<GbCategory[]> {
+  return invoke("gamebanana_categories", { model: model ?? null });
 }
 
 export interface GbFile {
@@ -1145,6 +1178,12 @@ export function gamebananaDownload(
     fileName,
     model: model ?? null,
   });
+}
+
+/** Unpack a dropped/picked mod archive (.zip/.rar/.7z) into app-data and
+ *  return the mountable vpk(s) + loose audio files inside. */
+export function extractModArchive(path: string): Promise<{ vpks: string[]; audios: string[] }> {
+  return invoke("extract_mod_archive", { path });
 }
 
 /** Copy an audio file into the app-data sound library; returns the copy. */
@@ -1202,6 +1241,28 @@ export interface HeroImage {
   height: number;
   /** SVG assets (the name logo) are display-only for now. */
   svg: boolean;
+}
+
+export interface HeroMaterialInfo {
+  /** Material stem, e.g. `abrams_upper_body`. */
+  name: string;
+  /** Vanilla material path (no `_c`), the compile target. */
+  vmat: string;
+  /** Decoded color map PNG (the UV template) in the app-data cache. */
+  colorPng: string;
+  width: number;
+  height: number;
+}
+
+/** List a hero's model materials with their color maps decoded (cached).
+ *  These are the swappable/recolorable skin textures. */
+export function heroMaterials(
+  helperPath: string,
+  pakPath: string,
+  codename: string,
+  refresh = false,
+): Promise<HeroMaterialInfo[]> {
+  return invoke("hero_materials", { helperPath, pakPath, codename, refresh });
 }
 
 /** Decode a hero's replaceable panorama images (cards, icons, minimap,

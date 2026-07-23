@@ -4,14 +4,16 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { appDataDir } from "@tauri-apps/api/path";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   autodetectPaths,
   checkPaths,
   checkSoundRefs,
   copyToDownloads,
   decodeStock as decodeStockApi,
+  extractModArchive,
   filesIdentical,
+  libraryAdd,
   healMissingSources,
   type HealItem,
   downloadEntry,
@@ -44,6 +46,7 @@ import {
   installAppUpdate,
   type AppUpdate,
   type HeroImage,
+  type HeroMaterialInfo,
   type ImportEvent,
   listSoundeventFiles,
   downloadTools,
@@ -60,6 +63,7 @@ import {
 import {
   cHeroDetail as heroDetailApi,
   cHeroImages,
+  cHeroMaterials,
   cHeroSounds as heroSoundsApi,
   cHeroVoicelines as heroVoicelinesApi,
   cItemSoundIndex as itemSoundIndex,
@@ -93,8 +97,8 @@ import { CustomServer } from "./components/CustomServer";
 import { ProfileSwitcher } from "./components/ProfileSwitcher";
 import { useToast } from "./components/Toaster";
 import { useSettings, slotSoundFolder, sheetSiblingsKey, compilePrefsOf, DEATHS_RELEASED, FFMPEG_BUNDLE_URL, TOOLS_BUNDLE_URL, type Settings } from "./lib/settings";
-import { songHash, overrideHash, effectHash, posterHash } from "./lib/songHash";
-import type { AttributeOverride, EffectOverride, EventProject, EventView, PosterOverride, Project, Song, SongLayer, SoundOverride } from "./types";
+import { songHash, overrideHash, effectHash, posterHash, heroTexHash } from "./lib/songHash";
+import type { AttributeOverride, EffectOverride, EventProject, EventView, HeroTextureOverride, LibraryItem, PosterOverride, Project, Song, SongLayer, SoundOverride } from "./types";
 import { GameBananaBrowser } from "./components/GameBananaBrowser";
 import { LibraryTab } from "./components/LibraryTab";
 import { EasyCompileTab } from "./components/EasyCompileTab";
@@ -103,6 +107,8 @@ import "./App.css";
 
 const AUDIO_EXT = /\.(mp3|wav|flac|ogg|m4a|aac)$/i;
 const IMAGE_EXT = /\.(png|jpe?g|webp|bmp)$/i;
+/** Mod archives the backend can unpack (extract_mod_archive). */
+const ARCHIVE_EXT = /\.(zip|rar|7z)$/i;
 const DEFAULT_GAIN_DB = 6;
 
 const MOD_COMBINER = "modcombiner";
@@ -838,6 +844,142 @@ export default function App() {
     }
     return out;
   }, [project?.iconMods, selectedHero]);
+
+  // The selected hero's swappable skin textures (model material color maps).
+  // Loaded on first drill-in: each hero is several material decompiles, so
+  // it's not part of the boot warm-up.
+  const [heroMats, setHeroMats] = useState<HeroMaterialInfo[] | null>(null);
+  const [heroMatsLoading, setHeroMatsLoading] = useState(false);
+  useEffect(() => {
+    setHeroMats(null);
+    if (!selectedHero) return;
+    const s = settingsRef.current;
+    let cancelled = false;
+    setHeroMatsLoading(true);
+    cHeroMaterials(s.vpkHelperPath, s.deadlockPak, selectedHero)
+      .then((r) => !cancelled && setHeroMats(r))
+      .catch(() => !cancelled && setHeroMats([]))
+      .finally(() => !cancelled && setHeroMatsLoading(false));
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedHero]);
+
+  /** Replace one hero material's color map (keeps any hue already set). */
+  async function pickHeroTexture(mat: HeroMaterialInfo) {
+    if (!selectedHero) return;
+    const picked = await openDialog({
+      multiple: false,
+      filters: [{ name: "Image", extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }],
+    });
+    if (typeof picked !== "string") return;
+    const hero = selectedHero;
+    const id = `herotex_${hero}_${mat.name}`;
+    setProject((prev) => {
+      if (!prev) return prev;
+      const existing = (prev.heroTextures ?? []).find((t) => t.id === id);
+      return {
+        ...prev,
+        heroTextures: [
+          ...(prev.heroTextures ?? []).filter((t) => t.id !== id),
+          {
+            id,
+            hero,
+            label: `${selectedHeroInfo?.displayName ?? hero} - ${mat.name}`,
+            vmat: mat.vmat,
+            sourceImage: picked,
+            hue: existing?.hue ?? 0,
+            lastCompiledHash: existing?.lastCompiledHash ?? null,
+          },
+        ],
+      };
+    });
+    push("success", "Hero texture set - compile to apply");
+  }
+
+  /** Set the hue rotation on one hero material (creates the override if the
+   *  slot only has a hue so far; hue 0 with no art drops it entirely). */
+  function setHeroTextureHue(mat: HeroMaterialInfo, hue: number) {
+    if (!selectedHero) return;
+    const hero = selectedHero;
+    const id = `herotex_${hero}_${mat.name}`;
+    setProject((prev) => {
+      if (!prev) return prev;
+      const existing = (prev.heroTextures ?? []).find((t) => t.id === id);
+      const rest = (prev.heroTextures ?? []).filter((t) => t.id !== id);
+      if (Math.abs(hue) < 0.01 && !existing?.sourceImage) {
+        return { ...prev, heroTextures: rest };
+      }
+      return {
+        ...prev,
+        heroTextures: [
+          ...rest,
+          {
+            id,
+            hero,
+            label: existing?.label ?? `${selectedHeroInfo?.displayName ?? hero} - ${mat.name}`,
+            vmat: mat.vmat,
+            sourceImage: existing?.sourceImage ?? null,
+            hue,
+            lastCompiledHash: existing?.lastCompiledHash ?? null,
+          },
+        ],
+      };
+    });
+  }
+
+  function removeHeroTexture(mat: HeroMaterialInfo) {
+    if (!selectedHero) return;
+    const id = `herotex_${selectedHero}_${mat.name}`;
+    setProject((prev) =>
+      prev ? { ...prev, heroTextures: (prev.heroTextures ?? []).filter((t) => t.id !== id) } : prev,
+    );
+  }
+
+  /** Master hue: set the same rotation on EVERY material of the selected hero
+   *  (whole-character recolor). Custom art is kept; hue 0 drops overrides that
+   *  only existed for their hue. */
+  function setHeroTextureHueAll(hue: number) {
+    if (!selectedHero || !heroMats) return;
+    const hero = selectedHero;
+    const mats = heroMats;
+    setProject((prev) => {
+      if (!prev) return prev;
+      const all = prev.heroTextures ?? [];
+      const ids = new Set(mats.map((m) => `herotex_${hero}_${m.name}`));
+      // Other heroes' overrides (and any stale ids) ride along untouched.
+      const rest = all.filter((t) => !ids.has(t.id));
+      const next: HeroTextureOverride[] = [];
+      for (const mat of mats) {
+        const id = `herotex_${hero}_${mat.name}`;
+        const existing = all.find((t) => t.id === id);
+        if (Math.abs(hue) < 0.01 && !existing?.sourceImage) continue;
+        next.push({
+          id,
+          hero,
+          label: existing?.label ?? `${selectedHeroInfo?.displayName ?? hero} - ${mat.name}`,
+          vmat: mat.vmat,
+          sourceImage: existing?.sourceImage ?? null,
+          hue,
+          lastCompiledHash: existing?.lastCompiledHash ?? null,
+        });
+      }
+      return { ...prev, heroTextures: [...rest, ...next] };
+    });
+  }
+
+  /** name -> the selected hero's override for that material (UI lookup). */
+  const heroTextureBySlot = useMemo(() => {
+    const out: Record<string, HeroTextureOverride> = {};
+    if (selectedHero) {
+      const p = `herotex_${selectedHero}_`;
+      for (const t of project?.heroTextures ?? []) {
+        if (t.id.startsWith(p)) out[t.id.slice(p.length)] = t;
+      }
+    }
+    return out;
+  }, [project?.heroTextures, selectedHero]);
   // Selected shop item (Items tab) -> drill-in to its sound events.
   const [selectedItem, setSelectedItem] = useState<ItemCard | null>(null);
   const [itemSounds, setItemSounds] = useState<HeroAbilitySound[] | null>(null);
@@ -1547,7 +1689,7 @@ export default function App() {
           return;
         }
 
-        const vpks = p.paths.filter((pp) => /\.vpk$/i.test(pp));
+        const vpks = p.paths.filter((pp) => /\.vpk$/i.test(pp) || ARCHIVE_EXT.test(pp));
         const audio = p.paths.filter((pp) => AUDIO_EXT.test(pp));
         const images = p.paths.filter((pp) => IMAGE_EXT.test(pp));
 
@@ -1569,8 +1711,9 @@ export default function App() {
           }
         }
 
-        // Dropped mod .vpk(s) → open the import review. Several at once queue
-        // up and review one at a time (same flow as the multi-select picker).
+        // Dropped mod .vpk(s) or archives → open the import review. Several
+        // at once queue up and review one at a time (same flow as the
+        // multi-select picker); archives unpack in queuePackImports.
         if (vpks.length > 0) {
           setActiveTab(MOD_COMBINER);
           queuePackImports(vpks);
@@ -1608,7 +1751,7 @@ export default function App() {
         }
 
         if (vpks.length === 0 && audio.length === 0 && images.length === 0) {
-          push("error", "Drop an .mp3 (onto a slot), an image (onto an item), or a mod .vpk");
+          push("error", "Drop an .mp3 (onto a slot), an image (onto an item), or a mod .vpk / .zip / .rar / .7z");
         }
       }
     });
@@ -1960,19 +2103,63 @@ export default function App() {
   /** Kick off reviews for one or more picked/dropped vpks. The first opens
    *  now; the rest wait in the queue (appended to anything already waiting
    *  in the same profile) and open one at a time as reviews close. */
-  function queuePackImports(vpks: string[]) {
-    if (vpks.length === 0) return;
-    const [first, ...rest] = vpks;
-    const profile = settingsRef.current.activeProfile;
-    const carry = importQueue.current.profile === profile ? importQueue.current.vpks : [];
-    importQueue.current = { profile, vpks: [...carry, ...rest] };
-    if (importQueue.current.vpks.length > 0) {
-      push(
-        "info",
-        `${importQueue.current.vpks.length} more mod(s) waiting - the next review opens when this one closes`,
-      );
-    }
-    void startPackImport(first);
+  function queuePackImports(paths: string[]) {
+    void (async () => {
+      // Archives (.zip/.rar/.7z) unpack first and are replaced by the vpk(s)
+      // inside; an audio-only archive shelves its sounds in the Sound Library
+      // instead (the same treatment a GameBanana Sound download gets).
+      const vpks: string[] = [];
+      for (const p of paths) {
+        if (!ARCHIVE_EXT.test(p)) {
+          vpks.push(p);
+          continue;
+        }
+        const name = baseName(p);
+        push("info", `Unpacking "${name}"…`);
+        try {
+          const res = await extractModArchive(p);
+          vpks.push(...res.vpks);
+          if (res.vpks.length === 0 && res.audios.length > 0) {
+            const added: LibraryItem[] = [];
+            for (const a of res.audios) {
+              try {
+                const copy = await libraryAdd(a);
+                added.push({
+                  id: crypto.randomUUID(),
+                  name: copy.name,
+                  path: copy.path,
+                  source: name,
+                  addedAt: new Date().toISOString(),
+                });
+              } catch (e) {
+                push("error", `${a.split(/[\\/]/).pop()}: ${e}`);
+              }
+            }
+            if (added.length > 0) {
+              updateSettings((prev) => ({ soundLibrary: [...(prev.soundLibrary ?? []), ...added] }));
+              push(
+                "success",
+                `"${name}" has no pak, just audio - added ${added.length} sound(s) to your Sound Library`,
+              );
+            }
+          }
+        } catch (e) {
+          push("error", `Couldn't unpack "${name}": ${e}`);
+        }
+      }
+      if (vpks.length === 0) return;
+      const [first, ...rest] = vpks;
+      const profile = settingsRef.current.activeProfile;
+      const carry = importQueue.current.profile === profile ? importQueue.current.vpks : [];
+      importQueue.current = { profile, vpks: [...carry, ...rest] };
+      if (importQueue.current.vpks.length > 0) {
+        push(
+          "info",
+          `${importQueue.current.vpks.length} more mod(s) waiting - the next review opens when this one closes`,
+        );
+      }
+      void startPackImport(first);
+    })();
   }
 
   /** Open the next queued review, if any. Returns false when the run is over. */
@@ -3000,6 +3187,10 @@ export default function App() {
             posterOverrides: (prev.posterOverrides ?? []).map((p, _, all) => ({
               ...p,
               lastCompiledHash: posterHash(p, sheetSiblingsKey(all, p.sheetId)),
+            })),
+            heroTextures: (prev.heroTextures ?? []).map((t) => ({
+              ...t,
+              lastCompiledHash: heroTexHash(t),
             })),
           }
         : prev,
@@ -5235,6 +5426,14 @@ export default function App() {
               customImages={heroCustomImages}
               onPickImage={(img) => void pickHeroImage(img)}
               onRemoveImage={removeHeroImage}
+              materials={heroMats}
+              materialsLoading={heroMatsLoading}
+              textures={heroTextureBySlot}
+              onPickTexture={(mat) => void pickHeroTexture(mat)}
+              onRemoveTexture={removeHeroTexture}
+              onTextureHue={setHeroTextureHue}
+              onTextureHueAll={setHeroTextureHueAll}
+              onShowTemplate={(mat) => void revealItemInDir(mat.colorPng)}
               onPreviewSound={(ref) => decodeStock(ref)}
               onOpenSound={(s) => void openVoiceline(s)}
               hasContent={(eventName) => {
@@ -5325,6 +5524,7 @@ export default function App() {
             globalOverrides={settings.experimentalServer ? (project.globalOverrides ?? []) : []}
             worldOverrides={settings.experimentalServer ? (project.worldOverrides ?? []) : []}
             posterOverrides={project.posterOverrides ?? []}
+            heroTextures={project.heroTextures ?? []}
             digimod={project.digimod ?? null}
             uiOverrides={settings.experimentalUiMaster ? (project.uiOverrides ?? []) : []}
             pools={pools}

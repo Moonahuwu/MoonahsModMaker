@@ -107,6 +107,15 @@ export function posterHash(
   ].join("|");
 }
 
+/** Fingerprint of one hero skin-texture override (material + art + hue). */
+export function heroTexHash(o: {
+  vmat: string;
+  sourceImage?: string | null;
+  hue: number;
+}): string {
+  return [o.vmat, o.sourceImage ?? "", o.hue].join("|");
+}
+
 /** Compile status of a song relative to its last successful compile. */
 export type SongStatus = "new" | "compiled" | "stale";
 
