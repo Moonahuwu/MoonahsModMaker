@@ -34,3 +34,6 @@ Thumbs.db
 # local MCP server config + deps (machine-specific dev tooling)
 .mcp.json
 tools/particle-mcp/node_modules
+
+# Local model/texture reference dumps (ripped content, never ship)
+ReferenceFiles/
