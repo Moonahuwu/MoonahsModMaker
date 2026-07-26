@@ -71,8 +71,14 @@ export function effectHash(e: {
   hue: number;
   saturation: number;
   mode: string;
+  driver?: string | null;
+  gradientStops?: { pos: number; color: [number, number, number] }[] | null;
+  cycleSecs?: number | null;
 }): string {
-  return [e.targetRef, e.hue, e.saturation, e.mode].join("|");
+  const stops = (e.gradientStops ?? [])
+    .map((s) => `${s.pos}:${s.color.join(",")}`)
+    .join(";");
+  return [e.targetRef, e.hue, e.saturation, e.mode, e.driver ?? "age", stops, e.cycleSecs ?? 3].join("|");
 }
 
 /** Fingerprint of one poster override. `sheetSiblings` is the sorted id+image

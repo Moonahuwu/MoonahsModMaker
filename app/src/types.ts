@@ -168,6 +168,15 @@ export interface EffectOverride {
   saturation: number;
   /** Color mode: static recolor, or animated over particle lifetime. */
   mode: "static" | "rainbow" | "pulse";
+  /** What samples the gradient for animated modes: particle lifetime ("age",
+   *  default), animated noise, particle index, position along a rope, or a
+   *  looping wall-clock cycle. */
+  driver?: "age" | "noise" | "index" | "rope" | "time" | null;
+  /** Custom gradient stops (pos 0..1 + rgb). Null = the built-in rainbow
+   *  wheel (rainbow mode) or bright/dim pulse (pulse mode). */
+  gradientStops?: { pos: number; color: [number, number, number] }[] | null;
+  /** Loop period in seconds for the "time" driver (default 3). */
+  cycleSecs?: number | null;
   lastCompiledHash?: string | null;
 }
 

@@ -192,6 +192,55 @@ export function DigimodTab({
     [],
   );
 
+  // Source durations, cached: sounds via ffprobe (also refreshed by the clip
+  // editor's waveform decode), videos via a metadata-only <video> element.
+  // Everything timing-related (clip lengths, sync buttons) reads these.
+  const [audioDur, setAudioDur] = useState<Record<string, number>>({});
+  const [videoDur, setVideoDur] = useState<Record<string, number>>({});
+  const probing = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    for (const s of sounds) {
+      if (audioDur[s.id] !== undefined || probing.current.has(s.id)) continue;
+      probing.current.add(s.id);
+      probeAudio(s.sourceAudio, ffmpegPath || undefined)
+        .then((p) => setAudioDur((d) => ({ ...d, [s.id]: p.duration })))
+        .catch(() => {});
+    }
+    for (const e of [...config.scares, ...config.deaths]) {
+      if (e.kind !== "video" || videoDur[e.id] !== undefined || probing.current.has(e.id)) continue;
+      probing.current.add(e.id);
+      const v = document.createElement("video");
+      v.preload = "metadata";
+      v.onloadedmetadata = () => {
+        if (Number.isFinite(v.duration)) setVideoDur((d) => ({ ...d, [e.id]: v.duration }));
+        v.src = "";
+      };
+      v.onerror = () => {
+        v.src = "";
+      };
+      v.src = convertFileSrc(e.sourceMedia);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sounds, config.scares, config.deaths]);
+
+  /** Effective clip length of a sound (trim window, else source length). */
+  function clipLen(s: DigiSound): number | null {
+    const start = s.trimStart ?? 0;
+    if ((s.trimEnd ?? 0) > start) return (s.trimEnd ?? 0) - start;
+    const dur = audioDur[s.id];
+    return dur !== undefined ? Math.max(0, dur - start) : null;
+  }
+
+  const fmt = (n: number) => (Math.round(n * 100) / 100).toString();
+
+  /** Clip the sound's trim window to `secs` (keeps the clip's start point). */
+  function clipSoundTo(s: DigiSound, secs: number) {
+    const start = s.trimStart ?? 0;
+    updateSound(s.id, { trimEnd: Math.round((start + secs) * 100) / 100 });
+    const uses = [...config.scares, ...config.deaths].filter((e) => e.soundId === s.id).length;
+    if (uses > 1) push("info", `"${s.name}" is used by ${uses} videos - all of them get the ${fmt(secs)}s clip`);
+  }
+
   /** Play a sound the way it will ship: trims, gain, and fades applied. */
   async function previewClip(s: DigiSound) {
     playerRef.current?.pause();
@@ -511,6 +560,21 @@ export function DigimodTab({
                     />
                     s
                   </label>
+                  {e.kind === "video" &&
+                    videoDur[e.id] !== undefined &&
+                    Math.abs(videoDur[e.id] - e.show) > 0.1 && (
+                      <button
+                        onClick={() =>
+                          updateEntry(list, e.id, {
+                            show: Math.round(videoDur[e.id] * 10) / 10,
+                          })
+                        }
+                        title="Show the video for exactly its own length"
+                        className="rounded bg-zinc-800 px-1.5 py-0.5 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200"
+                      >
+                        video is {fmt(videoDur[e.id])}s
+                      </button>
+                    )}
                   <span className="flex gap-1">
                     {(["fullscreen", "banner"] as const).map((p) => (
                       <button
@@ -547,6 +611,44 @@ export function DigimodTab({
                     <option value="__new__">＋ add a new sound…</option>
                   </select>
                 </label>
+                {/* Timing: does the paired sound outlive (or undercut) the
+                    on-screen time? One click makes them agree. */}
+                {(() => {
+                  const s = e.soundId ? sounds.find((x) => x.id === e.soundId) : null;
+                  if (!s) return null;
+                  const len = clipLen(s);
+                  if (len === null) return null;
+                  const diff = len - e.show;
+                  if (Math.abs(diff) <= 0.1)
+                    return (
+                      <div className="flex items-center gap-1.5 text-[11px] text-emerald-400/70">
+                        ⏱ sound and video are in sync ({fmt(e.show)}s)
+                      </div>
+                    );
+                  return (
+                    <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-amber-300/80">
+                      <span title="How long the assigned sound actually plays vs the on-screen time">
+                        ⏱ sound {fmt(len)}s vs show {fmt(e.show)}s
+                      </span>
+                      <button
+                        onClick={() =>
+                          updateEntry(list, e.id, { show: Math.round(len * 10) / 10 })
+                        }
+                        title="Set the on-screen time to the sound's length"
+                        className="rounded bg-zinc-800 px-1.5 py-0.5 text-zinc-300 hover:bg-zinc-700 hover:text-white"
+                      >
+                        show {fmt(len)}s
+                      </button>
+                      <button
+                        onClick={() => clipSoundTo(s, e.show)}
+                        title="Clip the sound to end with the video"
+                        className="rounded bg-zinc-800 px-1.5 py-0.5 text-zinc-300 hover:bg-zinc-700 hover:text-white"
+                      >
+                        clip sound to {fmt(e.show)}s
+                      </button>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           ))}
@@ -760,6 +862,38 @@ export function DigimodTab({
                   </div>
                   {editSound === s.id && (
                     <div className="mt-2 flex flex-col gap-3 rounded-md border border-zinc-800 bg-zinc-900/50 p-3 text-sm">
+                      {(() => {
+                        const len = clipLen(s);
+                        const dur = audioDur[s.id];
+                        const users = [...config.scares, ...config.deaths].filter(
+                          (e) => e.soundId === s.id,
+                        );
+                        return (
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-zinc-500">
+                            <span>
+                              {dur !== undefined ? `source ${fmt(dur)}s` : "source ..."}
+                              {len !== null && (
+                                <span className="ml-2 font-semibold text-emerald-400/90">
+                                  clip {fmt(len)}s
+                                </span>
+                              )}
+                            </span>
+                            {users
+                              .filter((e) => len === null || Math.abs(clipLen(s)! - e.show) > 0.1)
+                              .slice(0, 3)
+                              .map((e) => (
+                                <button
+                                  key={e.id}
+                                  onClick={() => clipSoundTo(s, e.show)}
+                                  title={`Clip to end exactly when "${e.name}" leaves the screen`}
+                                  className="rounded bg-zinc-800 px-1.5 py-0.5 text-zinc-300 hover:bg-zinc-700 hover:text-white"
+                                >
+                                  match "{e.name}" ({fmt(e.show)}s)
+                                </button>
+                              ))}
+                          </div>
+                        );
+                      })()}
                       <Waveform
                         url={convertFileSrc(s.sourceAudio)}
                         trimStart={s.trimStart ?? 0}
@@ -770,11 +904,27 @@ export function DigimodTab({
                             trimEnd: Math.round(b * 100) / 100,
                           })
                         }
+                        onDuration={(d) => setAudioDur((m) => ({ ...m, [s.id]: d }))}
                         timeline
+                        zoomable
                       />
-                      <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-5">
+                      <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-6">
                         <Field label="Trim start (s)">{num("trimStart", 0.1, 0)}</Field>
                         <Field label="Trim end (s)">{num("trimEnd", 0.1, 0)}</Field>
+                        <Field label="Length (s)">
+                          <input
+                            type="number"
+                            step={0.1}
+                            min={0.1}
+                            value={clipLen(s) !== null ? Math.round(clipLen(s)! * 100) / 100 : ""}
+                            placeholder="full"
+                            onChange={(ev) => {
+                              const v = Number(ev.target.value);
+                              if (v > 0) clipSoundTo(s, v);
+                            }}
+                            className="w-full rounded border border-zinc-700 bg-zinc-950/60 px-2 py-1 text-zinc-200 outline-none focus:border-zinc-500"
+                          />
+                        </Field>
                         <Field label="Gain (dB)">{num("gainDb", 0.5)}</Field>
                         <Field label="Fade in (s)">{num("fadeIn", 0.1, 0)}</Field>
                         <Field label="Fade out (s)">{num("fadeOut", 0.1, 0)}</Field>
@@ -787,8 +937,8 @@ export function DigimodTab({
                           {previewing === s.id ? "▶ playing…" : "▶ Preview clip"}
                         </button>
                         <span className="text-[11px] text-zinc-600">
-                          Drag the green window to trim (click it to play that slice).
-                          Trim 0 → 0 uses the whole file; preview plays exactly what
+                          Drag the green window (or type exact times - the window follows).
+                          Click the window to play that slice; preview plays exactly what
                           ships.
                         </span>
                       </div>

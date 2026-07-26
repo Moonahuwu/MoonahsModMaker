@@ -5141,6 +5141,357 @@ pub fn effect_preview(
     Ok(EffectPreview { particle_path, sprites, colors })
 }
 
+/// Decompile a compiled particle from the pak into KV3 text (read-only source
+/// view for the Effects tab). Async + spawn_blocking (CLAUDE.md sync-command
+/// rule): the helper shell-out is slow on big paks.
+#[tauri::command]
+pub async fn read_particle_text(
+    helper_path: String,
+    pak_path: String,
+    particle_path: String,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let stem = particle_path.trim_end_matches(".vpcf").replace(['/', '\\'], "_");
+        let tmp = std::env::temp_dir().join(format!("eim_particle_{stem}.vpcf"));
+        crate::vpk::decompile_from_vpk(
+            &helper_path,
+            &pak_path,
+            &format!("{particle_path}_c"),
+            &tmp.to_string_lossy(),
+        )?;
+        let text = std::fs::read_to_string(&tmp).map_err(|e| e.to_string());
+        let _ = std::fs::remove_file(&tmp);
+        text
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Child `.vpcf` references of a decompiled particle source, in file order.
+fn particle_child_refs(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if !line.contains("m_ChildRef") {
+            continue;
+        }
+        let Some(i) = line.find("resource:\"") else { continue };
+        let rest = &line[i + "resource:\"".len()..];
+        let Some(end) = rest.find('"') else { continue };
+        let p = &rest[..end];
+        if p.ends_with(".vpcf") && !out.iter().any(|e| e == p) {
+            out.push(p.to_string());
+        }
+    }
+    out
+}
+
+/// Stage a particle (plus its child systems) as vpcf63 sources under the CSDK
+/// content tree and open it in the real particle editor (Deadlock_with_tools).
+/// Async + spawn_blocking: many helper shell-outs for deep child trees.
+#[tauri::command]
+pub async fn open_in_particle_editor(
+    csdk_root: String,
+    helper_path: String,
+    pak_path: String,
+    particle_path: String,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        open_in_particle_editor_blocking(csdk_root, helper_path, pak_path, particle_path)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn open_in_particle_editor_blocking(
+    csdk_root: String,
+    helper_path: String,
+    pak_path: String,
+    particle_path: String,
+) -> Result<String, String> {
+    use std::collections::HashSet;
+    let root = std::path::Path::new(&csdk_root);
+    let content_root = root.join("content").join("citadel_addons").join("eim_inspect");
+    // The inspect addon is ephemeral staging - wipe both sides so it never
+    // accumulates stale trees across inspections.
+    let _ = std::fs::remove_dir_all(&content_root);
+    let _ = std::fs::remove_dir_all(root.join("game").join("citadel_addons").join("eim_inspect"));
+    // Walk the child-ref tree: depth-capped, count-capped, each path staged
+    // once. A child that fails to decompile is skipped, not fatal - the root
+    // particle failing IS fatal (there'd be nothing to open).
+    let mut staged: HashSet<String> = HashSet::new();
+    let mut queue: Vec<(String, u32)> = vec![(particle_path.clone(), 0)];
+    while let Some((rel, depth)) = queue.pop() {
+        if staged.len() >= 60 || staged.contains(&rel) {
+            continue;
+        }
+        let dest = content_root.join(&rel);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        if let Err(e) = crate::vpk::decompile_from_vpk(
+            &helper_path,
+            &pak_path,
+            &format!("{rel}_c"),
+            &dest.to_string_lossy(),
+        ) {
+            if rel == particle_path {
+                return Err(format!("decompile {rel}: {e}"));
+            }
+            eprintln!("open_in_particle_editor: skipping child {rel}: {e}");
+            continue;
+        }
+        let text = std::fs::read_to_string(&dest).map_err(|e| e.to_string())?;
+        // The CSDK tools reject vpcf64+ sources; pin to the proven vpcf63.
+        let text = crate::compile::normalize_vpcf_header(&text);
+        std::fs::write(&dest, &text).map_err(|e| e.to_string())?;
+        staged.insert(rel);
+        if depth < 4 {
+            for child in particle_child_refs(&text) {
+                if !staged.contains(&child) {
+                    queue.push((child, depth + 1));
+                }
+            }
+        }
+    }
+    let n = staged.len();
+    // Launch the game exe DIRECTLY, not Deadlock_with_tools.exe: that shim is
+    // a .NET launcher with its own saved install path, so it can open a whole
+    // different CSDK than the one this vpcf was staged into. deadlock.exe next
+    // to it resolves gameinfo relative to itself - always THIS csdk. The flags
+    // mirror the community CFGtools "BinTools" profile (+ our addon/asset).
+    let exe = ["bin_tools", "bin"]
+        .iter()
+        .map(|b| root.join("game").join(b).join("win64").join("deadlock.exe"))
+        .find(|p| p.exists());
+    match exe {
+        Some(exe) => {
+            let mut cmd = std::process::Command::new(&exe);
+            if let Some(dir) = exe.parent() {
+                cmd.current_dir(dir);
+            }
+            cmd.args([
+                "-tools",
+                "-danger_mode_ignore_schema_mismatches",
+                "-addon",
+                "eim_inspect",
+                "-asset",
+                &particle_path,
+            ]);
+            // Fire and forget: the editor outlives us, never wait on it.
+            cmd.spawn().map_err(|e| format!("launching particle editor: {e}"))?;
+            Ok(format!(
+                "staged {n} file(s) into eim_inspect - launching the CSDK tools (takes a bit)"
+            ))
+        }
+        None => Ok(format!(
+            "staged {n} file(s) into {} - launch the CSDK tools and open {particle_path}",
+            content_root.display()
+        )),
+    }
+}
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PackOverlap {
+    pub other: String,
+    pub count: u64,
+}
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PackScan {
+    /// Content kinds carried (sound/model/vfx/ui/texture/config/other).
+    pub kinds: Vec<String>,
+    /// Local file/dir modified time (unix secs) - the update-check baseline.
+    pub mtime: u64,
+    /// Same-file overlaps with OTHER bundled packs. Only files the combiner
+    /// stages count: soundevents trees merge (never clobber) so they're
+    /// excluded - anything listed here is a real last-pack-wins clobber.
+    pub overlaps: Vec<PackOverlap>,
+}
+
+/// Scan bundled mod packs: classify content, record mtimes, and detect
+/// file-level overlaps between packs (the silent clobber class where two
+/// packs ship the same file and the later-staged one wins). Feeds the Mod
+/// combiner gallery; results are cached frontend-side per session.
+#[tauri::command]
+pub async fn pack_scan(
+    helper_path: String,
+    paths: Vec<String>,
+) -> Result<std::collections::HashMap<String, PackScan>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::collections::{HashMap, HashSet};
+        // First pass: per pack, top-level trees (for kinds) + the file set
+        // the combiner would actually stage (for overlap detection).
+        let mut tops_all: Vec<HashSet<String>> = Vec::new();
+        let mut stage_files: Vec<HashSet<String>> = Vec::new();
+        let mut mtimes: Vec<u64> = Vec::new();
+        for p in &paths {
+            let mut tops: HashSet<String> = HashSet::new();
+            let mut set: HashSet<String> = HashSet::new();
+            if let Ok(files) = crate::vpk::list(&helper_path, p, None) {
+                for f in files {
+                    let lower = f.to_ascii_lowercase();
+                    let Some(i) = lower.find('/') else { continue };
+                    let top = lower[..i].to_string();
+                    if !top.contains("soundevents") {
+                        set.insert(lower);
+                    }
+                    tops.insert(top);
+                }
+            }
+            tops_all.push(tops);
+            stage_files.push(set);
+            mtimes.push(
+                std::fs::metadata(p)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0),
+            );
+        }
+        let mut out: HashMap<String, PackScan> = HashMap::new();
+        for (i, p) in paths.iter().enumerate() {
+            let has = |t: &str| tops_all[i].contains(t);
+            let mut kinds: Vec<String> = Vec::new();
+            if has("sounds") || has("soundevents") {
+                kinds.push("sound".into());
+            }
+            if has("models") {
+                kinds.push("model".into());
+            }
+            if has("particles") {
+                kinds.push("vfx".into());
+            }
+            if has("panorama") {
+                kinds.push("ui".into());
+            }
+            if has("materials") {
+                kinds.push("texture".into());
+            }
+            if has("scripts") {
+                kinds.push("config".into());
+            }
+            if kinds.is_empty() {
+                kinds.push("other".into());
+            }
+            let mut overlaps: Vec<PackOverlap> = Vec::new();
+            for (j, q) in paths.iter().enumerate() {
+                if i == j || stage_files[i].is_empty() || stage_files[j].is_empty() {
+                    continue;
+                }
+                let count = stage_files[i].intersection(&stage_files[j]).count() as u64;
+                if count > 0 {
+                    overlaps.push(PackOverlap { other: q.clone(), count });
+                }
+            }
+            overlaps.sort_by(|a, b| b.count.cmp(&a.count));
+            out.insert(p.clone(), PackScan { kinds, mtime: mtimes[i], overlaps });
+        }
+        Ok(out)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Open a particle in Source 2 Viewer with its whole child tree staged next to
+/// it (compiled files, game-relative layout) so the viewer can resolve and
+/// render the children instead of just the one system.
+#[tauri::command]
+pub async fn open_in_s2v(
+    app: tauri::AppHandle,
+    viewer_path: String,
+    helper_path: String,
+    pak_path: String,
+    particle_path: String,
+) -> Result<String, String> {
+    use tauri::Manager;
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("viewer_tree");
+    tauri::async_runtime::spawn_blocking(move || {
+        open_in_s2v_blocking(base, viewer_path, helper_path, pak_path, particle_path)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn open_in_s2v_blocking(
+    tree: std::path::PathBuf,
+    viewer_path: String,
+    helper_path: String,
+    pak_path: String,
+    particle_path: String,
+) -> Result<String, String> {
+    use std::collections::HashSet;
+    if viewer_path.trim().is_empty() {
+        return Err("Source2Viewer path not set (Setup)".into());
+    }
+    let mut viewer = std::path::PathBuf::from(viewer_path.trim());
+    if viewer.is_dir() {
+        let candidate = viewer.join("Source2Viewer.exe");
+        if candidate.is_file() {
+            viewer = candidate;
+        } else {
+            return Err(format!("Source2Viewer.exe not found in {}", viewer.display()));
+        }
+    }
+    if !viewer.is_file() {
+        return Err(format!("Source2Viewer.exe not found at {}", viewer.display()));
+    }
+    let mut staged: HashSet<String> = HashSet::new();
+    let mut queue: Vec<(String, u32)> = vec![(particle_path.clone(), 0)];
+    while let Some((rel, depth)) = queue.pop() {
+        if staged.contains(&rel) || staged.len() >= 60 {
+            continue;
+        }
+        let rel_c = format!("{rel}_c");
+        let dest = tree.join(rel_c.replace('/', std::path::MAIN_SEPARATOR_STR));
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        if let Err(e) = crate::vpk::extract(&helper_path, &pak_path, &rel_c, &dest.to_string_lossy()) {
+            if rel == particle_path {
+                return Err(e);
+            }
+            eprintln!("open_in_s2v: skipping child {rel}: {e}");
+            continue;
+        }
+        staged.insert(rel.clone());
+        // Children come from the decompiled text (the compiled binary isn't
+        // reliably greppable) - best effort, a failed decompile just means
+        // that branch ships without its children.
+        if depth < 4 {
+            let tmp = std::env::temp_dir().join(format!(
+                "eim_s2v_{}.vpcf",
+                rel.replace(['/', '\\'], "_")
+            ));
+            if crate::vpk::decompile_from_vpk(&helper_path, &pak_path, &rel_c, &tmp.to_string_lossy())
+                .is_ok()
+            {
+                if let Ok(text) = std::fs::read_to_string(&tmp) {
+                    for child in particle_child_refs(&text) {
+                        if !staged.contains(&child) {
+                            queue.push((child, depth + 1));
+                        }
+                    }
+                }
+                let _ = std::fs::remove_file(&tmp);
+            }
+        }
+    }
+    let n = staged.len();
+    let target = tree.join(format!("{particle_path}_c").replace('/', std::path::MAIN_SEPARATOR_STR));
+    std::process::Command::new(&viewer)
+        .arg(&target)
+        .spawn()
+        .map_err(|e| format!("launching viewer: {e}"))?;
+    Ok(format!("opened in Source 2 Viewer ({n} file(s) staged so children resolve)"))
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PosterSheet {
@@ -6127,6 +6478,9 @@ pub struct GbFile {
     pub download_url: String,
     pub download_count: u64,
     pub description: String,
+    /// Upload time (unix secs) - the update-check compares this against the
+    /// local pack's mtime.
+    pub date: u64,
 }
 
 /// The downloadable files on a mod page (a page can ship several variants).
@@ -6157,6 +6511,7 @@ pub async fn gamebanana_files(mod_id: u64, model: Option<String>) -> Result<Vec<
                     download_url,
                     download_count: f.get("_nDownloadCount").and_then(|v| v.as_u64()).unwrap_or(0),
                     description: gb_str(f, "_sDescription"),
+                    date: f.get("_tsDateAdded").and_then(|v| v.as_u64()).unwrap_or(0),
                 })
             })
             .collect())

@@ -18,6 +18,40 @@ export interface ParticleCategory {
   hint?: string;
 }
 
+/** The gradient drivers our injected Set Vector supports: what samples the
+ *  color ramp. Labels are player-facing; keys mirror the backend. */
+const DRIVERS: [string, string, string][] = [
+  ["age", "Lifetime", "each particle sweeps the gradient over its life"],
+  ["noise", "Shimmer", "animated noise picks the color - nearby particles share hues"],
+  ["index", "Per particle", "each particle keeps one color - gradient across ribbons and chains"],
+  ["rope", "Along rope", "color laid out along a rope or beam's length"],
+  ["time", "Time loop", "cycles on a clock forever - best for held or looping effects"],
+];
+
+/** Default 7-stop wheel used when the user starts customizing the gradient. */
+const WHEEL: { pos: number; color: [number, number, number] }[] = [
+  { pos: 0, color: [255, 0, 0] },
+  { pos: 1 / 6, color: [255, 255, 0] },
+  { pos: 2 / 6, color: [0, 255, 0] },
+  { pos: 3 / 6, color: [0, 255, 255] },
+  { pos: 4 / 6, color: [0, 0, 255] },
+  { pos: 5 / 6, color: [255, 0, 255] },
+  { pos: 1, color: [255, 0, 0] },
+];
+
+const rgbToHex = (c: [number, number, number]) =>
+  "#" + c.map((v) => v.toString(16).padStart(2, "0")).join("");
+const hexToRgb = (h: string): [number, number, number] => [
+  parseInt(h.slice(1, 3), 16),
+  parseInt(h.slice(3, 5), 16),
+  parseInt(h.slice(5, 7), 16),
+];
+const gradientCss = (stops: { pos: number; color: [number, number, number] }[]) =>
+  `linear-gradient(to right, ${[...stops]
+    .sort((a, b) => a.pos - b.pos)
+    .map((s) => `rgb(${s.color.join(",")}) ${Math.round(s.pos * 100)}%`)
+    .join(", ")})`;
+
 /** Pick the most vivid (saturated) color as the effect's representative tint. */
 function dominantColor(colors: RgbaColor[]): RgbaColor | null {
   let best: RgbaColor | null = null;
@@ -45,6 +79,7 @@ export function EffectsBrowser({
   onUpdate,
   onRemove,
   onOpenViewer,
+  onInspect,
 }: {
   helperPath: string;
   pakPath: string;
@@ -55,6 +90,8 @@ export function EffectsBrowser({
   onUpdate: (reference: string, patch: Partial<EffectOverride>) => void;
   onRemove: (reference: string) => void;
   onOpenViewer: (reference: string) => void;
+  /** Open the effect Inspector (function list + docs) on this reference. */
+  onInspect: (reference: string) => void;
 }) {
   const [cat, setCat] = useState<ParticleCategory | null>(null);
   const [prefix, setPrefix] = useState("");
@@ -297,6 +334,9 @@ export function EffectsBrowser({
                               hue={ov.hue}
                               saturation={ov.saturation}
                               mode={ov.mode}
+                              driver={ov.driver ?? "age"}
+                              gradientStops={ov.gradientStops ?? null}
+                              cycleSecs={ov.cycleSecs ?? 3}
                               height={200}
                             />
                           )}
@@ -329,6 +369,145 @@ export function EffectsBrowser({
                               ))}
                             </div>
                           </div>
+
+                          {/* Gradient driver: what samples the color ramp. */}
+                          {ov.mode !== "static" && (
+                            <div className="flex items-start gap-2 text-xs text-zinc-400">
+                              <span className="w-20 shrink-0 pt-0.5">Driver</span>
+                              <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
+                                {DRIVERS.map(([d, label, hint]) => (
+                                  <button
+                                    key={d}
+                                    onClick={() => onUpdate(file.reference, { driver: d as EffectOverride["driver"] })}
+                                    title={hint}
+                                    style={
+                                      (ov.driver ?? "age") === d
+                                        ? { borderColor: accent, color: accent }
+                                        : undefined
+                                    }
+                                    className="rounded-md border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-300 transition hover:border-zinc-500 hover:text-white"
+                                  >
+                                    {label}
+                                  </button>
+                                ))}
+                                {(ov.driver ?? "age") === "time" && (
+                                  <label className="ml-1 flex items-center gap-1 text-[11px] text-zinc-500">
+                                    every
+                                    <input
+                                      type="number"
+                                      min={0.5}
+                                      max={30}
+                                      step={0.5}
+                                      value={ov.cycleSecs ?? 3}
+                                      onChange={(e) =>
+                                        onUpdate(file.reference, { cycleSecs: Number(e.target.value) })
+                                      }
+                                      className="w-14 rounded border border-zinc-700 bg-zinc-950 px-1.5 py-0.5 text-right tabular-nums text-zinc-200 outline-none focus:border-zinc-500"
+                                    />
+                                    s
+                                  </label>
+                                )}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Custom gradient stops (rainbow mode). */}
+                          {ov.mode === "rainbow" && (
+                            <div className="flex items-start gap-2 text-xs text-zinc-400">
+                              <span className="w-20 shrink-0 pt-0.5">Gradient</span>
+                              <div className="min-w-0 flex-1">
+                                <div
+                                  className="h-3 w-full rounded-full border border-zinc-800"
+                                  style={{ background: gradientCss(ov.gradientStops ?? WHEEL) }}
+                                />
+                                {ov.gradientStops ? (
+                                  <div className="mt-1.5 flex flex-col gap-1">
+                                    {ov.gradientStops.map((s, si) => (
+                                      <div key={si} className="flex items-center gap-2">
+                                        <input
+                                          type="color"
+                                          value={rgbToHex(s.color)}
+                                          onChange={(e) => {
+                                            const next = ov.gradientStops!.map((x, xi) =>
+                                              xi === si ? { ...x, color: hexToRgb(e.target.value) } : x,
+                                            );
+                                            onUpdate(file.reference, { gradientStops: next });
+                                          }}
+                                          className="h-5 w-8 cursor-pointer rounded border border-zinc-700 bg-transparent"
+                                        />
+                                        <input
+                                          type="range"
+                                          min={0}
+                                          max={1}
+                                          step={0.01}
+                                          value={s.pos}
+                                          onChange={(e) => {
+                                            const next = ov.gradientStops!.map((x, xi) =>
+                                              xi === si ? { ...x, pos: Number(e.target.value) } : x,
+                                            );
+                                            onUpdate(file.reference, { gradientStops: next });
+                                          }}
+                                          className="h-1 flex-1 cursor-pointer"
+                                        />
+                                        <span className="w-9 shrink-0 text-right text-[10px] tabular-nums text-zinc-500">
+                                          {Math.round(s.pos * 100)}%
+                                        </span>
+                                        <button
+                                          onClick={() =>
+                                            onUpdate(file.reference, {
+                                              gradientStops:
+                                                ov.gradientStops!.length > 2
+                                                  ? ov.gradientStops!.filter((_, xi) => xi !== si)
+                                                  : ov.gradientStops,
+                                            })
+                                          }
+                                          disabled={ov.gradientStops!.length <= 2}
+                                          title="Remove stop (a gradient needs at least two)"
+                                          className="shrink-0 text-zinc-600 transition hover:text-red-300 disabled:opacity-30"
+                                        >
+                                          ✕
+                                        </button>
+                                      </div>
+                                    ))}
+                                    <div className="flex gap-2">
+                                      <button
+                                        onClick={() => {
+                                          const stops = ov.gradientStops!;
+                                          const last = stops[stops.length - 1];
+                                          onUpdate(file.reference, {
+                                            gradientStops: [
+                                              ...stops,
+                                              { pos: Math.min(1, last.pos + 0.1), color: last.color },
+                                            ],
+                                          });
+                                        }}
+                                        className="rounded border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-400 transition hover:border-zinc-500 hover:text-zinc-200"
+                                      >
+                                        + stop
+                                      </button>
+                                      <button
+                                        onClick={() => onUpdate(file.reference, { gradientStops: null })}
+                                        className="rounded border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-400 transition hover:border-zinc-500 hover:text-zinc-200"
+                                      >
+                                        Reset to rainbow
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <button
+                                    onClick={() =>
+                                      onUpdate(file.reference, {
+                                        gradientStops: WHEEL.map((s) => ({ ...s, color: [...s.color] as [number, number, number] })),
+                                      })
+                                    }
+                                    className="mt-1.5 rounded border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-400 transition hover:border-zinc-500 hover:text-zinc-200"
+                                  >
+                                    Customize colors...
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          )}
 
                           <label className="flex items-center gap-2 text-xs text-zinc-400">
                             <span className="w-20 shrink-0">
@@ -382,6 +561,13 @@ export function EffectsBrowser({
                               className="rounded-md border border-zinc-700 px-2.5 py-1 text-[11px] text-zinc-300 transition hover:border-zinc-500 hover:text-white"
                             >
                               Open in real viewer
+                            </button>
+                            <button
+                              onClick={() => onInspect(file.reference)}
+                              title="See every function this effect uses, with docs"
+                              className="rounded-md border border-zinc-700 px-2.5 py-1 text-[11px] text-zinc-300 transition hover:border-zinc-500 hover:text-white"
+                            >
+                              Functions + docs
                             </button>
                           </div>
                           <p className="text-[11px] text-zinc-600">

@@ -201,9 +201,28 @@ pub struct EffectOverride {
     /// particle lifetime).
     #[serde(default = "static_mode")]
     pub mode: String,
+    /// What samples the animated gradient: "age" | "noise" | "index" | "rope" |
+    /// "time". None = "age" (normalized particle lifetime, the original behavior).
+    #[serde(default)]
+    pub driver: Option<String>,
+    /// Custom gradient stops for rainbow/pulse. None = the built-in rainbow
+    /// wheel (rainbow) or bright/dim pulse (pulse).
+    #[serde(default)]
+    pub gradient_stops: Option<Vec<GradientStop>>,
+    /// Loop period in seconds for the "time" driver (effective default 3.0).
+    #[serde(default)]
+    pub cycle_secs: Option<f32>,
     /// Hash recorded after the last successful compile (null = never compiled).
     #[serde(default)]
     pub last_compiled_hash: Option<String>,
+}
+
+/// One stop of a custom color gradient: position in [0,1] + RGB color.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GradientStop {
+    pub pos: f32,
+    pub color: [u8; 3],
 }
 
 fn static_mode() -> String {

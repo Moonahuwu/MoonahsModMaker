@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
 import RegionsPlugin from "wavesurfer.js/dist/plugins/regions.esm.js";
 import TimelinePlugin from "wavesurfer.js/dist/plugins/timeline.esm.js";
@@ -37,6 +37,9 @@ interface WaveformProps {
   seekRef?: React.MutableRefObject<((t: number) => void) | null>;
   /** Live playhead position (seconds) as the waveform plays. */
   onTime?: (t: number) => void;
+  /** Show a zoom slider (horizontal px-per-second; the wave scrolls when
+   *  zoomed past the container width). */
+  zoomable?: boolean;
 }
 
 /**
@@ -44,8 +47,16 @@ interface WaveformProps {
  * marking the trim window. The region is the source of truth for trim edits;
  * `trimStart/trimEnd` seed it on load.
  */
-export function Waveform({ url, trimStart, trimEnd, onTrimChange, widthPct, onDuration, timeline, onTime, onRegionPlay, seekRef }: WaveformProps) {
+export function Waveform({ url, trimStart, trimEnd, onTrimChange, widthPct, onDuration, timeline, onTime, onRegionPlay, seekRef, zoomable }: WaveformProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const wsRef = useRef<WaveSurfer | null>(null);
+  // The trim region, once created - lets external trim edits (number fields,
+  // sync buttons) move the green window instead of only region drags writing
+  // back to state.
+  const regionRef = useRef<{ start: number; end: number; setOptions: (o: { start: number; end: number }) => void } | null>(null);
+  // Region updates echo through props; skip re-applying our own value.
+  const lastFromRegion = useRef<{ start: number; end: number } | null>(null);
+  const [zoom, setZoom] = useState(0); // 0 = fit width
   // Keep latest trim/callback without re-creating wavesurfer on every change.
   const trimRef = useRef({ trimStart, trimEnd });
   trimRef.current = { trimStart, trimEnd };
@@ -85,7 +96,7 @@ export function Waveform({ url, trimStart, trimEnd, onTrimChange, widthPct, onDu
       if (!cached) setCachedPeaks(url, ws.exportPeaks(), duration);
       onDurationRef.current?.(duration);
       const { trimStart: s, trimEnd: e } = trimRef.current;
-      regions.addRegion({
+      regionRef.current = regions.addRegion({
         start: Math.max(0, s),
         end: Math.min(e || duration, duration),
         color: "rgba(16, 185, 129, 0.18)",
@@ -95,6 +106,7 @@ export function Waveform({ url, trimStart, trimEnd, onTrimChange, widthPct, onDu
     });
 
     regions.on("region-updated", (region) => {
+      lastFromRegion.current = { start: region.start, end: region.end };
       onTrimChangeRef.current(region.start, region.end);
     });
 
@@ -128,13 +140,47 @@ export function Waveform({ url, trimStart, trimEnd, onTrimChange, widthPct, onDu
     };
     el.addEventListener("contextmenu", onContext);
 
+    wsRef.current = ws;
     return () => {
       el.removeEventListener("contextmenu", onContext);
       if (seekRef) seekRef.current = null;
+      regionRef.current = null;
+      wsRef.current = null;
       ws.destroy();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url]);
+
+  // External trim edits (number fields, sync buttons) move the region. Edits
+  // that ORIGINATED from a region drag echo back through props - skip those.
+  useEffect(() => {
+    const region = regionRef.current;
+    if (!region) return;
+    const dur = wsRef.current?.getDuration() ?? 0;
+    const start = Math.max(0, trimStart);
+    const end = trimEnd > start ? Math.min(trimEnd, dur || trimEnd) : dur || region.end;
+    const echo = lastFromRegion.current;
+    if (echo && Math.abs(echo.start - trimStart) < 0.011 && Math.abs(echo.end - trimEnd) < 0.011)
+      return;
+    if (Math.abs(region.start - start) < 0.011 && Math.abs(region.end - end) < 0.011) return;
+    region.setOptions({ start, end });
+  }, [trimStart, trimEnd]);
+
+  // Zoom: px per second; 0 falls back to fit-the-container.
+  useEffect(() => {
+    const ws = wsRef.current;
+    if (!ws || !zoomable) return;
+    try {
+      if (zoom > 0) ws.zoom(zoom);
+      else {
+        const el = containerRef.current;
+        const dur = ws.getDuration();
+        if (el && dur > 0) ws.zoom(el.clientWidth / dur);
+      }
+    } catch {
+      /* zoom before decode is a no-op */
+    }
+  }, [zoom, zoomable]);
 
   return (
     <div className="w-full">
@@ -143,6 +189,21 @@ export function Waveform({ url, trimStart, trimEnd, onTrimChange, widthPct, onDu
         className="cursor-pointer"
         style={widthPct != null ? { width: `${widthPct}%` } : { width: "100%" }}
       />
+      {zoomable && (
+        <div className="mt-1 flex items-center gap-2 text-[10px] text-zinc-600">
+          <span>zoom</span>
+          <input
+            type="range"
+            min={0}
+            max={400}
+            step={10}
+            value={zoom}
+            onChange={(e) => setZoom(Number(e.target.value))}
+            className="h-1 w-40 cursor-pointer"
+          />
+          {zoom > 0 ? <span className="tabular-nums">{zoom} px/s</span> : <span>fit</span>}
+        </div>
+      )}
     </div>
   );
 }

@@ -15,6 +15,9 @@ export function EffectPreview({
   hue,
   saturation,
   mode = "static",
+  driver = "age",
+  gradientStops = null,
+  cycleSecs = 3,
   height = 260,
 }: {
   sprites: string[];
@@ -22,12 +25,17 @@ export function EffectPreview({
   hue: number;
   saturation: number;
   mode?: "static" | "rainbow" | "pulse";
+  /** What samples the gradient (mirrors the compile): age, noise, index,
+   *  rope (position), or a looping time cycle. */
+  driver?: string | null;
+  gradientStops?: { pos: number; color: [number, number, number] }[] | null;
+  cycleSecs?: number | null;
   height?: number;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   // Live values read by the animation loop without restarting it.
-  const params = useRef({ hue, saturation, mode });
-  params.current = { hue, saturation, mode };
+  const params = useRef({ hue, saturation, mode, driver, gradientStops, cycleSecs });
+  params.current = { hue, saturation, mode, driver, gradientStops, cycleSecs };
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -41,43 +49,77 @@ export function EffectPreview({
     // Load the first usable sprite (the dominant one for most effects).
     const img = new Image();
     let ready = false;
-    const tint = document.createElement("canvas");
-    const tg = tint.getContext("2d")!;
-    let lastKey = "";
-    function retint(tSec: number) {
-      if (!ready) return;
-      const { hue, saturation, mode } = params.current;
-      let h = baseHsl.h + hue;
-      let s = Math.min(1, baseHsl.s * saturation);
-      let l = baseHsl.l;
-      if (mode === "rainbow") {
-        h += tSec * 120; // ~3s per full cycle
-        s = Math.min(1, Math.max(baseHsl.s, 0.65) * saturation);
-      } else if (mode === "pulse") {
-        l = baseHsl.l * (0.55 + 0.45 * Math.sin(tSec * 4)); // brightness oscillation
+    // A bank of pre-tinted sprites sampled across the gradient, so each
+    // particle can wear its own color (age/index/rope drivers) without
+    // re-tinting per particle per frame.
+    const BANK = 14;
+    const bank: HTMLCanvasElement[] = [];
+    let lastBankKey = "";
+
+    /** Gradient sample at k (0..1): custom stops, or the hue wheel offset by
+     *  the user's hue (rainbow), or the base color (static/pulse). */
+    function sampleGradient(k: number): { r: number; g: number; b: number } {
+      const { hue, saturation, mode, gradientStops } = params.current;
+      if (mode === "rainbow" && gradientStops && gradientStops.length >= 2) {
+        const stops = [...gradientStops].sort((a, b) => a.pos - b.pos);
+        const kk = Math.min(1, Math.max(0, k));
+        let lo = stops[0];
+        let hi = stops[stops.length - 1];
+        for (let i = 0; i < stops.length - 1; i++) {
+          if (kk >= stops[i].pos && kk <= stops[i + 1].pos) {
+            lo = stops[i];
+            hi = stops[i + 1];
+            break;
+          }
+        }
+        const span = hi.pos - lo.pos || 1;
+        const t = Math.min(1, Math.max(0, (kk - lo.pos) / span));
+        return {
+          r: Math.round(lo.color[0] + (hi.color[0] - lo.color[0]) * t),
+          g: Math.round(lo.color[1] + (hi.color[1] - lo.color[1]) * t),
+          b: Math.round(lo.color[2] + (hi.color[2] - lo.color[2]) * t),
+        };
       }
-      h = ((h % 360) + 360) % 360;
-      const c = hslToRgb(h, s, l);
-      const key = `${c.r},${c.g},${c.b}`;
-      if (key === lastKey) return;
-      lastKey = key;
-      tint.width = img.width;
-      tint.height = img.height;
-      tg.globalCompositeOperation = "source-over";
-      tg.clearRect(0, 0, tint.width, tint.height);
-      tg.drawImage(img, 0, 0);
-      tg.globalCompositeOperation = "source-in";
-      tg.fillStyle = `rgb(${c.r},${c.g},${c.b})`;
-      tg.fillRect(0, 0, tint.width, tint.height);
+      if (mode === "rainbow") {
+        const h = (((baseHsl.h + hue + k * 360) % 360) + 360) % 360;
+        const s = Math.min(1, Math.max(baseHsl.s, 0.65) * saturation);
+        return hslToRgb(h, s, 0.5);
+      }
+      // static/pulse: one hue-shifted color; pulse dims over the bank index.
+      let l = baseHsl.l;
+      if (mode === "pulse") l = baseHsl.l * (0.2 + 0.8 * k);
+      const h = (((baseHsl.h + hue) % 360) + 360) % 360;
+      return hslToRgb(h, Math.min(1, baseHsl.s * saturation), l);
+    }
+
+    function rebuildBank() {
+      if (!ready) return;
+      const { hue, saturation, mode, gradientStops } = params.current;
+      const key = JSON.stringify([hue, saturation, mode, gradientStops]);
+      if (key === lastBankKey) return;
+      lastBankKey = key;
+      bank.length = 0;
+      for (let i = 0; i < BANK; i++) {
+        const c = sampleGradient(i / (BANK - 1));
+        const t = document.createElement("canvas");
+        t.width = img.width;
+        t.height = img.height;
+        const tg = t.getContext("2d")!;
+        tg.drawImage(img, 0, 0);
+        tg.globalCompositeOperation = "source-in";
+        tg.fillStyle = `rgb(${c.r},${c.g},${c.b})`;
+        tg.fillRect(0, 0, t.width, t.height);
+        bank.push(t);
+      }
     }
     img.onload = () => {
       ready = true;
-      lastKey = "";
-      retint(0);
+      lastBankKey = "";
+      rebuildBank();
     };
     if (sprites[0]) img.src = convertFileSrc(sprites[0]);
 
-    type P = { x: number; y: number; vx: number; vy: number; life: number; max: number; sz: number; rot: number; vr: number };
+    type P = { x: number; y: number; vx: number; vy: number; life: number; max: number; sz: number; rot: number; vr: number; seed: number };
     const particles: P[] = [];
     function spawn() {
       const a = Math.random() * Math.PI * 2;
@@ -92,7 +134,27 @@ export function EffectPreview({
         sz: 46 + Math.random() * 80,
         rot: Math.random() * 6.28,
         vr: (Math.random() - 0.5) * 1.1,
+        seed: Math.random(),
       });
+    }
+
+    /** Which gradient sample this particle wears right now. */
+    function gradientPos(p: P, tSec: number): number {
+      const { mode, driver, cycleSecs } = params.current;
+      if (mode === "pulse") return 0.6 + 0.4 * Math.sin(tSec * 4);
+      if (mode !== "rainbow") return 0.5;
+      switch (driver ?? "age") {
+        case "time":
+          return (tSec / Math.max(0.5, cycleSecs ?? 3)) % 1;
+        case "noise":
+          return (p.seed + tSec * 0.22) % 1;
+        case "index":
+          return p.seed;
+        case "rope":
+          return Math.min(1, Math.max(0, p.x / W));
+        default: // age
+          return p.life / p.max;
+      }
     }
 
     let raf = 0;
@@ -101,7 +163,8 @@ export function EffectPreview({
     function frame(now: number) {
       const dt = Math.min(0.05, (now - prev) / 1000);
       prev = now;
-      retint((now - start) / 1000);
+      const tSec = (now - start) / 1000;
+      rebuildBank();
       for (let i = 0; i < 3; i++) spawn();
       g.globalCompositeOperation = "source-over";
       g.fillStyle = "rgba(0,0,0,0.26)";
@@ -123,7 +186,13 @@ export function EffectPreview({
         g.translate(p.x, p.y);
         g.rotate(p.rot);
         g.globalAlpha = Math.sin(k * Math.PI) * 0.5;
-        if (ready) g.drawImage(tint, -p.sz / 2, -p.sz / 2, p.sz, p.sz);
+        if (ready && bank.length > 0) {
+          const idx = Math.min(
+            BANK - 1,
+            Math.max(0, Math.round(gradientPos(p, tSec) * (BANK - 1))),
+          );
+          g.drawImage(bank[idx], -p.sz / 2, -p.sz / 2, p.sz, p.sz);
+        }
         g.restore();
       }
       g.globalAlpha = 1;

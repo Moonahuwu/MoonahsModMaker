@@ -326,6 +326,12 @@ export interface EffectCompile {
   hue: number;
   saturation: number;
   mode: string;
+  /** Gradient driver for animated modes (age/noise/index/rope/time). */
+  driver?: string | null;
+  /** Custom gradient stops; null = the built-in rainbow wheel / pulse. */
+  gradientStops?: { pos: number; color: [number, number, number] }[] | null;
+  /** Loop period for the time driver, seconds. */
+  cycleSecs?: number | null;
   currentHash: string;
   lastCompiledHash?: string | null;
 }
@@ -1070,6 +1076,9 @@ export interface GbModInfo {
   /** The local vpk's MD5 matched one of the page's release files. Best
    *  effort: downloads are often zips, so false proves nothing. */
   md5Verified: boolean;
+  /** Preview image, stashed frontend-side when a link is made via the search
+   *  picker (the backend fetch doesn't return one). Old links lack it. */
+  thumbUrl?: string;
 }
 
 /** Fetch a GameBanana mod page's name/author/credits for attribution.
@@ -1147,6 +1156,8 @@ export interface GbFile {
   downloadUrl: string;
   downloadCount: number;
   description: string;
+  /** Upload time (unix secs) - 0 when the API didn't provide one. */
+  date: number;
 }
 
 /** The downloadable files on a mod page (a page can ship several variants). */
@@ -1291,6 +1302,56 @@ export function posterSheet(
   refresh = false,
 ): Promise<PosterSheet> {
   return invoke("poster_sheet", { helperPath, pakPath, material, refresh });
+}
+
+/** Decompile a particle from the game pak and return its KV3 source text
+ *  (feeds the Inspector's outline view). */
+export function readParticleText(
+  helperPath: string,
+  pakPath: string,
+  particlePath: string,
+): Promise<string> {
+  return invoke("read_particle_text", { helperPath, pakPath, particlePath });
+}
+
+/** Stage a particle (+ its children) as sources into the CSDK's eim_inspect
+ *  addon and launch the CSDK tools on it. Returns a summary line. */
+export function openInParticleEditor(
+  csdkRoot: string,
+  helperPath: string,
+  pakPath: string,
+  particlePath: string,
+): Promise<string> {
+  return invoke("open_in_particle_editor", { csdkRoot, helperPath, pakPath, particlePath });
+}
+
+export interface PackScan {
+  /** Content kinds carried (sound/model/vfx/ui/texture/config/other). */
+  kinds: string[];
+  /** Local file/dir mtime (unix secs) - baseline for the GB update check. */
+  mtime: number;
+  /** Same-file overlaps with other bundled packs (real clobbers: the
+   *  later-staged pack wins; merged soundevents are excluded). */
+  overlaps: { other: string; count: number }[];
+}
+
+/** Scan bundled packs: content kinds, mtimes, and pack-vs-pack overlaps. */
+export function packScan(
+  helperPath: string,
+  paths: string[],
+): Promise<Record<string, PackScan>> {
+  return invoke("pack_scan", { helperPath, paths });
+}
+
+/** Open a particle in Source 2 Viewer with its child tree staged alongside,
+ *  so the whole effect renders instead of just the one system. */
+export function openInS2v(
+  viewerPath: string,
+  helperPath: string,
+  pakPath: string,
+  particlePath: string,
+): Promise<string> {
+  return invoke("open_in_s2v", { viewerPath, helperPath, pakPath, particlePath });
 }
 
 /** Open a particle in an external viewer (VRF's Source2Viewer). */

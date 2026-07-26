@@ -337,6 +337,16 @@ pub struct EffectCompile {
     /// "static" | "rainbow" | "pulse".
     #[serde(default = "default_static")]
     pub mode: String,
+    /// Gradient sampling driver: "age" | "noise" | "index" | "rope" | "time".
+    /// None = "age" (normalized particle lifetime).
+    #[serde(default)]
+    pub driver: Option<String>,
+    /// Custom gradient stops; None = built-in rainbow wheel / pulse pair.
+    #[serde(default)]
+    pub gradient_stops: Option<Vec<crate::project::GradientStop>>,
+    /// Loop period in seconds for the "time" driver (effective default 3.0).
+    #[serde(default)]
+    pub cycle_secs: Option<f32>,
     #[serde(default)]
     pub current_hash: Option<String>,
     #[serde(default)]
@@ -1060,57 +1070,230 @@ fn recolor_line(line: &str, hue: f32, sat: f32) -> Option<String> {
     Some(format!("{}[{}]{}", &line[..open], inner, &line[close + 1..]))
 }
 
-/// Build a chain of `C_OP_ColorInterpolate` operators that animate a particle's
-/// color over its lifetime: `rainbow` cycles the full hue wheel, `pulse`
-/// oscillates a hue's brightness. Each op fades to its target over a time window.
-fn color_animation_ops(mode: &str, hue: f32, sat: f32) -> String {
-    let s = sat.clamp(0.0, 1.0);
-    // (r,g,b) targets for the cycle, tiled across particle age [0,1].
-    let stops: Vec<(u8, u8, u8)> = if mode == "pulse" {
-        let bright = hsl_to_rgb(hue, s.max(0.2), 0.6);
-        let dim = hsl_to_rgb(hue, s.max(0.2), 0.12);
-        vec![bright, dim, bright, dim, bright]
-    } else {
-        // rainbow: 6 hue steps around the wheel (+ closing the loop = 7 targets).
-        (0..=6).map(|i| hsl_to_rgb(hue + i as f32 * 60.0, s.max(0.6), 0.5)).collect()
+/// The vpcf63 header segment the CSDK toolchain is happy with. resourcecompiler
+/// HARD-FAILS on vpcf64+ sources ("No valid format conversion") and SILENTLY
+/// STRIPS newer operators (e.g. C_OP_CycleScalar) from vpcf61 sources; vpcf63
+/// is the proven sweet spot.
+const VPCF63_SEGMENT: &str = "format:vpcf63:version{a6e6a69e-52d3-4527-8b9c-ff3bb91aca3e}";
+
+/// Rewrite the `format:vpcfNN:version{...}` segment of a decompiled particle's
+/// kv3 header line to vpcf63 (see `VPCF63_SEGMENT`). First line only; sources
+/// without a vpcf format segment pass through untouched.
+pub(crate) fn normalize_vpcf_header(text: &str) -> String {
+    let line_end = text.find('\n').unwrap_or(text.len());
+    let header = &text[..line_end];
+    let Some(start) = header.find("format:vpcf") else {
+        return text.to_string();
     };
-    let n = stops.len();
-    let mut out = String::new();
-    for (i, (r, g, b)) in stops.iter().enumerate() {
-        // First target snaps in fast; the rest tile the remaining lifetime.
-        let (start, end) = if i == 0 {
-            (0.0_f32, 0.02_f32)
-        } else {
-            ((i - 1) as f32 / (n - 1) as f32, i as f32 / (n - 1) as f32)
-        };
-        out.push_str(&format!(
-            "\t\t{{\n\t\t\t_class = \"C_OP_ColorInterpolate\"\n\t\t\tm_ColorFade = [ {r}, {g}, {b}, 255 ]\n\t\t\tm_flFadeStartTime = {start}\n\t\t\tm_flFadeEndTime = {end}\n\t\t}},\n"
-        ));
-    }
-    out
+    let Some(ver_rel) = header[start..].find("version{") else {
+        return text.to_string();
+    };
+    let Some(close_rel) = header[start + ver_rel..].find('}') else {
+        return text.to_string();
+    };
+    let end = start + ver_rel + close_rel + 1;
+    format!("{}{}{}", &header[..start], VPCF63_SEGMENT, &text[end..])
 }
 
-/// Inject color-animation operators into a vpcf's `m_Operators` array. Falls back
-/// to a static recolor when the particle has no operators array to extend.
-fn animate_particle_source(text: &str, mode: &str, hue: f32, sat: f32) -> String {
-    let ops = color_animation_ops(mode, hue, sat);
-    // Find the `m_Operators = ` key, then its opening `[` + newline, insert after.
+/// The identity-curve age driver: gradient position = normalized particle age.
+const AGE_INTERP: &str = concat!(
+    "\t\t\t\t{\n",
+    "\t\t\t\t\tm_nType = \"PF_TYPE_PARTICLE_AGE_NORMALIZED\"\n",
+    "\t\t\t\t\tm_flInput0 = 0.0\n",
+    "\t\t\t\t\tm_flInput1 = 1.0\n",
+    "\t\t\t\t\tm_flOutput0 = 0.0\n",
+    "\t\t\t\t\tm_flOutput1 = 1.0\n",
+    "\t\t\t\t\tm_Curve = \n",
+    "\t\t\t\t\t{\n",
+    "\t\t\t\t\t\tm_spline = \n",
+    "\t\t\t\t\t\t[\n",
+    "\t\t\t\t\t\t\t{\n\t\t\t\t\t\t\t\tx = 0.0\n\t\t\t\t\t\t\t\ty = 0.0\n\t\t\t\t\t\t\t\tm_flSlopeIncoming = 1.0\n\t\t\t\t\t\t\t\tm_flSlopeOutgoing = 1.0\n\t\t\t\t\t\t\t},\n",
+    "\t\t\t\t\t\t\t{\n\t\t\t\t\t\t\t\tx = 1.0\n\t\t\t\t\t\t\t\ty = 1.0\n\t\t\t\t\t\t\t\tm_flSlopeIncoming = 1.0\n\t\t\t\t\t\t\t\tm_flSlopeOutgoing = 1.0\n\t\t\t\t\t\t\t},\n",
+    "\t\t\t\t\t\t]\n",
+    "\t\t\t\t\t\tm_tangents = \n",
+    "\t\t\t\t\t\t[\n",
+    "\t\t\t\t\t\t\t{\n\t\t\t\t\t\t\t\tm_nIncomingTangent = \"CURVE_TANGENT_SPLINE\"\n\t\t\t\t\t\t\t\tm_nOutgoingTangent = \"CURVE_TANGENT_SPLINE\"\n\t\t\t\t\t\t\t},\n",
+    "\t\t\t\t\t\t\t{\n\t\t\t\t\t\t\t\tm_nIncomingTangent = \"CURVE_TANGENT_SPLINE\"\n\t\t\t\t\t\t\t\tm_nOutgoingTangent = \"CURVE_TANGENT_SPLINE\"\n\t\t\t\t\t\t\t},\n",
+    "\t\t\t\t\t\t]\n",
+    "\t\t\t\t\t\tm_vDomainMins = [ 0.0, 0.0 ]\n",
+    "\t\t\t\t\t\tm_vDomainMaxs = [ 1.0, 1.0 ]\n",
+    "\t\t\t\t\t}\n",
+    "\t\t\t\t}\n",
+);
+
+/// The looping-time driver reads per-particle scalar field 18, kept cycling
+/// 0..1 by a C_OP_CycleScalar op. (PF_INPUT_MODE_LOOPED on COLLECTION_AGE does
+/// NOT loop at runtime - never use it.)
+const TIME_INTERP: &str = concat!(
+    "\t\t\t\t{\n",
+    "\t\t\t\t\tm_nType = \"PF_TYPE_PARTICLE_FLOAT\"\n",
+    "\t\t\t\t\tm_nScalarAttribute = 18\n",
+    "\t\t\t\t\tm_flInput0 = 0.0\n",
+    "\t\t\t\t\tm_flInput1 = 1.0\n",
+    "\t\t\t\t\tm_flOutput0 = 0.0\n",
+    "\t\t\t\t\tm_flOutput1 = 1.0\n",
+    "\t\t\t\t}\n",
+);
+
+/// Per-particle spatial noise driver (shimmering, non-uniform color).
+const NOISE_INTERP: &str = concat!(
+    "\t\t\t\t{\n",
+    "\t\t\t\t\tm_nType = \"PF_TYPE_PARTICLE_NOISE\"\n",
+    "\t\t\t\t\tm_flNoiseOutputMin = 0.0\n",
+    "\t\t\t\t\tm_flNoiseOutputMax = 1.0\n",
+    "\t\t\t\t\tm_flNoiseScale = 0.005\n",
+    "\t\t\t\t\tm_vecNoiseOffsetRate = [ 0.0, 0.0, 250.0 ]\n",
+    "\t\t\t\t}\n",
+);
+
+/// Build the color-animation operator(s): one `C_OP_SetVec` writing the tint
+/// attribute (field 6) through a multi-stop color gradient, sampled by the
+/// override's driver (particle age by default). Chained `C_OP_ColorInterpolate`
+/// ops do NOT compose - each lerps initial->target with a clamped window every
+/// frame, so the last op in the list wins and the chain shows nothing. The
+/// gradient input is the mechanism vanilla rainbow effects (unicorn flux) use.
+/// The "time" driver additionally emits a C_OP_CycleScalar BEFORE the SetVec.
+fn color_animation_ops(ov: &EffectCompile) -> String {
+    let s = ov.saturation.clamp(0.0, 1.0);
+    // (position, rgb) gradient stops tiled across the driver's [0,1] range:
+    // the user's custom stops when at least two are given, else the built-ins.
+    let mut stops: Vec<(f32, (u8, u8, u8))> = match ov.gradient_stops.as_deref() {
+        Some(gs) if gs.len() >= 2 => gs
+            .iter()
+            .map(|g| (g.pos.clamp(0.0, 1.0), (g.color[0], g.color[1], g.color[2])))
+            .collect(),
+        _ if ov.mode == "pulse" => {
+            let bright = hsl_to_rgb(ov.hue, s.max(0.2), 0.6);
+            let dim = hsl_to_rgb(ov.hue, s.max(0.2), 0.12);
+            vec![(0.0, bright), (0.25, dim), (0.5, bright), (0.75, dim), (1.0, bright)]
+        }
+        // rainbow: 6 hue steps around the wheel (+ closing the loop = 7 stops).
+        _ => (0..=6)
+            .map(|i| (i as f32 / 6.0, hsl_to_rgb(ov.hue + i as f32 * 60.0, s.max(0.6), 0.5)))
+            .collect(),
+    };
+    stops.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let stops_text: String = stops
+        .iter()
+        .map(|(pos, (r, g, b))| {
+            format!(
+                "\t\t\t\t\t\t{{\n\t\t\t\t\t\t\tm_flPosition = {pos:.4}\n\t\t\t\t\t\t\tm_Color = [ {r}, {g}, {b} ]\n\t\t\t\t\t\t}},\n"
+            )
+        })
+        .collect();
+    let driver = ov.driver.as_deref().unwrap_or("age");
+    let interp: String = match driver {
+        "time" => TIME_INTERP.to_string(),
+        "noise" => NOISE_INTERP.to_string(),
+        "index" | "rope" => {
+            let ty = if driver == "rope" {
+                "PF_TYPE_PARTICLE_ROPE_SEGMENT_NORMALIZED"
+            } else {
+                "PF_TYPE_PARTICLE_NUMBER_NORMALIZED"
+            };
+            format!(
+                concat!(
+                    "\t\t\t\t{{\n",
+                    "\t\t\t\t\tm_nType = \"{ty}\"\n",
+                    "\t\t\t\t\tm_flInput0 = 0.0\n",
+                    "\t\t\t\t\tm_flInput1 = 1.0\n",
+                    "\t\t\t\t\tm_flOutput0 = 0.0\n",
+                    "\t\t\t\t\tm_flOutput1 = 1.0\n",
+                    "\t\t\t\t}}\n",
+                ),
+                ty = ty
+            )
+        }
+        _ => AGE_INTERP.to_string(),
+    };
+    let set_vec = format!(
+        concat!(
+            "\t\t{{\n",
+            "\t\t\t_class = \"C_OP_SetVec\"\n",
+            "\t\t\tm_nOutputField = 6\n",
+            "\t\t\tm_nSetMethod = \"PARTICLE_SET_REPLACE_VALUE\"\n",
+            "\t\t\tm_InputValue = \n",
+            "\t\t\t{{\n",
+            "\t\t\t\tm_nType = \"PVEC_TYPE_FLOAT_INTERP_GRADIENT\"\n",
+            "\t\t\t\tm_FloatInterp = \n",
+            "{interp}",
+            "\t\t\t\tm_flInterpInput0 = 0.0\n",
+            "\t\t\t\tm_flInterpInput1 = 1.0\n",
+            "\t\t\t\tm_vInterpOutput0 = [ 0.0, 0.0, 0.0 ]\n",
+            "\t\t\t\tm_vInterpOutput1 = [ 1.0, 1.0, 1.0 ]\n",
+            "\t\t\t\tm_Gradient = \n",
+            "\t\t\t\t{{\n",
+            "\t\t\t\t\tm_Stops = \n",
+            "\t\t\t\t\t[\n",
+            "{stops}",
+            "\t\t\t\t\t]\n",
+            "\t\t\t\t}}\n",
+            "\t\t\t}}\n",
+            "\t\t}},\n",
+        ),
+        interp = interp,
+        stops = stops_text
+    );
+    if driver == "time" {
+        let cycle = ov.cycle_secs.unwrap_or(3.0);
+        let cycler = format!(
+            concat!(
+                "\t\t{{\n",
+                "\t\t\t_class = \"C_OP_CycleScalar\"\n",
+                "\t\t\tm_flStartValue = 0.0\n",
+                "\t\t\tm_flEndValue = 1.0\n",
+                "\t\t\tm_flCycleTime = {cycle:.4}\n",
+                "\t\t\tm_nDestField = 18\n",
+                "\t\t}},\n",
+            ),
+            cycle = cycle
+        );
+        format!("{cycler}{set_vec}")
+    } else {
+        set_vec
+    }
+}
+
+/// Inject the color-animation operator into a vpcf's `m_Operators` array.
+/// Appended at the END of the array: the tint write must run after the
+/// effect's own color operators, or they overwrite it again next frame.
+/// Falls back to a static recolor when there is no operators array to extend.
+fn animate_particle_source(text: &str, ov: &EffectCompile) -> String {
+    let ops = color_animation_ops(ov);
     if let Some(k) = text.find("m_Operators") {
         if let Some(rel) = text[k..].find('[') {
-            let bracket = k + rel;
-            // advance past the newline following '['
-            if let Some(nl) = text[bracket..].find('\n') {
-                let insert_at = bracket + nl + 1;
-                let mut out = String::with_capacity(text.len() + ops.len());
-                out.push_str(&text[..insert_at]);
-                out.push_str(&ops);
-                out.push_str(&text[insert_at..]);
-                return out;
+            let open = k + rel;
+            // Matching close bracket of the array (string-aware depth scan).
+            let bytes = text.as_bytes();
+            let mut depth = 0i32;
+            let mut in_str = false;
+            let mut close = None;
+            let mut i = open;
+            while i < bytes.len() {
+                match bytes[i] {
+                    b'\\' if in_str => i += 1,
+                    b'"' => in_str = !in_str,
+                    b'[' | b'{' if !in_str => depth += 1,
+                    b']' | b'}' if !in_str => {
+                        depth -= 1;
+                        if depth == 0 {
+                            close = Some(i);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+            if let Some(close) = close {
+                let before = &text[..close];
+                let glue = if before.ends_with('\n') || before.ends_with('\t') { "" } else { "\n" };
+                return format!("{before}{glue}{ops}\t{}", &text[close..]);
             }
         }
     }
     // No operators array — animation can't be injected; recolor statically.
-    recolor_particle_source(text, hue, sat)
+    recolor_particle_source(text, ov.hue, ov.saturation)
 }
 
 /// Hue/sat-shift every color literal in a vpcf source, leaving all else intact.
@@ -1192,8 +1375,12 @@ fn compile_effect_overrides(
                 continue;
             }
         };
+        // Newer effects decompile as vpcf64+ which the CSDK compiler rejects
+        // outright (and vpcf61 silently drops newer ops) - pin every source,
+        // static recolors included, to the proven vpcf63 header.
+        let text = normalize_vpcf_header(&text);
         let transformed = match ov.mode.as_str() {
-            "rainbow" | "pulse" => animate_particle_source(&text, &ov.mode, ov.hue, ov.saturation),
+            "rainbow" | "pulse" => animate_particle_source(&text, ov),
             _ => recolor_particle_source(&text, ov.hue, ov.saturation),
         };
         if let Err(e) = std::fs::write(&content_vpcf, transformed) {
@@ -4662,24 +4849,133 @@ mod tests {
         assert_eq!(recolor_particle_source(src, 0.0, 1.0), src);
     }
 
+    /// Test-fixture EffectCompile with the animation knobs defaulted.
+    fn fx(mode: &str, hue: f32, sat: f32) -> EffectCompile {
+        EffectCompile {
+            target_ref: "particles/test.vpcf".into(),
+            hue,
+            saturation: sat,
+            mode: mode.into(),
+            driver: None,
+            gradient_stops: None,
+            cycle_secs: None,
+            current_hash: None,
+            last_compiled_hash: None,
+        }
+    }
+
     #[test]
-    fn rainbow_injects_color_ops_into_operators() {
+    fn rainbow_injects_gradient_color_op() {
         let src = "{\n\tm_Operators = \n\t[\n\t\t{\n\t\t\t_class = \"C_OP_BasicMovement\"\n\t\t},\n\t]\n}\n";
-        let out = animate_particle_source(src, "rainbow", 0.0, 1.0);
-        // Injected several ColorInterpolate ops with fade windows, before the existing op.
-        assert!(out.matches("C_OP_ColorInterpolate").count() >= 6);
-        assert!(out.contains("m_flFadeEndTime"));
-        let ci = out.find("C_OP_ColorInterpolate").unwrap();
+        let out = animate_particle_source(src, &fx("rainbow", 0.0, 1.0));
+        // One gradient Set Vec driving tint over normalized age, with the full
+        // hue wheel as stops.
+        assert_eq!(out.matches("C_OP_SetVec").count(), 1);
+        assert!(out.contains("PVEC_TYPE_FLOAT_INTERP_GRADIENT"));
+        assert!(out.contains("PF_TYPE_PARTICLE_AGE_NORMALIZED"));
+        assert_eq!(out.matches("m_flPosition").count(), 7);
+        // Appended AFTER existing ops (still inside the array) so its tint
+        // write wins the frame.
+        let sv = out.find("C_OP_SetVec").unwrap();
         let bm = out.find("C_OP_BasicMovement").unwrap();
-        assert!(ci < bm, "animation ops must be inside m_Operators, before existing ops");
+        assert!(bm < sv, "gradient op must come after existing ops");
+        let arr_close = out.rfind("\t]").unwrap();
+        assert!(sv < arr_close, "gradient op must sit inside m_Operators");
     }
 
     #[test]
     fn animate_falls_back_to_recolor_without_operators() {
         // No m_Operators array → static recolor instead of a broken injection.
         let src = "\tm_ConstantColor = [ 255, 0, 0, 255 ]\n";
-        let out = animate_particle_source(src, "rainbow", 120.0, 1.0);
+        let out = animate_particle_source(src, &fx("rainbow", 120.0, 1.0));
         assert_eq!(out, "\tm_ConstantColor = [ 0, 255, 0, 255 ]\n");
+    }
+
+    #[test]
+    fn header_normalizes_vpcf61_and_vpcf64_to_vpcf63() {
+        let want = "format:vpcf63:version{a6e6a69e-52d3-4527-8b9c-ff3bb91aca3e}";
+        for n in ["61", "64"] {
+            let src = format!(
+                "<!-- kv3 encoding:text:version{{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d}} format:vpcf{n}:version{{deadbeef-0000-0000-0000-000000000000}} -->\n{{\n\tm_Operators = \n\t[\n\t]\n}}\n"
+            );
+            let out = normalize_vpcf_header(&src);
+            assert!(out.contains(want), "vpcf{n} header must be rewritten");
+            assert!(!out.contains(&format!("format:vpcf{n}:")));
+            // Encoding segment + body ride through byte-identical.
+            assert!(out.starts_with("<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} format:vpcf63:"));
+            assert!(out.ends_with(" -->\n{\n\tm_Operators = \n\t[\n\t]\n}\n"));
+        }
+        // Non-vpcf headers pass through untouched.
+        let other = "<!-- kv3 encoding:text:version{x} format:generic:version{y} -->\n{\n}\n";
+        assert_eq!(normalize_vpcf_header(other), other);
+    }
+
+    #[test]
+    fn time_driver_emits_cycle_scalar_before_set_vec() {
+        let mut ov = fx("rainbow", 0.0, 1.0);
+        ov.driver = Some("time".into());
+        ov.cycle_secs = Some(2.5);
+        let out = color_animation_ops(&ov);
+        assert!(out.contains("C_OP_CycleScalar"));
+        assert!(out.contains("m_flStartValue = 0.0"));
+        assert!(out.contains("m_flEndValue = 1.0"));
+        assert!(out.contains("m_flCycleTime = 2.5000"));
+        assert!(out.contains("m_nDestField = 18"));
+        // The SetVec samples the cycled per-particle scalar field 18.
+        assert!(out.contains("PF_TYPE_PARTICLE_FLOAT"));
+        assert!(out.contains("m_nScalarAttribute = 18"));
+        let cyc = out.find("C_OP_CycleScalar").unwrap();
+        let sv = out.find("C_OP_SetVec").unwrap();
+        assert!(cyc < sv, "cycler must precede the SetVec");
+        // Default period when cycle_secs is unset.
+        ov.cycle_secs = None;
+        assert!(color_animation_ops(&ov).contains("m_flCycleTime = 3.0000"));
+    }
+
+    #[test]
+    fn noise_driver_emits_particle_noise_interp() {
+        let mut ov = fx("rainbow", 0.0, 1.0);
+        ov.driver = Some("noise".into());
+        let out = color_animation_ops(&ov);
+        assert!(out.contains("PF_TYPE_PARTICLE_NOISE"));
+        assert!(out.contains("m_flNoiseOutputMin = 0.0"));
+        assert!(out.contains("m_flNoiseOutputMax = 1.0"));
+        assert!(out.contains("m_flNoiseScale = 0.005"));
+        assert!(out.contains("m_vecNoiseOffsetRate = [ 0.0, 0.0, 250.0 ]"));
+        // No cycler for a non-time driver.
+        assert!(!out.contains("C_OP_CycleScalar"));
+    }
+
+    #[test]
+    fn index_and_rope_drivers_emit_their_pf_types() {
+        let mut ov = fx("rainbow", 0.0, 1.0);
+        ov.driver = Some("index".into());
+        assert!(color_animation_ops(&ov).contains("PF_TYPE_PARTICLE_NUMBER_NORMALIZED"));
+        ov.driver = Some("rope".into());
+        assert!(color_animation_ops(&ov).contains("PF_TYPE_PARTICLE_ROPE_SEGMENT_NORMALIZED"));
+    }
+
+    #[test]
+    fn custom_gradient_stops_are_used_and_sorted() {
+        use crate::project::GradientStop;
+        let mut ov = fx("rainbow", 0.0, 1.0);
+        ov.gradient_stops = Some(vec![
+            GradientStop { pos: 0.8, color: [1, 2, 3] },
+            GradientStop { pos: 0.2, color: [9, 8, 7] },
+            GradientStop { pos: 1.5, color: [4, 5, 6] }, // clamped to 1.0
+        ]);
+        let out = color_animation_ops(&ov);
+        assert!(out.contains("m_Color = [ 1, 2, 3 ]"));
+        assert!(out.contains("m_Color = [ 9, 8, 7 ]"));
+        assert!(out.contains("m_flPosition = 1.0000"));
+        // Sorted by position: 0.2 stop first even though it was listed second.
+        let a = out.find("m_Color = [ 9, 8, 7 ]").unwrap();
+        let b = out.find("m_Color = [ 1, 2, 3 ]").unwrap();
+        assert!(a < b, "stops must be sorted by position");
+        assert_eq!(out.matches("m_flPosition").count(), 3);
+        // A single stop is not a gradient: fall back to the built-in wheel.
+        ov.gradient_stops = Some(vec![GradientStop { pos: 0.0, color: [1, 2, 3] }]);
+        assert_eq!(color_animation_ops(&ov).matches("m_flPosition").count(), 7);
     }
 
     #[test]
@@ -5111,6 +5407,9 @@ mod tests {
                 hue: 150.0,
                 saturation: 1.0,
                 mode: "static".into(),
+                driver: None,
+                gradient_stops: None,
+                cycle_secs: None,
                 current_hash: Some("h1".into()),
                 last_compiled_hash: None,
             }],

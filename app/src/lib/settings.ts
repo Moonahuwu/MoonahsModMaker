@@ -562,6 +562,9 @@ export function buildCompileConfig(
     hue: e.hue,
     saturation: e.saturation,
     mode: e.mode,
+    driver: e.driver ?? null,
+    gradientStops: e.gradientStops ?? null,
+    cycleSecs: e.cycleSecs ?? null,
     currentHash: effectHash(e),
     lastCompiledHash: e.lastCompiledHash ?? null,
   }));
