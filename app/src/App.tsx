@@ -30,6 +30,7 @@ import {
   loadState,
   newProject,
   probeAudio,
+  vaultFile,
   readEventPools,
   refreshVanilla as refreshVanillaApi,
   listEditableEvents,
@@ -795,11 +796,13 @@ export default function App() {
   // Replace / clear one hero image slot (rides the icon-mod pipeline).
   async function pickHeroImage(img: HeroImage) {
     if (!selectedHero) return;
-    const picked = await openDialog({
+    const chosen = await openDialog({
       multiple: false,
       filters: [{ name: "Image", extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }],
     });
-    if (typeof picked !== "string") return;
+    if (typeof chosen !== "string") return;
+    // Vault the art into app-data so a Downloads cleanup can't break compiles.
+    const picked = await vaultFile(chosen).catch(() => chosen);
     const id = `heroimg_${selectedHero}_${img.kind}`;
     // Slots without known dimensions (name logo, ability icons) take the
     // user art's own size so nothing gets squashed to a square.
@@ -888,11 +891,12 @@ export default function App() {
   /** Replace one hero material's color map (keeps any hue already set). */
   async function pickHeroTexture(mat: HeroMaterialInfo) {
     if (!selectedHero) return;
-    const picked = await openDialog({
+    const chosen = await openDialog({
       multiple: false,
       filters: [{ name: "Image", extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }],
     });
-    if (typeof picked !== "string") return;
+    if (typeof chosen !== "string") return;
+    const picked = await vaultFile(chosen).catch(() => chosen);
     const hero = selectedHero;
     const id = `herotex_${hero}_${mat.name}`;
     setProject((prev) => {

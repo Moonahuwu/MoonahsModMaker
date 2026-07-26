@@ -1325,6 +1325,12 @@ export function openInParticleEditor(
   return invoke("open_in_particle_editor", { csdkRoot, helperPath, pakPath, particlePath });
 }
 
+/** Copy a user-picked media file into the app-data vault (returns the vaulted
+ *  path) so overrides survive the user tidying their Downloads folder. */
+export function vaultFile(path: string): Promise<string> {
+  return invoke("vault_file", { path });
+}
+
 export interface DecodedTexture {
   png: string;
   width: number;

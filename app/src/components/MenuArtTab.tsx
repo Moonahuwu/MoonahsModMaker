@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { decodePakTexture } from "../lib/api";
+import { decodePakTexture, vaultFile } from "../lib/api";
 import type { IconMod } from "../types";
 import { useToast } from "./Toaster";
 
@@ -119,8 +119,10 @@ export function MenuArtTab({
     iconMods.find((m) => m.id === idOf(slot.slug) || m.targetVtexc === targetOf(slot.path));
 
   async function replaceSlot(slot: MenuSlot) {
-    const picked = await openDialog({ multiple: false, filters: IMAGE_FILTERS });
-    if (typeof picked !== "string") return;
+    const chosen = await openDialog({ multiple: false, filters: IMAGE_FILTERS });
+    if (typeof chosen !== "string") return;
+    // Vault into app-data so a Downloads cleanup can't break the compile.
+    const picked = await vaultFile(chosen).catch(() => chosen);
     const next = iconMods.filter(
       (m) => m.id !== idOf(slot.slug) && m.targetVtexc !== targetOf(slot.path),
     );
@@ -164,8 +166,9 @@ export function MenuArtTab({
     try {
       // Validate against the pak and grab the vanilla dimensions in one go.
       const d = await decodePakTexture(helperPath, pakPath, target);
-      const picked = await openDialog({ multiple: false, filters: IMAGE_FILTERS });
-      if (typeof picked !== "string") return;
+      const chosen = await openDialog({ multiple: false, filters: IMAGE_FILTERS });
+      if (typeof chosen !== "string") return;
+      const picked = await vaultFile(chosen).catch(() => chosen);
       const slug = `custom_${p.replace(/[^a-z0-9]+/gi, "_").toLowerCase()}`;
       const next = iconMods.filter((m) => m.id !== idOf(slug) && m.targetVtexc !== target);
       next.push({

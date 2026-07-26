@@ -5290,6 +5290,40 @@ fn open_in_particle_editor_blocking(
     }
 }
 
+/// Copy a user-picked media file into the app-data vault and return the
+/// vaulted path. Overrides that reference loose files (Downloads etc.) break
+/// when the user tidies up - vaulting at pick time makes them durable. Files
+/// already under app-data are returned as-is.
+#[tauri::command]
+pub async fn vault_file(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    use tauri::Manager;
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let src = std::path::Path::new(&path);
+        if !src.is_file() {
+            return Err(format!("file not found: {path}"));
+        }
+        if src.starts_with(&data_dir) {
+            return Ok(path);
+        }
+        let vault = data_dir.join("vault");
+        std::fs::create_dir_all(&vault).map_err(|e| e.to_string())?;
+        let name = src
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "file".into());
+        // Hash the FULL source path so same-named files from different folders
+        // coexist, and re-picking the same file reuses its vaulted copy.
+        let dest = vault.join(format!("{}_{name}", &crate::compile::fingerprint(&path)[..12]));
+        if !dest.exists() {
+            std::fs::copy(src, &dest).map_err(|e| e.to_string())?;
+        }
+        Ok(dest.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Decode one texture from the game pak to a PNG in the app-data cache and
 /// return its path (+dimensions). Feeds the Menu Art tab's vanilla previews;
 /// the cache key is the internal path, so repeat views are instant.

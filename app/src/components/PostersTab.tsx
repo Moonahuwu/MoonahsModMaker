@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { copyToDownloads, posterSheet } from "../lib/api";
+import { copyToDownloads, posterSheet, vaultFile } from "../lib/api";
 import { useToast } from "./Toaster";
 import type { PosterOverride } from "../types";
 import manifestJson from "../data/posterManifest.json";
@@ -365,7 +365,9 @@ export function PostersTab({
     };
   }, [sheet, helperPath, pakPath]);
 
-  function assign(sh: ManifestSheet, poster: ManifestPoster, imagePath: string) {
+  async function assign(sh: ManifestSheet, poster: ManifestPoster, rawPath: string) {
+    // Vault the art into app-data first: loose Downloads files vanish.
+    const imagePath = await vaultFile(rawPath).catch(() => rawPath);
     const id = `${sh.id}::${poster.id}`;
     const r = eff(sh, poster);
     const existing = byId.get(id);
@@ -394,7 +396,7 @@ export function PostersTab({
 
   async function pickImage(sh: ManifestSheet, poster: ManifestPoster) {
     const picked = await openDialog({ multiple: false, filters: IMAGE_FILTERS });
-    if (typeof picked === "string") assign(sh, poster, picked);
+    if (typeof picked === "string") void assign(sh, poster, picked);
   }
 
   /** Hide a vanilla decal in-game (no art — its trans mask gets blanked).
@@ -425,8 +427,9 @@ export function PostersTab({
    *  original) stretched over the whole texture. Keeps the vanilla trans mask
    *  so cut-out shapes stay cut out. */
   async function pickWholeSheet(sh: ManifestSheet) {
-    const picked = await openDialog({ multiple: false, filters: IMAGE_FILTERS });
-    if (typeof picked !== "string") return;
+    const chosen = await openDialog({ multiple: false, filters: IMAGE_FILTERS });
+    if (typeof chosen !== "string") return;
+    const picked = await vaultFile(chosen).catch(() => chosen);
     const id = `${sh.id}::${WHOLE}`;
     if (byId.has(id)) {
       onUpdate(id, { sourceImage: picked });

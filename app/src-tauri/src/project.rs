@@ -1108,6 +1108,27 @@ impl Project {
                     "sounds/ui/ui_game_matchmake_find.vsnd",
                     "soundevents/ui.vsndevts",
                 ),
+                // Queue music: the 155bpm loop while actively searching for a
+                // match, and the long idle track playing in the hideout while
+                // you sit in queue.
+                slot(
+                    "ui_queue_music",
+                    "ui",
+                    "Queue music (searching)",
+                    "Music.Hideout.Search",
+                    "vsnd_files",
+                    "sounds/music/music_hideout_search_155bpm.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "ui_hideout_wait",
+                    "ui",
+                    "Hideout music (waiting)",
+                    "Music.Hideout.Wait",
+                    "vsnd_files",
+                    "sounds/music/music_search_wait_temp.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
                 // --- Tab (Match): Match Music (match-flow music outside the intro) ---
                 slot(
                     "match_title",
@@ -1509,7 +1530,7 @@ mod tests {
         let p = Project::default_for_match_intro();
         let json = serde_json::to_string_pretty(&p).unwrap();
         let back: Project = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.events.len(), 100);
+        assert_eq!(back.events.len(), 102);
         assert_eq!(back.events[0].id, "intro_king");
         // The Sinner's Sacrifice vault tab: normal arrays and the track_2
         // scalar jingle slots both present.
