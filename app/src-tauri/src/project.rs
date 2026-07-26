@@ -1077,17 +1077,6 @@ impl Project {
                     "sounds/music/music_menu_lp.vsnd",
                     "soundevents/music.vsndevts",
                 ),
-                // Loading / connecting screen music (the long 60bpm track that
-                // plays while the match map loads).
-                slot(
-                    "ui_loading_screen",
-                    "ui",
-                    "Loading screen",
-                    "Music.MatchIntro.Connecting",
-                    "vsnd_files",
-                    "sounds/music/match_intro/music_match_intro_connecting_60bpm.vsnd",
-                    "soundevents/music.vsndevts",
-                ),
                 // Matchmaking SFX (single-sound events in ui.vsndevts — the merger
                 // promotes the scalar to an array when our entries are added).
                 slot(
@@ -1108,12 +1097,14 @@ impl Project {
                     "sounds/ui/ui_game_matchmake_find.vsnd",
                     "soundevents/ui.vsndevts",
                 ),
-                // Queue music: the 155bpm loop while actively searching for a
-                // match, and the long idle track playing in the hideout while
-                // you sit in queue.
+                // --- Tab: Hideout (queue / pre-match flow) ---
+                // The whole "sitting in the hideout, queuing, loading in" music
+                // arc. The ui_-prefixed ids are slots that used to live in the
+                // UI tab - ids are kept so existing saves carry their tracks
+                // over (reconcileProject re-homes them by default group).
                 slot(
                     "ui_queue_music",
-                    "ui",
+                    "hideout",
                     "Queue music (searching)",
                     "Music.Hideout.Search",
                     "vsnd_files",
@@ -1122,11 +1113,70 @@ impl Project {
                 ),
                 slot(
                     "ui_hideout_wait",
-                    "ui",
-                    "Hideout music (waiting)",
+                    "hideout",
+                    "Queue music (long wait)",
                     "Music.Hideout.Wait",
                     "vsnd_files",
                     "sounds/music/music_search_wait_temp.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                // The hideout's layered ambient loop (Music.Hideout is a
+                // citadel_music_hideout event: base + fx + high + low layers
+                // mixed live by what you do in the room). One slot per layer.
+                slot(
+                    "hideout_ambient_base",
+                    "hideout",
+                    "Hideout ambient (base layer)",
+                    "Music.Hideout",
+                    "vsnd_files_play_base",
+                    "sounds/music/music_hideout_play_base_lp_155bpm.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "hideout_ambient_fx",
+                    "hideout",
+                    "Hideout ambient (fx layer)",
+                    "Music.Hideout",
+                    "vsnd_files_play_base_fx",
+                    "sounds/music/music_hideout_play_base_lp_fx_155bpm.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "hideout_ambient_high",
+                    "hideout",
+                    "Hideout ambient (high layer)",
+                    "Music.Hideout",
+                    "vsnd_files_play_high",
+                    "sounds/music/music_hideout_play_high_lp_155bpm.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "hideout_ambient_low",
+                    "hideout",
+                    "Hideout ambient (low layer)",
+                    "Music.Hideout",
+                    "vsnd_files_play_low",
+                    "sounds/music/music_hideout_play_low_lp_155bpm.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                slot(
+                    "hideout_build",
+                    "hideout",
+                    "Hideout build (short loop)",
+                    "Music.Hideout.Build",
+                    "vsnd_files",
+                    "sounds/music/music_hideout_build_155bpm.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                // Loading / connecting screen music (the long 60bpm track that
+                // plays while the match map loads).
+                slot(
+                    "ui_loading_screen",
+                    "hideout",
+                    "Loading screen (load in)",
+                    "Music.MatchIntro.Connecting",
+                    "vsnd_files",
+                    "sounds/music/match_intro/music_match_intro_connecting_60bpm.vsnd",
                     "soundevents/music.vsndevts",
                 ),
                 // --- Tab (Match): Match Music (match-flow music outside the intro) ---
@@ -1530,7 +1580,7 @@ mod tests {
         let p = Project::default_for_match_intro();
         let json = serde_json::to_string_pretty(&p).unwrap();
         let back: Project = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.events.len(), 102);
+        assert_eq!(back.events.len(), 107);
         assert_eq!(back.events[0].id, "intro_king");
         // The Sinner's Sacrifice vault tab: normal arrays and the track_2
         // scalar jingle slots both present.

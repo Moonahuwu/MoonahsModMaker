@@ -205,6 +205,7 @@ const TAB_LABELS: Record<string, string> = {
   heroes: "Heroes",
   shop: "Shop Music",
   ui: "UI",
+  hideout: "Hideout",
   match: "Match Music",
   stingers: "Stingers",
   brawl: "Brawl Mode",
@@ -233,7 +234,7 @@ const TAB_LABELS: Record<string, string> = {
  *  Misc last. Shared by the sidebar and the import review's group sorting. */
 const SIDEBAR_ORDER = [
   "heroes", ITEMS,
-  "intro", "match", "stingers", "brawl",
+  "hideout", "intro", "match", "stingers", "brawl",
   "urn", "rift", "midboss", "powerups", "teamobj", "sinners", "shop",
   "gameplay", "combat", "mapsfx", "ambience", "npcs",
   "ui", UNSORTED,
@@ -242,7 +243,7 @@ const SIDEBAR_ORDER = [
 /** Parent groupings in the sidebar: a collapsible header over related tabs. */
 const TAB_CATEGORIES: { label: string; tabs: string[] }[] = [
   { label: "In-game", tabs: ["urn", "rift", "midboss", "powerups", "teamobj", "sinners", "shop"] },
-  { label: "Match", tabs: ["intro", "match", "stingers", "brawl"] },
+  { label: "Match", tabs: ["hideout", "intro", "match", "stingers", "brawl"] },
   // Gameplay has curated slots; the rest appear once discovery/import routes
   // slots into them.
   { label: "Game SFX", tabs: ["gameplay", "combat", "mapsfx", "ambience", "npcs"] },
@@ -260,6 +261,7 @@ const SOUND_MASTER_TABS = ["ui", UNSORTED, LIBRARY, REPLACE_SOUNDS];
  *  id-keyed drill-in tabs (Heroes, Items) are excluded — their UIs render
  *  slots by their own id scheme and wouldn't show a foreign slot. */
 const MOVE_TARGETS: { value: string; label: string }[] = [
+  "hideout",
   "intro",
   "urn",
   "rift",
@@ -416,6 +418,9 @@ function routeGroupFor(relpath: string, eventName: string): string {
     relpath === "soundevents/music.vsndevts" ||
     relpath === "soundevents/world.vsndevts"
   ) {
+    // Hideout/queue music has its own tab (the curated Connecting slot lives
+    // there too, but new MatchIntro.* events still belong with the intro).
+    if (n.includes("hideout")) return "hideout";
     if (n.includes("matchintro")) return "intro";
     // Idol = the music events; Soul.Urn.* = the urn's own SFX (pickup/carry/
     // cash-in). Segment match, NOT includes("urn") — "returned" contains "urn".
@@ -531,7 +536,14 @@ function slotHasContent(e: EventProject): boolean {
 function reconcileProject(saved: Project, def: Project): Project {
   const savedById = new Map(saved.events.map((e) => [e.id, e]));
   const defIds = new Set(def.events.map((e) => e.id));
-  const merged = def.events.map((d) => savedById.get(d.id) ?? d);
+  // Saved content wins, but a curated slot's tab home + label follow the
+  // CURRENT defaults - so a new app version can re-home slots (e.g. the
+  // queue/loading music moving from UI into the Hideout tab) without
+  // stranding users' saved tracks in the old tab.
+  const merged = def.events.map((d) => {
+    const s = savedById.get(d.id);
+    return s ? { ...s, group: d.group, side: d.side } : d;
+  });
   const extras = saved.events.filter(
     (e) =>
       !defIds.has(e.id) &&
@@ -695,6 +707,7 @@ function accentFor(ev: { group: string; side: string }): string {
   if (ev.group === "sinners") return "#d4a017"; // slot-machine gold (soul vault)
   if (ev.group === "shop") return "#10b981"; // emerald (souls/shop)
   if (ev.group === "ui") return "#38bdf8"; // sky (menus)
+  if (ev.group === "hideout") return "#a5b4fc"; // periwinkle (hideout at night)
   if (ev.group === "match") return "#f472b6"; // pink (match flow)
   if (ev.group === "stingers") return "#facc15"; // yellow (kill streaks)
   if (ev.group === "brawl") return "#fb7185"; // rose (brawl mode)
