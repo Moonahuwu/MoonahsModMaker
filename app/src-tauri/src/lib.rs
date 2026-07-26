@@ -154,6 +154,7 @@ pub fn run() {
             commands::open_in_particle_editor,
             commands::open_in_s2v,
             commands::pack_scan,
+            commands::decode_pak_texture,
             commands::poster_sheet,
             commands::pack_icons,
             commands::hero_images,

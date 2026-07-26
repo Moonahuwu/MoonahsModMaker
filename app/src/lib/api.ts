@@ -1325,6 +1325,21 @@ export function openInParticleEditor(
   return invoke("open_in_particle_editor", { csdkRoot, helperPath, pakPath, particlePath });
 }
 
+export interface DecodedTexture {
+  png: string;
+  width: number;
+  height: number;
+}
+
+/** Decode a texture from the game pak to a cached PNG (Menu Art previews). */
+export function decodePakTexture(
+  helperPath: string,
+  pakPath: string,
+  internalPath: string,
+): Promise<DecodedTexture> {
+  return invoke("decode_pak_texture", { helperPath, pakPath, internalPath });
+}
+
 export interface PackScan {
   /** Content kinds carried (sound/model/vfx/ui/texture/config/other). */
   kinds: string[];

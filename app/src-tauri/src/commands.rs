@@ -5290,6 +5290,63 @@ fn open_in_particle_editor_blocking(
     }
 }
 
+/// Decode one texture from the game pak to a PNG in the app-data cache and
+/// return its path (+dimensions). Feeds the Menu Art tab's vanilla previews;
+/// the cache key is the internal path, so repeat views are instant.
+#[tauri::command]
+pub async fn decode_pak_texture(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+    internal_path: String,
+) -> Result<DecodedTexture, String> {
+    use tauri::Manager;
+    let cache = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("menu_art");
+    tauri::async_runtime::spawn_blocking(move || {
+        std::fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
+        let stem = internal_path
+            .trim_end_matches(".vtex_c")
+            .trim_end_matches(".vtex")
+            .replace(['/', '\\'], "_");
+        let png = cache.join(format!("{stem}.png"));
+        if !png.exists() {
+            let internal = if internal_path.ends_with(".vtex_c") {
+                internal_path.clone()
+            } else {
+                format!("{}.vtex_c", internal_path.trim_end_matches(".vtex"))
+            };
+            let decoded =
+                crate::vpk::texture_batch(&helper_path, &pak_path, &cache.to_string_lossy(), &[internal])
+                    .map_err(|e| e.to_string())?;
+            let src = decoded
+                .first()
+                .map(|(_, p)| p.clone())
+                .ok_or_else(|| format!("texture not found in pak: {internal_path}"))?;
+            if std::path::Path::new(&src) != png {
+                std::fs::rename(&src, &png).or_else(|_| {
+                    std::fs::copy(&src, &png).map(|_| ())
+                }).map_err(|e| e.to_string())?;
+            }
+        }
+        let (width, height) = png_dimensions(&png)?;
+        Ok(DecodedTexture { png: png.to_string_lossy().into_owned(), width, height })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct DecodedTexture {
+    pub png: String,
+    pub width: u32,
+    pub height: u32,
+}
+
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct PackOverlap {

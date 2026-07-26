@@ -91,6 +91,7 @@ import { OverrideEditor } from "./components/OverrideEditor";
 import { EffectsBrowser } from "./components/EffectsBrowser";
 import { ParticleReference } from "./components/ParticleReference";
 import { ParticleOutline } from "./components/ParticleOutline";
+import { MenuArtTab } from "./components/MenuArtTab";
 import { PostersTab } from "./components/PostersTab";
 import { DigimodTab, DEFAULT_DIGIMOD } from "./components/DigimodTab";
 import { UiMasterTab } from "./components/UiMasterTab";
@@ -131,6 +132,8 @@ const PARTICLE_GUIDE = "particleguide";
 const CUSTOM_SERVER = "customserver";
 /** Special always-present tab for replacing in-world posters/signs/graffiti. */
 const POSTERS = "posters";
+/** Replace the game's screen art (play-mode cards, any panorama image). */
+const MENU_ART = "menuart";
 /** Jumpscares/Deaths (MoonahMasterUI) — only when the engine is detected installed. */
 const JUMPSCARES = "jumpscares";
 /** UI Master (experimental): edit the game's panorama layouts/styles. */
@@ -215,6 +218,7 @@ const TAB_LABELS: Record<string, string> = {
   [EFFECTS]: "Effects",
   [PARTICLE_GUIDE]: "Particle Guide",
   [POSTERS]: "Wall Art",
+  [MENU_ART]: "Menu Art",
   [JUMPSCARES]: "Jumpscares",
   [UIMASTER]: "UI Master",
   [EASY_COMPILE]: "Easy Compile",
@@ -704,6 +708,7 @@ function accentFor(ev: { group: string; side: string }): string {
   if (ev.group === EFFECTS) return "#c084fc"; // violet (VFX)
   if (ev.group === PARTICLE_GUIDE) return "#818cf8"; // indigo (VFX docs)
   if (ev.group === POSTERS) return "#8b5cf6"; // deep violet (posters)
+  if (ev.group === MENU_ART) return "#67e8f9"; // light cyan (menu art)
   if (ev.group === JUMPSCARES) return "#ef4444"; // red (spooky)
   if (ev.group === UIMASTER) return "#f59e0b"; // amber (experimental UI editing)
   if (ev.group === EASY_COMPILE) return "#fbbf24"; // amber (compiler utility)
@@ -1126,6 +1131,7 @@ export default function App() {
     if (settings.experimentalUiMaster) out.push(UIMASTER);
     if (settings.experimentalEasyCompile) out.push(EASY_COMPILE);
     out.push(POSTERS);
+    out.push(MENU_ART);
     // Jumpscares when the MoonahMasterUI engine is in the user's mods, this
     // project already configures it, or the settings toggle opts in (build
     // your own from the blank template, no installed mod needed).
@@ -5126,6 +5132,8 @@ export default function App() {
                         ? "Every particle function in the game with what it does and the values Valve actually uses - the docs the particle editor never had."
                         : activeTab === POSTERS
                         ? "Replace the world's posters, signs, ghost signs, and graffiti with your own images - drop a PNG onto a region and compile."
+                        : activeTab === MENU_ART
+                          ? "Replace the game's screen art - the play-mode cards, their hero portraits, or any menu image by path."
                         : activeTab === JUMPSCARES
                           ? DEATHS_RELEASED
                             ? "Random jumpscares while you play + videos when you die - your MoonahMasterUI mod, configured here and rebuilt on compile."
@@ -5326,6 +5334,16 @@ export default function App() {
             onRemove={removeEffectOverride}
             onOpenViewer={(ref) => void openEffectInViewer(ref)}
             onInspect={(ref) => setInspector({ open: true, ref })}
+          />
+        ) : activeTab === MENU_ART ? (
+          <MenuArtTab
+            helperPath={settings.vpkHelperPath}
+            pakPath={settings.deadlockPak}
+            iconMods={project?.iconMods ?? []}
+            accent="#67e8f9"
+            onChange={(next) =>
+              setProject((prev) => (prev ? { ...prev, iconMods: next } : prev))
+            }
           />
         ) : activeTab === PARTICLE_GUIDE ? (
           <ParticleReference
