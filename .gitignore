@@ -30,3 +30,7 @@ tools/poster-manifest/out
 .DS_Store
 Thumbs.db
 *.log
+
+# local MCP server config + deps (machine-specific dev tooling)
+.mcp.json
+tools/particle-mcp/node_modules

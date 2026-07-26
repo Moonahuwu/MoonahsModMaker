@@ -37,6 +37,7 @@ static int Dispatch(string[] args)
             "material" => MaterialCmd(args),
             "extractall" => ExtractAll(args),
             "decompileall" => DecompileAll(args),
+            "gltf" => Gltf(args),
             "texture" => TextureCmd(args),
             "texturebatch" => TextureBatch(args),
             "heroes" => Heroes(args),
@@ -557,6 +558,45 @@ static PackageEntry? FindFuzzy(Package package, string internalPath)
 // decompileall <vpk> <destDir> [pathPrefix]
 // Decompile EVERYTHING in a vpk into source form, preserving the folder
 // structure: sounds → mp3/wav/aac, textures → png, other compiled resources →
+// gltf <vpk> <internalPath.vmdl_c> <out.glb> — export a compiled model as glTF
+// (mesh + skeleton + animations; materials skipped so Blender imports clean).
+static int Gltf(string[] args)
+{
+    if (args.Length < 4)
+    {
+        Console.Error.WriteLine("usage: gltf <vpk> <internalPath.vmdl_c> <out.glb|.gltf>");
+        return 2;
+    }
+    var vpk = Path.GetFullPath(args[1]);
+    var internalPath = args[2].Replace('\\', '/').TrimStart('/');
+    var outFile = Path.GetFullPath(args[3]);
+
+    using var package = new Package();
+    package.Read(vpk);
+    var entry = package.FindEntry(internalPath);
+    if (entry is null)
+    {
+        Console.Error.WriteLine($"entry not found: {internalPath}");
+        return 1;
+    }
+    package.ReadEntry(entry, out var bytes);
+    using var resource = new Resource { FileName = internalPath };
+    resource.Read(new MemoryStream(bytes));
+
+    var outDir = Path.GetDirectoryName(outFile);
+    if (!string.IsNullOrEmpty(outDir))
+        Directory.CreateDirectory(outDir);
+    using var loader = new GameFileLoader(package, vpk);
+    var exporter = new GltfModelExporter(loader)
+    {
+        ExportMaterials = false,
+        ProgressReporter = new Progress<string>(s => Console.Error.WriteLine(s)),
+    };
+    exporter.Export(resource, outFile);
+    Console.WriteLine($"exported {internalPath} -> {outFile}");
+    return 0;
+}
+
 // decompiled text (KV3 etc.); anything that can't be decompiled is copied raw.
 static int DecompileAll(string[] args)
 {
