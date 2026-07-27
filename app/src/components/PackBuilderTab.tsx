@@ -29,6 +29,10 @@ export interface ExportModuleResult {
   outputPath: string | null;
   failed: number;
   error?: string;
+  /** Release zip (vpk + README), when "Package for release" was on and the build was clean. */
+  zipPath?: string | null;
+  /** Paste-ready GameBanana description generated for this module. */
+  description?: string;
 }
 
 /** Display order for kinds inside a module card (and for auto-sort buckets). */
@@ -221,14 +225,30 @@ export function PackBuilderTab({
   modules: PackModule[];
   conflicts: ModuleConflict[];
   onChange: (modules: PackModule[]) => void;
-  onExportModule: (mod: PackModule, baseDir: string) => Promise<ExportModuleResult>;
+  onExportModule: (
+    mod: PackModule,
+    baseDir: string,
+    packRelease: boolean,
+  ) => Promise<ExportModuleResult>;
 }) {
   const [newName, setNewName] = useState("");
   // null = "every exportable module" (the default until the user picks).
   const [sel, setSel] = useState<Set<string> | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [packRelease, setPackRelease] = useState(true);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   const [status, setStatus] = useState<
-    Record<string, { state: "run" | "ok" | "fail"; path?: string | null; failed?: number; error?: string }>
+    Record<
+      string,
+      {
+        state: "run" | "ok" | "fail";
+        path?: string | null;
+        failed?: number;
+        error?: string;
+        zipPath?: string | null;
+        description?: string;
+      }
+    >
   >({});
 
   // key -> owning module id (stale keys in modules are ignored via the items
@@ -284,12 +304,24 @@ export function PackBuilderTab({
     try {
       for (const m of picks) {
         setStatus((s) => ({ ...s, [m.id]: { state: "run" } }));
-        const r = await onExportModule(m, dir);
+        const r = await onExportModule(m, dir, packRelease);
         setStatus((s) => ({
           ...s,
           [m.id]: r.ok
-            ? { state: "ok", path: r.outputPath, failed: r.failed }
-            : { state: "fail", path: r.outputPath, failed: r.failed, error: r.error },
+            ? {
+                state: "ok",
+                path: r.outputPath,
+                failed: r.failed,
+                zipPath: r.zipPath,
+                description: r.description,
+              }
+            : {
+                state: "fail",
+                path: r.outputPath,
+                failed: r.failed,
+                error: r.error,
+                description: r.description,
+              },
         }));
       }
     } finally {
@@ -458,18 +490,43 @@ export function PackBuilderTab({
                           ✕ failed
                         </span>
                       )}
-                      {st?.path && (
+                      {(st?.zipPath || st?.path) && (
                         <button
-                          onClick={() => void revealItemInDir(st.path!)}
+                          onClick={() => void revealItemInDir((st.zipPath ?? st.path)!)}
+                          title={st.zipPath ? "Open the release zip's folder" : "Open the vpk's folder"}
                           className="shrink-0 rounded border border-zinc-700 px-1.5 py-0.5 text-[10px] text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-200"
                         >
                           Show
+                        </button>
+                      )}
+                      {st?.description && (
+                        <button
+                          onClick={() => {
+                            void navigator.clipboard.writeText(st.description!);
+                            setCopiedId(m.id);
+                            setTimeout(() => setCopiedId((c) => (c === m.id ? null : c)), 1500);
+                          }}
+                          title="Copy the generated release description (also saved as description.txt next to the zip)"
+                          className="shrink-0 rounded border border-zinc-700 px-1.5 py-0.5 text-[10px] text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-200"
+                        >
+                          {copiedId === m.id ? "Copied ✓" : "Copy text"}
                         </button>
                       )}
                     </div>
                   );
                 })}
               </div>
+              <label className="mt-3 flex cursor-pointer items-center gap-2 text-[11px] text-zinc-400">
+                <input
+                  type="checkbox"
+                  checked={packRelease}
+                  onChange={(e) => setPackRelease(e.target.checked)}
+                  disabled={exporting}
+                  className="accent-teal-500"
+                />
+                Package for release: also zip each vpk (with a README) and write a paste-ready
+                GameBanana description next to it
+              </label>
               {hasBundled && (
                 <p className="mt-2 text-[10px] text-zinc-600">
                   Note: bundled mod vpks aren't inspected, so two modules bundling mods that touch

@@ -26,6 +26,7 @@ kv3-core = { path = "../../crates/kv3-core" }
 tauri-plugin-dialog = "2.7.1"
 sevenz-rust2 = "0.21.3"
 unrar = "0.5.8"
+zip = "2"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-global-shortcut = "2"

@@ -4713,6 +4713,27 @@ pub async fn import_shared_pack(dir: String) -> Result<crate::packsync::ImportRe
     .map_err(|e| e.to_string())?
 }
 
+/// Pack Builder release helper: wrap an exported module vpk into a
+/// ready-to-upload zip (vpk + README) with the description dropped alongside.
+#[tauri::command]
+pub async fn package_module_release(
+    vpk_path: String,
+    out_dir: String,
+    zip_stem: String,
+    description: String,
+) -> Result<crate::packsync::ReleasePackage, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::packsync::package_release(
+            std::path::Path::new(&vpk_path),
+            std::path::Path::new(&out_dir),
+            &zip_stem,
+            &description,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Rename a profile (overwrites any existing profile at the new name).
 #[tauri::command]
 pub fn rename_profile(app: tauri::AppHandle, from: String, to: String) -> Result<(), String> {

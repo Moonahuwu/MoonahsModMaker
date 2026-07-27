@@ -107,6 +107,7 @@ pub fn run() {
             commands::rename_profile,
             commands::export_shared_pack,
             commands::import_shared_pack,
+            commands::package_module_release,
             commands::probe_audio,
             commands::process_audio,
             commands::pack_vpk,

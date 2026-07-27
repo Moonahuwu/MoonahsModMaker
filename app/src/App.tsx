@@ -63,6 +63,7 @@ import {
   exportSharedPack,
   importSharedPack,
   compileProject,
+  packageModuleRelease,
 } from "./lib/api";
 import {
   cHeroDetail as heroDetailApi,
@@ -103,7 +104,7 @@ import { getCopiedSound } from "./lib/soundClipboard";
 import { CustomServer } from "./components/CustomServer";
 import { ProfileSwitcher } from "./components/ProfileSwitcher";
 import { useToast } from "./components/Toaster";
-import { useSettings, slotSoundFolder, sheetSiblingsKey, compilePrefsOf, buildCompileConfig, directReplaceTarget, slotNeedsEventsMerge, worldOverrideCategory, DEATHS_RELEASED, FFMPEG_BUNDLE_URL, TOOLS_BUNDLE_URL, type Settings } from "./lib/settings";
+import { useSettings, slotSoundFolder, sheetSiblingsKey, compilePrefsOf, buildCompileConfig, buildCreditsText, directReplaceTarget, slotNeedsEventsMerge, worldOverrideCategory, DEATHS_RELEASED, FFMPEG_BUNDLE_URL, TOOLS_BUNDLE_URL, type Settings } from "./lib/settings";
 import { songHash, overrideHash, effectHash, posterHash, heroTexHash } from "./lib/songHash";
 import type { AttributeOverride, EffectOverride, EventProject, EventView, HeroTextureOverride, LibraryItem, PackModule, PosterOverride, Project, Song, SongLayer, SoundOverride } from "./types";
 import { GameBananaBrowser } from "./components/GameBananaBrowser";
@@ -563,6 +564,61 @@ function modulePartsFor(p: Project, s: Settings, mod: PackModule) {
     hasGameplay: keys.has("gameplay") && s.experimentalServer,
     importedMods: s.importedMods.filter((m) => keys.has(bundledModKey(m))),
   };
+}
+
+/** Paste-ready release description for one exported module: what's inside,
+ *  how to install, credits for its bundled mods. Plain text so it drops into
+ *  a GameBanana page (or anywhere) unchanged. */
+function buildModuleReleaseText(
+  modName: string,
+  parts: ReturnType<typeof modulePartsFor>,
+  s: Settings,
+): string {
+  const inside: string[] = [];
+  const bullet = (n: number, what: string, names: string[] = []) => {
+    if (n === 0) return;
+    let line = `- ${n} ${what}${n === 1 ? "" : "s"}`;
+    if (names.length > 0) {
+      const shown = names.slice(0, 8);
+      line += `: ${shown.join(", ")}${names.length > shown.length ? ", ..." : ""}`;
+    }
+    inside.push(line);
+  };
+  const slots = parts.events.filter(slotHasContent);
+  bullet(slots.length, "custom sound slot", slots.map((e) => e.side || e.eventName));
+  bullet(parts.soundOverrides.length, "replaced sound file");
+  bullet(parts.iconMods.filter((m) => m.enabled !== false).length, "custom image/icon");
+  bullet(parts.posterOverrides.length, "wall art replacement");
+  bullet(
+    parts.heroTextures.length,
+    "hero skin",
+    parts.heroTextures.map((t) => t.label || t.hero),
+  );
+  bullet(parts.effectOverrides.length, "effect recolor");
+  bullet(parts.uiOverrides.length, "UI edit");
+  if (parts.digimod) inside.push("- Jumpscares (MoonahMasterUI)");
+  if (parts.hasGameplay) inside.push("- Gameplay config edits (custom/private servers only)");
+  for (const m of parts.importedMods) {
+    const info = s.importedModCredits?.[m];
+    inside.push(`- Bundled mod: ${info?.name || (m.split(/[\\/]/).pop() ?? m)}`);
+  }
+  const credits = buildCreditsText({ ...s, importedMods: parts.importedMods });
+  return [
+    modName,
+    "",
+    "WHAT'S INSIDE",
+    ...(inside.length > 0 ? inside : ["- (empty module)"]),
+    "",
+    "HOW TO INSTALL",
+    "Copy pak01_dir.vpk into Deadlock's game/citadel/addons folder, renamed to the",
+    "next free slot (pak01_dir.vpk, pak02_dir.vpk, ...). Or one-click install it",
+    "with Moonahs Mod Maker. If mods don't load, gameinfo.gi is missing the",
+    "citadel/addons search path - the app can patch that for you.",
+    ...(credits ? ["", "CREDITS", credits] : []),
+    "",
+    "----",
+    "Built with Moonahs Mod Maker: https://gamebanana.com/tools/23422",
+  ].join("\n");
 }
 
 /** Align a saved project to the current slot schema: ordered by the default,
@@ -1858,7 +1914,15 @@ export default function App() {
   async function exportModule(
     mod: PackModule,
     baseDir: string,
-  ): Promise<{ ok: boolean; outputPath: string | null; failed: number; error?: string }> {
+    packRelease: boolean,
+  ): Promise<{
+    ok: boolean;
+    outputPath: string | null;
+    failed: number;
+    error?: string;
+    zipPath?: string | null;
+    description?: string;
+  }> {
     const p = projectRef.current;
     const s = settingsRef.current;
     if (!p) return { ok: false, outputPath: null, failed: 0, error: "no project loaded" };
@@ -1925,7 +1989,31 @@ export default function App() {
       };
       const r = await compileProject(config);
       const failed = r.steps.filter((st) => !st.ok && !st.name.startsWith("⚠")).length;
-      return { ok: r.ok, outputPath: r.outputPath ?? null, failed };
+      // Release helper: only a CLEAN build gets zipped - a partial vpk must
+      // not end up upload-ready by accident.
+      let zipPath: string | null = null;
+      let description: string | undefined;
+      if (packRelease && r.ok && r.outputPath) {
+        description = buildModuleReleaseText(mod.name, parts, s);
+        try {
+          const pkg = await packageModuleRelease(
+            r.outputPath,
+            `${baseDir}/${dirName}`,
+            dirName,
+            description,
+          );
+          zipPath = pkg.zipPath;
+        } catch (e) {
+          return {
+            ok: false,
+            outputPath: r.outputPath,
+            failed,
+            error: `built fine, but release packaging failed: ${e}`,
+            description,
+          };
+        }
+      }
+      return { ok: r.ok, outputPath: r.outputPath ?? null, failed, zipPath, description };
     } catch (e) {
       return { ok: false, outputPath: null, failed: 0, error: String(e) };
     }

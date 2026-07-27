@@ -1580,3 +1580,20 @@ export function exportSharedPack(
 export function importSharedPack(dir: string): Promise<SharedPackImportResult> {
   return invoke("import_shared_pack", { dir });
 }
+
+export interface ReleasePackage {
+  zipPath: string;
+  zipBytes: number;
+  descriptionPath: string;
+}
+
+/** Pack Builder release helper: zip an exported module vpk (+ README) and
+ *  write the paste-ready description next to it. */
+export function packageModuleRelease(
+  vpkPath: string,
+  outDir: string,
+  zipStem: string,
+  description: string,
+): Promise<ReleasePackage> {
+  return invoke("package_module_release", { vpkPath, outDir, zipStem, description });
+}

@@ -334,6 +334,55 @@ pub fn import_pack(dir: &Path) -> Result<ImportResult, String> {
     Ok(ImportResult { name, data, warnings })
 }
 
+// ---- Pack Builder release packaging ----------------------------------------
+// Phase 3 of the module workflow: wrap an exported module vpk into a
+// ready-to-upload release zip (vpk + README with the generated description)
+// and drop the description next to it for easy copy-paste into GameBanana.
+
+#[derive(serde::Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ReleasePackage {
+    pub zip_path: String,
+    pub zip_bytes: u64,
+    pub description_path: String,
+}
+
+pub fn package_release(
+    vpk: &Path,
+    out_dir: &Path,
+    zip_stem: &str,
+    description: &str,
+) -> Result<ReleasePackage, String> {
+    use std::io::Write;
+    if !vpk.is_file() {
+        return Err(format!("compiled vpk not found: {}", vpk.display()));
+    }
+    std::fs::create_dir_all(out_dir).map_err(|e| format!("{}: {e}", out_dir.display()))?;
+    let zip_path = out_dir.join(format!("{zip_stem}.zip"));
+    let file = std::fs::File::create(&zip_path).map_err(|e| format!("{}: {e}", zip_path.display()))?;
+    let mut z = zip::ZipWriter::new(file);
+    let opts = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    let vpk_name = vpk
+        .file_name()
+        .map(|f| f.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "pak01_dir.vpk".into());
+    z.start_file(&vpk_name, opts).map_err(|e| e.to_string())?;
+    let mut src = std::fs::File::open(vpk).map_err(|e| e.to_string())?;
+    std::io::copy(&mut src, &mut z).map_err(|e| e.to_string())?;
+    z.start_file("README.txt", opts).map_err(|e| e.to_string())?;
+    z.write_all(description.as_bytes()).map_err(|e| e.to_string())?;
+    z.finish().map_err(|e| e.to_string())?;
+    let description_path = out_dir.join("description.txt");
+    std::fs::write(&description_path, description).map_err(|e| e.to_string())?;
+    let zip_bytes = std::fs::metadata(&zip_path).map(|m| m.len()).unwrap_or(0);
+    Ok(ReleasePackage {
+        zip_path: zip_path.to_string_lossy().into_owned(),
+        zip_bytes,
+        description_path: description_path.to_string_lossy().into_owned(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -428,6 +477,28 @@ mod tests {
         // Two distinct destinations on disk.
         let files: Vec<_> = std::fs::read_dir(pack.join("assets").join("files")).unwrap().collect();
         assert_eq!(files.len(), 2, "{files:?}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn package_release_zips_vpk_and_readme() {
+        let root = temp_root("rel");
+        let vpk = root.join("pak01_dir.vpk");
+        std::fs::write(&vpk, vec![0u8; 4096]).unwrap();
+        let out = root.join("release");
+        let pkg = package_release(&vpk, &out, "Hero Music", "My module.\nCredits: none.").unwrap();
+        assert!(Path::new(&pkg.zip_path).is_file());
+        assert!(pkg.zip_path.ends_with("Hero Music.zip"));
+        assert!(pkg.zip_bytes > 0);
+        assert_eq!(
+            std::fs::read_to_string(&pkg.description_path).unwrap(),
+            "My module.\nCredits: none."
+        );
+        // The zip must contain exactly the vpk + README.
+        let mut ar = zip::ZipArchive::new(std::fs::File::open(&pkg.zip_path).unwrap()).unwrap();
+        let names: Vec<String> = (0..ar.len()).map(|i| ar.by_index(i).unwrap().name().to_string()).collect();
+        assert_eq!(names, vec!["pak01_dir.vpk".to_string(), "README.txt".to_string()]);
+        assert!(package_release(&root.join("missing.vpk"), &out, "x", "d").is_err());
         let _ = std::fs::remove_dir_all(&root);
     }
 
