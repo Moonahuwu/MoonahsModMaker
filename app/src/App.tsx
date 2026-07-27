@@ -62,6 +62,7 @@ import {
   type ProfileBlob,
   exportSharedPack,
   importSharedPack,
+  compileProject,
 } from "./lib/api";
 import {
   cHeroDetail as heroDetailApi,
@@ -102,9 +103,9 @@ import { getCopiedSound } from "./lib/soundClipboard";
 import { CustomServer } from "./components/CustomServer";
 import { ProfileSwitcher } from "./components/ProfileSwitcher";
 import { useToast } from "./components/Toaster";
-import { useSettings, slotSoundFolder, sheetSiblingsKey, compilePrefsOf, DEATHS_RELEASED, FFMPEG_BUNDLE_URL, TOOLS_BUNDLE_URL, type Settings } from "./lib/settings";
+import { useSettings, slotSoundFolder, sheetSiblingsKey, compilePrefsOf, buildCompileConfig, directReplaceTarget, slotNeedsEventsMerge, worldOverrideCategory, DEATHS_RELEASED, FFMPEG_BUNDLE_URL, TOOLS_BUNDLE_URL, type Settings } from "./lib/settings";
 import { songHash, overrideHash, effectHash, posterHash, heroTexHash } from "./lib/songHash";
-import type { AttributeOverride, EffectOverride, EventProject, EventView, HeroTextureOverride, LibraryItem, PosterOverride, Project, Song, SongLayer, SoundOverride } from "./types";
+import type { AttributeOverride, EffectOverride, EventProject, EventView, HeroTextureOverride, LibraryItem, PackModule, PosterOverride, Project, Song, SongLayer, SoundOverride } from "./types";
 import { GameBananaBrowser } from "./components/GameBananaBrowser";
 import { LibraryTab } from "./components/LibraryTab";
 import { EasyCompileTab } from "./components/EasyCompileTab";
@@ -533,6 +534,35 @@ function slotHasContent(e: EventProject): boolean {
     e.removedEntries.length > 0 ||
     (e.attributeOverrides?.length ?? 0) > 0
   );
+}
+
+/** Pack Builder content key for a bundled vpk: keyed by basename, not path, so
+ *  module layouts survive Shared Pack sync between machines. */
+function bundledModKey(vpkPath: string): string {
+  return `mod:${(vpkPath.split(/[\\/]/).pop() ?? vpkPath).toLowerCase()}`;
+}
+
+/** The slice of the project one Pack Builder module owns, with the SAME
+ *  experimental gating the CompileBar applies (hidden tabs' content must not
+ *  ship in a module export either). */
+function modulePartsFor(p: Project, s: Settings, mod: PackModule) {
+  const keys = new Set(mod.items);
+  return {
+    events: p.events.filter((e) => keys.has(`slot:${e.id}`)),
+    iconMods: (p.iconMods ?? []).filter((m) => keys.has(`icon:${m.id}`)),
+    soundOverrides: (p.soundOverrides ?? []).filter((o) => keys.has(`sound:${o.id}`)),
+    effectOverrides: s.experimentalEffects
+      ? (p.effectOverrides ?? []).filter((o) => keys.has(`effect:${o.id}`))
+      : [],
+    posterOverrides: (p.posterOverrides ?? []).filter((o) => keys.has(`poster:${o.id}`)),
+    heroTextures: (p.heroTextures ?? []).filter((t) => keys.has(`herotex:${t.id}`)),
+    uiOverrides: s.experimentalUiMaster
+      ? (p.uiOverrides ?? []).filter((u) => keys.has(`ui:${u.targetRel}`))
+      : [],
+    digimod: keys.has("digimod") ? (p.digimod ?? null) : null,
+    hasGameplay: keys.has("gameplay") && s.experimentalServer,
+    importedMods: s.importedMods.filter((m) => keys.has(bundledModKey(m))),
+  };
 }
 
 /** Align a saved project to the current slot schema: ordered by the default,
@@ -1275,10 +1305,59 @@ export default function App() {
       out.push({ key: "gameplay", kind: "Gameplay", label: "Gameplay config edits" });
     for (const p of settings.importedMods) {
       const base = p.split(/[\\/]/).pop() ?? p;
-      out.push({ key: `mod:${base.toLowerCase()}`, kind: "Bundled mod", label: base });
+      out.push({ key: bundledModKey(p), kind: "Bundled mod", label: base });
     }
     return out;
   }, [project, settings.importedMods]);
+
+  // Pack Builder conflict check: two modules that ship the SAME output file
+  // can't be installed together - separate addon paks both carry the file and
+  // the lower slot silently wins (the jumpscare-gone-quiet bug). Warn early,
+  // while organizing, and never block (the combined build is unaffected).
+  // Mirrors compile reality: direct-replace slots ship at the stock sound
+  // path, everything else with content merges its shared events file.
+  const moduleConflicts = useMemo(() => {
+    const mods = project?.modules ?? [];
+    if (!project || mods.length < 2) return [];
+    const claims = new Map<string, { file: string; kind: string; modules: string[] }>();
+    const claim = (key: string, file: string, kind: string, modName: string) => {
+      const c = claims.get(key);
+      if (c) {
+        if (!c.modules.includes(modName)) c.modules.push(modName);
+      } else {
+        claims.set(key, { file, kind, modules: [modName] });
+      }
+    };
+    for (const mod of mods) {
+      const parts = modulePartsFor(project, settings, mod);
+      const explicitRefs = new Set(parts.soundOverrides.map((o) => o.targetRef));
+      for (const ev of parts.events) {
+        const direct = directReplaceTarget(ev, explicitRefs, pools);
+        if (direct) claim(`snd:${direct}`, direct, "replaced sound", mod.name);
+        else if (slotNeedsEventsMerge(ev))
+          claim(`evts:${ev.eventsRelpath}`, ev.eventsRelpath, "shared sound-events file", mod.name);
+      }
+      for (const o of parts.soundOverrides)
+        claim(`snd:${o.targetRef}`, o.targetRef, "replaced sound", mod.name);
+      for (const m of parts.iconMods)
+        if (m.enabled !== false) claim(`img:${m.targetVtexc}`, m.targetVtexc, "image", mod.name);
+      for (const e of parts.effectOverrides)
+        claim(`fx:${e.targetRef}`, e.targetRef, "effect", mod.name);
+      for (const po of parts.posterOverrides)
+        claim(`sheet:${po.sheetId}`, po.sheetId, "shared wall-art sheet", mod.name);
+      for (const t of parts.heroTextures)
+        claim(`mat:${t.vmat}`, t.vmat, "hero material", mod.name);
+      for (const u of parts.uiOverrides) {
+        claim(`ui:${u.targetRel}`, u.targetRel, "UI file", mod.name);
+        // UI Master edits of the HUD hook file collide with the jumpscare engine.
+        if (u.targetRel.includes("base_hud"))
+          claim("hud:base_hud", "panorama HUD (base_hud)", "HUD hook", mod.name);
+      }
+      if (parts.digimod)
+        claim("hud:base_hud", "panorama HUD (base_hud)", "HUD hook", mod.name);
+    }
+    return [...claims.values()].filter((c) => c.modules.length > 1);
+  }, [project, settings, pools]);
 
   const navItems = useMemo(() => {
     type Child = { type: "tab"; key: string } | { type: "category"; label: string; tabs: string[] };
@@ -1769,6 +1848,86 @@ export default function App() {
       push("error", `Couldn't load from the pack folder: ${e}`);
     } finally {
       setProfileBusy(false);
+    }
+  }
+
+  // ---- Pack Builder phase 2: compile one module into its own standalone
+  // vpk under `<baseDir>/<module name>/`. Same pipeline as a normal compile,
+  // but only the module's content, exportOnly (no build stamps, no install),
+  // and credits scoped to the module's own bundled vpks.
+  async function exportModule(
+    mod: PackModule,
+    baseDir: string,
+  ): Promise<{ ok: boolean; outputPath: string | null; failed: number; error?: string }> {
+    const p = projectRef.current;
+    const s = settingsRef.current;
+    if (!p) return { ok: false, outputPath: null, failed: 0, error: "no project loaded" };
+    try {
+      const parts = modulePartsFor(p, s, mod);
+      // Gameplay gating mirrors the CompileBar exactly: the includeGameplay
+      // master switch plus per-key / per-category exclusions.
+      let gameplay = [] as NonNullable<Project["vdataOverrides"]>;
+      let globals = [] as NonNullable<Project["globalOverrides"]>;
+      let world = [] as NonNullable<Project["worldOverrides"]>;
+      if (parts.hasGameplay && s.includeGameplay) {
+        const ex = new Set(s.excludedConfigKeys);
+        let itemNames = new Set<string>();
+        if (ex.has("__cat:heroes") || ex.has("__cat:items")) {
+          try {
+            itemNames = new Set((await cItemRoster(s.vpkHelperPath, s.deadlockPak)).map((i) => i.name));
+          } catch {
+            /* roster unavailable: keep everything, like the CompileBar */
+          }
+        }
+        gameplay = (p.vdataOverrides ?? []).filter((o) => {
+          if (ex.has(o.abilityKey)) return false;
+          const isItem = itemNames.has(o.abilityKey);
+          if (isItem && ex.has("__cat:items")) return false;
+          if (!isItem && ex.has("__cat:heroes")) return false;
+          return true;
+        });
+        globals = !ex.has("__cat:global") ? (p.globalOverrides ?? []) : [];
+        world = (p.worldOverrides ?? []).filter((o) => {
+          if (ex.has(`${o.file}::${o.entity}`)) return false;
+          const cat = worldOverrideCategory(o.file, o.entity);
+          return cat === "other" || !ex.has(`__cat:${cat}`);
+        });
+      }
+      const dirName =
+        // eslint-disable-next-line no-control-regex
+        mod.name.replace(/[<>:"/\\|?*\x00-\x1f]/g, " ").trim() || "module";
+      const s2: Settings = {
+        ...s,
+        outputDir: `${baseDir}/${dirName}`,
+        outputMode: "vpk",
+        vpkName: "pak01_dir.vpk",
+        importedMods: parts.importedMods,
+        installAfterCompile: false,
+      };
+      const config = {
+        ...buildCompileConfig(
+          s2,
+          parts.events,
+          false,
+          parts.iconMods,
+          parts.soundOverrides,
+          parts.effectOverrides,
+          gameplay,
+          globals,
+          world,
+          parts.posterOverrides,
+          parts.digimod,
+          parts.uiOverrides,
+          pools,
+          parts.heroTextures,
+        ),
+        exportOnly: true,
+      };
+      const r = await compileProject(config);
+      const failed = r.steps.filter((st) => !st.ok && !st.name.startsWith("⚠")).length;
+      return { ok: r.ok, outputPath: r.outputPath ?? null, failed };
+    } catch (e) {
+      return { ok: false, outputPath: null, failed: 0, error: String(e) };
     }
   }
 
@@ -5381,9 +5540,11 @@ export default function App() {
           <PackBuilderTab
             items={packItems}
             modules={project?.modules ?? []}
+            conflicts={moduleConflicts}
             onChange={(mods) =>
               setProject((prev) => (prev ? { ...prev, modules: mods } : prev))
             }
+            onExportModule={exportModule}
           />
         ) : activeTab === ITEMS ? (
           <ItemsTab

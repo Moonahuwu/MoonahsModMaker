@@ -460,6 +460,21 @@ export function directReplaceTarget(
   return target;
 }
 
+/** Whether a slot carries changes that require MERGING the shared events file
+ *  (as opposed to being empty, or eligible for the direct-replace shortcut).
+ *  Shared by buildCompileConfig and the Pack Builder conflict check - one rule,
+ *  so the warning can't disagree with what actually ships. */
+export function slotNeedsEventsMerge(ev: EventProject): boolean {
+  return (
+    ev.songs.length > 0 ||
+    ev.adopted.length > 0 ||
+    ev.excludedEntries.length > 0 ||
+    ev.removedEntries.length > 0 ||
+    ev.previousOwnedNames.length > 0 ||
+    (ev.attributeOverrides?.length ?? 0) > 0
+  );
+}
+
 /** Derive the full CompileConfig from settings + the project's events.
  *  `pools` (slot id → live event view) unlocks the direct-replace shortcut:
  *  a slot that just swaps its ONLY sound compiles at the stock path instead
@@ -491,14 +506,7 @@ export function buildCompileConfig(
   // nobody touches stays OUT of the build entirely (a replace-two-sounds
   // profile must not ship every soundevents file it never edited).
   const mergeSlots = events.filter(
-    (ev) =>
-      !directTargets.has(ev.id) &&
-      (ev.songs.length > 0 ||
-        ev.adopted.length > 0 ||
-        ev.excludedEntries.length > 0 ||
-        ev.removedEntries.length > 0 ||
-        ev.previousOwnedNames.length > 0 ||
-        (ev.attributeOverrides?.length ?? 0) > 0),
+    (ev) => !directTargets.has(ev.id) && slotNeedsEventsMerge(ev),
   );
   const directCompiles: SoundOverrideCompile[] = directSlots.map((ev) => {
     const song = ev.songs[0];

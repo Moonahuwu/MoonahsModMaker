@@ -1,4 +1,6 @@
 import { useMemo, useState } from "react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { PackModule } from "../types";
 
 /** One piece of pack content, flattened by App.tsx from every subsystem into a
@@ -11,6 +13,22 @@ export interface PackItem {
   label: string;
   /** Secondary context, e.g. the slot's tab name. */
   detail?: string;
+}
+
+/** Two+ modules shipping the same output file: installed as separate addon
+ *  paks, the lower slot silently wins and the other module's edit vanishes.
+ *  Computed by App.tsx mirroring real compile rules; display-only here. */
+export interface ModuleConflict {
+  file: string;
+  kind: string;
+  modules: string[];
+}
+
+export interface ExportModuleResult {
+  ok: boolean;
+  outputPath: string | null;
+  failed: number;
+  error?: string;
 }
 
 /** Display order for kinds inside a module card (and for auto-sort buckets). */
@@ -195,13 +213,23 @@ function ModuleCard({
 export function PackBuilderTab({
   items,
   modules,
+  conflicts,
   onChange,
+  onExportModule,
 }: {
   items: PackItem[];
   modules: PackModule[];
+  conflicts: ModuleConflict[];
   onChange: (modules: PackModule[]) => void;
+  onExportModule: (mod: PackModule, baseDir: string) => Promise<ExportModuleResult>;
 }) {
   const [newName, setNewName] = useState("");
+  // null = "every exportable module" (the default until the user picks).
+  const [sel, setSel] = useState<Set<string> | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [status, setStatus] = useState<
+    Record<string, { state: "run" | "ok" | "fail"; path?: string | null; failed?: number; error?: string }>
+  >({});
 
   // key -> owning module id (stale keys in modules are ignored via the items
   // list; they stay stored so content that comes back is still assigned).
@@ -229,6 +257,44 @@ export function PackBuilderTab({
     if (!name) return;
     setNewName("");
     onChange([...modules, { id: newModuleId(), name, items: [] }]);
+  }
+
+  // Export: only named modules that own at least one live item.
+  const exportable = modules.filter((m) => items.some((i) => ownerOf.get(i.key) === m.id));
+  const selected = sel ?? new Set(exportable.map((m) => m.id));
+  const hasBundled = modules.some((m) => m.items.some((k) => k.startsWith("mod:")));
+
+  function toggleSel(id: string) {
+    const next = new Set(selected);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setSel(next);
+  }
+
+  async function runExport() {
+    const picks = exportable.filter((m) => selected.has(m.id));
+    if (picks.length === 0) return;
+    const dir = await openDialog({
+      directory: true,
+      title: "Export module vpks into which folder?",
+    });
+    if (typeof dir !== "string") return;
+    setExporting(true);
+    setStatus({});
+    try {
+      for (const m of picks) {
+        setStatus((s) => ({ ...s, [m.id]: { state: "run" } }));
+        const r = await onExportModule(m, dir);
+        setStatus((s) => ({
+          ...s,
+          [m.id]: r.ok
+            ? { state: "ok", path: r.outputPath, failed: r.failed }
+            : { state: "fail", path: r.outputPath, failed: r.failed, error: r.error },
+        }));
+      }
+    } finally {
+      setExporting(false);
+    }
   }
 
   /** Seed by content type: move every CORE (unassigned) item into a module
@@ -275,6 +341,35 @@ export function PackBuilderTab({
           Sort Core by content type
         </button>
       </div>
+
+      {conflicts.length > 0 && (
+        <div className="rounded-xl border border-amber-500/40 bg-amber-500/5 p-4">
+          <p className="text-xs font-bold uppercase tracking-widest text-amber-300">
+            Module conflicts
+          </p>
+          <p className="mt-1 text-[11px] text-amber-200/70">
+            These modules ship the same game file. Installed together as separate mods, the lower
+            addon slot silently wins and the other module's edit goes missing. Move the colliding
+            content into one module (or ship them as one release). Exporting is still allowed.
+          </p>
+          <div className="mt-2 flex flex-col gap-1">
+            {conflicts.slice(0, 8).map((c) => (
+              <div key={`${c.kind}:${c.file}`} className="flex flex-wrap items-center gap-2 text-[11px]">
+                <span className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-300">
+                  {c.kind}
+                </span>
+                <span className="truncate font-mono text-amber-100/90" title={c.file}>
+                  {c.file}
+                </span>
+                <span className="text-amber-200/60">{c.modules.join(" + ")}</span>
+              </div>
+            ))}
+            {conflicts.length > 8 && (
+              <p className="text-[10px] text-amber-200/50">...and {conflicts.length - 8} more</p>
+            )}
+          </div>
+        </div>
+      )}
 
       {items.length === 0 ? (
         <p className="rounded-xl border border-zinc-800 bg-zinc-950/50 p-6 text-center text-sm text-zinc-500">
@@ -324,6 +419,74 @@ export function PackBuilderTab({
               </ModuleCard>
             );
           })}
+
+          {exportable.length > 0 && (
+            <section className="rounded-xl border border-zinc-800 bg-zinc-950/50 p-4">
+              <h3 className="text-[11px] font-bold uppercase tracking-widest text-zinc-400">
+                Export modules
+              </h3>
+              <p className="mt-0.5 text-[10px] text-zinc-600">
+                Compile each selected module into its own standalone pak01_dir.vpk (in a folder
+                named after the module), ready to release on its own. The normal compile and
+                install are not affected.
+              </p>
+              <div className="mt-3 flex flex-col gap-1">
+                {exportable.map((m) => {
+                  const st = status[m.id];
+                  const count = items.filter((i) => ownerOf.get(i.key) === m.id).length;
+                  return (
+                    <div key={m.id} className="flex items-center gap-2 text-xs">
+                      <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={selected.has(m.id)}
+                          onChange={() => toggleSel(m.id)}
+                          disabled={exporting}
+                          className="accent-teal-500"
+                        />
+                        <span className="truncate text-zinc-200">{m.name}</span>
+                        <span className="shrink-0 text-[10px] text-zinc-600">{count} item(s)</span>
+                      </label>
+                      {st?.state === "run" && <span className="shrink-0 text-zinc-400">building…</span>}
+                      {st?.state === "ok" && (
+                        <span className="shrink-0 text-emerald-300">
+                          ✓ done{st.failed ? ` (${st.failed} item(s) failed)` : ""}
+                        </span>
+                      )}
+                      {st?.state === "fail" && (
+                        <span className="shrink-0 text-red-300" title={st.error}>
+                          ✕ failed
+                        </span>
+                      )}
+                      {st?.path && (
+                        <button
+                          onClick={() => void revealItemInDir(st.path!)}
+                          className="shrink-0 rounded border border-zinc-700 px-1.5 py-0.5 text-[10px] text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-200"
+                        >
+                          Show
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              {hasBundled && (
+                <p className="mt-2 text-[10px] text-zinc-600">
+                  Note: bundled mod vpks aren't inspected, so two modules bundling mods that touch
+                  the same files can still collide without a warning above.
+                </p>
+              )}
+              <button
+                onClick={() => void runExport()}
+                disabled={exporting || exportable.every((m) => !selected.has(m.id))}
+                className="mt-3 rounded-md border border-teal-500/40 bg-teal-500/10 px-3 py-1.5 text-xs font-medium text-teal-200 transition hover:bg-teal-500/20 disabled:opacity-50"
+              >
+                {exporting
+                  ? "Exporting…"
+                  : `Export ${exportable.filter((m) => selected.has(m.id)).length} module(s) as standalone vpks`}
+              </button>
+            </section>
+          )}
         </>
       )}
     </div>
