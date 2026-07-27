@@ -145,7 +145,8 @@ export function EasyCompileTab({
         <span>
           Images as world textures: writes a real <span className="font-mono">.vtex</span>{" "}
           source next to the compiled <span className="font-mono">.vtex_c</span> - what
-          particles, models and CSDK content trees reference. Leave off for UI images.
+          particles, models and CSDK content trees reference. Sizes snap to the nearest
+          power of two (world textures require it). Leave off for UI images.
         </span>
       </label>
 

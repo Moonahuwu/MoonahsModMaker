@@ -4323,6 +4323,27 @@ fn easy_ffmpeg_convert(ffmpeg: Option<&str>, src: &str, dest: &Path) -> Result<(
     }
 }
 
+/// Width/height from a PNG's IHDR (the file must really be a png - staged
+/// images always are).
+fn png_dims(p: &Path) -> Option<(u32, u32)> {
+    let b = std::fs::read(p).ok()?;
+    if b.len() < 24 || b[..8] != [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A] {
+        return None;
+    }
+    let w = u32::from_be_bytes(b[16..20].try_into().ok()?);
+    let h = u32::from_be_bytes(b[20..24].try_into().ok()?);
+    Some((w, h))
+}
+
+/// Nearest power of two in [1, 4096]. World textures require pow2 dims -
+/// GenerateMips hard-fails on anything else.
+fn nearest_pow2(n: u32) -> u32 {
+    let n = n.clamp(1, 4096);
+    let lo = 1u32 << (31 - n.leading_zeros());
+    let hi = (lo << 1).min(4096);
+    if n - lo <= hi - n { lo } else { hi }
+}
+
 /// A minimal CDmeVtex source: one 2D srgb input png, DXT5 output, box mips.
 /// This is the standalone-texture source format resourcecompiler ships
 /// (world / particle / model textures - panorama UI textures ride the
@@ -4431,6 +4452,33 @@ pub fn easy_compile_blocking(req: &EasyCompileReq) -> Result<Vec<EasyCompiled>, 
             if let Err(e) = staged {
                 results[idx].error = Some(e);
                 continue;
+            }
+            // Mips require power-of-two dims; scale to the nearest pow2.
+            if let Some((w, h)) = png_dims(&png) {
+                let (tw, th) = (nearest_pow2(w), nearest_pow2(h));
+                if (tw, th) != (w, h) {
+                    let scaled = misc_dir.join(format!("{stem}_pow2.png"));
+                    let exe = req.ffmpeg_path.as_deref().unwrap_or("ffmpeg");
+                    let ok = crate::procutil::quiet(exe)
+                        .args(["-y", "-i"])
+                        .arg(&png)
+                        .args(["-vf", &format!("scale={tw}:{th}:flags=lanczos")])
+                        .arg(&scaled)
+                        .output()
+                        .map(|o| o.status.success() && scaled.is_file())
+                        .unwrap_or(false);
+                    if !ok {
+                        results[idx].error = Some(format!(
+                            "world textures need power-of-two sizes and the resize {w}x{h} to {tw}x{th} failed - is ffmpeg set up?"
+                        ));
+                        continue;
+                    }
+                    let _ = std::fs::remove_file(&png);
+                    if let Err(e) = std::fs::rename(&scaled, &png) {
+                        results[idx].error = Some(e.to_string());
+                        continue;
+                    }
+                }
             }
             let vtex = misc_dir.join(format!("{stem}.vtex"));
             if let Err(e) = write_vtex_source(&vtex, &format!("eim_easy/{stem}.png")) {
@@ -5469,16 +5517,32 @@ mod tests {
         assert!(std::fs::metadata(snd_out).unwrap().len() > 100);
         assert!(res[2].error.is_some(), "missing file must report an error");
 
-        // Vtex-source mode: the same png becomes a real .vtex source +
-        // compiled .vtex_c, with the sources copied beside the output.
+        // Vtex-source mode: pngs become a real .vtex source + compiled
+        // .vtex_c, with the sources copied beside the output. The second
+        // image is deliberately non-power-of-two: world textures hard-fail
+        // GenerateMips on those, so the pipeline must rescale it.
+        let npot = tmp.join("easy npot.png");
+        assert!(crate::procutil::quiet(ffmpeg)
+            .args(["-y", "-f", "lavfi", "-i", "color=c=blue:s=100x60:d=1", "-frames:v", "1"])
+            .arg(&npot)
+            .output()
+            .unwrap()
+            .status
+            .success());
         let out2 = tmp.join("out_vtex");
         let req2 = EasyCompileReq {
-            files: vec![png.to_string_lossy().into_owned()],
+            files: vec![
+                png.to_string_lossy().into_owned(),
+                npot.to_string_lossy().into_owned(),
+            ],
             out_dir: out2.to_string_lossy().into_owned(),
             vtex_source: true,
             ..req
         };
         let res2 = easy_compile_blocking(&req2).expect("vtex-source run");
+        for r in &res2 {
+            eprintln!("{} -> {:?} {:?}", r.input, r.output, r.error);
+        }
         let img2 = &res2[0];
         assert!(img2.error.is_none(), "vtex-source image failed: {:?}", img2.error);
         let out_c = img2.output.as_ref().expect("vtex_c output");
@@ -5492,6 +5556,21 @@ mod tests {
         );
         let vtex_src = img2.extras.iter().find(|e| e.ends_with(".vtex")).unwrap();
         assert!(std::fs::read_to_string(vtex_src).unwrap().contains("CDmeVtex"));
+        let img3 = &res2[1];
+        assert!(img3.error.is_none(), "npot image failed: {:?}", img3.error);
+        let npot_png = img3.extras.iter().find(|e| e.ends_with(".png")).expect("npot staged png");
+        assert_eq!(png_dims(Path::new(npot_png)), Some((128, 64)), "must rescale to pow2");
+    }
+
+    #[test]
+    fn nearest_pow2_rounds_sanely() {
+        assert_eq!(nearest_pow2(1), 1);
+        assert_eq!(nearest_pow2(64), 64);
+        assert_eq!(nearest_pow2(100), 128);
+        assert_eq!(nearest_pow2(586), 512);
+        assert_eq!(nearest_pow2(624), 512);
+        assert_eq!(nearest_pow2(800), 1024);
+        assert_eq!(nearest_pow2(9000), 4096);
     }
 
     #[test]
