@@ -108,6 +108,7 @@ import type { AttributeOverride, EffectOverride, EventProject, EventView, HeroTe
 import { GameBananaBrowser } from "./components/GameBananaBrowser";
 import { LibraryTab } from "./components/LibraryTab";
 import { EasyCompileTab } from "./components/EasyCompileTab";
+import { PackBuilderTab, type PackItem } from "./components/PackBuilderTab";
 import "./index.css";
 import "./App.css";
 
@@ -143,6 +144,9 @@ const JUMPSCARES = "jumpscares";
 const UIMASTER = "uimaster";
 /** Easy Compile (experimental): one-off source → `_c` conversion. */
 const EASY_COMPILE = "easycompile";
+/** Pack Builder: organize the pack's content into named modules (the future
+ *  split points for standalone releases). */
+const PACK_BUILDER = "packbuilder";
 /** Catch-all tab for events auto-discovered from a new patch. */
 const UNSORTED = "unsorted";
 
@@ -226,6 +230,7 @@ const TAB_LABELS: Record<string, string> = {
   [JUMPSCARES]: "Jumpscares",
   [UIMASTER]: "UI Master",
   [EASY_COMPILE]: "Easy Compile",
+  [PACK_BUILDER]: "Pack Builder",
   [CUSTOM_SERVER]: "Custom Server",
   [MOD_COMBINER]: "Mod combiner",
   [GAMEBANANA]: "GameBanana",
@@ -728,6 +733,7 @@ function accentFor(ev: { group: string; side: string }): string {
   if (ev.group === JUMPSCARES) return "#ef4444"; // red (spooky)
   if (ev.group === UIMASTER) return "#f59e0b"; // amber (experimental UI editing)
   if (ev.group === EASY_COMPILE) return "#fbbf24"; // amber (compiler utility)
+  if (ev.group === PACK_BUILDER) return "#5eead4"; // teal (pack organization)
   if (ev.group === CUSTOM_SERVER) return "#38bdf8"; // sky (server)
   if (ev.group === GAMEBANANA) return "#eab308"; // GameBanana yellow
   if (ev.group === LIBRARY) return "#93c5fd"; // light blue (library shelf)
@@ -1174,6 +1180,9 @@ export default function App() {
     // combined/, so hiding their management UI would ship them invisibly).
     if (settings.experimentalModCombiner || settings.importedMods.length > 0)
       out.push(MOD_COMBINER);
+    // Pack Builder: always visible - organizing content into modules is
+    // harmless when unused and the foundation for splitting releases.
+    out.push(PACK_BUILDER);
     out.push(LIBRARY, REPLACE_SOUNDS);
     return out;
   }, [
@@ -1224,6 +1233,53 @@ export default function App() {
   // Sidebar nav structure: standalone tabs, with category tabs collapsed under
   // a single parent header (rendered at the position of the first member tab).
   // All sound-event tabs additionally nest under one colored ♪ "Sound" master.
+  // Pack Builder inventory: every piece of pack content flattened to a stable
+  // key + display info (the tab itself only moves keys between modules).
+  // Keys deliberately avoid machine paths so modules survive Shared Pack sync;
+  // bundled mods are keyed by vpk basename for the same reason.
+  const packItems = useMemo<PackItem[]>(() => {
+    if (!project) return [];
+    const out: PackItem[] = [];
+    for (const e of project.events)
+      if (slotHasContent(e))
+        out.push({
+          key: `slot:${e.id}`,
+          kind: "Sound slot",
+          label: e.side || e.eventName,
+          detail: TAB_LABELS[e.group] ?? e.group,
+        });
+    for (const m of project.iconMods ?? [])
+      out.push({ key: `icon:${m.id}`, kind: "Image", label: m.name || m.id });
+    for (const o of project.soundOverrides ?? [])
+      out.push({ key: `sound:${o.id}`, kind: "Sound replace", label: o.label || o.targetRef });
+    for (const o of project.effectOverrides ?? [])
+      out.push({ key: `effect:${o.id}`, kind: "Effect", label: o.label || o.targetRef });
+    for (const o of project.posterOverrides ?? [])
+      out.push({ key: `poster:${o.id}`, kind: "Wall art", label: o.label || o.posterId });
+    for (const t of project.heroTextures ?? [])
+      out.push({ key: `herotex:${t.id}`, kind: "Hero skin", label: t.label || t.id });
+    for (const u of project.uiOverrides ?? [])
+      out.push({
+        key: `ui:${u.targetRel}`,
+        kind: "UI file",
+        label: u.targetRel.split("/").pop() ?? u.targetRel,
+      });
+    const d = project.digimod;
+    if (d && (d.scares.length > 0 || d.deaths.length > 0 || (d.mergeVpks?.length ?? 0) > 0))
+      out.push({ key: "digimod", kind: "Jumpscares", label: "Jumpscares / Deaths mod" });
+    if (
+      (project.vdataOverrides?.length ?? 0) > 0 ||
+      (project.globalOverrides?.length ?? 0) > 0 ||
+      (project.worldOverrides?.length ?? 0) > 0
+    )
+      out.push({ key: "gameplay", kind: "Gameplay", label: "Gameplay config edits" });
+    for (const p of settings.importedMods) {
+      const base = p.split(/[\\/]/).pop() ?? p;
+      out.push({ key: `mod:${base.toLowerCase()}`, kind: "Bundled mod", label: base });
+    }
+    return out;
+  }, [project, settings.importedMods]);
+
   const navItems = useMemo(() => {
     type Child = { type: "tab"; key: string } | { type: "category"; label: string; tabs: string[] };
     const items: (Child | { type: "master"; label: string; items: Child[] })[] = [];
@@ -4841,6 +4897,8 @@ export default function App() {
   const tabCount = (g: string): number =>
     g === MOD_COMBINER
       ? settings.importedMods.length
+      : g === PACK_BUILDER
+      ? (project?.modules ?? []).length
       : g === REPLACE_SOUNDS
         ? (project?.soundOverrides ?? []).length
         : g === EFFECTS
@@ -5238,7 +5296,9 @@ export default function App() {
                             : "Random jumpscares while you play - your MoonahMasterUI mod, configured here and rebuilt on compile."
                           : activeTab === UIMASTER
                             ? "Edit the game's UI files directly - decompiled to source, compiled back into your mod. Very experimental."
-                            : null;
+                            : activeTab === PACK_BUILDER
+                              ? "Organize the pack into named modules - the future split points for standalone releases. Compiling still builds everything together."
+                              : null;
               return sub ? <p className="mt-1 text-sm text-zinc-500">{sub}</p> : null;
             })()}
           </div>
@@ -5317,6 +5377,14 @@ export default function App() {
           />
         ) : activeTab === EASY_COMPILE ? (
           <EasyCompileTab settings={settings} update={updateSettings} dropRef={easyDropRef} />
+        ) : activeTab === PACK_BUILDER ? (
+          <PackBuilderTab
+            items={packItems}
+            modules={project?.modules ?? []}
+            onChange={(mods) =>
+              setProject((prev) => (prev ? { ...prev, modules: mods } : prev))
+            }
+          />
         ) : activeTab === ITEMS ? (
           <ItemsTab
             helperPath={settings.vpkHelperPath}

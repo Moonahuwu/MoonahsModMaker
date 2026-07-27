@@ -219,6 +219,21 @@ export interface Project {
   heroTextures?: HeroTextureOverride[];
   digimod?: DigimodConfig | null;
   uiOverrides?: UiFileOverride[];
+  /** Pack Builder: named modules the pack's content is organized into, so a
+   *  big shared pack can later split into standalone releases. Items are
+   *  stable content keys (`slot:<id>`, `icon:<id>`, `sound:<id>`,
+   *  `effect:<id>`, `poster:<id>`, `herotex:<id>`, `ui:<targetRel>`,
+   *  `mod:<vpk basename>`, or the units `digimod` / `gameplay`) - machine
+   *  independent on purpose so modules survive Shared Pack sync. Content not
+   *  claimed by any module belongs to the implicit Core module. */
+  modules?: PackModule[];
+}
+
+/** One Pack Builder module (see `Project.modules`). */
+export interface PackModule {
+  id: string;
+  name: string;
+  items: string[];
 }
 
 /** UI Master: one edited panorama layout/style, staged over the game's own
