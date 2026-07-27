@@ -83,6 +83,9 @@ export interface Settings {
   enableJumpscares: boolean;
   /** Easy Compile: where compiled files land (persisted between runs). */
   easyCompileOutDir: string;
+  /** Easy Compile: images become world textures (.vtex source + .vtex_c,
+   *  for particles / models / CSDK trees) instead of panorama UI vtex. */
+  easyCompileVtexSource: boolean;
   /** Include UI-tab sound changes in the compiled build. Off by default — UI
    *  soundevent edits make broad menu changes that can break things. */
   includeUiSounds: boolean;
@@ -211,6 +214,7 @@ export const DEFAULT_SETTINGS: Settings = {
   experimentalModCombiner: false,
   enableJumpscares: false,
   easyCompileOutDir: "",
+  easyCompileVtexSource: false,
   includeUiSounds: false,
   source2ViewerPath: "",
   includeGameplay: false,

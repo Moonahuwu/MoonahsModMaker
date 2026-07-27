@@ -1226,6 +1226,9 @@ export interface EasyCompileReq {
   ffmpegPath?: string;
   files: string[];
   outDir: string;
+  /** Images: compile as world textures (a real .vtex source + .vtex_c) instead
+   *  of panorama UI textures. The .vtex + .png sources land in outDir too. */
+  vtexSource?: boolean;
 }
 
 export interface EasyCompiled {
@@ -1233,6 +1236,8 @@ export interface EasyCompiled {
   /** Where the compiled file landed in the output folder (null on failure). */
   output: string | null;
   error: string | null;
+  /** Source files copied beside the output (.vtex + .png in vtex-source mode). */
+  extras: string[];
 }
 
 /** Easy Compile (experimental): auto-detect each file and compile it to its

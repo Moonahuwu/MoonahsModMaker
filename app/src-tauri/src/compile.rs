@@ -4223,6 +4223,12 @@ pub struct EasyCompileReq {
     pub ffmpeg_path: Option<String>,
     pub files: Vec<String>,
     pub out_dir: String,
+    /// Images: compile as WORLD textures - a real `.vtex` source next to the
+    /// staged png, compiled to `.vtex_c` - instead of the panorama UI route.
+    /// The `.vtex` + `.png` sources are copied to the output folder too:
+    /// they're what CSDK content trees and particle `resource:` refs want.
+    #[serde(default)]
+    pub vtex_source: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -4232,6 +4238,9 @@ pub struct EasyCompiled {
     /// Where the compiled file landed in the output folder (None on failure).
     pub output: Option<String>,
     pub error: Option<String>,
+    /// Source files copied beside the output (the `.vtex` + `.png` in
+    /// vtex-source mode; empty otherwise).
+    pub extras: Vec<String>,
 }
 
 const EASY_RASTER: &[&str] = &["png", "jpg", "jpeg", "webp", "bmp", "tga"];
@@ -4314,6 +4323,58 @@ fn easy_ffmpeg_convert(ffmpeg: Option<&str>, src: &str, dest: &Path) -> Result<(
     }
 }
 
+/// A minimal CDmeVtex source: one 2D srgb input png, DXT5 output, box mips.
+/// This is the standalone-texture source format resourcecompiler ships
+/// (world / particle / model textures - panorama UI textures ride the
+/// image-list vdata instead). Verified against the real CSDK compiler.
+fn write_vtex_source(dest: &Path, png_relpath: &str) -> std::io::Result<()> {
+    let body = format!(
+        r#"<!-- dmx encoding keyvalues2_noids 1 format vtex 1 -->
+"CDmeVtex"
+{{
+	"m_inputTextureArray" "element_array"
+	[
+		"CDmeInputTexture"
+		{{
+			"m_name" "string" "0"
+			"m_fileName" "string" "{png_relpath}"
+			"m_colorSpace" "string" "srgb"
+			"m_typeString" "string" "2D"
+			"m_imageProcessorArray" "element_array"
+			[
+				"CDmeImageProcessor"
+				{{
+					"m_algorithm" "string" "None"
+					"m_stringArg" "string" ""
+					"m_vFloat4Arg" "vector4" "0 0 0 0"
+				}}
+			]
+		}}
+	]
+	"m_outputTypeString" "string" "2D"
+	"m_outputFormat" "string" "DXT5"
+	"m_textureOutputChannelArray" "element_array"
+	[
+		"CDmeTextureOutputChannel"
+		{{
+			"m_inputTextureArray" "string_array" ["0"]
+			"m_srcChannels" "string" "rgba"
+			"m_dstChannels" "string" "rgba"
+			"m_mipAlgorithm" "CDmeImageProcessor"
+			{{
+				"m_algorithm" "string" "Box"
+				"m_stringArg" "string" ""
+				"m_vFloat4Arg" "vector4" "0 0 0 0"
+			}}
+			"m_outputColorSpace" "string" "srgb"
+		}}
+	]
+}}
+"#
+    );
+    std::fs::write(dest, body)
+}
+
 pub fn easy_compile_blocking(req: &EasyCompileReq) -> Result<Vec<EasyCompiled>, String> {
     let content_root = Path::new(&req.content_root);
     let compiled_root = Path::new(&req.compiled_root);
@@ -4334,12 +4395,15 @@ pub fn easy_compile_blocking(req: &EasyCompileReq) -> Result<Vec<EasyCompiled>, 
     let mut results: Vec<EasyCompiled> = req
         .files
         .iter()
-        .map(|f| EasyCompiled { input: f.clone(), output: None, error: None })
+        .map(|f| EasyCompiled { input: f.clone(), output: None, error: None, extras: Vec::new() })
         .collect();
     let mut used = std::collections::HashSet::new();
     let mut image_list = String::new();
     // result idx -> the compiled file the run should produce.
     let mut expect: Vec<(usize, PathBuf)> = Vec::new();
+    // result idx -> source files to copy beside the output (vtex-source mode).
+    let mut source_files: std::collections::HashMap<usize, Vec<PathBuf>> =
+        std::collections::HashMap::new();
     // Staged sources compiled directly (result idx tags per-file retry errors).
     let mut direct: Vec<(usize, String)> = Vec::new();
     let mut any_images = false;
@@ -4354,7 +4418,29 @@ pub fn easy_compile_blocking(req: &EasyCompileReq) -> Result<Vec<EasyCompiled>, 
         let raw_stem = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         let stem = easy_stem(&raw_stem, &mut used);
 
-        if EASY_RASTER.contains(&ext.as_str()) {
+        if EASY_RASTER.contains(&ext.as_str()) && req.vtex_source {
+            // World-texture route: stage the png + author a CDmeVtex source
+            // referencing it, and compile THAT. Yields a real .vtex usable in
+            // CSDK content trees / particle refs, plus the .vtex_c.
+            let png = misc_dir.join(format!("{stem}.png"));
+            let staged = if ext == "png" {
+                stage_as_png(req.ffmpeg_path.as_deref(), f, &png).map(|_| ())
+            } else {
+                easy_ffmpeg_convert(req.ffmpeg_path.as_deref(), f, &png)
+            };
+            if let Err(e) = staged {
+                results[idx].error = Some(e);
+                continue;
+            }
+            let vtex = misc_dir.join(format!("{stem}.vtex"));
+            if let Err(e) = write_vtex_source(&vtex, &format!("eim_easy/{stem}.png")) {
+                results[idx].error = Some(e.to_string());
+                continue;
+            }
+            direct.push((idx, vtex.to_string_lossy().into_owned()));
+            expect.push((idx, compiled_root.join(format!("eim_easy/{stem}.vtex_c"))));
+            source_files.insert(idx, vec![vtex, png]);
+        } else if EASY_RASTER.contains(&ext.as_str()) {
             let dest = img_dir.join(format!("{stem}.png"));
             let staged = if ext == "png" {
                 // Sniff-and-convert: "png"s that are really JPEG/WebP would
@@ -4477,7 +4563,18 @@ pub fn easy_compile_blocking(req: &EasyCompileReq) -> Result<Vec<EasyCompiled>, 
                 Some(n) => {
                     let out = Path::new(&req.out_dir).join(&n);
                     match std::fs::copy(produced, &out) {
-                        Ok(_) => results[*idx].output = Some(out.to_string_lossy().into_owned()),
+                        Ok(_) => {
+                            results[*idx].output = Some(out.to_string_lossy().into_owned());
+                            // Vtex-source mode: the .vtex + .png sources ride
+                            // along - they're half the point of the mode.
+                            for src in source_files.get(idx).into_iter().flatten() {
+                                let Some(name) = src.file_name() else { continue };
+                                let dst = Path::new(&req.out_dir).join(name);
+                                if std::fs::copy(src, &dst).is_ok() {
+                                    results[*idx].extras.push(dst.to_string_lossy().into_owned());
+                                }
+                            }
+                        }
                         Err(e) => results[*idx].error = Some(format!("copying result: {e}")),
                     }
                 }
@@ -5305,9 +5402,16 @@ mod tests {
     #[ignore]
     fn e2e_easy_compile() {
         let csdk = r"C:\Users\ethob\Desktop\DeadlockModding\Reduced_CSDK_12";
-        let ffmpeg = r"C:\Users\ethob\Desktop\DeadlockModding\EIM_Tools\ffmpeg\ffmpeg.exe";
+        // The bundled tools copy moves around; fall back to PATH ffmpeg.
+        let ffmpeg_bundled = r"C:\Users\ethob\Desktop\DeadlockModding\EIM_Tools\ffmpeg\ffmpeg.exe";
+        let ffmpeg = if Path::new(ffmpeg_bundled).exists() { ffmpeg_bundled } else { "ffmpeg" };
+        let ffmpeg_ok = crate::procutil::quiet(ffmpeg)
+            .arg("-version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
         let compiler = format!(r"{csdk}\game\bin_tools\win64\resourcecompiler.exe");
-        if !Path::new(&compiler).exists() || !Path::new(ffmpeg).exists() {
+        if !Path::new(&compiler).exists() || !ffmpeg_ok {
             eprintln!("skipping: CSDK or ffmpeg missing");
             return;
         }
@@ -5346,6 +5450,7 @@ mod tests {
                 tmp.join("missing.png").to_string_lossy().into_owned(),
             ],
             out_dir: out_dir.to_string_lossy().into_owned(),
+            vtex_source: false,
         };
         let res = easy_compile_blocking(&req).expect("easy compile should run");
         for r in &res {
@@ -5363,6 +5468,43 @@ mod tests {
         assert!(snd_out.ends_with("easy_test_tone.vsnd_c"), "got {snd_out}");
         assert!(std::fs::metadata(snd_out).unwrap().len() > 100);
         assert!(res[2].error.is_some(), "missing file must report an error");
+
+        // Vtex-source mode: the same png becomes a real .vtex source +
+        // compiled .vtex_c, with the sources copied beside the output.
+        let out2 = tmp.join("out_vtex");
+        let req2 = EasyCompileReq {
+            files: vec![png.to_string_lossy().into_owned()],
+            out_dir: out2.to_string_lossy().into_owned(),
+            vtex_source: true,
+            ..req
+        };
+        let res2 = easy_compile_blocking(&req2).expect("vtex-source run");
+        let img2 = &res2[0];
+        assert!(img2.error.is_none(), "vtex-source image failed: {:?}", img2.error);
+        let out_c = img2.output.as_ref().expect("vtex_c output");
+        assert!(out_c.ends_with("easy_test_image.vtex_c"), "got {out_c}");
+        assert!(std::fs::metadata(out_c).unwrap().len() > 100);
+        assert!(
+            img2.extras.iter().any(|e| e.ends_with(".vtex"))
+                && img2.extras.iter().any(|e| e.ends_with(".png")),
+            "sources must ride along: {:?}",
+            img2.extras
+        );
+        let vtex_src = img2.extras.iter().find(|e| e.ends_with(".vtex")).unwrap();
+        assert!(std::fs::read_to_string(vtex_src).unwrap().contains("CDmeVtex"));
+    }
+
+    #[test]
+    fn vtex_source_writes_the_dmx_template() {
+        let dir = std::env::temp_dir().join("eim_vtex_src_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let dest = dir.join("t.vtex");
+        write_vtex_source(&dest, "eim_easy/t.png").unwrap();
+        let body = std::fs::read_to_string(&dest).unwrap();
+        assert!(body.starts_with("<!-- dmx encoding keyvalues2_noids 1 format vtex 1 -->"));
+        assert!(body.contains("\"CDmeVtex\""));
+        assert!(body.contains("\"m_fileName\" \"string\" \"eim_easy/t.png\""));
+        assert!(body.contains("DXT5"));
     }
 
     ///   cargo test -p app --lib -- --ignored e2e_recolor_particle --nocapture

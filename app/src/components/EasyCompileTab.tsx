@@ -23,9 +23,10 @@ function baseName(p: string): string {
 }
 
 /** What a file will become, for the queue row's hint. */
-function compiledKind(p: string): string {
+function compiledKind(p: string, vtexSource: boolean): string {
   const ext = (p.split(".").pop() ?? "").toLowerCase();
-  if (["png", "jpg", "jpeg", "webp", "bmp", "tga"].includes(ext)) return ".vtex_c";
+  if (["png", "jpg", "jpeg", "webp", "bmp", "tga"].includes(ext))
+    return vtexSource ? ".vtex + .vtex_c" : ".vtex_c";
   if (ext === "svg") return ".vsvg_c";
   if (["wav", "mp3", "flac", "ogg", "m4a", "aac"].includes(ext)) return ".vsnd_c";
   if (ext === "xml") return ".vxml_c";
@@ -98,6 +99,7 @@ export function EasyCompileTab({
         ffmpegPath: s.ffmpegPath || undefined,
         files: queue,
         outDir,
+        vtexSource: !!settings.easyCompileVtexSource,
       });
       setResults(res);
       const ok = res.filter((r) => r.output).length;
@@ -132,6 +134,20 @@ export function EasyCompileTab({
         panorama image list method, audio becomes <span className="font-mono">.vsnd_c</span>,
         panorama xml/css/js and vsndevts/vmat/vpcf/vdata compile directly.
       </p>
+
+      <label className="mt-3 flex cursor-pointer items-start gap-2 text-xs text-zinc-400">
+        <input
+          type="checkbox"
+          checked={!!settings.easyCompileVtexSource}
+          onChange={(e) => update({ easyCompileVtexSource: e.target.checked })}
+          className="mt-0.5 accent-amber-500"
+        />
+        <span>
+          Images as world textures: writes a real <span className="font-mono">.vtex</span>{" "}
+          source next to the compiled <span className="font-mono">.vtex_c</span> - what
+          particles, models and CSDK content trees reference. Leave off for UI images.
+        </span>
+      </label>
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <button
@@ -179,7 +195,7 @@ export function EasyCompileTab({
                     {baseName(p)}
                   </span>
                   <span className="shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 font-mono text-[10px] text-zinc-500">
-                    → {compiledKind(p)}
+                    → {compiledKind(p, !!settings.easyCompileVtexSource)}
                   </span>
                   <span className="ml-auto flex shrink-0 items-center gap-1.5">
                     {r?.output && (
@@ -189,6 +205,15 @@ export function EasyCompileTab({
                         title={r.output}
                       >
                         ✓ {baseName(r.output)}
+                      </button>
+                    )}
+                    {r && r.extras.length > 0 && (
+                      <button
+                        onClick={() => void revealItemInDir(r.extras[0])}
+                        className="rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] text-sky-300 transition hover:bg-sky-500/25"
+                        title={r.extras.join("\n")}
+                      >
+                        + .{r.extras.map((x) => baseName(x).split(".").pop()).join(", .")}
                       </button>
                     )}
                     {r?.error && (
