@@ -60,6 +60,8 @@ import {
   deleteProfile,
   renameProfile,
   type ProfileBlob,
+  exportSharedPack,
+  importSharedPack,
 } from "./lib/api";
 import {
   cHeroDetail as heroDetailApi,
@@ -1630,6 +1632,85 @@ export default function App() {
       push("success", `Duplicated to "${name}"`);
     } catch (e) {
       push("error", `Couldn't duplicate profile: ${e}`);
+    } finally {
+      setProfileBusy(false);
+    }
+  }
+
+  // ---- Shared Pack: sync the active profile with a friend through a shared
+  // folder (typically a GitHub repo clone; git or a synced drive does the
+  // transport, the exporter makes the profile portable).
+
+  async function savePackTo(dir: string) {
+    if (!projectRef.current) return;
+    setProfileBusy(true);
+    try {
+      await flushActiveProfile();
+      const s = settingsRef.current;
+      const name = s.activeProfile || "Shared Pack";
+      const rep = await exportSharedPack(dir, name, {
+        project: projectRef.current,
+        importedMods: s.importedMods,
+        compilePrefs: compilePrefsOf(s),
+        modExcludes: s.importedMods
+          .map((p) => ({ path: p, excludes: s.importedModExcludes[p] ?? [] }))
+          .filter((e) => e.excludes.length > 0),
+        modCredits: s.importedMods
+          .filter((p) => s.importedModCredits[p])
+          .map((p) => ({ path: p, credit: s.importedModCredits[p] })),
+      });
+      const mb = rep.copiedBytes / (1024 * 1024);
+      const copied =
+        rep.copiedBytes > 0
+          ? `, ${mb < 1 ? "under 1" : Math.round(mb)} MB copied`
+          : ", already up to date";
+      push("success", `Saved "${name}" to the pack folder: ${rep.packed} file(s)${copied} - commit and push to share it`);
+      for (const w of rep.warnings.slice(0, 3)) push("error", w);
+      if (rep.warnings.length > 3)
+        push("error", `...and ${rep.warnings.length - 3} more file(s) were missing`);
+    } catch (e) {
+      push("error", `Couldn't save to the pack folder: ${e}`);
+    } finally {
+      setProfileBusy(false);
+    }
+  }
+
+  async function loadPackFrom(dir: string) {
+    setProfileBusy(true);
+    try {
+      await flushActiveProfile();
+      const res = await importSharedPack(dir);
+      const def = await newProject();
+      const { modExcludes, modCredits, ...rest } = res.data;
+      // Path-keyed import prefs ride the pack as arrays; fold them back into
+      // the settings maps under the rewritten (local) paths.
+      if (modExcludes?.length || modCredits?.length) {
+        updateSettings({
+          importedModExcludes: {
+            ...settingsRef.current.importedModExcludes,
+            ...Object.fromEntries((modExcludes ?? []).map((e) => [e.path, e.excludes])),
+          },
+          importedModCredits: {
+            ...settingsRef.current.importedModCredits,
+            ...Object.fromEntries((modCredits ?? []).map((e) => [e.path, e.credit])),
+          },
+        });
+      }
+      const blob: ProfileBlob = {
+        project: rest.project,
+        importedMods: rest.importedMods ?? [],
+        // The author's pinned install slot is their machine's, not this one's.
+        compilePrefs: { ...(rest.compilePrefs ?? compilePrefsOf(settingsRef.current)), installSlot: null },
+      };
+      await saveProfile(res.name, blob);
+      setProfiles(await listProfiles());
+      applyProfile(res.name, blob, def);
+      push("success", `Loaded "${res.name}" from the pack folder`);
+      for (const w of res.warnings.slice(0, 3)) push("error", w);
+      if (res.warnings.length > 3)
+        push("error", `...and ${res.warnings.length - 3} more file(s) were missing - pull the repo fully, then load again`);
+    } catch (e) {
+      push("error", `Couldn't load from the pack folder: ${e}`);
     } finally {
       setProfileBusy(false);
     }
@@ -5799,6 +5880,8 @@ export default function App() {
                 onClose={() => setSettingsOpen(false)}
                 onRefreshVanilla={refreshVanilla}
                 onAutodetect={autodetect}
+                onSavePack={savePackTo}
+                onLoadPack={loadPackFrom}
               />
             </motion.div>
           </motion.div>

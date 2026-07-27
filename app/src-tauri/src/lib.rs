@@ -4,6 +4,7 @@ mod compile;
 mod digimod;
 mod host;
 mod install;
+mod packsync;
 mod paths;
 mod procutil;
 mod project;
@@ -104,6 +105,8 @@ pub fn run() {
             commands::load_profile,
             commands::delete_profile,
             commands::rename_profile,
+            commands::export_shared_pack,
+            commands::import_shared_pack,
             commands::probe_audio,
             commands::process_audio,
             commands::pack_vpk,

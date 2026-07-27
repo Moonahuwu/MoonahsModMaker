@@ -143,6 +143,19 @@ contains `{` braces).
   overwrites a caller-given one, backing up the occupant under `.eim_backups/`) and, when
   asked, adds the `citadel/addons` search path to the sibling `gameinfo.gi` if missing
   (with a `.gi.eim.bak`). Commands: `scan_addon_slots`, `install_to_game`.
+- `packsync.rs` — Shared Pack profile sync (two people, one modpack, transport =
+  any shared folder, typically a GitHub clone). Export walks the profile JSON
+  **schema-blind**: every string that is an absolute path to something that exists
+  (songs, icons, digimod media, adopted-entry source vpks, pack cache DIRS) is
+  copied into the pack folder's `assets/` (app-data files keep their relative
+  layout for stable git diffs; collisions get a path-hash salt) and rewritten to
+  `pack://` form; import reverses against the reader's own clone, so pulls need no
+  re-copy. Composite strings embedding paths (`lastCompiledHash`) are skipped via
+  invalid-path-char detection. Writes starter `.gitattributes` (Git LFS for big
+  types) + README once. Commands `export_shared_pack`/`import_shared_pack`; UI =
+  Settings > "Shared Pack" (folder + Save/Load, `settings.sharedPackDir`); import
+  resets `installSlot` to auto and folds `modExcludes`/`modCredits` arrays back
+  into the path-keyed settings maps.
 - `host.rs` — one-click custom-game hosting (no SteamCMD): patches `gameinfo.gi` for P2P
   dedicated-server mode and relaunches the client with `-dedicated`. Commands:
   `host_status`, `setup_hosting`, `revert_hosting`, `launch_host`, `launch_game`,

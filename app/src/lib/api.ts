@@ -1543,3 +1543,40 @@ export function deleteProfile(name: string): Promise<void> {
 export function renameProfile(from: string, to: string): Promise<void> {
   return invoke("rename_profile", { from, to });
 }
+
+/** What `export_shared_pack` copied and rewrote into the pack folder. */
+export interface SharedPackReport {
+  packed: number;
+  copiedBytes: number;
+  rewritten: number;
+  warnings: string[];
+  packJson: string;
+}
+
+/** A profile plus the path-keyed settings that must travel with it, flattened
+ *  to arrays: the pack exporter rewrites path VALUES, not object keys. */
+export interface SharedPackBlob extends ProfileBlob {
+  modExcludes?: { path: string; excludes: string[] }[];
+  modCredits?: { path: string; credit: GbModInfo }[];
+}
+
+export interface SharedPackImportResult {
+  name: string;
+  data: SharedPackBlob;
+  warnings: string[];
+}
+
+/** Write the profile portably into a shared folder (a git clone): media copied
+ *  under `assets/`, refs rewritten to pack:// form, pack.json on top. */
+export function exportSharedPack(
+  dir: string,
+  name: string,
+  data: SharedPackBlob,
+): Promise<SharedPackReport> {
+  return invoke("export_shared_pack", { dir, name, data });
+}
+
+/** Read a shared folder's pack.json with refs pointed at THIS machine's copy. */
+export function importSharedPack(dir: string): Promise<SharedPackImportResult> {
+  return invoke("import_shared_pack", { dir });
+}

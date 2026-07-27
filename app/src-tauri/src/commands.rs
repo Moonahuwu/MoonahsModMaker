@@ -4683,6 +4683,36 @@ pub fn delete_profile(app: tauri::AppHandle, name: String) -> Result<(), String>
     Ok(())
 }
 
+// ---- Shared Pack -----------------------------------------------------------
+// Sync a whole profile with another person through a shared folder (typically
+// a git repo clone): export copies every referenced media file in and rewrites
+// paths portable; import points them back at the reader's own copy.
+
+#[tauri::command]
+pub async fn export_shared_pack(
+    app: tauri::AppHandle,
+    dir: String,
+    name: String,
+    data: serde_json::Value,
+) -> Result<crate::packsync::ExportReport, String> {
+    use tauri::Manager;
+    let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::packsync::export_pack(std::path::Path::new(&dir), &app_data, &name, data)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn import_shared_pack(dir: String) -> Result<crate::packsync::ImportResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::packsync::import_pack(std::path::Path::new(&dir))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Rename a profile (overwrites any existing profile at the new name).
 #[tauri::command]
 pub fn rename_profile(app: tauri::AppHandle, from: String, to: String) -> Result<(), String> {

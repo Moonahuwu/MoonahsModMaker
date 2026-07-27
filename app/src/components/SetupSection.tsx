@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { checkPaths } from "../lib/api";
 import { DEATHS_RELEASED } from "../lib/settings";
@@ -119,15 +120,36 @@ export function SetupSection({
   onClose,
   onRefreshVanilla,
   onAutodetect,
+  onSavePack,
+  onLoadPack,
 }: {
   settings: Settings;
   update: (patch: Partial<Settings>) => void;
   onClose: () => void;
   onRefreshVanilla: () => Promise<unknown>;
   onAutodetect: () => Promise<unknown>;
+  onSavePack: (dir: string) => Promise<void>;
+  onLoadPack: (dir: string) => Promise<void>;
 }) {
   const [checks, setChecks] = useState<Record<string, boolean | null>>({});
   const [busy, setBusy] = useState<null | "detect" | "refresh">(null);
+  const [packBusy, setPackBusy] = useState<null | "save" | "load">(null);
+
+  async function runPack(which: "save" | "load") {
+    const dir = settings.sharedPackDir.trim();
+    if (!dir) return;
+    setPackBusy(which);
+    try {
+      await (which === "save" ? onSavePack(dir) : onLoadPack(dir));
+    } finally {
+      setPackBusy(null);
+    }
+  }
+
+  async function browsePackDir() {
+    const sel = await open({ directory: true, title: "Pick your shared pack folder (the repo clone)" });
+    if (typeof sel === "string") update({ sharedPackDir: sel });
+  }
 
   async function run(which: "detect" | "refresh", fn: () => Promise<unknown>) {
     setBusy(which);
@@ -194,6 +216,46 @@ export function SetupSection({
               title={DEATHS_RELEASED ? "Jumpscares / Deaths (MoonahMasterUI)" : "Jumpscares (MoonahMasterUI)"}
               desc="Show the Jumpscares tab without the mod installed: start from a blank template, add your own videos and sounds, and compiling generates the whole mod for you. The tab always shows when the mod is detected in your addons."
             />
+          </div>
+        </Section>
+
+        <Section
+          title="Shared Pack"
+          hint="Work on one mod pack with a friend: point both apps at a clone of the same GitHub repo (GitHub Desktop is the easy way). Save writes the current profile plus every file it uses into the folder; after they pull, Load brings it into their app as a profile."
+        >
+          <div className="flex flex-col gap-2">
+            <Field
+              label="Pack folder (your copy of the shared repo)"
+              value={settings.sharedPackDir}
+              onChange={(v) => update({ sharedPackDir: v })}
+            />
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => void browsePackDir()}
+                className="rounded-md border border-zinc-700 bg-zinc-800/60 px-3 py-1.5 text-xs font-medium text-zinc-300 transition hover:bg-zinc-700/60"
+              >
+                Browse…
+              </button>
+              <button
+                onClick={() => void runPack("save")}
+                disabled={packBusy !== null || !settings.sharedPackDir.trim()}
+                title="Write the active profile and all its files into the pack folder, then commit and push it to share"
+                className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-200 transition hover:bg-emerald-500/20 disabled:opacity-50"
+              >
+                {packBusy === "save" ? "Saving…" : "Save profile to pack"}
+              </button>
+              <button
+                onClick={() => void runPack("load")}
+                disabled={packBusy !== null || !settings.sharedPackDir.trim()}
+                title="Read the pack folder's profile into this app (pull the repo first to get the latest)"
+                className="rounded-md border border-sky-500/40 bg-sky-500/10 px-3 py-1.5 text-xs font-medium text-sky-200 transition hover:bg-sky-500/20 disabled:opacity-50"
+              >
+                {packBusy === "load" ? "Loading…" : "Load profile from pack"}
+              </button>
+            </div>
+            <p className="text-[10px] text-zinc-600">
+              Files over 100 MB need Git LFS on GitHub. The pack writes a .gitattributes covering the big types - run "git lfs install" once per machine before the first push.
+            </p>
           </div>
         </Section>
 

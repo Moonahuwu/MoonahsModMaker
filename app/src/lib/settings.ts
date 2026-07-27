@@ -109,6 +109,10 @@ export interface Settings {
   /** Name of the currently-loaded profile (build config). Empty until the first
    *  profile is bootstrapped. The active profile owns `importedMods`. */
   activeProfile: string;
+  /** Shared Pack folder for syncing a profile with a friend - typically a
+   *  GitHub repo clone (git does the transport, we do the portability).
+   *  A machine path, so it lives here and never inside a profile. */
+  sharedPackDir: string;
   /** Baseline of known game sound events (`relpath::eventName`), seeded on the
    *  first "Fix for new patch". Future fixes diff the live game against this so
    *  only events a NEW patch added surface in the "New / Unsorted" tab. */
@@ -222,6 +226,7 @@ export const DEFAULT_SETTINGS: Settings = {
   randomizer: { skipMovement: false, skipCast: false, skipScale: true, includeGuns: false, noNegative: true, randomizeItemTiers: false, heroStats: false, heroInvestment: false, unsorted: false },
   hostAutoPrep: true,
   activeProfile: "",
+  sharedPackDir: "",
   knownSoundEvents: [],
   knownSweepFiles: [],
   uiSoundsMigrated: false,
