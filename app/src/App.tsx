@@ -1388,6 +1388,13 @@ export default function App() {
       const parts = modulePartsFor(project, settings, mod);
       const explicitRefs = new Set(parts.soundOverrides.map((o) => o.targetRef));
       for (const ev of parts.events) {
+        // Mirror buildCompileConfig: soundstack-driven slots always replace
+        // their stock file directly and never touch the events file.
+        if (ev.directOnly) {
+          if (ev.stockEntry && ev.songs.length > 0)
+            claim(`snd:${ev.stockEntry}`, ev.stockEntry, "replaced sound", mod.name);
+          continue;
+        }
         const direct = directReplaceTarget(ev, explicitRefs, pools);
         if (direct) claim(`snd:${direct}`, direct, "replaced sound", mod.name);
         else if (slotNeedsEventsMerge(ev))

@@ -402,6 +402,12 @@ pub struct EventProject {
     pub vsnd_duration_manual: Option<f64>,
     #[serde(default)]
     pub songs: Vec<Song>,
+    /// Direct-replace slot: the event carries NO vsnd refs to merge (a
+    /// soundstack drives it), so the user's track compiles AT `stock_entry`'s
+    /// path instead - a loose-file override wearing slot clothing. The merge
+    /// machinery skips these entirely.
+    #[serde(default)]
+    pub direct_only: bool,
     /// Reference strings (full `.vsnd` refs) we owned last compile, so renames /
     /// removals clean up correctly.
     #[serde(default)]
@@ -514,6 +520,23 @@ fn slot(
         adopted: vec![],
         events_relpath: events_relpath.into(),
         attribute_overrides: vec![],
+        direct_only: false,
+    }
+}
+
+/// A slot whose event can't be merged (soundstack-driven, no vsnd refs): the
+/// user's audio replaces the `stock_entry` FILE directly on compile.
+fn direct_slot(
+    id: &str,
+    group: &str,
+    label: &str,
+    event_name: &str,
+    stock_entry: &str,
+    events_relpath: &str,
+) -> EventProject {
+    EventProject {
+        direct_only: true,
+        ..slot(id, group, label, event_name, "vsnd_files", stock_entry, events_relpath)
     }
 }
 
@@ -621,12 +644,45 @@ impl Project {
                     "soundevents/music.vsndevts",
                 ),
                 // --- Tab (Map): Rift (the new King-of-the-Hill objective; the
-                //     game names these events "Koth"). These are the musical
-                //     stingers from music.vsndevts. NOTE: the capture LOOP music
+                //     game names these events "Koth"). Stingers merge normally
+                //     from music.vsndevts. The capture LOOP music
                 //     (Music.Koth.Capture.Lp) is driven by a soundstack
                 //     (soundstack_citadel_music_koth_capture) with no vsnd_files
-                //     array, so it can't be merged with the current tooling and is
-                //     intentionally not a slot here. ---
+                //     array, so its four layered loop files are direct-replace
+                //     slots instead: the user's track compiles AT the stock
+                //     path (loose-file override), no event merge involved. ---
+                direct_slot(
+                    "rift_capture_loop",
+                    "rift",
+                    "In the rift (main loop)",
+                    "Music.Koth.Capture.Lp",
+                    "sounds/music/music_koth_capture_160bpm.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                direct_slot(
+                    "rift_capture_contest",
+                    "rift",
+                    "In the rift (contested layer)",
+                    "Music.Koth.Capture.Lp",
+                    "sounds/music/music_koth_capture_contest_160bpm.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                direct_slot(
+                    "rift_capture_block",
+                    "rift",
+                    "In the rift (blocked layer)",
+                    "Music.Koth.Capture.Lp",
+                    "sounds/music/music_koth_capture_block_160bpm.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
+                direct_slot(
+                    "rift_capture_fx",
+                    "rift",
+                    "In the rift (FX layer)",
+                    "Music.Koth.Capture.Lp",
+                    "sounds/music/music_koth_capture_fx_160bpm.vsnd",
+                    "soundevents/music.vsndevts",
+                ),
                 slot(
                     "rift_announce",
                     "rift",
@@ -1580,7 +1636,12 @@ mod tests {
         let p = Project::default_for_match_intro();
         let json = serde_json::to_string_pretty(&p).unwrap();
         let back: Project = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.events.len(), 107);
+        assert_eq!(back.events.len(), 111);
+        // The in-rift capture loop layers are direct-replace slots (their
+        // soundstack event has no arrays to merge).
+        let cap = back.events.iter().find(|e| e.id == "rift_capture_loop").unwrap();
+        assert!(cap.direct_only && cap.group == "rift");
+        assert_eq!(cap.stock_entry, "sounds/music/music_koth_capture_160bpm.vsnd");
         assert_eq!(back.events[0].id, "intro_king");
         // The Sinner's Sacrifice vault tab: normal arrays and the track_2
         // scalar jingle slots both present.

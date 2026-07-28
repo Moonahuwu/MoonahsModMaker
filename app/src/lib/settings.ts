@@ -498,6 +498,12 @@ export function buildCompileConfig(
   const explicitOverrideRefs = new Set(soundOverrides.map((o) => o.targetRef));
   const directTargets = new Map<string, string>();
   for (const ev of events) {
+    // Soundstack-driven slots (Rift capture loop layers): no vsnd refs exist
+    // to merge, so the track ALWAYS compiles at the stock path.
+    if (ev.directOnly) {
+      if (ev.stockEntry && ev.songs.length > 0) directTargets.set(ev.id, ev.stockEntry);
+      continue;
+    }
     const t = directReplaceTarget(ev, explicitOverrideRefs, pools);
     if (t) directTargets.set(ev.id, t);
   }
@@ -506,7 +512,7 @@ export function buildCompileConfig(
   // nobody touches stays OUT of the build entirely (a replace-two-sounds
   // profile must not ship every soundevents file it never edited).
   const mergeSlots = events.filter(
-    (ev) => !directTargets.has(ev.id) && slotNeedsEventsMerge(ev),
+    (ev) => !ev.directOnly && !directTargets.has(ev.id) && slotNeedsEventsMerge(ev),
   );
   const directCompiles: SoundOverrideCompile[] = directSlots.map((ev) => {
     const song = ev.songs[0];

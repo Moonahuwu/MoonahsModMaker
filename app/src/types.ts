@@ -81,6 +81,10 @@ export interface EventProject {
   eventName: string;
   arrayKey: string;
   stockEntry: string;
+  /** Direct-replace slot: the event has no vsnd refs to merge (soundstack
+   *  driven), so the track compiles AT stockEntry's path instead (loose-file
+   *  override). Merge machinery skips these. */
+  directOnly?: boolean;
   vsndDurationMode: DurationMode;
   vsndDurationManual: number | null;
   songs: Song[];
