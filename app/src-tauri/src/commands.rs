@@ -7201,7 +7201,12 @@ pub fn poster_sheet(
 ) -> Result<PosterSheet, String> {
     use tauri::Manager;
     let material = material.trim_matches('/').to_string();
-    if !material.starts_with("materials/") || !material.ends_with(".vmat") {
+    // Overlays live under materials/; the hideout paintings are MODEL
+    // materials (models/hideout/materials/...) - same decompile+composite
+    // pipeline, different tree.
+    if !(material.starts_with("materials/") || material.starts_with("models/"))
+        || !material.ends_with(".vmat")
+    {
         return Err(format!("not a material path: {material}"));
     }
     let root = app.path().app_data_dir().map_err(|e| e.to_string())?.join("posters").join("sheets");

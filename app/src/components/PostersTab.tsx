@@ -47,6 +47,7 @@ const CATEGORIES: { key: string; label: string; hint: string; icon: string }[] =
   { key: "ghostsigns", label: "Ghost Signs", hint: "Faded painted wall ads", icon: "▤" },
   { key: "graffiti", label: "Graffiti", hint: "Tags and murals", icon: "✎" },
   { key: "sigils", label: "Sigils", hint: "Occult wall markings", icon: "✦" },
+  { key: "hideout", label: "Hideout", hint: "The paintings and posters in your hideout", icon: "⌂" },
 ];
 
 const IMAGE_FILTERS = [{ name: "Image", extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }];

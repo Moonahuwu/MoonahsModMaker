@@ -2053,7 +2053,7 @@
           "y": 346,
           "w": 144,
           "h": 144,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "item_55",
@@ -2138,7 +2138,7 @@
           "y": 0,
           "w": 246,
           "h": 763,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "skater_green",
@@ -2356,7 +2356,7 @@
           "y": 6,
           "w": 977,
           "h": 505,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "maj_flav_drink",
@@ -2364,7 +2364,7 @@
           "y": 518,
           "w": 471,
           "h": 980,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "boss_sticker",
@@ -2388,7 +2388,7 @@
           "y": 628,
           "w": 241,
           "h": 112,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "ova_supermega_sticker",
@@ -2396,7 +2396,7 @@
           "y": 750,
           "w": 115,
           "h": 125,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "purple_squiggle_sticker",
@@ -2404,7 +2404,7 @@
           "y": 750,
           "w": 115,
           "h": 108,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "drop_sticker",
@@ -2412,7 +2412,7 @@
           "y": 750,
           "w": 244,
           "h": 102,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "twak_go_sticker",
@@ -2420,7 +2420,7 @@
           "y": 865,
           "w": 121,
           "h": 374,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "brown_face_sticker",
@@ -2428,7 +2428,7 @@
           "y": 876,
           "w": 246,
           "h": 112,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "lightning_sticker",
@@ -2674,7 +2674,7 @@
           "y": 537,
           "w": 100,
           "h": 207,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "item_25",
@@ -2682,7 +2682,7 @@
           "y": 581,
           "w": 121,
           "h": 53,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "item_26",
@@ -2698,7 +2698,7 @@
           "y": 514,
           "w": 374,
           "h": 59,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "item_28",
@@ -2706,7 +2706,7 @@
           "y": 580,
           "w": 52,
           "h": 185,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "item_29",
@@ -2722,7 +2722,7 @@
           "y": 641,
           "w": 120,
           "h": 125,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "item_31",
@@ -2730,7 +2730,7 @@
           "y": 644,
           "w": 115,
           "h": 122,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "item_32",
@@ -2738,7 +2738,7 @@
           "y": 645,
           "w": 174,
           "h": 245,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "item_33",
@@ -2778,7 +2778,7 @@
           "y": 772,
           "w": 243,
           "h": 375,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "item_39",
@@ -2786,7 +2786,7 @@
           "y": 773,
           "w": 113,
           "h": 375,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "item_40",
@@ -2794,7 +2794,7 @@
           "y": 768,
           "w": 58,
           "h": 317,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "item_41",
@@ -2802,7 +2802,7 @@
           "y": 841,
           "w": 128,
           "h": 165,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "item_47",
@@ -2810,7 +2810,7 @@
           "y": 901,
           "w": 174,
           "h": 244,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "item_49",
@@ -2866,7 +2866,7 @@
           "y": 1980,
           "w": 511,
           "h": 68,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         }
       ]
     },
@@ -3537,7 +3537,7 @@
           "y": 1321,
           "w": 420,
           "h": 520,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "obituaries_page",
@@ -3599,7 +3599,7 @@
           "y": 31,
           "w": 259,
           "h": 455,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "np_rich_battle_1",
@@ -3607,7 +3607,7 @@
           "y": 14,
           "w": 285,
           "h": 472,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "np_map_page",
@@ -3663,7 +3663,7 @@
           "y": 486,
           "w": 269,
           "h": 489,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "np_obituaries_2",
@@ -3695,7 +3695,7 @@
           "y": 498,
           "w": 296,
           "h": 464,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "np_columns_2",
@@ -3727,7 +3727,7 @@
           "y": 1523,
           "w": 1024,
           "h": 525,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         }
       ]
     },
@@ -3889,7 +3889,7 @@
           "y": 51,
           "w": 14,
           "h": 154,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "item_13",
@@ -3983,7 +3983,7 @@
           "y": 0,
           "w": 2048,
           "h": 2048,
-          "alphaCoverage": 0.0
+          "alphaCoverage": 0
         }
       ]
     },
@@ -4005,7 +4005,7 @@
           "y": 0,
           "w": 2048,
           "h": 2048,
-          "alphaCoverage": 0.0
+          "alphaCoverage": 0
         }
       ]
     },
@@ -4415,7 +4415,7 @@
           "y": 56,
           "w": 709,
           "h": 1418,
-          "alphaCoverage": 0.0
+          "alphaCoverage": 0
         },
         {
           "id": "friedlander_koppelman",
@@ -4423,7 +4423,7 @@
           "y": 8,
           "w": 140,
           "h": 1295,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "holy_chains",
@@ -4431,7 +4431,7 @@
           "y": 8,
           "w": 130,
           "h": 510,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "afterlife_credit",
@@ -4439,7 +4439,7 @@
           "y": 8,
           "w": 54,
           "h": 577,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "macksound_hoff",
@@ -4447,7 +4447,7 @@
           "y": 28,
           "w": 214,
           "h": 768,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "perfect_shine",
@@ -4455,7 +4455,7 @@
           "y": 865,
           "w": 338,
           "h": 476,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "sanguine_laceration",
@@ -4463,7 +4463,7 @@
           "y": 0,
           "w": 706,
           "h": 1342,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "anathema_crest",
@@ -4510,7 +4510,7 @@
           "y": 15,
           "w": 978,
           "h": 1403,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "rescue_beam",
@@ -4572,7 +4572,7 @@
           "y": 0,
           "w": 1075,
           "h": 809,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "the_66th_store",
@@ -4618,7 +4618,7 @@
           "y": 0,
           "w": 855,
           "h": 858,
-          "alphaCoverage": 0.0
+          "alphaCoverage": 0
         },
         {
           "id": "daveralie_fleur",
@@ -4626,7 +4626,7 @@
           "y": 0,
           "w": 650,
           "h": 2048,
-          "alphaCoverage": 0.0
+          "alphaCoverage": 0
         },
         {
           "id": "dark_horizon_unicorn",
@@ -4634,7 +4634,7 @@
           "y": 1275,
           "w": 1266,
           "h": 773,
-          "alphaCoverage": 0.0
+          "alphaCoverage": 0
         }
       ]
     },
@@ -4656,7 +4656,7 @@
           "y": 8,
           "w": 709,
           "h": 1046,
-          "alphaCoverage": 0.0
+          "alphaCoverage": 0
         },
         {
           "id": "eclipse_blades",
@@ -4664,7 +4664,7 @@
           "y": 0,
           "w": 645,
           "h": 1859,
-          "alphaCoverage": 0.0
+          "alphaCoverage": 0
         },
         {
           "id": "dimensional_chess",
@@ -4672,7 +4672,7 @@
           "y": 1147,
           "w": 1272,
           "h": 901,
-          "alphaCoverage": 0.0
+          "alphaCoverage": 0
         }
       ]
     },
@@ -4694,7 +4694,7 @@
           "y": 0,
           "w": 707,
           "h": 1270,
-          "alphaCoverage": 0.0
+          "alphaCoverage": 0
         },
         {
           "id": "optiwerk_scope",
@@ -4702,7 +4702,7 @@
           "y": 0,
           "w": 1038,
           "h": 1270,
-          "alphaCoverage": 0.0
+          "alphaCoverage": 0
         },
         {
           "id": "somnex_astral",
@@ -4710,7 +4710,7 @@
           "y": 1321,
           "w": 2048,
           "h": 727,
-          "alphaCoverage": 0.0
+          "alphaCoverage": 0
         }
       ]
     },
@@ -4732,7 +4732,7 @@
           "y": 0,
           "w": 676,
           "h": 998,
-          "alphaCoverage": 0.0
+          "alphaCoverage": 0
         },
         {
           "id": "longston_hats",
@@ -4740,7 +4740,7 @@
           "y": 1009,
           "w": 911,
           "h": 1039,
-          "alphaCoverage": 0.0
+          "alphaCoverage": 0
         },
         {
           "id": "spirattra",
@@ -4748,7 +4748,7 @@
           "y": 0,
           "w": 894,
           "h": 1270,
-          "alphaCoverage": 0.0
+          "alphaCoverage": 0
         }
       ]
     },
@@ -4770,7 +4770,7 @@
           "y": 26,
           "w": 1331,
           "h": 1036,
-          "alphaCoverage": 0.0
+          "alphaCoverage": 0
         },
         {
           "id": "blackwell_weston_detectives",
@@ -4778,7 +4778,7 @@
           "y": 10,
           "w": 604,
           "h": 1157,
-          "alphaCoverage": 0.0
+          "alphaCoverage": 0
         },
         {
           "id": "dr_rockwells_dental",
@@ -4786,7 +4786,7 @@
           "y": 1244,
           "w": 2048,
           "h": 804,
-          "alphaCoverage": 0.0
+          "alphaCoverage": 0
         }
       ]
     },
@@ -5062,7 +5062,7 @@
           "y": 0,
           "w": 2048,
           "h": 2048,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         }
       ]
     },
@@ -5616,7 +5616,7 @@
           "y": 0,
           "w": 2048,
           "h": 1024,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "item_01",
@@ -5844,7 +5844,7 @@
           "y": 0,
           "w": 2048,
           "h": 2048,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         }
       ]
     },
@@ -5866,7 +5866,7 @@
           "y": 0,
           "w": 2048,
           "h": 2048,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         }
       ]
     },
@@ -5976,7 +5976,7 @@
           "y": 640,
           "w": 64,
           "h": 512,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "item_12",
@@ -5992,7 +5992,7 @@
           "y": 640,
           "w": 64,
           "h": 512,
-          "alphaCoverage": 1.0
+          "alphaCoverage": 1
         },
         {
           "id": "item_14",
@@ -6022,6 +6022,430 @@
           "y": 0,
           "w": 1024,
           "h": 512
+        }
+      ]
+    },
+    {
+      "id": "hideout/portraits",
+      "category": "hideout",
+      "curated": true,
+      "materials": [
+        "models/hideout/materials/hideout_portraits.vmat"
+      ],
+      "colorTexture": "hideout_portraits_color.png",
+      "transTexture": null,
+      "width": 1024,
+      "height": 1024,
+      "posters": [
+        {
+          "id": "painting_00",
+          "x": 0,
+          "y": 1,
+          "w": 139,
+          "h": 136,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_01",
+          "x": 139,
+          "y": 0,
+          "w": 140,
+          "h": 137,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_02",
+          "x": 279,
+          "y": 0,
+          "w": 139,
+          "h": 137,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_03",
+          "x": 418,
+          "y": 0,
+          "w": 139,
+          "h": 135,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_04",
+          "x": 557,
+          "y": 0,
+          "w": 137,
+          "h": 135,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_05",
+          "x": 694,
+          "y": 0,
+          "w": 153,
+          "h": 135,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_06",
+          "x": 847,
+          "y": 0,
+          "w": 175,
+          "h": 277,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_07",
+          "x": 0,
+          "y": 137,
+          "w": 139,
+          "h": 137,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_08",
+          "x": 139,
+          "y": 137,
+          "w": 139,
+          "h": 137,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_09",
+          "x": 278,
+          "y": 137,
+          "w": 140,
+          "h": 137,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_10",
+          "x": 418,
+          "y": 135,
+          "w": 139,
+          "h": 142,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_11",
+          "x": 557,
+          "y": 135,
+          "w": 137,
+          "h": 142,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_12",
+          "x": 694,
+          "y": 135,
+          "w": 153,
+          "h": 142,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_13",
+          "x": 2,
+          "y": 274,
+          "w": 278,
+          "h": 423,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_14",
+          "x": 280,
+          "y": 274,
+          "w": 138,
+          "h": 423,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_15",
+          "x": 418,
+          "y": 277,
+          "w": 314,
+          "h": 203,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_16",
+          "x": 732,
+          "y": 277,
+          "w": 101,
+          "h": 231,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_17",
+          "x": 833,
+          "y": 277,
+          "w": 100,
+          "h": 231,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_18",
+          "x": 933,
+          "y": 277,
+          "w": 89,
+          "h": 231,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_19",
+          "x": 418,
+          "y": 480,
+          "w": 314,
+          "h": 217,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_20",
+          "x": 732,
+          "y": 508,
+          "w": 181,
+          "h": 189,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_21",
+          "x": 913,
+          "y": 508,
+          "w": 111,
+          "h": 189,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_22",
+          "x": 2,
+          "y": 697,
+          "w": 92,
+          "h": 149,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_23",
+          "x": 94,
+          "y": 697,
+          "w": 93,
+          "h": 149,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_24",
+          "x": 187,
+          "y": 697,
+          "w": 93,
+          "h": 149,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_25",
+          "x": 280,
+          "y": 697,
+          "w": 94,
+          "h": 149,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_26",
+          "x": 374,
+          "y": 697,
+          "w": 97,
+          "h": 149,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_27",
+          "x": 471,
+          "y": 697,
+          "w": 96,
+          "h": 149,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_28",
+          "x": 567,
+          "y": 697,
+          "w": 91,
+          "h": 149,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_29",
+          "x": 658,
+          "y": 697,
+          "w": 93,
+          "h": 149,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_30",
+          "x": 751,
+          "y": 697,
+          "w": 163,
+          "h": 44,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_31",
+          "x": 914,
+          "y": 697,
+          "w": 110,
+          "h": 149,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_32",
+          "x": 751,
+          "y": 741,
+          "w": 163,
+          "h": 105,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_33",
+          "x": 2,
+          "y": 846,
+          "w": 312,
+          "h": 101,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_34",
+          "x": 314,
+          "y": 846,
+          "w": 344,
+          "h": 101,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_35",
+          "x": 658,
+          "y": 846,
+          "w": 178,
+          "h": 102,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_36",
+          "x": 836,
+          "y": 846,
+          "w": 67,
+          "h": 178,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_37",
+          "x": 903,
+          "y": 846,
+          "w": 119,
+          "h": 178,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_38",
+          "x": 2,
+          "y": 948,
+          "w": 708,
+          "h": 76,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "painting_39",
+          "x": 710,
+          "y": 948,
+          "w": 125,
+          "h": 76,
+          "alphaCoverage": 1
+        }
+      ]
+    },
+    {
+      "id": "hideout/portraits02",
+      "category": "hideout",
+      "curated": true,
+      "materials": [
+        "models/hideout/materials/hideout_portraits02.vmat"
+      ],
+      "colorTexture": "hideout_portraits_02_color.png",
+      "transTexture": null,
+      "width": 1024,
+      "height": 1024,
+      "posters": [
+        {
+          "id": "scene_00",
+          "x": 0,
+          "y": 0,
+          "w": 671,
+          "h": 279,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "scene_01",
+          "x": 680,
+          "y": 0,
+          "w": 343,
+          "h": 452,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "scene_02",
+          "x": 0,
+          "y": 282,
+          "w": 671,
+          "h": 280,
+          "alphaCoverage": 1
+        },
+        {
+          "id": "scene_03",
+          "x": 0,
+          "y": 565,
+          "w": 673,
+          "h": 280,
+          "alphaCoverage": 1
+        }
+      ]
+    },
+    {
+      "id": "hideout/portrait_large",
+      "category": "hideout",
+      "curated": true,
+      "materials": [
+        "models/hideout/materials/hideout_portrait_large.vmat"
+      ],
+      "colorTexture": "hideout_portrait_large_color.png",
+      "transTexture": null,
+      "width": 512,
+      "height": 1024,
+      "posters": [
+        {
+          "id": "canvas_00",
+          "x": 0,
+          "y": 0,
+          "w": 512,
+          "h": 1024,
+          "alphaCoverage": 1
+        }
+      ]
+    },
+    {
+      "id": "hideout/rem_poster",
+      "category": "hideout",
+      "curated": true,
+      "materials": [
+        "models/hideout/materials/rem_poster.vmat"
+      ],
+      "colorTexture": "remposter_color.png",
+      "transTexture": null,
+      "width": 512,
+      "height": 512,
+      "posters": [
+        {
+          "id": "poster_00",
+          "x": 0,
+          "y": 0,
+          "w": 512,
+          "h": 512,
+          "alphaCoverage": 1
         }
       ]
     }
