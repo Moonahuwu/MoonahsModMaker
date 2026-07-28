@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub const PACK_FILE: &str = "pack.json";
 const PACK_PREFIX: &str = "pack://";
