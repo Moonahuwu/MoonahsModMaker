@@ -104,7 +104,13 @@ contains `{` braces).
   on-disk events file is the source of truth for everyone else's). Events are generalized
   into **slots** = `(eventName, arrayKey, eventsRelpath)` grouped into **tabs/groups**;
   `Project::default_for_match_intro()` builds the default slot set (intro, urn, rift,
-  midboss, powerups, teamobj, heroes, shop, ui). Beyond slots, the project also carries
+  midboss, powerups, teamobj, heroes, shop, ui). Slots may be `direct_only`
+  (soundstack-driven events with NO vsnd refs to merge - e.g. the Rift in-capture
+  loop `Music.Koth.Capture.Lp`, whose four layered `music_koth_capture_*_160bpm`
+  files are Rift-tab slots): the track always compiles AT `stock_entry`'s path as a
+  loose-file override; `buildCompileConfig` routes them into `soundOverrides`, the
+  merge machinery skips them, and users should toggle Looping on loop tracks.
+  Beyond slots, the project also carries
   override subsystems: `icon_mods` (also hero images + ability icons + SVG name logos:
   `.vsvg_c` targets wrap the PNG in an `<image>` svg), `sound_overrides` (loose-file
   `.vsnd_c` replacements), `effect_overrides` (VFX recolor), `vdata_overrides` /
