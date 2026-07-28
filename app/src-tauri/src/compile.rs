@@ -4151,7 +4151,11 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
 /// The top-level dirs of an imported pack that ride into the combined build:
 /// everything the pack contains, EXCEPT soundevents trees (merged via
 /// array-union, never staged wholesale - this also catches working copies
-/// like MYSoundevents/NEWSoundevents) and obvious backup junk. Falls back to
+/// like MYSoundevents/NEWSoundevents), obvious backup junk, and ENGINE
+/// CONFIG (`cfg/`, `bin/`): a pack shipping `cfg/user_keys_default.vcfg`
+/// shadows the game's own keybinding config and the client dies at boot with
+/// "FATAL ERROR: Unable to read default keybinding configuration" (real
+/// crash report, 2026-07-28). Falls back to
 /// the classic game-content set if the pack can't be listed, so a transient
 /// helper failure can't produce an empty combined build. The bool says
 /// whether the dirs came from a REAL listing (`true`) or the fixed fallback
@@ -4171,6 +4175,8 @@ pub(crate) fn import_asset_dirs_listed(helper: &str, mod_vpk: &str) -> (Vec<Stri
                     || t.contains("backup")
                     || t.ends_with(".bak")
                     || t.ends_with("_old")
+                    || t == "cfg"
+                    || t == "bin"
                 {
                     continue;
                 }
@@ -5926,6 +5932,11 @@ mod tests {
             "MYSoundevents/music.vsndevts",
             "sounds_BACKUP/old.vsnd_c",
             "sounds/x.vsnd_c",
+            // Engine config shadowing the game's own crashes the client at
+            // boot ("Unable to read default keybinding configuration") - a
+            // bundled pack's cfg/bin must never ride into combined.
+            "cfg/user_keys_default.vcfg",
+            "bin/whatever.dll",
         ] {
             let p = root.join(f);
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
