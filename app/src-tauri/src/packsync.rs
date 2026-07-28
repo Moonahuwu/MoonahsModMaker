@@ -386,6 +386,7 @@ pub fn package_release(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn temp_root(tag: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("eim_packsync_{tag}_{}", std::process::id()));
