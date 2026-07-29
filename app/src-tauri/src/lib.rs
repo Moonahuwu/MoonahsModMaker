@@ -159,6 +159,7 @@ pub fn run() {
             commands::open_in_s2v,
             commands::pack_scan,
             commands::decode_pak_texture,
+            commands::list_vpk_textures,
             commands::vault_file,
             commands::poster_sheet,
             commands::pack_icons,

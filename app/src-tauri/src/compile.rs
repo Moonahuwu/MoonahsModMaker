@@ -187,6 +187,9 @@ pub struct CompileConfig {
     /// `.vmat_c` + `.vtex_c` at the vanilla paths (whole-material override).
     #[serde(default)]
     pub hero_textures: Vec<HeroTexCompile>,
+    /// Texture swaps inside bundled mod vpks (combined variant only).
+    #[serde(default)]
+    pub mod_textures: Vec<ModTextureCompile>,
     /// UI Master: edited panorama layout/style sources, compiled and staged
     /// at the game's own paths (whole-file overrides). Experimental.
     #[serde(default)]
@@ -525,6 +528,42 @@ pub struct HeroTexCompile {
 }
 
 impl HeroTexCompile {
+    fn up_to_date(&self, skip_compile: bool, compiled_exists: bool) -> bool {
+        !skip_compile
+            && self.current_hash.is_some()
+            && self.current_hash == self.last_compiled_hash
+            && compiled_exists
+    }
+}
+
+/// One texture override INSIDE a bundled mod vpk: recompile the user's art (or
+/// a hue-rotated copy of the mod's own texture) as a `.vtex_c` at the exact
+/// internal path the mod's material references, so it replaces the mod's copy
+/// in the combined build. Texture-level on purpose - no material recompile, so
+/// arbitrary custom shaders/refs in other people's mods can't break the build.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModTextureCompile {
+    /// The bundled vpk this texture lives in (an `imported_mods` entry).
+    pub mod_vpk: String,
+    /// Compiled internal path inside the vpk, e.g.
+    /// `models/x/materials/x_color_png_1234.vtex_c`.
+    pub internal_path: String,
+    /// Friendly label for report steps.
+    pub label: String,
+    /// Absolute path to the user's art. None = mod's art (hue-only recolor).
+    #[serde(default)]
+    pub source_image: Option<String>,
+    /// Hue rotation in degrees (-180..180, 0 = none).
+    #[serde(default)]
+    pub hue: f32,
+    #[serde(default)]
+    pub current_hash: Option<String>,
+    #[serde(default)]
+    pub last_compiled_hash: Option<String>,
+}
+
+impl ModTextureCompile {
     fn up_to_date(&self, skip_compile: bool, compiled_exists: bool) -> bool {
         !skip_compile
             && self.current_hash.is_some()
@@ -1859,6 +1898,148 @@ fn compile_hero_textures(
     Ok((staged, dirty))
 }
 
+/// Compile texture swaps inside bundled mod vpks: the user's art (or the mod's
+/// own texture hue-rotated) becomes a fresh `.vtex_c` at the mod's exact
+/// internal path, replacing the mod's copy in the combined build (staged after
+/// the mod's own extraction, so ours wins). Texture-level on purpose: no
+/// material recompile, so custom shaders/refs in other people's mods can't
+/// break the build. Returns compiled-root-relative rels (combined-only).
+fn compile_mod_textures(
+    cfg: &CompileConfig,
+    content_root: &Path,
+    compiled_root: &Path,
+    report: &mut CompileReport,
+) -> Result<(Vec<String>, bool), ()> {
+    let mut staged: Vec<String> = Vec::new();
+    let mut dirty = false;
+    if cfg.mod_textures.is_empty() {
+        return Ok((staged, false));
+    }
+    let helper = match cfg.vpk_helper_path.as_deref() {
+        Some(h) => h,
+        None => {
+            report.soft_fail("mod textures", "vpkHelperPath not set");
+            return Ok((staged, true));
+        }
+    };
+    let ffmpeg = cfg.ffmpeg_path.as_deref();
+    let tmp_dir = content_root.join("eim_modtex_tmp");
+
+    'overrides: for ov in &cfg.mod_textures {
+        // Only meaningful when the mod actually rides in this build.
+        if !cfg.imported_mods.iter().any(|m| m == &ov.mod_vpk) {
+            report.ok_step(
+                format!("mod texture: {}", ov.label),
+                "its mod isn't bundled - skipped",
+            );
+            continue;
+        }
+        let rel_c = ov.internal_path.replace('\\', "/").trim_matches('/').to_string();
+        if !rel_c.ends_with(".vtex_c") {
+            report.soft_fail(format!("mod texture: {}", ov.label), "not a .vtex_c path");
+            continue;
+        }
+        let rel_vtex = rel_c.trim_end_matches("_c").to_string();
+        let rel_png = format!("{}.png", rel_vtex.trim_end_matches(".vtex"));
+        let compiled_ok = compiled_root.join(&rel_c).exists();
+        if ov.up_to_date(cfg.skip_compile, compiled_ok) {
+            staged.push(rel_c);
+            report.ok_step(
+                format!("mod texture up to date: {}", ov.label),
+                "unchanged - skipped",
+            );
+            continue;
+        }
+        dirty = true;
+
+        // The mod's own texture: dimension reference always, art base for
+        // hue-only recolors.
+        let _ = std::fs::create_dir_all(&tmp_dir);
+        let decoded = match crate::vpk::texture_batch(
+            helper,
+            &ov.mod_vpk,
+            &tmp_dir.to_string_lossy(),
+            &[rel_c.clone()],
+        ) {
+            Ok(v) if !v.is_empty() => v[0].1.clone(),
+            Ok(_) => {
+                report.soft_fail(
+                    format!("mod texture: {}", ov.label),
+                    format!("texture not found in the mod: {rel_c}"),
+                );
+                continue 'overrides;
+            }
+            Err(e) => {
+                report.soft_fail(format!("mod texture: {}", ov.label), e);
+                continue 'overrides;
+            }
+        };
+        let (w, h) = match crate::commands::png_dimensions(Path::new(&decoded)) {
+            Ok(d) => d,
+            Err(e) => {
+                report.soft_fail(format!("mod texture: {}", ov.label), e);
+                continue 'overrides;
+            }
+        };
+        // Compiled textures are pow2 already; snap anyway so a weird source
+        // can't hard-fail GenerateMips.
+        let (w, h) = (nearest_pow2(w), nearest_pow2(h));
+
+        let png_abs = content_root.join(&rel_png);
+        if let Some(parent) = png_abs.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let outcome = if let Some(src) = ov.source_image.as_deref().filter(|s| !s.is_empty()) {
+            render_icon(ffmpeg, src, w, h, ov.hue, &png_abs.to_string_lossy()).map(|_| {
+                let hue_note = if ov.hue.abs() > 0.01 {
+                    format!(", hue {:+.0}", ov.hue)
+                } else {
+                    String::new()
+                };
+                format!("custom art {w}x{h}{hue_note}")
+            })
+        } else if ov.hue.abs() > 0.01 {
+            render_icon(ffmpeg, &decoded, w, h, ov.hue, &png_abs.to_string_lossy())
+                .map(|_| format!("hue {:+.0}", ov.hue))
+        } else {
+            report.soft_fail(
+                format!("mod texture: {}", ov.label),
+                "no art and no hue change - nothing to apply",
+            );
+            continue 'overrides;
+        };
+        match outcome {
+            Ok(detail) => report.ok_step(format!("mod texture: {}", ov.label), detail),
+            Err(e) => {
+                report.soft_fail(format!("mod texture: {}", ov.label), e);
+                continue 'overrides;
+            }
+        }
+
+        let vtex_abs = content_root.join(&rel_vtex);
+        if let Err(e) = write_vtex_source(&vtex_abs, &rel_png) {
+            report.soft_fail(format!("mod texture: {}", ov.label), e.to_string());
+            continue 'overrides;
+        }
+        if cfg.skip_compile {
+            staged.push(rel_c);
+            continue;
+        }
+        match run_resource_compiler(cfg, &vtex_abs.to_string_lossy()) {
+            Ok(detail) => report.ok_step(format!("compile (mod texture): {rel_c}"), detail),
+            Err(e) => {
+                report.soft_fail(format!("compile (mod texture): {rel_c}"), e);
+                continue 'overrides;
+            }
+        }
+        staged.push(rel_c);
+    }
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+    staged.sort();
+    staged.dedup();
+    Ok((staged, dirty))
+}
+
 /// Composite every poster override into its atlas sheet and recompile the
 /// sheet's material(s). Returns compiled-root-relative `_c` paths to stage.
 fn compile_posters(
@@ -2973,6 +3154,7 @@ fn estimate_steps(cfg: &CompileConfig) -> usize {
         .collect::<std::collections::HashSet<_>>()
         .len();
     est += 2 * cfg.hero_textures.len();
+    est += 2 * cfg.mod_textures.len();
     if let Some(dm) = &cfg.digimod {
         est += 3
             + dm.scares.len()
@@ -3337,6 +3519,8 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
     // map, recompile once (staged into every variant, like posters).
     let (herotex_outputs, herotex_dirty) =
         compile_hero_textures(cfg, content_root, compiled_root, report)?;
+    let (modtex_outputs, modtex_dirty) =
+        compile_mod_textures(cfg, content_root, compiled_root, report)?;
 
     // Gameplay config edits: rewrite abilities.vdata once (staged into every
     // variant). Custom Server tab.
@@ -3365,6 +3549,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
     let overrides_dirty = effects_dirty
         || posters_dirty
         || herotex_dirty
+        || modtex_dirty
         || vdata_dirty
         || global_dirty
         || world_dirty
@@ -4051,6 +4236,20 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
             match copy_into(&src, &stage, rel) {
                 Ok(_) => staged += 1,
                 Err(e) => report.soft_fail(format!("stage hero texture: {rel}"), e.to_string()),
+            }
+        }
+        // Stage bundled-mod texture swaps: combined only (the mod itself only
+        // rides there), copied AFTER the mod's extraction above so ours wins.
+        if v.with_imported {
+            for rel in &modtex_outputs {
+                let src = compiled_root.join(rel);
+                if cfg.skip_compile && !src.exists() {
+                    continue;
+                }
+                match copy_into(&src, &stage, rel) {
+                    Ok(_) => staged += 1,
+                    Err(e) => report.soft_fail(format!("stage mod texture: {rel}"), e.to_string()),
+                }
             }
         }
         // Stage the gameplay-config override (recompiled abilities.vdata_c).
@@ -5322,6 +5521,7 @@ mod tests {
             world_overrides: vec![],
             poster_overrides: vec![],
             hero_textures: vec![],
+            mod_textures: vec![],
             digimod: None,
             ui_overrides: ui,
             credits_text: None,
@@ -5412,6 +5612,7 @@ mod tests {
             world_overrides: vec![],
             poster_overrides: vec![],
             hero_textures: vec![],
+            mod_textures: vec![],
             digimod: None,
             ui_overrides: vec![],
             credits_text: None,
@@ -5645,6 +5846,7 @@ mod tests {
             world_overrides: vec![],
             poster_overrides: vec![],
             hero_textures: vec![],
+            mod_textures: vec![],
             digimod: None,
             ui_overrides: vec![],
             credits_text: None,
@@ -5778,6 +5980,7 @@ mod tests {
                 last_compiled_hash: None,
             }],
             hero_textures: vec![],
+            mod_textures: vec![],
         };
 
         let report = run(&cfg);
@@ -5867,6 +6070,7 @@ mod tests {
             credits_text: None,
             export_only: false,
             poster_overrides: vec![],
+            mod_textures: vec![],
             hero_textures: vec![HeroTexCompile {
                 vmat: "models/heroes_wip/abrams/materials/abrams_upper_body.vmat".into(),
                 label: "Abrams - Upper Body (e2e)".into(),

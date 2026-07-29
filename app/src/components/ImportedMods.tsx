@@ -17,9 +17,10 @@ import {
 } from "../lib/api";
 import { cListUiMods } from "../lib/dataCache";
 import { buildCreditsText, isMadeByMe, MADE_BY_ME, type Settings } from "../lib/settings";
-import type { DigimodConfig, LibraryItem } from "../types";
+import type { DigimodConfig, LibraryItem, ModTextureOverride } from "../types";
 import { useEscape } from "../lib/useEscape";
 import { useToast } from "./Toaster";
+import { ModRetexture } from "./ModRetexture";
 
 function baseName(p: string): string {
   return p.split(/[\\/]/).pop() ?? p;
@@ -292,11 +293,16 @@ export function ImportedMods({
   autoLinkFor,
   onAutoLinkDone,
   onBrowseGameBanana,
+  modTextureOverrides,
+  onModTexturesChange,
 }: {
   settings: Settings;
   update: (patch: Partial<Settings>) => void;
   /** Scan pack(s) and open their import reviews (several queue one at a time). */
   onImportPack: (vpk: string | string[]) => void;
+  /** Texture swaps inside bundled vpks (project-owned; edited per mod here). */
+  modTextureOverrides: ModTextureOverride[];
+  onModTexturesChange: (next: ModTextureOverride[]) => void;
   /** Jumpscares config — UI-mod merges live on it (they splice base_hud). */
   digimod: DigimodConfig | null;
   onDigimodChange: (next: DigimodConfig) => void;
@@ -312,6 +318,8 @@ export function ImportedMods({
   const [decompiling, setDecompiling] = useState(false);
   const { push } = useToast();
   const mods = settings.importedMods;
+  // The bundled vpk whose retexture dialog is open, if any.
+  const [retexFor, setRetexFor] = useState<string | null>(null);
 
   // GameBanana attribution: link a bundled vpk to its mod page so releases
   // can credit everyone (author + the page's credits list).
@@ -894,6 +902,19 @@ export function ImportedMods({
                   >
                     review
                   </button>
+                  <button
+                    onClick={() => setRetexFor(m)}
+                    title="Swap textures inside this mod (its model skins, art, etc.)"
+                    className={`absolute bottom-1.5 left-[4.2rem] rounded bg-black/70 px-2 py-0.5 text-xs transition-opacity hover:bg-teal-500/20 group-hover:opacity-100 ${
+                      modTextureOverrides.some((o) => o.modVpk === m)
+                        ? "text-teal-300 opacity-100"
+                        : "text-zinc-300 opacity-0"
+                    }`}
+                  >
+                    retex
+                    {modTextureOverrides.filter((o) => o.modVpk === m).length > 0 &&
+                      ` ${modTextureOverrides.filter((o) => o.modVpk === m).length}`}
+                  </button>
                 </div>
                 <div className="flex min-h-0 flex-1 flex-col gap-1 p-2">
                   {linked ? (
@@ -1192,6 +1213,17 @@ export function ImportedMods({
           onPasteUrl={(url) => void linkPage(linkPicker, url)}
           onMine={() => markMine(linkPicker)}
           onCancel={() => closePicker(false)}
+        />
+      )}
+
+      {retexFor && (
+        <ModRetexture
+          modVpk={retexFor}
+          modName={credits[retexFor]?.name || baseName(retexFor).replace(/\.vpk$/i, "")}
+          helperPath={settings.vpkHelperPath}
+          overrides={modTextureOverrides}
+          onChange={onModTexturesChange}
+          onClose={() => setRetexFor(null)}
         />
       )}
     </section>

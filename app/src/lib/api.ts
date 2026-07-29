@@ -140,8 +140,26 @@ export interface CompileConfig {
   worldOverrides?: WorldCompile[];
   posterOverrides?: PosterCompile[];
   heroTextures?: HeroTexCompile[];
+  /** Texture swaps inside bundled mod vpks (combined variant only). */
+  modTextures?: ModTextureCompile[];
   digimod?: DigimodCompile | null;
   uiOverrides?: UiFileCompile[];
+}
+
+export interface ModTextureCompile {
+  modVpk: string;
+  internalPath: string;
+  label: string;
+  sourceImage?: string | null;
+  hue: number;
+  currentHash?: string | null;
+  lastCompiledHash?: string | null;
+}
+
+/** List the compiled textures inside a mod vpk (panorama images excluded -
+ *  those belong to the Menu Art / icon pipeline). */
+export function listVpkTextures(helperPath: string, vpkPath: string): Promise<string[]> {
+  return invoke("list_vpk_textures", { helperPath, vpkPath });
 }
 
 export interface UiFileCompile {

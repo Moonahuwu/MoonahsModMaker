@@ -105,7 +105,7 @@ import { CustomServer } from "./components/CustomServer";
 import { ProfileSwitcher } from "./components/ProfileSwitcher";
 import { useToast } from "./components/Toaster";
 import { useSettings, slotSoundFolder, sheetSiblingsKey, compilePrefsOf, buildCompileConfig, buildCreditsText, directReplaceTarget, slotNeedsEventsMerge, worldOverrideCategory, DEATHS_RELEASED, FFMPEG_BUNDLE_URL, TOOLS_BUNDLE_URL, type Settings } from "./lib/settings";
-import { songHash, overrideHash, effectHash, posterHash, heroTexHash } from "./lib/songHash";
+import { songHash, overrideHash, effectHash, posterHash, heroTexHash, modTexHash } from "./lib/songHash";
 import type { AttributeOverride, EffectOverride, EventProject, EventView, HeroTextureOverride, LibraryItem, PackModule, PosterOverride, Project, Song, SongLayer, SoundOverride } from "./types";
 import { GameBananaBrowser } from "./components/GameBananaBrowser";
 import { LibraryTab } from "./components/LibraryTab";
@@ -563,6 +563,9 @@ function modulePartsFor(p: Project, s: Settings, mod: PackModule) {
     digimod: keys.has("digimod") ? (p.digimod ?? null) : null,
     hasGameplay: keys.has("gameplay") && s.experimentalServer,
     importedMods: s.importedMods.filter((m) => keys.has(bundledModKey(m))),
+    modTextureOverrides: (p.modTextureOverrides ?? []).filter((o) =>
+      keys.has(`modtex:${o.id}`),
+    ),
   };
 }
 
@@ -1350,6 +1353,13 @@ export default function App() {
         kind: "UI file",
         label: u.targetRel.split("/").pop() ?? u.targetRel,
       });
+    for (const o of project.modTextureOverrides ?? [])
+      out.push({
+        key: `modtex:${o.id}`,
+        kind: "Mod texture",
+        label: o.label,
+        detail: (o.modVpk.split(/[\\/]/).pop() ?? "").replace(/\.vpk$/i, ""),
+      });
     const d = project.digimod;
     if (d && (d.scares.length > 0 || d.deaths.length > 0 || (d.mergeVpks?.length ?? 0) > 0))
       out.push({ key: "digimod", kind: "Jumpscares", label: "Jumpscares / Deaths mod" });
@@ -1404,6 +1414,8 @@ export default function App() {
         claim(`snd:${o.targetRef}`, o.targetRef, "replaced sound", mod.name);
       for (const m of parts.iconMods)
         if (m.enabled !== false) claim(`img:${m.targetVtexc}`, m.targetVtexc, "image", mod.name);
+      for (const o of parts.modTextureOverrides)
+        claim(`img:${o.internalPath}`, o.internalPath, "image", mod.name);
       for (const e of parts.effectOverrides)
         claim(`fx:${e.targetRef}`, e.targetRef, "effect", mod.name);
       for (const po of parts.posterOverrides)
@@ -1991,6 +2003,7 @@ export default function App() {
           parts.uiOverrides,
           pools,
           parts.heroTextures,
+          parts.modTextureOverrides,
         ),
         exportOnly: true,
       };
@@ -3622,6 +3635,10 @@ export default function App() {
             heroTextures: (prev.heroTextures ?? []).map((t) => ({
               ...t,
               lastCompiledHash: heroTexHash(t),
+            })),
+            modTextureOverrides: (prev.modTextureOverrides ?? []).map((o) => ({
+              ...o,
+              lastCompiledHash: modTexHash(o),
             })),
           }
         : prev,
@@ -5599,6 +5616,10 @@ export default function App() {
             settings={settings}
             update={updateSettings}
             onImportPack={(v) => queuePackImports(Array.isArray(v) ? v : [v])}
+            modTextureOverrides={project?.modTextureOverrides ?? []}
+            onModTexturesChange={(next) =>
+              setProject((prev) => (prev ? { ...prev, modTextureOverrides: next } : prev))
+            }
             digimod={project?.digimod ?? null}
             onDigimodChange={(next) =>
               setProject((prev) => (prev ? { ...prev, digimod: next } : prev))
@@ -5995,6 +6016,7 @@ export default function App() {
             digimod={project.digimod ?? null}
             uiOverrides={settings.experimentalUiMaster ? (project.uiOverrides ?? []) : []}
             pools={pools}
+            modTextureOverrides={project.modTextureOverrides ?? []}
             onCompiled={markAllCompiled}
             onBulkGain={bulkGain}
             onFixForNewPatch={refreshVanilla}

@@ -122,6 +122,15 @@ export function heroTexHash(o: {
   return [o.vmat, o.sourceImage ?? "", o.hue].join("|");
 }
 
+export function modTexHash(o: {
+  modVpk: string;
+  internalPath: string;
+  sourceImage?: string | null;
+  hue: number;
+}): string {
+  return [o.modVpk, o.internalPath, o.sourceImage ?? "", o.hue].join("|");
+}
+
 /** Compile status of a song relative to its last successful compile. */
 export type SongStatus = "new" | "compiled" | "stale";
 

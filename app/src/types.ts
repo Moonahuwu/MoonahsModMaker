@@ -223,6 +223,8 @@ export interface Project {
   heroTextures?: HeroTextureOverride[];
   digimod?: DigimodConfig | null;
   uiOverrides?: UiFileOverride[];
+  /** Texture swaps inside bundled mod vpks (combined builds only). */
+  modTextureOverrides?: ModTextureOverride[];
   /** Pack Builder: named modules the pack's content is organized into, so a
    *  big shared pack can later split into standalone releases. Items are
    *  stable content keys (`slot:<id>`, `icon:<id>`, `sound:<id>`,
@@ -238,6 +240,25 @@ export interface PackModule {
   id: string;
   name: string;
   items: string[];
+}
+
+/** One texture swap inside a bundled mod vpk: user art (or a hue-rotated copy
+ *  of the mod's own texture) recompiled as a fresh .vtex_c at the mod's exact
+ *  internal path, overriding the mod's copy in the combined build. Texture
+ *  level on purpose - no material recompile, so custom shaders in other
+ *  people's mods can't break the build. */
+export interface ModTextureOverride {
+  id: string;
+  /** The bundled vpk this texture lives in (an importedMods entry). */
+  modVpk: string;
+  /** Compiled path inside the vpk, e.g. `models/x/materials/x_color_1234.vtex_c`. */
+  internalPath: string;
+  label: string;
+  /** Absolute path to the user's art; null = mod's art (hue-only recolor). */
+  sourceImage?: string | null;
+  /** Hue rotation in degrees (-180..180, 0 = none). */
+  hue: number;
+  lastCompiledHash?: string | null;
 }
 
 /** UI Master: one edited panorama layout/style, staged over the game's own
