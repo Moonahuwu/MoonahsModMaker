@@ -703,6 +703,8 @@ export function modelBuild(req: {
   vmdlInternal: string;
   meshFile: string;
   materialOverride: string | null;
+  /** Blender default FBX exports land x100 - 0.01 corrects; DMX is 1.0. */
+  importScale: number;
   artifactOut: string;
 }): Promise<ModelBuildReport> {
   return invoke("model_build", { req });

@@ -3982,8 +3982,27 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                 )
             })
             .collect();
+        // Model artifacts are rebuilt IN PLACE (same cache path) by the Model
+        // Replacement tab, so the config alone can't see a rebuild - fold the
+        // artifact files' len+mtime into the stamp.
+        let models_ident: String = cfg
+            .model_overrides
+            .iter()
+            .map(|m| {
+                let meta = std::fs::metadata(&m.artifact).ok();
+                format!(
+                    "{}|{}|{};",
+                    m.artifact,
+                    meta.as_ref().map(|x| x.len()).unwrap_or(0),
+                    meta.and_then(|x| x.modified().ok())
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0)
+                )
+            })
+            .collect();
         let build_stamp = fingerprint(&format!(
-            "{STAGE_FORMAT}|{cfg:?}|imported:{}|packs:{packs_ident}",
+            "{STAGE_FORMAT}|{cfg:?}|imported:{}|packs:{packs_ident}|models:{models_ident}",
             v.with_imported
         ));
         let stamp_file = output_dir.join(v.name).join(".eim_buildstamp");

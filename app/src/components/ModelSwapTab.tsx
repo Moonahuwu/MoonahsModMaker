@@ -51,6 +51,7 @@ export function ModelSwapTab({
   const [meshFile, setMeshFile] = useState<string>("");
   const [preflight, setPreflight] = useState<ModelPreflight | null>(null);
   const [material, setMaterial] = useState<string>("");
+  const [importScale, setImportScale] = useState<string>("1");
   const [building, setBuilding] = useState(false);
   const [buildSteps, setBuildSteps] = useState<string[]>([]);
   const [detecting, setDetecting] = useState(false);
@@ -110,6 +111,9 @@ export function ModelSwapTab({
     if (typeof sel !== "string") return;
     setMeshFile(sel);
     setPreflight(null);
+    // Blender's default FBX export is in centimeters: everything imports x100
+    // without this. DMX via Blender Source 2 Tools follows the 39.37 flow = 1:1.
+    setImportScale(sel.toLowerCase().endsWith(".fbx") ? "0.01" : "1");
     if (sel.toLowerCase().endsWith(".fbx")) {
       try {
         setPreflight(await modelPreflight(sel, ws.bones));
@@ -132,12 +136,14 @@ export function ModelSwapTab({
     try {
       const cacheDir = await join(await appDataDir(), "model_cache");
       const artifactOut = await join(cacheDir, `${hero}.vmdl_c`);
+      const scale = Number(importScale) || 1;
       const rep = await modelBuild({
         cs2Root: settings.cs2Root,
         workspaceDir: ws.dir,
         vmdlInternal: wsTarget,
         meshFile,
         materialOverride: material || null,
+        importScale: scale,
         artifactOut,
       });
       setBuildSteps(rep.steps);
@@ -340,6 +346,16 @@ export function ModelSwapTab({
                 nothing renders)
               </option>
             </select>
+            <label className="flex items-center gap-1.5 text-[11px] text-zinc-400">
+              Scale
+              <input
+                value={importScale}
+                onChange={(e) => setImportScale(e.target.value)}
+                spellCheck={false}
+                title="Mesh import scale. Blender's default FBX export lands x100 in game - 0.01 corrects it. DMX via the 39.37 Blender flow is 1."
+                className="w-16 rounded-md border border-zinc-700/80 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-200 outline-none transition focus:border-rose-400/70"
+              />
+            </label>
             <button
               onClick={() => void build()}
               disabled={building || !cs2Ok || errorCount > 0}

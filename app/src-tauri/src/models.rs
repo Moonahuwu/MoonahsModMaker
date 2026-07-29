@@ -552,11 +552,21 @@ fn children_span(text: &str, class_name: &str, from: usize) -> Option<(usize, us
 /// - optional MaterialGroupList override (whole model uses one game material)
 /// Everything else (skeleton, attachments, cameras, hitboxes, cloth, anim
 /// lists, NmSkeleton/AnimGraph2 references) rides through untouched.
-pub fn generate_vmdl(src: &str, mesh_rel: &str, material_override: Option<&str>) -> Result<String, String> {
+pub fn generate_vmdl(
+    src: &str,
+    mesh_rel: &str,
+    material_override: Option<&str>,
+    import_scale: f32,
+) -> Result<String, String> {
     let mut text = src.to_string();
 
+    let scale_line = if (import_scale - 1.0).abs() > 1e-6 {
+        format!("\n\t\t\t\t\t\t\timport_scale = {import_scale}")
+    } else {
+        String::new()
+    };
     let mesh_block = format!(
-        "[\n\t\t\t\t\t\t{{\n\t\t\t\t\t\t\t_class = \"RenderMeshFile\"\n\t\t\t\t\t\t\tname = \"body\"\n\t\t\t\t\t\t\tfilename = \"{mesh_rel}\"\n\t\t\t\t\t\t}},\n\t\t\t\t\t]"
+        "[\n\t\t\t\t\t\t{{\n\t\t\t\t\t\t\t_class = \"RenderMeshFile\"\n\t\t\t\t\t\t\tname = \"body\"\n\t\t\t\t\t\t\tfilename = \"{mesh_rel}\"{scale_line}\n\t\t\t\t\t\t}},\n\t\t\t\t\t]"
     );
     let (a, b) = children_span(&text, "RenderMeshList", 0)
         .ok_or("vmdl has no RenderMeshList - refresh the hero kit")?;
@@ -599,8 +609,17 @@ pub struct ModelBuildReq {
     /// Game material to apply to the whole model, or None to keep the mesh's
     /// own Blender material names.
     pub material_override: Option<String>,
+    /// Mesh import scale. Blender's default FBX export is in centimeters
+    /// (everything lands x100 in ModelDoc) - 0.01 corrects it. DMX exported
+    /// via Blender Source 2 Tools with the community 39.37 convention is 1.0.
+    #[serde(default = "default_import_scale")]
+    pub import_scale: f32,
     /// Where the compiled artifact is cached (absolute .vmdl_c path).
     pub artifact_out: String,
+}
+
+fn default_import_scale() -> f32 {
+    1.0
 }
 
 #[derive(serde::Serialize, Debug, Default)]
@@ -656,9 +675,12 @@ fn build_inner(req: &ModelBuildReq, rep: &mut ModelBuildReport) -> Result<String
     let vmdl_abs = content.join(vmdl_internal.replace('/', std::path::MAIN_SEPARATOR_STR));
     let src = std::fs::read_to_string(&vmdl_abs).map_err(|e| e.to_string())?;
     let mesh_rel = format!("{vmdl_dir_internal}/{mesh_name}");
-    let generated = generate_vmdl(&src, &mesh_rel, req.material_override.as_deref())?;
+    let generated = generate_vmdl(&src, &mesh_rel, req.material_override.as_deref(), req.import_scale)?;
     std::fs::write(&vmdl_abs, generated).map_err(|e| e.to_string())?;
-    rep.steps.push("generated vmdl (your mesh + the hero's skeleton, cameras and animation refs)".into());
+    rep.steps.push(format!(
+        "generated vmdl (your mesh at scale {}, the hero's skeleton, cameras and animation refs)",
+        req.import_scale
+    ));
 
     // 3. Compile, auto-stubbing missing materials (they live in Deadlock's
     //    pak, not CS2's content - stubs satisfy the compiler and leave no
@@ -869,7 +891,8 @@ mod tests {
 
     #[test]
     fn generate_replaces_meshes_lods_and_bodygroups() {
-        let out = generate_vmdl(MINI_VMDL, "models/x/custom.fbx", Some("models/a/b.vmat")).unwrap();
+        let out = generate_vmdl(MINI_VMDL, "models/x/custom.fbx", Some("models/a/b.vmat"), 0.01).unwrap();
+        assert!(out.contains("import_scale = 0.01"), "scale line present");
         assert!(out.contains("custom.fbx"), "user mesh referenced");
         assert!(!out.contains("x_gun.dmx"), "old meshes gone");
         // LOD and bodygroup nodes are REMOVED wholesale (the proven shape).
@@ -885,8 +908,9 @@ mod tests {
 
     #[test]
     fn generate_without_material_override_keeps_materials_out() {
-        let out = generate_vmdl(MINI_VMDL, "m.fbx", None).unwrap();
+        let out = generate_vmdl(MINI_VMDL, "m.fbx", None, 1.0).unwrap();
         assert!(!out.contains("MaterialGroupList"));
+        assert!(!out.contains("import_scale"), "scale 1.0 emits no line");
     }
 
     /// Full pipeline against the real local game + CS2 Workshop Tools:
@@ -920,6 +944,7 @@ mod tests {
             vmdl_internal: "models/heroes_staging/haze/haze.vmdl".into(),
             mesh_file: fbx.into(),
             material_override: ws.materials.first().cloned(),
+            import_scale: 0.01,
             artifact_out: scratch.join("haze.vmdl_c").to_string_lossy().into_owned(),
         };
         let rep = build(&req);
