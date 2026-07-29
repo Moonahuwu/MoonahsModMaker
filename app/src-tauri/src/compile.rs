@@ -190,6 +190,10 @@ pub struct CompileConfig {
     /// Texture swaps inside bundled mod vpks (combined variant only).
     #[serde(default)]
     pub mod_textures: Vec<ModTextureCompile>,
+    /// Custom hero models: pre-built vmdl_c artifacts (compiled via CS2
+    /// Workshop Tools in the Model Replacement tab) staged at vanilla paths.
+    #[serde(default)]
+    pub model_overrides: Vec<ModelOverrideCompile>,
     /// UI Master: edited panorama layout/style sources, compiled and staged
     /// at the game's own paths (whole-file overrides). Experimental.
     #[serde(default)]
@@ -570,6 +574,20 @@ impl ModTextureCompile {
             && self.current_hash == self.last_compiled_hash
             && compiled_exists
     }
+}
+
+/// One custom hero model: the ARTIFACT is already compiled (CS2 Workshop
+/// Tools, via the Model Replacement tab) - the compile only stages the file
+/// at the hero's vanilla path in every variant.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelOverrideCompile {
+    /// Vanilla compiled path, e.g. `models/heroes_staging/haze/haze.vmdl_c`.
+    pub target_rel: String,
+    /// Absolute path of the cached compiled artifact.
+    pub artifact: String,
+    /// Friendly label for report steps.
+    pub label: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -3155,6 +3173,7 @@ fn estimate_steps(cfg: &CompileConfig) -> usize {
         .len();
     est += 2 * cfg.hero_textures.len();
     est += 2 * cfg.mod_textures.len();
+    est += cfg.model_overrides.len();
     if let Some(dm) = &cfg.digimod {
         est += 3
             + dm.scares.len()
@@ -4250,6 +4269,30 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                     Ok(_) => staged += 1,
                     Err(e) => report.soft_fail(format!("stage mod texture: {rel}"), e.to_string()),
                 }
+            }
+        }
+        // Stage custom hero models: pre-built artifacts (CS2 Workshop Tools)
+        // copied to the vanilla model path. A missing artifact soft-fails so
+        // the rest of the build survives (e.g. profile synced to a machine
+        // that hasn't pulled the pack's files yet).
+        for ov in &cfg.model_overrides {
+            let src = Path::new(&ov.artifact);
+            if !src.exists() {
+                report.soft_fail(
+                    format!("stage model: {}", ov.label),
+                    format!("artifact missing: {} - rebuild it in Model Replacement", ov.artifact),
+                );
+                continue;
+            }
+            match copy_into(src, &stage, &ov.target_rel) {
+                Ok(_) => {
+                    staged += 1;
+                    report.ok_step(
+                        format!("[{}] stage model: {}", v.name, ov.label),
+                        ov.target_rel.clone(),
+                    );
+                }
+                Err(e) => report.soft_fail(format!("stage model: {}", ov.label), e.to_string()),
             }
         }
         // Stage the gameplay-config override (recompiled abilities.vdata_c).
@@ -5522,6 +5565,7 @@ mod tests {
             poster_overrides: vec![],
             hero_textures: vec![],
             mod_textures: vec![],
+            model_overrides: vec![],
             digimod: None,
             ui_overrides: ui,
             credits_text: None,
@@ -5613,6 +5657,7 @@ mod tests {
             poster_overrides: vec![],
             hero_textures: vec![],
             mod_textures: vec![],
+            model_overrides: vec![],
             digimod: None,
             ui_overrides: vec![],
             credits_text: None,
@@ -5847,6 +5892,7 @@ mod tests {
             poster_overrides: vec![],
             hero_textures: vec![],
             mod_textures: vec![],
+            model_overrides: vec![],
             digimod: None,
             ui_overrides: vec![],
             credits_text: None,
@@ -5981,6 +6027,7 @@ mod tests {
             }],
             hero_textures: vec![],
             mod_textures: vec![],
+            model_overrides: vec![],
         };
 
         let report = run(&cfg);
@@ -6071,6 +6118,7 @@ mod tests {
             export_only: false,
             poster_overrides: vec![],
             mod_textures: vec![],
+            model_overrides: vec![],
             hero_textures: vec![HeroTexCompile {
                 vmat: "models/heroes_wip/abrams/materials/abrams_upper_body.vmat".into(),
                 label: "Abrams - Upper Body (e2e)".into(),

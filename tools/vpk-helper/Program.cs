@@ -35,6 +35,7 @@ static int Dispatch(string[] args)
             "decode" => Decode(args),
             "decompile" => Decompile(args),
             "material" => MaterialCmd(args),
+            "model" => ModelCmd(args),
             "extractall" => ExtractAll(args),
             "decompileall" => DecompileAll(args),
             "gltf" => Gltf(args),
@@ -304,6 +305,89 @@ static int MaterialCmd(string[] args)
     foreach (var sub in content.SubFiles)
     {
         var p = Prepare(sub.FileName.Replace('\\', '/').TrimStart('/'));
+        File.WriteAllBytes(p, sub.Extract.Invoke());
+        Console.WriteLine(p);
+    }
+    return 0;
+}
+
+// model <vpk> <internalVmdlC> <outRoot>
+// Decompiles a compiled model into a ModelDoc-ready source tree: the .vmdl
+// (kv3 text) plus every referenced mesh/animation as DMX, written under
+// outRoot at their internal paths. Mirrors MaterialCmd's loader wiring so
+// FileExtract can resolve the model's references back into the pak.
+static int ModelCmd(string[] args)
+{
+    if (args.Length < 4)
+    {
+        Console.Error.WriteLine("usage: model <vpk> <internalVmdlC> <outRoot>");
+        return 2;
+    }
+    var vpk = Path.GetFullPath(args[1]);
+    var internalPath = args[2].Replace('\\', '/').TrimStart('/');
+    var outRoot = Path.GetFullPath(args[3]);
+    using var package = new Package();
+    package.Read(vpk);
+    var entry = package.FindEntry(internalPath);
+    if (entry is null)
+    {
+        Console.Error.WriteLine($"entry not found: {internalPath}");
+        return 1;
+    }
+    package.ReadEntry(entry, out var bytes);
+    var vmdlRel = internalPath.EndsWith("_c", StringComparison.OrdinalIgnoreCase)
+        ? internalPath[..^2] : internalPath;
+
+    string Prepare(string rel)
+    {
+        var dest = Path.Combine(outRoot, rel.Replace('/', Path.DirectorySeparatorChar));
+        var dir = Path.GetDirectoryName(dest);
+        if (!string.IsNullOrEmpty(dir))
+            Directory.CreateDirectory(dir);
+        return dest;
+    }
+
+    using var resource = new Resource();
+    resource.Read(new MemoryStream(bytes));
+    using var loader = new GameFileLoader(package, vpk);
+    using var content = FileExtract.Extract(resource, loader, null);
+    var vmdlPath = Prepare(vmdlRel);
+    File.WriteAllBytes(vmdlPath, content.Data);
+    Console.WriteLine(vmdlPath);
+
+    var vmdlDir = Path.GetDirectoryName(vmdlRel)?.Replace('\\', '/') ?? "";
+    void WriteExtra(ContentFile extra)
+    {
+        if (extra.Data is { Length: > 0 } && !string.IsNullOrEmpty(extra.FileName))
+        {
+            var rel = extra.FileName.Replace('\\', '/').TrimStart('/');
+            // Mesh/anim DMX names come back bare - they belong next to the vmdl.
+            if (!rel.Contains('/'))
+                rel = string.IsNullOrEmpty(vmdlDir) ? rel : vmdlDir + "/" + rel;
+            var p = Prepare(rel);
+            File.WriteAllBytes(p, extra.Data);
+            Console.WriteLine(p);
+        }
+        foreach (var sub in extra.SubFiles)
+        {
+            var dir = Path.GetDirectoryName(extra.FileName ?? "")?.Replace('\\', '/') ?? "";
+            var rel = string.IsNullOrEmpty(dir) ? sub.FileName : dir + "/" + sub.FileName;
+            rel = rel.Replace('\\', '/').TrimStart('/');
+            if (!rel.Contains('/'))
+                rel = string.IsNullOrEmpty(vmdlDir) ? rel : vmdlDir + "/" + rel;
+            var p = Prepare(rel);
+            File.WriteAllBytes(p, sub.Extract.Invoke());
+            Console.WriteLine(p);
+        }
+    }
+    foreach (var extra in content.AdditionalFiles)
+        WriteExtra(extra);
+    foreach (var sub in content.SubFiles)
+    {
+        var rel = sub.FileName.Replace('\\', '/').TrimStart('/');
+        if (!rel.Contains('/'))
+            rel = string.IsNullOrEmpty(vmdlDir) ? rel : vmdlDir + "/" + rel;
+        var p = Prepare(rel);
         File.WriteAllBytes(p, sub.Extract.Invoke());
         Console.WriteLine(p);
     }

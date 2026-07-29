@@ -4,6 +4,7 @@ mod compile;
 mod digimod;
 mod host;
 mod install;
+mod models;
 mod packsync;
 mod paths;
 mod procutil;
@@ -108,6 +109,10 @@ pub fn run() {
             commands::export_shared_pack,
             commands::import_shared_pack,
             commands::package_module_release,
+            commands::hero_model_target,
+            commands::model_workspace,
+            commands::model_preflight,
+            commands::model_build,
             commands::probe_audio,
             commands::process_audio,
             commands::pack_vpk,

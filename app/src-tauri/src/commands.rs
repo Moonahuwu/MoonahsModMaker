@@ -1464,6 +1464,8 @@ pub struct DetectedPaths {
     pub addons_dir: Option<String>,
     pub ffmpeg: Option<String>,
     pub vpk_helper: Option<String>,
+    /// CS2 install with Workshop Tools (Model Replacement's compiler).
+    pub cs2_root: Option<String>,
 }
 
 fn exists(p: &std::path::Path) -> bool {
@@ -1526,6 +1528,21 @@ fn deadlock_root() -> Option<std::path::PathBuf> {
     for lib in steam_libraries() {
         let root = lib.join("steamapps").join("common").join("Deadlock");
         if root.join("game").join("citadel").is_dir() {
+            return Some(root);
+        }
+    }
+    None
+}
+
+/// CS2 install WITH the Workshop Tools (the current-schema Source 2 compiler
+/// Model Replacement needs - CSDK12 can't allocate the modern skeleton nodes).
+fn cs2_tools_root() -> Option<std::path::PathBuf> {
+    for lib in steam_libraries() {
+        let root = lib
+            .join("steamapps")
+            .join("common")
+            .join("Counter-Strike Global Offensive");
+        if root.join("game/bin/win64/resourcecompiler.exe").exists() {
             return Some(root);
         }
     }
@@ -1674,7 +1691,100 @@ pub fn autodetect_paths(app: tauri::AppHandle) -> DetectedPaths {
         ffmpeg: bundled_ffmpeg.or_else(|| ffmpeg_on_path().then(|| "ffmpeg".into())),
         vpk_helper: find_vpk_helper(exe_dir.as_deref(), resource_dir.as_deref())
             .map(|p| p.replace('\\', "/")),
+        cs2_root: cs2_tools_root().map(|p| p.to_string_lossy().replace('\\', "/")),
     }
+}
+
+// ---- Model Replacement -----------------------------------------------------
+// Custom skinned hero models. Heavy builds run HERE (explicitly, via the tab);
+// the normal compile just ships the cached vmdl_c artifact.
+
+/// The hero's vanilla vmdl path (heroes.vdata `m_strModelName`), decompiling
+/// and caching heroes.vdata on first use like the hero-materials flow.
+#[tauri::command]
+pub async fn hero_model_target(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+    codename: String,
+) -> Result<String, String> {
+    use tauri::Manager;
+    let heroes = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("hero_portraits")
+        .join("heroes.vdata");
+    tauri::async_runtime::spawn_blocking(move || {
+        if !heroes.exists() {
+            if let Some(parent) = heroes.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            crate::vpk::decompile_from_vpk(
+                &helper_path,
+                &pak_path,
+                "scripts/heroes.vdata_c",
+                &heroes.to_string_lossy(),
+            )?;
+        }
+        let text = std::fs::read_to_string(&heroes).map_err(|e| e.to_string())?;
+        hero_model_path(&text, &codename)
+            .ok_or_else(|| format!("no model path for hero '{codename}'"))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Decompile the hero's model into the app-data workspace (the Blender kit)
+/// and return its bone + material lists.
+#[tauri::command]
+pub async fn model_workspace(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+    vmdl_internal: String,
+    refresh: Option<bool>,
+) -> Result<crate::models::ModelWorkspace, String> {
+    use tauri::Manager;
+    let root = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("model_swap");
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::models::workspace(
+            &helper_path,
+            &pak_path,
+            &vmdl_internal,
+            &root,
+            refresh.unwrap_or(false),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Name-level FBX sanity scan against the hero's bone list.
+#[tauri::command]
+pub async fn model_preflight(
+    fbx_path: String,
+    bones: Vec<String>,
+) -> Result<crate::models::Preflight, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::models::preflight_fbx(std::path::Path::new(&fbx_path), &bones)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Generate the vmdl + compile via CS2 Workshop Tools + cache the artifact.
+#[tauri::command]
+pub async fn model_build(
+    req: crate::models::ModelBuildReq,
+) -> Result<crate::models::ModelBuildReport, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::models::build(&req))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[derive(serde::Serialize)]
