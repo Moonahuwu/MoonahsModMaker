@@ -154,6 +154,25 @@ contains `{` braces).
   overwrites a caller-given one, backing up the occupant under `.eim_backups/`) and, when
   asked, adds the `citadel/addons` search path to the sibling `gameinfo.gi` if missing
   (with a `.gi.eim.bak`). Commands: `scan_addon_slots`, `install_to_game`.
+- `models.rs` — Model Replacement: custom skinned HERO models. CSDK12 CANNOT
+  compile these (its DLLs lack the NmSkeletonList/AnimGraph2List classes -
+  proven), so builds shell to **CS2 Workshop Tools'** headless resourcecompiler
+  (settings `cs2Root`, autodetected across Steam libraries). Flow: helper
+  `model` cmd decompiles the hero vmdl_c into an app-data Blender kit (vmdl +
+  every mesh/anim DMX; bones parsed from vmdl, materials byte-scanned from the
+  mesh DMX) → `preflight_fbx` (name/props-level binary-FBX scan, no vertex
+  arrays: unknown/unrigged bones, un-applied transforms with Blender's
+  unit/axis stamps whitelisted, `.001` names, spaces, vertex colors) →
+  `generate_vmdl` (bracket-balanced splice: user mesh into RenderMeshList,
+  single-LOD rewrite, bodygroups emptied, optional DefaultMaterialGroup;
+  skeleton/attachments/cameras/Nm+AG2 refs untouched) → compile in the
+  `eim_models` csgo_addon with auto-stubbed hard-error materials (bare FBX
+  material names only WARN - success accepts the "WARNING: N compiled, 0
+  failed" summary) → vmdl_c cached in app-data `model_cache/`. The app compile
+  stages cached artifacts at vanilla paths in every variant
+  (`project.model_overrides` / `ModelOverrideCompile`). E2E: ignored test
+  `e2e_model_build_via_cs2` + committed rigged-cube fixture
+  (`testdata/eim_testcube.fbx`, generated headlessly by Blender).
 - `packsync.rs` — Shared Pack profile sync (two people, one modpack, transport =
   any shared folder, typically a GitHub clone). Export walks the profile JSON
   **schema-blind**: every string that is an absolute path to something that exists
@@ -279,7 +298,12 @@ overrides are also excluded from compiles). `menuart` (`MenuArtTab`, always visi
 curated play-page mode-card/portrait slots + any `panorama/images/` path by
 hand; previews decode via `decode_pak_texture` (app-data cached) and entries
 are plain `iconMods` (`menuart_` id prefix), so the icon pipeline compiles
-them with zero extra machinery. `packbuilder` (`PackBuilderTab`, always visible)
+them with zero extra machinery. `modelswap` (`ModelSwapTab`, always visible: "Model
+Replacement") is the frontend of `models.rs`: hero picker (roster) → Blender
+kit + checklist → FBX/DMX pick + preflight display → material override
+dropdown → Build (CS2 compile feed) → `modelOverrides` entries with
+enable/rebuild/remove; shows a CS2-setup banner until `cs2Root` is set.
+`packbuilder` (`PackBuilderTab`, always visible)
 organizes pack content into named modules (the future split points for
 standalone releases): App.tsx flattens every subsystem into stable content keys
 (`slot:<id>`, `icon:<id>`, `sound:/effect:/poster:/herotex:<id>`,

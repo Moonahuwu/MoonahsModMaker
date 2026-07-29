@@ -363,6 +363,12 @@ export function SetupSection({
               onChange={(v) => update({ vpkHelperPath: v })}
             />
             <Field
+              label="CS2 install (Workshop Tools)"
+              value={settings.cs2Root}
+              onChange={(v) => update({ cs2Root: v })}
+              hint="Only for Model Replacement - the Counter-Strike Global Offensive folder"
+            />
+            <Field
               label="Game pak (pak01_dir.vpk)"
               value={settings.deadlockPak}
               onChange={(v) => update({ deadlockPak: v })}

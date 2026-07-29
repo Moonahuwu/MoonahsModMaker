@@ -111,6 +111,7 @@ import { GameBananaBrowser } from "./components/GameBananaBrowser";
 import { LibraryTab } from "./components/LibraryTab";
 import { EasyCompileTab } from "./components/EasyCompileTab";
 import { PackBuilderTab, type PackItem } from "./components/PackBuilderTab";
+import { ModelSwapTab } from "./components/ModelSwapTab";
 import "./index.css";
 import "./App.css";
 
@@ -149,6 +150,8 @@ const EASY_COMPILE = "easycompile";
 /** Pack Builder: organize the pack's content into named modules (the future
  *  split points for standalone releases). */
 const PACK_BUILDER = "packbuilder";
+/** Model Replacement: custom hero models compiled via CS2 Workshop Tools. */
+const MODEL_SWAP = "modelswap";
 /** Catch-all tab for events auto-discovered from a new patch. */
 const UNSORTED = "unsorted";
 
@@ -233,6 +236,7 @@ const TAB_LABELS: Record<string, string> = {
   [UIMASTER]: "UI Master",
   [EASY_COMPILE]: "Easy Compile",
   [PACK_BUILDER]: "Pack Builder",
+  [MODEL_SWAP]: "Model Replacement",
   [CUSTOM_SERVER]: "Custom Server",
   [MOD_COMBINER]: "Mod combiner",
   [GAMEBANANA]: "GameBanana",
@@ -566,6 +570,7 @@ function modulePartsFor(p: Project, s: Settings, mod: PackModule) {
     modTextureOverrides: (p.modTextureOverrides ?? []).filter((o) =>
       keys.has(`modtex:${o.id}`),
     ),
+    modelOverrides: (p.modelOverrides ?? []).filter((o) => keys.has(`model:${o.id}`)),
   };
 }
 
@@ -823,6 +828,7 @@ function accentFor(ev: { group: string; side: string }): string {
   if (ev.group === UIMASTER) return "#f59e0b"; // amber (experimental UI editing)
   if (ev.group === EASY_COMPILE) return "#fbbf24"; // amber (compiler utility)
   if (ev.group === PACK_BUILDER) return "#5eead4"; // teal (pack organization)
+  if (ev.group === MODEL_SWAP) return "#fda4af"; // rose (custom models)
   if (ev.group === CUSTOM_SERVER) return "#38bdf8"; // sky (server)
   if (ev.group === GAMEBANANA) return "#eab308"; // GameBanana yellow
   if (ev.group === LIBRARY) return "#93c5fd"; // light blue (library shelf)
@@ -1246,6 +1252,7 @@ export default function App() {
     if (settings.experimentalEasyCompile) out.push(EASY_COMPILE);
     out.push(POSTERS);
     out.push(MENU_ART);
+    out.push(MODEL_SWAP);
     // Jumpscares when the MoonahMasterUI engine is in the user's mods, this
     // project already configures it, or the settings toggle opts in (build
     // your own from the blank template, no installed mod needed).
@@ -1360,6 +1367,8 @@ export default function App() {
         label: o.label,
         detail: (o.modVpk.split(/[\\/]/).pop() ?? "").replace(/\.vpk$/i, ""),
       });
+    for (const o of project.modelOverrides ?? [])
+      out.push({ key: `model:${o.id}`, kind: "Hero model", label: o.label });
     const d = project.digimod;
     if (d && (d.scares.length > 0 || d.deaths.length > 0 || (d.mergeVpks?.length ?? 0) > 0))
       out.push({ key: "digimod", kind: "Jumpscares", label: "Jumpscares / Deaths mod" });
@@ -1416,6 +1425,9 @@ export default function App() {
         if (m.enabled !== false) claim(`img:${m.targetVtexc}`, m.targetVtexc, "image", mod.name);
       for (const o of parts.modTextureOverrides)
         claim(`img:${o.internalPath}`, o.internalPath, "image", mod.name);
+      for (const o of parts.modelOverrides)
+        if (o.enabled !== false)
+          claim(`mdl:${o.targetPath}`, o.targetPath, "hero model", mod.name);
       for (const e of parts.effectOverrides)
         claim(`fx:${e.targetRef}`, e.targetRef, "effect", mod.name);
       for (const po of parts.posterOverrides)
@@ -2004,6 +2016,7 @@ export default function App() {
           pools,
           parts.heroTextures,
           parts.modTextureOverrides,
+          parts.modelOverrides,
         ),
         exportOnly: true,
       };
@@ -3993,6 +4006,7 @@ export default function App() {
       if (d.vpkHelper && !(onlyEmpty && s.vpkHelperPath)) patch.vpkHelperPath = d.vpkHelper;
       if (d.ffmpeg && d.ffmpeg !== "ffmpeg" && !(onlyEmpty && s.ffmpegPath))
         patch.ffmpegPath = d.ffmpeg;
+      if (d.cs2Root && !(onlyEmpty && s.cs2Root)) patch.cs2Root = d.cs2Root;
       const found = Object.keys(patch).length;
       if (found > 0) {
         updateSettings(patch);
@@ -5170,6 +5184,8 @@ export default function App() {
       ? settings.importedMods.length
       : g === PACK_BUILDER
       ? (project?.modules ?? []).length
+      : g === MODEL_SWAP
+      ? (project?.modelOverrides ?? []).filter((o) => o.enabled !== false).length
       : g === REPLACE_SOUNDS
         ? (project?.soundOverrides ?? []).length
         : g === EFFECTS
@@ -5569,7 +5585,9 @@ export default function App() {
                             ? "Edit the game's UI files directly - decompiled to source, compiled back into your mod. Very experimental."
                             : activeTab === PACK_BUILDER
                               ? "Organize the pack into named modules - the future split points for standalone releases. Compiling still builds everything together."
-                              : null;
+                              : activeTab === MODEL_SWAP
+                                ? "Put your own Blender model on a hero - the game's animations, cameras and hitboxes stay. Builds through CS2's Workshop Tools, ships with your normal compile."
+                                : null;
               return sub ? <p className="mt-1 text-sm text-zinc-500">{sub}</p> : null;
             })()}
           </div>
@@ -5652,6 +5670,15 @@ export default function App() {
           />
         ) : activeTab === EASY_COMPILE ? (
           <EasyCompileTab settings={settings} update={updateSettings} dropRef={easyDropRef} />
+        ) : activeTab === MODEL_SWAP ? (
+          <ModelSwapTab
+            settings={settings}
+            overrides={project?.modelOverrides ?? []}
+            onChange={(next) =>
+              setProject((prev) => (prev ? { ...prev, modelOverrides: next } : prev))
+            }
+            onAutodetect={autodetect}
+          />
         ) : activeTab === PACK_BUILDER ? (
           <PackBuilderTab
             items={packItems}
@@ -6017,6 +6044,7 @@ export default function App() {
             uiOverrides={settings.experimentalUiMaster ? (project.uiOverrides ?? []) : []}
             pools={pools}
             modTextureOverrides={project.modTextureOverrides ?? []}
+            modelOverrides={project.modelOverrides ?? []}
             onCompiled={markAllCompiled}
             onBulkGain={bulkGain}
             onFixForNewPatch={refreshVanilla}

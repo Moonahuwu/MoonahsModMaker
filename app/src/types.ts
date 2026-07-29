@@ -225,6 +225,8 @@ export interface Project {
   uiOverrides?: UiFileOverride[];
   /** Texture swaps inside bundled mod vpks (combined builds only). */
   modTextureOverrides?: ModTextureOverride[];
+  /** Custom hero models (pre-built artifacts, Model Replacement tab). */
+  modelOverrides?: ModelOverride[];
   /** Pack Builder: named modules the pack's content is organized into, so a
    *  big shared pack can later split into standalone releases. Items are
    *  stable content keys (`slot:<id>`, `icon:<id>`, `sound:<id>`,
@@ -240,6 +242,25 @@ export interface PackModule {
   id: string;
   name: string;
   items: string[];
+}
+
+/** One custom hero model: the ARTIFACT is already compiled (via CS2 Workshop
+ *  Tools in the Model Replacement tab); the app's compile just ships it at
+ *  the hero's vanilla model path. */
+export interface ModelOverride {
+  id: string;
+  /** Hero codename (e.g. `haze`). */
+  hero: string;
+  label: string;
+  /** Vanilla compiled path, e.g. `models/heroes_staging/haze/haze.vmdl_c`. */
+  targetPath: string;
+  /** Absolute path of the cached compiled artifact (.vmdl_c). */
+  artifact: string;
+  /** The user's mesh file the build used (for rebuilds). */
+  meshFile: string;
+  /** Game material applied to the whole model, or null = Blender names. */
+  materialOverride?: string | null;
+  enabled?: boolean;
 }
 
 /** One texture swap inside a bundled mod vpk: user art (or a hue-rotated copy

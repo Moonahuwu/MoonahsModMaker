@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { CompileConfig, EffectCompile, EventCompile, GbModInfo, GlobalCompile, HeroTexCompile, IconCompile, ModTextureCompile, PosterCompile, ProfileCompilePrefs, SoundOverrideCompile, VdataCompile, WorldCompile } from "./api";
 import { loadSettings, saveSettings } from "./api";
-import type { DigimodConfig, EffectOverride, EventProject, HeroTextureOverride, LibraryItem, ModTextureOverride, PosterOverride, SoundOverride, UiFileOverride } from "../types";
+import type { DigimodConfig, EffectOverride, EventProject, HeroTextureOverride, LibraryItem, ModelOverride, ModTextureOverride, PosterOverride, SoundOverride, UiFileOverride } from "../types";
 import { songHash, overrideHash, effectHash, posterHash, heroTexHash, modTexHash } from "./songHash";
 
 // User-facing settings. We derive the verbose CompileConfig paths from a CSDK
@@ -113,6 +113,9 @@ export interface Settings {
    *  GitHub repo clone (git does the transport, we do the portability).
    *  A machine path, so it lives here and never inside a profile. */
   sharedPackDir: string;
+  /** CS2 install root (with Workshop Tools) - the current-schema Source 2
+   *  compiler Model Replacement builds through. Machine path. */
+  cs2Root: string;
   /** Baseline of known game sound events (`relpath::eventName`), seeded on the
    *  first "Fix for new patch". Future fixes diff the live game against this so
    *  only events a NEW patch added surface in the "New / Unsorted" tab. */
@@ -227,6 +230,7 @@ export const DEFAULT_SETTINGS: Settings = {
   hostAutoPrep: true,
   activeProfile: "",
   sharedPackDir: "",
+  cs2Root: "",
   knownSoundEvents: [],
   knownSweepFiles: [],
   uiSoundsMigrated: false,
@@ -495,6 +499,7 @@ export function buildCompileConfig(
   pools: Record<string, { vsndDuration: number | null; entries?: string[] } | undefined> = {},
   heroTextures: HeroTextureOverride[] = [],
   modTextureOverrides: ModTextureOverride[] = [],
+  modelOverrides: ModelOverride[] = [],
 ): CompileConfig {
   const explicitOverrideRefs = new Set(soundOverrides.map((o) => o.targetRef));
   const directTargets = new Map<string, string>();
@@ -684,6 +689,9 @@ export function buildCompileConfig(
     posterOverrides: posterCompiles,
     heroTextures: heroTexCompiles,
     modTextures: modTexCompiles,
+    modelOverrides: modelOverrides
+      .filter((m) => m.enabled !== false && m.artifact)
+      .map((m) => ({ targetRel: m.targetPath, artifact: m.artifact, label: m.label })),
     // Entries without media can't compile — drop them rather than failing.
     // Sounds/soundIds map to the shared library shape the backend expects.
     digimod: digimod

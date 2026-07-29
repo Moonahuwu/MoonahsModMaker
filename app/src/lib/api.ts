@@ -142,6 +142,8 @@ export interface CompileConfig {
   heroTextures?: HeroTexCompile[];
   /** Texture swaps inside bundled mod vpks (combined variant only). */
   modTextures?: ModTextureCompile[];
+  /** Custom hero models: pre-built vmdl_c artifacts staged at vanilla paths. */
+  modelOverrides?: ModelOverrideCompile[];
   digimod?: DigimodCompile | null;
   uiOverrides?: UiFileCompile[];
 }
@@ -154,6 +156,12 @@ export interface ModTextureCompile {
   hue: number;
   currentHash?: string | null;
   lastCompiledHash?: string | null;
+}
+
+export interface ModelOverrideCompile {
+  targetRel: string;
+  artifact: string;
+  label: string;
 }
 
 /** List the compiled textures inside a mod vpk (panorama images excluded -
@@ -638,6 +646,66 @@ export interface DetectedPaths {
   addonsDir: string | null;
   ffmpeg: string | null;
   vpkHelper: string | null;
+  /** CS2 install with Workshop Tools (Model Replacement's compiler). */
+  cs2Root: string | null;
+}
+
+// ---- Model Replacement (custom hero models via CS2 Workshop Tools) --------
+
+export interface ModelWorkspace {
+  dir: string;
+  vmdl: string;
+  bones: string[];
+  materials: string[];
+  files: number;
+}
+
+export interface ModelPreflight {
+  errors: string[];
+  warnings: string[];
+  info: string[];
+}
+
+export interface ModelBuildReport {
+  ok: boolean;
+  steps: string[];
+  artifact: string | null;
+}
+
+/** The hero's vanilla vmdl path from heroes.vdata (no `_c`). */
+export function heroModelTarget(
+  helperPath: string,
+  pakPath: string,
+  codename: string,
+): Promise<string> {
+  return invoke("hero_model_target", { helperPath, pakPath, codename });
+}
+
+/** Decompile the hero into the app-data Blender kit (bones + materials). */
+export function modelWorkspace(
+  helperPath: string,
+  pakPath: string,
+  vmdlInternal: string,
+  refresh?: boolean,
+): Promise<ModelWorkspace> {
+  return invoke("model_workspace", { helperPath, pakPath, vmdlInternal, refresh });
+}
+
+/** Name-level FBX sanity scan against the hero's bone list. */
+export function modelPreflight(fbxPath: string, bones: string[]): Promise<ModelPreflight> {
+  return invoke("model_preflight", { fbxPath, bones });
+}
+
+/** Generate the vmdl + compile via CS2 + cache the vmdl_c artifact. */
+export function modelBuild(req: {
+  cs2Root: string;
+  workspaceDir: string;
+  vmdlInternal: string;
+  meshFile: string;
+  materialOverride: string | null;
+  artifactOut: string;
+}): Promise<ModelBuildReport> {
+  return invoke("model_build", { req });
 }
 
 /** Best-effort auto-detection of tool/game paths (Steam, CSDK, ffmpeg, helper). */

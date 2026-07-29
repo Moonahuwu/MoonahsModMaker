@@ -22,7 +22,7 @@ import { ExportModal, type ExportExtra, type ExportSlot } from "./ExportModal";
 import { buildCompileConfig, directReplaceTarget, installSrcVpk, sheetSiblingsKey, slotSoundFolder, worldOverrideCategory, DEATHS_RELEASED, type Settings } from "../lib/settings";
 import { songStatus, overrideHash, effectHash, posterHash, heroTexHash } from "../lib/songHash";
 import { useToast } from "./Toaster";
-import type { DigimodConfig, EffectOverride, EventProject, GlobalOverride, HeroTextureOverride, IconMod, ModTextureOverride, PosterOverride, SoundOverride, UiFileOverride, VdataOverride, WorldOverride } from "../types";
+import type { DigimodConfig, EffectOverride, EventProject, GlobalOverride, HeroTextureOverride, IconMod, ModelOverride, ModTextureOverride, PosterOverride, SoundOverride, UiFileOverride, VdataOverride, WorldOverride } from "../types";
 
 const pakName = (n: number) => `pak${String(n).padStart(2, "0")}_dir.vpk`;
 
@@ -43,6 +43,7 @@ export function CompileBar({
   uiOverrides,
   pools,
   modTextureOverrides,
+  modelOverrides,
   onCompiled,
   onFixForNewPatch,
   onBulkGain,
@@ -68,6 +69,8 @@ export function CompileBar({
   pools: Record<string, { vsndDuration: number | null; entries?: string[] } | undefined>;
   /** Texture swaps inside bundled mod vpks (combined builds only). */
   modTextureOverrides: ModTextureOverride[];
+  /** Custom hero models (pre-built artifacts, Model Replacement tab). */
+  modelOverrides: ModelOverride[];
   /** Called after a successful compile so the project can record compiled hashes. */
   onCompiled: () => void;
   /** Nudge every track's + replacement's gain by `delta` dB (loudness leveling). */
@@ -318,7 +321,7 @@ export function CompileBar({
             return cat === "other" || !ex.has(`__cat:${cat}`);
           })
         : [];
-      const config = buildCompileConfig(s, evts, false, iconMods, soundOverrides, effectOverrides, gameplay, global, world, posterOverrides, digimod, uiOverrides, pools, heroTextures, modTextureOverrides);
+      const config = buildCompileConfig(s, evts, false, iconMods, soundOverrides, effectOverrides, gameplay, global, world, posterOverrides, digimod, uiOverrides, pools, heroTextures, modTextureOverrides, modelOverrides);
       const r = await compileProject(config);
       setReport(r);
       if (r.ok) {
