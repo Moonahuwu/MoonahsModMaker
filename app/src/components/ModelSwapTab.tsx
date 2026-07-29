@@ -90,6 +90,9 @@ export function ModelSwapTab({
       setWsTarget(target);
       const w = await modelWorkspace(settings.vpkHelperPath, settings.deadlockPak, target);
       setWs(w);
+      // A real game material by default: Blender material names that don't
+      // exist as game vmats render NOTHING (red bounds box in game).
+      setMaterial(w.materials[0] ?? "");
     } catch (e) {
       push("error", `Couldn't prepare the hero kit: ${e}`);
     } finally {
@@ -327,12 +330,15 @@ export function ModelSwapTab({
               title="One game material applied to the whole model, or keep the material names from Blender (checkerboards unless they match real game materials)"
               className="w-72 rounded-md border border-zinc-700/80 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-200 outline-none transition focus:border-rose-400/70"
             >
-              <option value="">Keep my Blender material names</option>
               {ws.materials.map((m) => (
                 <option key={m} value={m}>
                   {m.split("/").pop()} ({m})
                 </option>
               ))}
+              <option value="">
+                Advanced: keep my Blender material names (must match real game vmats, else
+                nothing renders)
+              </option>
             </select>
             <button
               onClick={() => void build()}

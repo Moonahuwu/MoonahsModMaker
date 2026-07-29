@@ -482,6 +482,43 @@ pub fn preflight_fbx(path: &Path, hero_bones: &[String]) -> Result<Preflight, St
 // vmdl generation
 // ---------------------------------------------------------------------------
 
+/// Remove the ENTIRE first node of `class_name` (its enclosing `{ ... }` plus
+/// a trailing comma/newline). Returns whether a node was removed.
+fn remove_node(text: &mut String, class_name: &str) -> bool {
+    let Some(anchor) = text.find(&format!("_class = \"{class_name}\"")) else {
+        return false;
+    };
+    let Some(open) = text[..anchor].rfind('{') else { return false };
+    let bytes = text.as_bytes();
+    let mut depth = 0i32;
+    let mut in_str = false;
+    let mut end = None;
+    for (i, &b) in bytes[open..].iter().enumerate() {
+        match b {
+            b'"' => in_str = !in_str,
+            b'{' if !in_str => depth += 1,
+            b'}' if !in_str => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(open + i + 1);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let Some(mut end) = end else { return false };
+    // Swallow the trailing comma + line break so the list stays tidy.
+    while end < text.len() && matches!(text.as_bytes()[end], b',' | b' ' | b'\t') {
+        end += 1;
+    }
+    if end < text.len() && text.as_bytes()[end] == b'\n' {
+        end += 1;
+    }
+    text.replace_range(open..end, "");
+    true
+}
+
 /// Find the `children = [ ... ]` span (bracket-balanced) of the first node of
 /// `class_name` at or after `from`. Returns (start_of_open_bracket, end_after_close).
 fn children_span(text: &str, class_name: &str, from: usize) -> Option<(usize, usize)> {
@@ -509,8 +546,9 @@ fn children_span(text: &str, class_name: &str, from: usize) -> Option<(usize, us
 
 /// Rewrite a decompiled hero vmdl so its render meshes are the user's file:
 /// - RenderMeshList children -> one RenderMeshFile ("body" -> mesh_rel)
-/// - LODGroupList children   -> one LOD level referencing "body"
-/// - BodyGroupList children  -> emptied (choices referenced the old meshes)
+/// - LODGroupList + BodyGroupList nodes REMOVED entirely (they referenced the
+///   old meshes; a model with a bare RenderMeshList renders everything - the
+///   proven static-swap shape)
 /// - optional MaterialGroupList override (whole model uses one game material)
 /// Everything else (skeleton, attachments, cameras, hitboxes, cloth, anim
 /// lists, NmSkeleton/AnimGraph2 references) rides through untouched.
@@ -524,13 +562,8 @@ pub fn generate_vmdl(src: &str, mesh_rel: &str, material_override: Option<&str>)
         .ok_or("vmdl has no RenderMeshList - refresh the hero kit")?;
     text.replace_range(a..b, &mesh_block);
 
-    if let Some((a, b)) = children_span(&text, "LODGroupList", 0) {
-        let lod_block = "[\n\t\t\t\t\t\t{\n\t\t\t\t\t\t\t_class = \"LODGroup\"\n\t\t\t\t\t\t\tswitch_threshold = 0.0\n\t\t\t\t\t\t\tmesh_references = \n\t\t\t\t\t\t\t[\n\t\t\t\t\t\t\t\t{\n\t\t\t\t\t\t\t\t\tmesh_name = \"body\"\n\t\t\t\t\t\t\t\t},\n\t\t\t\t\t\t\t]\n\t\t\t\t\t\t},\n\t\t\t\t\t]";
-        text.replace_range(a..b, lod_block);
-    }
-    if let Some((a, b)) = children_span(&text, "BodyGroupList", 0) {
-        text.replace_range(a..b, "[  ]");
-    }
+    remove_node(&mut text, "LODGroupList");
+    remove_node(&mut text, "BodyGroupList");
 
     if let Some(vmat) = material_override {
         // Insert a MaterialGroupList right before the RenderMeshList node's
@@ -839,8 +872,9 @@ mod tests {
         let out = generate_vmdl(MINI_VMDL, "models/x/custom.fbx", Some("models/a/b.vmat")).unwrap();
         assert!(out.contains("custom.fbx"), "user mesh referenced");
         assert!(!out.contains("x_gun.dmx"), "old meshes gone");
-        assert!(!out.contains("mesh_name = \"gun\""), "old LOD refs gone");
-        assert!(!out.contains("BodyGroup\""), "bodygroup choices emptied: {out}");
+        // LOD and bodygroup nodes are REMOVED wholesale (the proven shape).
+        assert!(!out.contains("LODGroupList"), "{out}");
+        assert!(!out.contains("BodyGroupList"), "{out}");
         assert!(out.contains("global_default_material = \"models/a/b.vmat\""));
         // Skeleton untouched.
         assert!(out.contains("name = \"pelvis\""));
