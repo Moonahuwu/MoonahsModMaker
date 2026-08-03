@@ -260,6 +260,19 @@ export interface ModelOverride {
   meshFile: string;
   /** Game material applied to the whole model, or null = Blender names. */
   materialOverride?: string | null;
+  /** Compiled custom-material files shipped with the model (targetRel = VPK
+   *  path, artifact = cached file). Present when built in My Textures mode. */
+  materials?: { targetRel: string; artifact: string }[];
+  /** The texture sets / game-vmat mappings the build used (for rebuilds),
+   *  keyed by FBX material. */
+  materialSpecs?: {
+    name: string;
+    color: string | null;
+    normal: string | null;
+    roughness: string | null;
+    metalness: string | null;
+    gameVmat?: string | null;
+  }[];
   enabled?: boolean;
 }
 

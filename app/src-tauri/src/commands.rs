@@ -1787,6 +1787,23 @@ pub async fn model_build(
         .map_err(|e| e.to_string())
 }
 
+/// Auto-match texture files in a folder to the FBX's material names
+/// (`Body5F` -> `Body5F_Base_color.png` / `Body5F_Normal.png` / ...).
+#[tauri::command]
+pub async fn match_material_textures(
+    folder: String,
+    materials: Vec<String>,
+) -> Result<Vec<crate::models::MatchedMaterial>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        Ok(crate::models::match_textures(
+            std::path::Path::new(&folder),
+            &materials,
+        ))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HeroPortrait {

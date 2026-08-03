@@ -182,6 +182,9 @@ pub struct Preflight {
     pub errors: Vec<String>,
     pub warnings: Vec<String>,
     pub info: Vec<String>,
+    /// FBX material names, verbatim - the "My textures" UI assigns a texture
+    /// set to each and the build ships a real pbr.vfx vmat per name.
+    pub materials: Vec<String>,
 }
 
 struct FbxNode {
@@ -334,6 +337,7 @@ pub fn preflight_fbx(path: &Path, hero_bones: &[String]) -> Result<Preflight, St
     let mut bad_transform: Vec<String> = Vec::new();
     let mut dot001: Vec<String> = Vec::new();
     let mut spaced: Vec<String> = Vec::new();
+    let mut material_names: Vec<String> = Vec::new();
 
     for node in &objects.children {
         match node.name.as_str() {
@@ -409,7 +413,10 @@ pub fn preflight_fbx(path: &Path, hero_bones: &[String]) -> Result<Preflight, St
                         dot001.push(name.clone());
                     }
                     if name.contains(' ') {
-                        spaced.push(name);
+                        spaced.push(name.clone());
+                    }
+                    if !material_names.contains(&name) {
+                        material_names.push(name);
                     }
                 }
             }
@@ -457,24 +464,26 @@ pub fn preflight_fbx(path: &Path, hero_bones: &[String]) -> Result<Preflight, St
     if !dot001.is_empty() {
         dot001.sort();
         dot001.dedup();
-        out.errors.push(format!(
-            "names ending in .001-style numbers break the compile: {} - rename them in Blender",
+        out.warnings.push(format!(
+            ".001-style numbered names are flaky in the tools: {} - if the build fails or a part misbehaves, rename them in Blender",
             dot001.join(", ")
         ));
     }
     if !spaced.is_empty() {
         spaced.sort();
         spaced.dedup();
-        out.errors.push(format!(
-            "names with spaces break the FBX material lookup: {} - rename them in Blender (use _ instead)",
+        out.warnings.push(format!(
+            "material names with spaces: {} - fine with My Textures mode, but rename them (use _) if a part won't texture",
             spaced.join(", ")
         ));
     }
     if has_vertex_colors {
         out.warnings.push(
-            "the mesh carries vertex colors - if the model looks glitchy in game, remove the Color Attributes in Blender's Object Data tab".into(),
+            "the mesh carries vertex colors - without custom textures these can render the model BLACK. Use My Textures mode (it neutralizes them) or delete the Color Attributes in Blender's Object Data tab".into(),
         );
     }
+    material_names.sort();
+    out.materials = material_names;
     Ok(out)
 }
 
@@ -556,6 +565,7 @@ pub fn generate_vmdl(
     src: &str,
     mesh_rel: &str,
     material_override: Option<&str>,
+    material_remaps: &[(String, String)],
     import_scale: f32,
 ) -> Result<String, String> {
     let mut text = src.to_string();
@@ -575,11 +585,34 @@ pub fn generate_vmdl(
     remove_node(&mut text, "LODGroupList");
     remove_node(&mut text, "BodyGroupList");
 
-    if let Some(vmat) = material_override {
+    // A DefaultMaterialGroup either forces ONE material over the whole model
+    // (`material_override`) or remaps individual mesh material names onto
+    // real game vmat paths (`material_remaps` - how kept kit meshes get
+    // their vanilla materials back).
+    let group_body = if let Some(vmat) = material_override {
+        Some(format!(
+            "remaps = [  ]\n\t\t\t\t\t\tuse_global_default = true\n\t\t\t\t\t\tglobal_default_material = \"{vmat}\""
+        ))
+    } else if !material_remaps.is_empty() {
+        let entries: String = material_remaps
+            .iter()
+            .map(|(from, to)| {
+                format!(
+                    "\n\t\t\t\t\t\t\t{{\n\t\t\t\t\t\t\t\tfrom = \"{from}\"\n\t\t\t\t\t\t\t\tto = \"{to}\"\n\t\t\t\t\t\t\t}},"
+                )
+            })
+            .collect();
+        Some(format!(
+            "remaps = \n\t\t\t\t\t\t[{entries}\n\t\t\t\t\t\t]\n\t\t\t\t\t\tuse_global_default = false"
+        ))
+    } else {
+        None
+    };
+    if let Some(body) = group_body {
         // Insert a MaterialGroupList right before the RenderMeshList node's
         // enclosing block - proven pattern from the static model swaps.
         let group = format!(
-            "{{\n\t\t\t\t_class = \"MaterialGroupList\"\n\t\t\t\tchildren = \n\t\t\t\t[\n\t\t\t\t\t{{\n\t\t\t\t\t\t_class = \"DefaultMaterialGroup\"\n\t\t\t\t\t\tremaps = [  ]\n\t\t\t\t\t\tuse_global_default = true\n\t\t\t\t\t\tglobal_default_material = \"{vmat}\"\n\t\t\t\t\t}},\n\t\t\t\t]\n\t\t\t}},\n\t\t\t"
+            "{{\n\t\t\t\t_class = \"MaterialGroupList\"\n\t\t\t\tchildren = \n\t\t\t\t[\n\t\t\t\t\t{{\n\t\t\t\t\t\t_class = \"DefaultMaterialGroup\"\n\t\t\t\t\t\t{body}\n\t\t\t\t\t}},\n\t\t\t\t]\n\t\t\t}},\n\t\t\t"
         );
         let anchor = text
             .find("_class = \"RenderMeshList\"")
@@ -589,6 +622,319 @@ pub fn generate_vmdl(
         text.insert_str(open, &group);
     }
     Ok(text)
+}
+
+// ---------------------------------------------------------------------------
+// Custom materials (user PNGs -> real pbr.vfx vmats via the Deadlock CSDK)
+// ---------------------------------------------------------------------------
+//
+// The community recipe, proven by working mods (e.g. the Miku pak): keep the
+// Blender material names in the vmdl (the compiled model then references
+// `<name>.vmat` at the VPK ROOT) and ship a real compiled vmat_c at exactly
+// that root path for each name. The vmats use Deadlock's generic `pbr.vfx`
+// shader - which only the CSDK has (CS2's toolchain lacks it), so materials
+// compile through the normal compile-tools root while the vmdl itself still
+// compiles through CS2.
+
+#[derive(serde::Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MaterialSpec {
+    /// FBX material name, verbatim (case and spaces preserved).
+    pub name: String,
+    /// Absolute path of the basecolor image (png/jpg/tga). Required unless
+    /// `game_vmat` maps this material to an existing game material instead.
+    #[serde(default)]
+    pub color: Option<String>,
+    pub normal: Option<String>,
+    pub roughness: Option<String>,
+    pub metalness: Option<String>,
+    /// Map this material to an EXISTING game vmat path instead of compiling
+    /// one - the vmdl gets a material-group remap. This is how kit meshes
+    /// kept from the decompile (SourceIO names them after the real vmats,
+    /// e.g. `doorman_door`) get their vanilla look back.
+    #[serde(default)]
+    pub game_vmat: Option<String>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MaterialArtifact {
+    /// VPK-internal path (matches what the compiled vmdl references).
+    pub target_rel: String,
+    /// Cached compiled file, absolute.
+    pub artifact: String,
+}
+
+/// Compile one pbr.vfx vmat per spec in the CSDK's `eim_models` addon and cache
+/// every produced file (vmat_c + generated vtex_c) under `out_cache`, keyed by
+/// its VPK-internal path. The whole game-side addon tree is collected: child
+/// texture compiles land at generated hashed names the vmat_c references.
+fn compile_materials(
+    tools_root: &Path,
+    hero_stem: &str,
+    specs: &[MaterialSpec],
+    out_cache: &Path,
+    rep: &mut ModelBuildReport,
+) -> Result<Vec<MaterialArtifact>, String> {
+    // The downloadable tools bundle ships the compiler under `bin_tools`; a
+    // full CSDK install has it under `bin`.
+    let rc = ["game/bin_tools/win64/resourcecompiler.exe", "game/bin/win64/resourcecompiler.exe"]
+        .iter()
+        .map(|r| tools_root.join(r))
+        .find(|p| p.exists())
+        .ok_or_else(|| {
+            format!(
+                "compile tools not found under {} - set up the compile tools in Settings first",
+                tools_root.display()
+            )
+        })?;
+    let content = tools_root.join("content/citadel_addons").join(CS2_ADDON);
+    let game_out = tools_root.join("game/citadel_addons").join(CS2_ADDON);
+    let _ = std::fs::remove_dir_all(&content);
+    let _ = std::fs::remove_dir_all(&game_out);
+    let tex_dir_rel = format!("materials/eim_models/{hero_stem}");
+    let tex_dir = content.join(tex_dir_rel.replace('/', std::path::MAIN_SEPARATOR_STR));
+    std::fs::create_dir_all(&tex_dir).map_err(|e| e.to_string())?;
+
+    // Vector fallbacks when a map wasn't provided: flat normal, matte
+    // roughness, non-metal, no AO.
+    const FLAT_NORMAL: &str = "[0.500000 0.500000 1.000000 0.000000]";
+    const MATTE: &str = "[1.000000 1.000000 1.000000 1.000000]";
+    const NON_METAL: &str = "[0.000000 0.000000 0.000000 0.000000]";
+    const NO_AO: &str = "[1.000000 1.000000 1.000000 1.000000]";
+
+    let mut inputs: Vec<String> = Vec::new();
+    for spec in specs {
+        let Some(color_src) = spec.color.as_deref() else { continue };
+        let stage_tex = |src: &str| -> Result<String, String> {
+            let mut name = Path::new(src)
+                .file_name()
+                .map(|f| f.to_string_lossy().to_lowercase())
+                .ok_or_else(|| format!("texture has no file name: {src}"))?;
+            let mut dest = tex_dir.join(&name);
+            // Same filename from a different folder: salt with a path hash so
+            // two materials' `color.png`s can't silently share one file.
+            if dest.exists() && std::fs::metadata(&dest).map(|m| m.len()).ok()
+                != std::fs::metadata(src).map(|m| m.len()).ok()
+            {
+                let mut h: u32 = 2166136261;
+                for b in src.to_lowercase().bytes() {
+                    h = (h ^ b as u32).wrapping_mul(16777619);
+                }
+                name = format!("{h:08x}_{name}");
+                dest = tex_dir.join(&name);
+            }
+            if !dest.exists() {
+                std::fs::copy(src, &dest).map_err(|e| format!("copy {src}: {e}"))?;
+            }
+            Ok(format!("{tex_dir_rel}/{name}"))
+        };
+        let color = stage_tex(color_src)?;
+        let normal = match &spec.normal {
+            Some(p) => format!("\"{}\"", stage_tex(p)?),
+            None => format!("\"{FLAT_NORMAL}\""),
+        };
+        let rough = match &spec.roughness {
+            Some(p) => format!("\"{}\"", stage_tex(p)?),
+            None => format!("\"{MATTE}\""),
+        };
+        let metal = match &spec.metalness {
+            Some(p) => format!("\"{}\"", stage_tex(p)?),
+            None => format!("\"{NON_METAL}\""),
+        };
+        // Source 2 normalizes resource paths to lowercase - the compiled vmdl
+        // references the lowercased material name, so the vmat file must match.
+        // g_fVertexColorStrength 0 neutralizes baked vertex colors (a classic
+        // cause of black models on FBX exports).
+        let vmat = format!(
+            "\"Layer0\"\n{{\n\t\"shader\"\t\"pbr.vfx\"\n\t\"F_RENDER_BACKFACES\"\t\"1\"\n\t\"F_USE_STATUS_EFFECTS_PROXY\"\t\"1\"\n\t\"g_fVertexColorStrength1\"\t\"0\"\n\t\"TextureColor1\"\t\"{color}\"\n\t\"TextureNormal1\"\t{normal}\n\t\"TextureRoughness1\"\t{rough}\n\t\"TextureMetalness1\"\t{metal}\n\t\"TextureAmbientOcclusion1\"\t\"{NO_AO}\"\n}}\n"
+        );
+        let vmat_name = format!("{}.vmat", spec.name.to_lowercase());
+        let vmat_abs = content.join(&vmat_name);
+        std::fs::write(&vmat_abs, vmat).map_err(|e| e.to_string())?;
+        inputs.push(vmat_abs.to_string_lossy().into_owned());
+    }
+
+    if inputs.is_empty() {
+        // Every spec maps to an existing game material - nothing to compile.
+        return Ok(Vec::new());
+    }
+    let game_dir = tools_root.join("game/citadel").to_string_lossy().into_owned();
+    let out = crate::compile::run_compiler_raw(&rc.to_string_lossy(), &game_dir, &inputs)
+        .map_err(|e| format!("material compile: {e}"))?;
+    rep.steps.push(format!("materials compiled: {out}"));
+
+    // Collect EVERYTHING the compile produced - rel path below the game addon
+    // root is the VPK-internal path.
+    let mut arts: Vec<MaterialArtifact> = Vec::new();
+    fn walk(root: &Path, dir: &Path, cache: &Path, arts: &mut Vec<MaterialArtifact>) {
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(root, &p, cache, arts);
+            } else if let Ok(rel) = p.strip_prefix(root) {
+                let rel_s = rel.to_string_lossy().replace('\\', "/");
+                let dest = cache.join(rel);
+                if let Some(parent) = dest.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                if std::fs::copy(&p, &dest).is_ok() {
+                    arts.push(MaterialArtifact {
+                        target_rel: rel_s,
+                        artifact: dest.to_string_lossy().into_owned(),
+                    });
+                }
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(out_cache);
+    std::fs::create_dir_all(out_cache).map_err(|e| e.to_string())?;
+    walk(&game_out, &game_out, out_cache, &mut arts);
+    if !arts.iter().any(|a| a.target_rel.ends_with(".vmat_c")) {
+        return Err("material compile produced no vmat_c files".into());
+    }
+    arts.sort_by(|a, b| a.target_rel.cmp(&b.target_rel));
+    rep.steps.push(format!(
+        "{} material file(s) cached ({} vmats)",
+        arts.len(),
+        arts.iter().filter(|a| a.target_rel.ends_with(".vmat_c")).count()
+    ));
+    Ok(arts)
+}
+
+/// ASCII `.vmat` references inside a compiled model - used to verify which
+/// material names the artifact actually asks for (root-level bare names for
+/// kept Blender materials, `models/...` paths for game materials).
+pub fn scan_vmdl_material_refs(bytes: &[u8]) -> Vec<String> {
+    let needle = b".vmat";
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+    while let Some(j) = bytes[i..].windows(needle.len()).position(|w| w == needle) {
+        let end = i + j + needle.len();
+        // A real reference is followed by a non-path byte (usually NUL) - a
+        // `.vmat_c` run or a longer word means this wasn't the string's end.
+        let tail_ok = bytes.get(end).map_or(true, |c| !c.is_ascii_alphanumeric() && *c != b'_');
+        let mut start = i + j;
+        while start > 0 {
+            let c = bytes[start - 1];
+            let ok = c.is_ascii_alphanumeric() || matches!(c, b'/' | b'\\' | b'_' | b'-' | b'.' | b' ');
+            if !ok {
+                break;
+            }
+            start -= 1;
+        }
+        if tail_ok {
+            if let Ok(s) = std::str::from_utf8(&bytes[start..end]) {
+                let s = s.trim_start().replace('\\', "/");
+                if s.len() > ".vmat".len() && !out.iter().any(|o| *o == s) {
+                    out.push(s);
+                }
+            }
+        }
+        i = end;
+    }
+    out.sort();
+    out
+}
+
+/// Auto-match texture files in `folder` (recursive) to FBX material names.
+/// Longest material name wins when several prefix-match the same file.
+#[derive(serde::Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MatchedMaterial {
+    pub name: String,
+    pub color: Option<String>,
+    pub normal: Option<String>,
+    pub roughness: Option<String>,
+    pub metalness: Option<String>,
+}
+
+pub fn match_textures(folder: &Path, materials: &[String]) -> Vec<MatchedMaterial> {
+    let mut files: Vec<(String, String)> = Vec::new(); // (lowercased stem, abs path)
+    fn walk(dir: &Path, depth: usize, files: &mut Vec<(String, String)>) {
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                if depth < 3 {
+                    walk(&p, depth + 1, files);
+                }
+                continue;
+            }
+            let name = p.file_name().map(|f| f.to_string_lossy().to_lowercase()).unwrap_or_default();
+            // Accept png/jpg/jpeg/tga, tolerating a trailing `.001`-style copy
+            // suffix after the extension.
+            let trimmed = match name.rsplit_once('.') {
+                Some((rest, tail)) if tail.chars().all(|c| c.is_ascii_digit()) => rest.to_string(),
+                _ => name.clone(),
+            };
+            let ok = [".png", ".jpg", ".jpeg", ".tga"].iter().any(|x| trimmed.ends_with(x));
+            if ok {
+                let stem = trimmed.rsplit_once('.').map(|(s, _)| s.to_string()).unwrap_or(trimmed);
+                files.push((stem, p.to_string_lossy().into_owned()));
+            }
+        }
+    }
+    walk(folder, 0, &mut files);
+    files.sort();
+
+    // Longest names first so "Body5F" beats "Body" for "body5f_base_color".
+    let mut order: Vec<&String> = materials.iter().collect();
+    order.sort_by_key(|m| std::cmp::Reverse(m.len()));
+    let mut taken: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut by_name: std::collections::HashMap<&str, MatchedMaterial> = materials
+        .iter()
+        .map(|m| {
+            (m.as_str(), MatchedMaterial {
+                name: m.clone(),
+                color: None,
+                normal: None,
+                roughness: None,
+                metalness: None,
+            })
+        })
+        .collect();
+
+    for mat in order {
+        // The FBX name, its space->underscore form, and its `.001`-stripped
+        // form all count as the same prefix.
+        let base = mat.to_lowercase();
+        let un_numbered = match base.rsplit_once('.') {
+            Some((rest, tail)) if tail.chars().all(|c| c.is_ascii_digit()) => rest.to_string(),
+            _ => base.clone(),
+        };
+        let prefixes = [base.clone(), base.replace(' ', "_"), un_numbered.clone(), un_numbered.replace(' ', "_")];
+        let entry = by_name.get_mut(mat.as_str()).unwrap();
+        for (idx, (stem, path)) in files.iter().enumerate() {
+            if taken.contains(&idx) {
+                continue;
+            }
+            if !prefixes.iter().any(|p| stem.starts_with(p.as_str())) {
+                continue;
+            }
+            let rest = &stem[prefixes.iter().filter(|p| stem.starts_with(p.as_str())).map(|p| p.len()).max().unwrap_or(0)..];
+            let slot: &mut Option<String> = if rest.contains("normal") {
+                &mut entry.normal
+            } else if rest.contains("rough") {
+                &mut entry.roughness
+            } else if rest.contains("metal") {
+                &mut entry.metalness
+            } else if rest.contains("color") || rest.contains("albedo") || rest.contains("diffuse") || rest.is_empty() || rest.chars().all(|c| !c.is_ascii_alphanumeric()) {
+                &mut entry.color
+            } else {
+                continue;
+            };
+            if slot.is_none() {
+                *slot = Some(path.clone());
+                taken.insert(idx);
+            }
+        }
+    }
+    materials
+        .iter()
+        .filter_map(|m| by_name.remove(m.as_str()))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -616,6 +962,17 @@ pub struct ModelBuildReq {
     pub import_scale: f32,
     /// Where the compiled artifact is cached (absolute .vmdl_c path).
     pub artifact_out: String,
+    /// Custom texture sets - one real pbr.vfx vmat per FBX material name.
+    /// Requires `tools_root` + `materials_out`; mutually exclusive with
+    /// `material_override` (the tab enforces the mode).
+    #[serde(default)]
+    pub materials: Vec<MaterialSpec>,
+    /// Deadlock compile-tools root (the CSDK - has pbr.vfx; CS2 doesn't).
+    #[serde(default)]
+    pub tools_root: Option<String>,
+    /// Cache dir for compiled material files (vmat_c + vtex_c tree).
+    #[serde(default)]
+    pub materials_out: Option<String>,
 }
 
 fn default_import_scale() -> f32 {
@@ -628,6 +985,9 @@ pub struct ModelBuildReport {
     pub ok: bool,
     pub steps: Vec<String>,
     pub artifact: Option<String>,
+    /// Compiled custom-material files to ship with the model (empty when no
+    /// custom textures were requested).
+    pub materials: Vec<MaterialArtifact>,
 }
 
 pub fn build(req: &ModelBuildReq) -> ModelBuildReport {
@@ -653,6 +1013,38 @@ fn build_inner(req: &ModelBuildReq, rep: &mut ModelBuildReport) -> Result<String
     }
     let vmdl_internal = req.vmdl_internal.replace('\\', "/");
     let vmdl_dir_internal = vmdl_internal.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+    let hero_stem = vmdl_internal
+        .rsplit('/')
+        .next()
+        .unwrap_or("model")
+        .trim_end_matches(".vmdl")
+        .to_string();
+
+    // 0. Custom materials first (fail fast - they compile in ~1s via the
+    //    Deadlock CSDK, the model itself takes ~10s via CS2). Specs that only
+    //    map onto existing game vmats need no compile at all.
+    if !req.materials.is_empty() {
+        if req.material_override.is_some() {
+            return Err("custom textures and a game material override can't be combined - pick one".into());
+        }
+        if req.materials.iter().any(|s| s.color.is_some()) {
+            let tools = req
+                .tools_root
+                .as_deref()
+                .ok_or("custom textures need the Deadlock compile tools - set them up in Settings")?;
+            let out_cache = req
+                .materials_out
+                .as_deref()
+                .ok_or("internal: materials_out not set")?;
+            rep.materials = compile_materials(
+                Path::new(tools),
+                &hero_stem,
+                &req.materials,
+                Path::new(out_cache),
+                rep,
+            )?;
+        }
+    }
 
     // 1. Fresh CS2 content stage: the whole decompiled tree (anims included -
     //    the legacy AnimationList compiles from them) + the user's mesh.
@@ -671,11 +1063,27 @@ fn build_inner(req: &ModelBuildReq, rep: &mut ModelBuildReport) -> Result<String
         .map_err(|e| format!("copy mesh into CS2 addon: {e}"))?;
     rep.steps.push(format!("mesh: {mesh_name}"));
 
-    // 2. Generate the vmdl over the staged copy.
+    // 2. Generate the vmdl over the staged copy. Materials mapped to game
+    //    vmats become DefaultMaterialGroup remaps (bare mesh name -> path).
+    let remaps: Vec<(String, String)> = req
+        .materials
+        .iter()
+        .filter_map(|s| {
+            s.game_vmat
+                .as_ref()
+                .map(|v| (format!("{}.vmat", s.name.to_lowercase()), v.clone()))
+        })
+        .collect();
     let vmdl_abs = content.join(vmdl_internal.replace('/', std::path::MAIN_SEPARATOR_STR));
     let src = std::fs::read_to_string(&vmdl_abs).map_err(|e| e.to_string())?;
     let mesh_rel = format!("{vmdl_dir_internal}/{mesh_name}");
-    let generated = generate_vmdl(&src, &mesh_rel, req.material_override.as_deref(), req.import_scale)?;
+    let generated = generate_vmdl(
+        &src,
+        &mesh_rel,
+        req.material_override.as_deref(),
+        &remaps,
+        req.import_scale,
+    )?;
     std::fs::write(&vmdl_abs, generated).map_err(|e| e.to_string())?;
     rep.steps.push(format!(
         "generated vmdl (your mesh at scale {}, the hero's skeleton, cameras and animation refs)",
@@ -753,6 +1161,47 @@ fn build_inner(req: &ModelBuildReq, rep: &mut ModelBuildReport) -> Result<String
     std::fs::copy(&compiled, &req.artifact_out).map_err(|e| e.to_string())?;
     let size = std::fs::metadata(&req.artifact_out).map(|m| m.len()).unwrap_or(0);
     rep.steps.push(format!("artifact cached ({} KB)", size / 1024));
+
+    // 5. Verify material coverage: which vmats does the artifact actually
+    //    reference, and does each have a shipped file (custom vmat), a game
+    //    remap, or a real game path?
+    if let Ok(bytes) = std::fs::read(&req.artifact_out) {
+        let refs = scan_vmdl_material_refs(&bytes);
+        // A bare name that's a suffix of a pathed ref is a scan artifact of
+        // adjacent string encoding (e.g. `_backpack.vmat` inside
+        // `.../haze_backpack.vmat`), not a real material.
+        let bare: Vec<&String> = refs
+            .iter()
+            .filter(|r| !r.contains('/'))
+            .filter(|r| !refs.iter().any(|p| p.contains('/') && p.ends_with(r.as_str())))
+            .collect();
+        if !bare.is_empty() {
+            let mut covered_names: std::collections::HashSet<String> = rep
+                .materials
+                .iter()
+                .filter(|a| a.target_rel.ends_with(".vmat_c"))
+                .map(|a| a.target_rel.trim_end_matches("_c").to_string())
+                .collect();
+            for (from, _) in &remaps {
+                covered_names.insert(from.clone());
+            }
+            let missing: Vec<&str> = bare
+                .iter()
+                .filter(|r| !covered_names.contains(r.as_str()))
+                .map(|r| r.as_str())
+                .collect();
+            let covered = bare.len() - missing.len();
+            if covered > 0 {
+                rep.steps.push(format!("{covered} of {} model material(s) covered", bare.len()));
+            }
+            if !missing.is_empty() {
+                rep.steps.push(format!(
+                    "WARNING: no textures assigned for {} - those parts will be invisible or untextured in game",
+                    missing.join(", ")
+                ));
+            }
+        }
+    }
     Ok(req.artifact_out.clone())
 }
 
@@ -891,7 +1340,8 @@ mod tests {
 
     #[test]
     fn generate_replaces_meshes_lods_and_bodygroups() {
-        let out = generate_vmdl(MINI_VMDL, "models/x/custom.fbx", Some("models/a/b.vmat"), 0.01).unwrap();
+        let out =
+            generate_vmdl(MINI_VMDL, "models/x/custom.fbx", Some("models/a/b.vmat"), &[], 0.01).unwrap();
         assert!(out.contains("import_scale = 0.01"), "scale line present");
         assert!(out.contains("custom.fbx"), "user mesh referenced");
         assert!(!out.contains("x_gun.dmx"), "old meshes gone");
@@ -908,9 +1358,25 @@ mod tests {
 
     #[test]
     fn generate_without_material_override_keeps_materials_out() {
-        let out = generate_vmdl(MINI_VMDL, "m.fbx", None, 1.0).unwrap();
+        let out = generate_vmdl(MINI_VMDL, "m.fbx", None, &[], 1.0).unwrap();
         assert!(!out.contains("MaterialGroupList"));
         assert!(!out.contains("import_scale"), "scale 1.0 emits no line");
+    }
+
+    #[test]
+    fn generate_with_remaps_emits_material_group() {
+        let remaps = vec![
+            ("doorman_door.vmat".to_string(), "models/heroes_wip/doorman/materials/doorman_door.vmat".to_string()),
+            ("eyes.vmat".to_string(), "models/x/eyes.vmat".to_string()),
+        ];
+        let out = generate_vmdl(MINI_VMDL, "m.fbx", None, &remaps, 1.0).unwrap();
+        assert!(out.contains("DefaultMaterialGroup"), "{out}");
+        assert!(out.contains("from = \"doorman_door.vmat\""), "{out}");
+        assert!(out.contains("to = \"models/heroes_wip/doorman/materials/doorman_door.vmat\""));
+        assert!(out.contains("use_global_default = false"));
+        assert!(!out.contains("global_default_material"));
+        assert_eq!(out.matches('[').count(), out.matches(']').count());
+        assert_eq!(out.matches('{').count(), out.matches('}').count());
     }
 
     /// Full pipeline against the real local game + CS2 Workshop Tools:
@@ -938,14 +1404,28 @@ mod tests {
         assert!(ws.bones.len() > 50, "haze has a real skeleton: {}", ws.bones.len());
         assert!(!ws.materials.is_empty());
 
+        // The cube's material maps onto a REAL haze vmat via a
+        // DefaultMaterialGroup remap - the compiled artifact must reference
+        // the game path (proves the remap syntax the compiler accepts).
+        let game_vmat = ws.materials.first().cloned().expect("haze has materials");
         let req = ModelBuildReq {
             cs2_root: cs2.into(),
             workspace_dir: ws.dir.clone(),
             vmdl_internal: "models/heroes_staging/haze/haze.vmdl".into(),
             mesh_file: fbx.into(),
-            material_override: ws.materials.first().cloned(),
+            material_override: None,
             import_scale: 0.01,
             artifact_out: scratch.join("haze.vmdl_c").to_string_lossy().into_owned(),
+            materials: vec![MaterialSpec {
+                name: "eim_test".into(),
+                color: None,
+                normal: None,
+                roughness: None,
+                metalness: None,
+                game_vmat: Some(game_vmat.clone()),
+            }],
+            tools_root: None,
+            materials_out: None,
         };
         let rep = build(&req);
         for s in &rep.steps {
@@ -953,6 +1433,13 @@ mod tests {
         }
         assert!(rep.ok, "{:?}", rep.steps);
         assert!(std::path::Path::new(&req.artifact_out).exists());
+        let bytes = std::fs::read(&req.artifact_out).unwrap();
+        let refs = scan_vmdl_material_refs(&bytes);
+        eprintln!("REFS {refs:?}");
+        assert!(
+            refs.iter().any(|r| r == &game_vmat),
+            "remap target must appear in the artifact: {refs:?}"
+        );
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
@@ -965,6 +1452,216 @@ mod tests {
         assert!(rep.errors.is_empty(), "{rep:?}");
         assert!(rep.info.iter().any(|i| i.contains("1 mesh")), "{rep:?}");
         assert!(rep.info.iter().any(|i| i.contains("1 of 2 hero bones")), "{rep:?}");
+    }
+
+    /// The cube fixture's material name must surface for the My Textures UI.
+    #[test]
+    fn preflight_lists_fbx_materials() {
+        let p = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/eim_testcube.fbx"));
+        let rep = preflight_fbx(p, &["pelvis".into()]).unwrap();
+        assert_eq!(rep.materials, vec!["eim_test".to_string()], "{rep:?}");
+    }
+
+    #[test]
+    fn match_textures_by_prefix_longest_name_wins() {
+        let dir = std::env::temp_dir().join("eim_match_tex_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for f in [
+            "Body_Base_color.png",
+            "Body_Normal.png",
+            "Body5F_Base_color.png",
+            "Body5F_Roughness.png",
+            "Ace Of Spades_back_Metalness.png",
+            "Ace Of Spades_back_Base_color.png",
+            "unrelated.txt",
+        ] {
+            std::fs::write(dir.join(f), b"x").unwrap();
+        }
+        let mats = vec![
+            "Body".to_string(),
+            "Body5F".to_string(),
+            "Ace Of Spades_back".to_string(),
+            "NoTextures".to_string(),
+        ];
+        let out = match_textures(&dir, &mats);
+        let get = |n: &str| out.iter().find(|m| m.name == n).unwrap();
+        // Longest prefix wins: Body5F files never leak into Body.
+        assert!(get("Body").color.as_deref().unwrap().ends_with("Body_Base_color.png"));
+        assert!(get("Body").normal.as_deref().unwrap().ends_with("Body_Normal.png"));
+        assert!(get("Body5F").color.as_deref().unwrap().ends_with("Body5F_Base_color.png"));
+        assert!(get("Body5F").roughness.is_some());
+        assert!(get("Ace Of Spades_back").color.is_some());
+        assert!(get("Ace Of Spades_back").metalness.is_some());
+        assert!(get("NoTextures").color.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn scan_vmdl_refs_finds_bare_and_pathed_materials() {
+        let mut bytes = b"junk\x00eim_test.vmat\x00more\x00models/heroes/haze/materials/haze_body.vmat\x00".to_vec();
+        bytes.extend_from_slice(b"x.vmat_c\x00"); // compiled ref, not a source ref
+        let refs = scan_vmdl_material_refs(&bytes);
+        assert!(refs.contains(&"eim_test.vmat".to_string()), "{refs:?}");
+        assert!(refs.contains(&"models/heroes/haze/materials/haze_body.vmat".to_string()));
+        assert!(!refs.iter().any(|r| r.contains(".vmat_c")), "{refs:?}");
+    }
+
+    /// Custom materials end to end against the real local CSDK: two specs
+    /// (one full PBR set, one color-only) compile into vmat_c + vtex_c files
+    /// cached with VPK-ready rel paths. Ignored: needs this machine's tools.
+    #[test]
+    #[ignore]
+    fn e2e_custom_materials_via_csdk() {
+        let tools = Path::new(r"C:\Users\ethob\Desktop\DeadlockModding\Reduced_CSDK_12");
+        let png = concat!(env!("CARGO_MANIFEST_DIR"), "/icons/icon.png");
+        let out_cache = std::env::temp_dir().join("eim_mats_e2e");
+        let _ = std::fs::remove_dir_all(&out_cache);
+        let specs = vec![
+            MaterialSpec {
+                name: "eim_test".into(),
+                color: Some(png.into()),
+                normal: Some(png.into()),
+                roughness: Some(png.into()),
+                metalness: None,
+                game_vmat: None,
+            },
+            MaterialSpec {
+                name: "Ace Of Spades_back".into(),
+                color: Some(png.into()),
+                normal: None,
+                roughness: None,
+                metalness: None,
+                game_vmat: None,
+            },
+        ];
+        let mut rep = ModelBuildReport::default();
+        let arts = compile_materials(tools, "haze", &specs, &out_cache, &mut rep).expect("compile");
+        for s in &rep.steps {
+            eprintln!("STEP {s}");
+        }
+        for a in &arts {
+            eprintln!("ART {} <- {}", a.target_rel, a.artifact);
+        }
+        // Root-level vmat_c per spec, lowercased, spaces preserved.
+        assert!(arts.iter().any(|a| a.target_rel == "eim_test.vmat_c"));
+        assert!(arts.iter().any(|a| a.target_rel == "ace of spades_back.vmat_c"));
+        // The color texture compiled somewhere under materials/.
+        assert!(arts.iter().any(|a| a.target_rel.starts_with("materials/") && a.target_rel.ends_with(".vtex_c")));
+        assert!(arts.iter().all(|a| Path::new(&a.artifact).exists()));
+        let _ = std::fs::remove_dir_all(&out_cache);
+    }
+
+    /// The whole My Textures pipeline against the user's REAL sona-doorman
+    /// FBX: decompile doorman, preflight lists its materials, every material
+    /// gets a stand-in color texture, model compiles via CS2 + materials via
+    /// CSDK, and the artifact's bare vmat refs are fully covered by the
+    /// shipped vmat_c set. Ignored: needs this machine's installs + the FBX.
+    #[test]
+    #[ignore]
+    fn e2e_doorman_v4_full_build() {
+        let helper = r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\tools\vpk-helper\dist\vpk-helper.exe";
+        let pak = r"D:\SteamLibrary\steamapps\common\Deadlock\game\citadel\pak01_dir.vpk";
+        let cs2 = r"D:\SteamLibrary\steamapps\common\Counter-Strike Global Offensive";
+        let tools = r"C:\Users\ethob\Desktop\DeadlockModding\Reduced_CSDK_12";
+        let fbx = r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\ReferenceFiles\deadlock_moonah_doormanv4Test.fbx";
+        if !Path::new(fbx).exists() {
+            eprintln!("skipping: user FBX not present");
+            return;
+        }
+        let png = concat!(env!("CARGO_MANIFEST_DIR"), "/icons/icon.png");
+        let scratch = std::env::temp_dir().join("eim_doorman_e2e");
+        let _ = std::fs::remove_dir_all(&scratch);
+
+        let ws = workspace(
+            helper,
+            pak,
+            "models/heroes_wip/doorman_v2/doorman.vmdl_c",
+            &scratch.join("ws"),
+            false,
+        )
+        .expect("workspace");
+        let pf = preflight_fbx(Path::new(fbx), &ws.bones).expect("preflight");
+        eprintln!("MATERIALS {:?}", pf.materials);
+        assert!(!pf.materials.is_empty(), "the sona FBX has materials");
+
+        // Kit materials (SourceIO names them after the real vmats) map back
+        // to the game paths; the sona's own materials get stand-in textures.
+        let specs: Vec<MaterialSpec> = pf
+            .materials
+            .iter()
+            .map(|m| {
+                let stem = m.to_lowercase();
+                let game = ws
+                    .materials
+                    .iter()
+                    .find(|p| p.rsplit('/').next().map(|f| f.trim_end_matches(".vmat")) == Some(stem.as_str()));
+                match game {
+                    Some(path) => MaterialSpec {
+                        name: m.clone(),
+                        color: None,
+                        normal: None,
+                        roughness: None,
+                        metalness: None,
+                        game_vmat: Some(path.clone()),
+                    },
+                    None => MaterialSpec {
+                        name: m.clone(),
+                        color: Some(png.into()),
+                        normal: None,
+                        roughness: None,
+                        metalness: None,
+                        game_vmat: None,
+                    },
+                }
+            })
+            .collect();
+        let remapped = specs.iter().filter(|s| s.game_vmat.is_some()).count();
+        eprintln!("SPECS {} textured, {remapped} remapped to game vmats", specs.len() - remapped);
+        let req = ModelBuildReq {
+            cs2_root: cs2.into(),
+            workspace_dir: ws.dir.clone(),
+            vmdl_internal: "models/heroes_wip/doorman_v2/doorman.vmdl".into(),
+            mesh_file: fbx.into(),
+            material_override: None,
+            import_scale: 0.01,
+            artifact_out: scratch.join("doorman.vmdl_c").to_string_lossy().into_owned(),
+            materials: specs.clone(),
+            tools_root: Some(tools.into()),
+            materials_out: Some(scratch.join("doorman_mats").to_string_lossy().into_owned()),
+        };
+        let rep = build(&req);
+        for s in &rep.steps {
+            eprintln!("STEP {s}");
+        }
+        assert!(rep.ok, "{:?}", rep.steps);
+
+        // Every bare material the artifact references is either a shipped
+        // vmat_c or a game-vmat remap.
+        let bytes = std::fs::read(&req.artifact_out).unwrap();
+        let refs = scan_vmdl_material_refs(&bytes);
+        let bare: Vec<&String> = refs
+            .iter()
+            .filter(|r| !r.contains('/'))
+            .filter(|r| !refs.iter().any(|p| p.contains('/') && p.ends_with(r.as_str())))
+            .collect();
+        eprintln!("BARE REFS {bare:?}");
+        eprintln!("ALL REFS {refs:?}");
+        let mut covered: std::collections::HashSet<String> = rep
+            .materials
+            .iter()
+            .filter(|a| a.target_rel.ends_with(".vmat_c"))
+            .map(|a| a.target_rel.trim_end_matches("_c").to_string())
+            .collect();
+        for s in &specs {
+            if s.game_vmat.is_some() {
+                covered.insert(format!("{}.vmat", s.name.to_lowercase()));
+            }
+        }
+        for r in &bare {
+            assert!(covered.contains(r.as_str()), "no coverage for {r}: {covered:?}");
+        }
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 
     /// Parses a real Blender FBX when one is around (the Twingo export);

@@ -113,6 +113,7 @@ pub fn run() {
             commands::model_workspace,
             commands::model_preflight,
             commands::model_build,
+            commands::match_material_textures,
             commands::probe_audio,
             commands::process_audio,
             commands::pack_vpk,

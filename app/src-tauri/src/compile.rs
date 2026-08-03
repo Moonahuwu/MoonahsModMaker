@@ -588,6 +588,19 @@ pub struct ModelOverrideCompile {
     pub artifact: String,
     /// Friendly label for report steps.
     pub label: String,
+    /// Custom-material files that ship WITH the model (compiled pbr.vfx
+    /// vmat_c + their generated vtex_c) - staged at their own VPK paths.
+    #[serde(default)]
+    pub materials: Vec<ModelMaterialFile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelMaterialFile {
+    /// VPK-internal path (root-level `<name>.vmat_c` or a vtex under it).
+    pub target_rel: String,
+    /// Absolute path of the cached compiled file.
+    pub artifact: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -3982,23 +3995,27 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                 )
             })
             .collect();
-        // Model artifacts are rebuilt IN PLACE (same cache path) by the Model
-        // Replacement tab, so the config alone can't see a rebuild - fold the
-        // artifact files' len+mtime into the stamp.
+        // Model artifacts (and their custom-material files) are rebuilt IN
+        // PLACE (same cache paths) by the Model Replacement tab, so the config
+        // alone can't see a rebuild - fold each file's len+mtime into the stamp.
+        let file_ident = |path: &str| {
+            let meta = std::fs::metadata(path).ok();
+            format!(
+                "{}|{}|{};",
+                path,
+                meta.as_ref().map(|x| x.len()).unwrap_or(0),
+                meta.and_then(|x| x.modified().ok())
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0)
+            )
+        };
         let models_ident: String = cfg
             .model_overrides
             .iter()
-            .map(|m| {
-                let meta = std::fs::metadata(&m.artifact).ok();
-                format!(
-                    "{}|{}|{};",
-                    m.artifact,
-                    meta.as_ref().map(|x| x.len()).unwrap_or(0),
-                    meta.and_then(|x| x.modified().ok())
-                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0)
-                )
+            .flat_map(|m| {
+                std::iter::once(file_ident(&m.artifact))
+                    .chain(m.materials.iter().map(|f| file_ident(&f.artifact)))
             })
             .collect();
         let build_stamp = fingerprint(&format!(
@@ -4312,6 +4329,35 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                     );
                 }
                 Err(e) => report.soft_fail(format!("stage model: {}", ov.label), e.to_string()),
+            }
+            // The model's custom materials ride along at their own paths
+            // (vmat_c at the VPK root named after the Blender materials, plus
+            // the generated textures they reference).
+            let mut mats = 0usize;
+            for f in &ov.materials {
+                let msrc = Path::new(&f.artifact);
+                if !msrc.exists() {
+                    report.soft_fail(
+                        format!("stage model material: {}", f.target_rel),
+                        format!("file missing: {} - rebuild in Model Replacement", f.artifact),
+                    );
+                    continue;
+                }
+                match copy_into(msrc, &stage, &f.target_rel) {
+                    Ok(_) => {
+                        staged += 1;
+                        mats += 1;
+                    }
+                    Err(e) => {
+                        report.soft_fail(format!("stage model material: {}", f.target_rel), e.to_string())
+                    }
+                }
+            }
+            if mats > 0 {
+                report.ok_step(
+                    format!("[{}] stage model materials: {}", v.name, ov.label),
+                    format!("{mats} file(s)"),
+                );
             }
         }
         // Stage the gameplay-config override (recompiled abilities.vdata_c).

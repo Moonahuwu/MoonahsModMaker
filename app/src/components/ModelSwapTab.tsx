@@ -4,10 +4,12 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { appDataDir, join } from "@tauri-apps/api/path";
 import {
   heroModelTarget,
+  matchMaterialTextures,
   modelBuild,
   modelPreflight,
   modelWorkspace,
   type HeroPortrait,
+  type MatchedMaterial,
   type ModelPreflight,
   type ModelWorkspace,
 } from "../lib/api";
@@ -17,16 +19,20 @@ import type { Settings } from "../lib/settings";
 import { useToast } from "./Toaster";
 
 const MESH_FILTERS = [{ name: "Model (Blender export)", extensions: ["fbx", "dmx"] }];
+const IMAGE_FILTERS = [{ name: "Texture image", extensions: ["png", "jpg", "jpeg", "tga"] }];
 
 /** The community checklist, shown next to the Blender kit. */
 const KIT_RULES = [
   "Import the kit's DMX meshes with SourceIO, or model over them",
   "Rig your mesh to the hero's armature bones (names must match)",
   "Vertex groups not named after a bone must be deleted",
-  "No names ending in .001 and no spaces in material names",
+  "Avoid .001-style name suffixes and spaces in material names",
   "Select all, then Object > Apply > All Transforms before export",
   "Export as FBX (or DMX Binary 9 / Model22 via Blender Source 2 Tools)",
+  "Textures: keep files named like the material (Body_Base_color.png, Body_Normal.png)",
 ];
+
+type MatMode = "textures" | "game";
 
 /** Model Replacement: put a custom Blender model on a hero. The heavy build
  *  runs here (CS2 Workshop Tools compile, cached artifact); the normal
@@ -52,11 +58,15 @@ export function ModelSwapTab({
   const [preflight, setPreflight] = useState<ModelPreflight | null>(null);
   const [material, setMaterial] = useState<string>("");
   const [importScale, setImportScale] = useState<string>("1");
+  const [matMode, setMatMode] = useState<MatMode>("textures");
+  const [texSpecs, setTexSpecs] = useState<MatchedMaterial[]>([]);
+  const [matching, setMatching] = useState(false);
   const [building, setBuilding] = useState(false);
   const [buildSteps, setBuildSteps] = useState<string[]>([]);
   const [detecting, setDetecting] = useState(false);
 
   const cs2Ok = useMemo(() => settings.cs2Root.trim().length > 0, [settings.cs2Root]);
+  const toolsOk = useMemo(() => settings.csdkRoot.trim().length > 0, [settings.csdkRoot]);
 
   useEffect(() => {
     if (!settings.vpkHelperPath || !settings.deadlockPak) return;
@@ -74,13 +84,14 @@ export function ModelSwapTab({
     };
   }, [settings.vpkHelperPath, settings.deadlockPak, settings.showExperimentalHeroes]);
 
-  async function prepareKit(codename: string) {
+  async function prepareKit(codename: string): Promise<ModelWorkspace | null> {
     setHero(codename);
     setWs(null);
     setPreflight(null);
     setMeshFile("");
     setMaterial("");
-    if (!codename) return;
+    setTexSpecs([]);
+    if (!codename) return null;
     setWsBusy(true);
     try {
       const target = await heroModelTarget(
@@ -94,10 +105,64 @@ export function ModelSwapTab({
       // A real game material by default: Blender material names that don't
       // exist as game vmats render NOTHING (red bounds box in game).
       setMaterial(w.materials[0] ?? "");
+      return w;
     } catch (e) {
       push("error", `Couldn't prepare the hero kit: ${e}`);
+      return null;
     } finally {
       setWsBusy(false);
+    }
+  }
+
+  /** Preflight + per-material texture rows for a chosen mesh file. */
+  async function analyzeMesh(sel: string, w: ModelWorkspace, keepSpecs?: MatchedMaterial[]) {
+    setMeshFile(sel);
+    setPreflight(null);
+    setTexSpecs([]);
+    // Blender's default FBX export is in centimeters: everything imports x100
+    // without this. DMX via Blender Source 2 Tools follows the 39.37 flow = 1:1.
+    setImportScale(sel.toLowerCase().endsWith(".fbx") ? "0.01" : "1");
+    if (sel.toLowerCase().endsWith(".fbx")) {
+      try {
+        const pf = await modelPreflight(sel, w.bones);
+        setPreflight(pf);
+        // Kit meshes kept from the decompile carry materials named after the
+        // hero's real vmats (SourceIO does that) - map those back to the
+        // game paths automatically so only the user's own materials need
+        // texture files.
+        const gameByStem = new Map(
+          w.materials.map((p) => [
+            (p.split("/").pop() ?? p).replace(/\.vmat$/i, "").toLowerCase(),
+            p,
+          ]),
+        );
+        setTexSpecs(
+          pf.materials.map((name) => {
+            const kept = keepSpecs?.find((s) => s.name === name);
+            if (kept) return kept;
+            const game = gameByStem.get(name.toLowerCase()) ?? null;
+            return {
+              name,
+              color: null,
+              normal: null,
+              roughness: null,
+              metalness: null,
+              gameVmat: game,
+            };
+          }),
+        );
+        if (pf.materials.length === 0) setMatMode("game");
+      } catch (e) {
+        push("error", `Preflight failed: ${e}`);
+      }
+    } else {
+      setPreflight({
+        errors: [],
+        warnings: [],
+        info: ["DMX file: preflight checks are FBX-only, compiling directly"],
+        materials: [],
+      });
+      setMatMode("game");
     }
   }
 
@@ -109,42 +174,104 @@ export function ModelSwapTab({
       title: "Your exported model (FBX or DMX)",
     });
     if (typeof sel !== "string") return;
-    setMeshFile(sel);
-    setPreflight(null);
-    // Blender's default FBX export is in centimeters: everything imports x100
-    // without this. DMX via Blender Source 2 Tools follows the 39.37 flow = 1:1.
-    setImportScale(sel.toLowerCase().endsWith(".fbx") ? "0.01" : "1");
-    if (sel.toLowerCase().endsWith(".fbx")) {
-      try {
-        setPreflight(await modelPreflight(sel, ws.bones));
-      } catch (e) {
-        push("error", `Preflight failed: ${e}`);
-      }
+    await analyzeMesh(sel, ws);
+  }
+
+  /** Rebuild: re-open the kit and prefill the mesh + texture sets from the
+   *  saved override so one click lands back at the Build button. */
+  async function startRebuild(o: ModelOverride) {
+    const w = await prepareKit(o.hero);
+    if (!w) return;
+    if (o.materialSpecs && o.materialSpecs.length > 0) {
+      setMatMode("textures");
+      await analyzeMesh(o.meshFile, w, o.materialSpecs);
     } else {
-      setPreflight({
-        errors: [],
-        warnings: [],
-        info: ["DMX file: preflight checks are FBX-only, compiling directly"],
-      });
+      setMatMode("game");
+      await analyzeMesh(o.meshFile, w);
+      setMaterial(o.materialOverride ?? "");
     }
+  }
+
+  /** Point at a folder; texture files auto-match material names by prefix. */
+  async function pickTextureFolder() {
+    if (!preflight || preflight.materials.length === 0) return;
+    const sel = await openDialog({ directory: true, title: "Your textures folder" });
+    if (typeof sel !== "string") return;
+    setMatching(true);
+    try {
+      const matched = await matchMaterialTextures(sel, preflight.materials);
+      // Folder matches fill gaps; hand-picked textures and game-material
+      // mappings stay put (a texture match beats an auto game mapping).
+      setTexSpecs((prev) =>
+        matched.map((m) => {
+          const cur = prev.find((p) => p.name === m.name);
+          return {
+            name: m.name,
+            color: cur?.color ?? m.color,
+            normal: cur?.normal ?? m.normal,
+            roughness: cur?.roughness ?? m.roughness,
+            metalness: cur?.metalness ?? m.metalness,
+            gameVmat: (cur?.color ?? m.color) ? null : (cur?.gameVmat ?? null),
+          };
+        }),
+      );
+      const found = matched.filter((m) => m.color).length;
+      push(
+        found > 0 ? "success" : "info",
+        `${found} of ${matched.length} materials matched a color texture`,
+      );
+    } catch (e) {
+      push("error", `Texture matching failed: ${e}`);
+    } finally {
+      setMatching(false);
+    }
+  }
+
+  async function pickColorFor(name: string) {
+    const sel = await openDialog({
+      multiple: false,
+      filters: IMAGE_FILTERS,
+      title: `Color texture for ${name}`,
+    });
+    if (typeof sel !== "string") return;
+    setTexSpecs((prev) =>
+      prev.map((s) => (s.name === name ? { ...s, color: sel, gameVmat: null } : s)),
+    );
   }
 
   async function build() {
     if (!ws || !meshFile || !hero) return;
+    const useTextures = matMode === "textures";
+    const specs = useTextures ? texSpecs.filter((s) => s.color || s.gameVmat) : [];
+    if (useTextures && specs.length === 0) {
+      push("error", "Assign a texture or game material to at least one material first");
+      return;
+    }
     setBuilding(true);
     setBuildSteps([]);
     try {
       const cacheDir = await join(await appDataDir(), "model_cache");
       const artifactOut = await join(cacheDir, `${hero}.vmdl_c`);
+      const materialsOut = await join(cacheDir, `${hero}_mats`);
       const scale = Number(importScale) || 1;
       const rep = await modelBuild({
         cs2Root: settings.cs2Root,
         workspaceDir: ws.dir,
         vmdlInternal: wsTarget,
         meshFile,
-        materialOverride: material || null,
+        materialOverride: useTextures ? null : material || null,
         importScale: scale,
         artifactOut,
+        materials: specs.map((s) => ({
+          name: s.name,
+          color: s.color,
+          normal: s.normal,
+          roughness: s.roughness,
+          metalness: s.metalness,
+          gameVmat: s.gameVmat ?? null,
+        })),
+        toolsRoot: useTextures ? settings.csdkRoot : null,
+        materialsOut: useTextures ? materialsOut : null,
       });
       setBuildSteps(rep.steps);
       if (rep.ok && rep.artifact) {
@@ -156,11 +283,35 @@ export function ModelSwapTab({
           targetPath: `${wsTarget}_c`,
           artifact: rep.artifact,
           meshFile,
-          materialOverride: material || null,
+          materialOverride: useTextures ? null : material || null,
+          materials: rep.materials,
+          materialSpecs: useTextures ? specs : undefined,
           enabled: true,
         };
         onChange([...overrides.filter((o) => o.id !== next.id), next]);
         push("success", `${label} model built - Compile & Install ships it`);
+        // Bare material names ship at the VPK root - two heroes using the
+        // same Blender material name would overwrite each other's textures.
+        const clash = [
+          ...new Set(
+            overrides
+              .filter((o) => o.id !== next.id && o.enabled !== false)
+              .flatMap((o) => (o.materials ?? []).map((m) => m.targetRel))
+              .filter(
+                (rel) =>
+                  rel.endsWith(".vmat_c") &&
+                  rep.materials.some((m) => m.targetRel === rel),
+              ),
+          ),
+        ];
+        if (clash.length > 0) {
+          push(
+            "info",
+            `Heads up: another model swap ships the same material name(s): ${clash
+              .map((c) => c.replace(/\.vmat_c$/, ""))
+              .join(", ")} - rename the Blender material on one of them if a texture comes out wrong`,
+          );
+        }
       } else {
         push("error", "Model build failed - see the steps below");
       }
@@ -172,6 +323,8 @@ export function ModelSwapTab({
   }
 
   const errorCount = preflight?.errors.length ?? 0;
+  const texAssigned = texSpecs.filter((s) => s.color || s.gameVmat).length;
+  const texWithArt = texSpecs.filter((s) => s.color).length;
 
   return (
     <div className="flex max-w-3xl flex-col gap-4">
@@ -224,8 +377,13 @@ export function ModelSwapTab({
                     {o.meshFile.split(/[\\/]/).pop()}
                   </span>
                 </label>
+                {(o.materials?.length ?? 0) > 0 && (
+                  <span className="shrink-0 rounded bg-rose-400/10 px-1.5 py-0.5 text-[10px] text-rose-200/80">
+                    {o.materialSpecs?.length ?? 0} textured
+                  </span>
+                )}
                 <button
-                  onClick={() => void prepareKit(o.hero)}
+                  onClick={() => void startRebuild(o)}
                   className="shrink-0 rounded border border-zinc-700 px-1.5 py-0.5 text-[10px] text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-200"
                 >
                   Rebuild…
@@ -327,25 +485,180 @@ export function ModelSwapTab({
       {ws && meshFile && (
         <section className="rounded-xl border border-zinc-800 bg-zinc-950/50 p-4">
           <h3 className="text-[11px] font-bold uppercase tracking-widest text-zinc-400">
-            3 - Material and build
+            3 - Materials and build
           </h3>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <select
-              value={material}
-              onChange={(e) => setMaterial(e.target.value)}
-              title="One game material applied to the whole model, or keep the material names from Blender (checkerboards unless they match real game materials)"
-              className="w-72 rounded-md border border-zinc-700/80 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-200 outline-none transition focus:border-rose-400/70"
-            >
-              {ws.materials.map((m) => (
-                <option key={m} value={m}>
-                  {m.split("/").pop()} ({m})
-                </option>
+          {preflight && preflight.materials.length > 0 && (
+            <div className="mt-2 flex items-center gap-1 text-[11px]">
+              {(
+                [
+                  ["textures", "My textures"],
+                  ["game", "One game material"],
+                ] as [MatMode, string][]
+              ).map(([mode, label]) => (
+                <button
+                  key={mode}
+                  onClick={() => setMatMode(mode)}
+                  className={`rounded-md border px-2.5 py-1 transition ${
+                    matMode === mode
+                      ? "border-rose-400/50 bg-rose-400/10 text-rose-200"
+                      : "border-zinc-700 text-zinc-400 hover:bg-zinc-800"
+                  }`}
+                >
+                  {label}
+                </button>
               ))}
-              <option value="">
-                Advanced: keep my Blender material names (must match real game vmats, else
-                nothing renders)
-              </option>
-            </select>
+              <span className="ml-1 text-zinc-600">
+                {matMode === "textures"
+                  ? "your PNGs become real game materials, one per Blender material"
+                  : "one existing hero material stretched over the whole model"}
+              </span>
+            </div>
+          )}
+
+          {matMode === "textures" && preflight && preflight.materials.length > 0 && (
+            <div className="mt-2 flex flex-col gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={() => void pickTextureFolder()}
+                  disabled={matching}
+                  className="rounded-md border border-rose-400/40 bg-rose-400/10 px-3 py-1.5 text-xs font-medium text-rose-200 transition hover:bg-rose-400/20 disabled:opacity-50"
+                >
+                  {matching ? "Matching…" : "Pick your textures folder…"}
+                </button>
+                <span className="text-[11px] text-zinc-500">
+                  files auto-match by name, e.g. Body_Base_color.png / Body_Normal.png
+                </span>
+              </div>
+              <div className="flex max-h-64 flex-col gap-1 overflow-y-auto pr-1">
+                {texSpecs.map((s) => (
+                  <div key={s.name} className="flex items-center gap-2 text-[11px]">
+                    <span
+                      className={`w-44 shrink-0 truncate ${s.color || s.gameVmat ? "text-zinc-200" : "text-zinc-500"}`}
+                      title={s.name}
+                    >
+                      {s.name}
+                    </span>
+                    {s.color ? (
+                      <>
+                        <span className="truncate text-emerald-300/90" title={s.color}>
+                          {s.color.split(/[\\/]/).pop()}
+                        </span>
+                        {([
+                          ["normal", s.normal],
+                          ["rough", s.roughness],
+                          ["metal", s.metalness],
+                        ] as const)
+                          .filter(([, v]) => v)
+                          .map(([k]) => (
+                            <span
+                              key={k}
+                              className="shrink-0 rounded bg-zinc-800 px-1 py-0.5 text-[9px] uppercase tracking-wide text-zinc-400"
+                            >
+                              {k}
+                            </span>
+                          ))}
+                        <button
+                          onClick={() =>
+                            setTexSpecs((prev) =>
+                              prev.map((x) =>
+                                x.name === s.name
+                                  ? { ...x, color: null, normal: null, roughness: null, metalness: null }
+                                  : x,
+                              ),
+                            )
+                          }
+                          className="shrink-0 rounded px-1 text-zinc-600 transition hover:bg-zinc-800 hover:text-red-300"
+                          title="Clear this material's textures"
+                        >
+                          ✕
+                        </button>
+                      </>
+                    ) : s.gameVmat ? (
+                      <>
+                        <span
+                          className="truncate text-sky-300/90"
+                          title={`Uses the game's material: ${s.gameVmat}`}
+                        >
+                          game: {s.gameVmat.split("/").pop()}
+                        </span>
+                        <button
+                          onClick={() =>
+                            setTexSpecs((prev) =>
+                              prev.map((x) => (x.name === s.name ? { ...x, gameVmat: null } : x)),
+                            )
+                          }
+                          className="shrink-0 rounded px-1 text-zinc-600 transition hover:bg-zinc-800 hover:text-red-300"
+                          title="Clear the game-material mapping"
+                        >
+                          ✕
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => void pickColorFor(s.name)}
+                          className="rounded border border-zinc-700 px-1.5 py-0.5 text-[10px] text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-200"
+                        >
+                          Pick color texture…
+                        </button>
+                        <select
+                          value=""
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            if (!v) return;
+                            setTexSpecs((prev) =>
+                              prev.map((x) => (x.name === s.name ? { ...x, gameVmat: v } : x)),
+                            );
+                          }}
+                          title="Or map this material onto one of the hero's existing game materials"
+                          className="w-40 rounded border border-zinc-700/80 bg-zinc-950 px-1 py-0.5 text-[10px] text-zinc-400 outline-none"
+                        >
+                          <option value="">or use a game material…</option>
+                          {ws.materials.map((m) => (
+                            <option key={m} value={m}>
+                              {m.split("/").pop()}
+                            </option>
+                          ))}
+                        </select>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+              {texAssigned > 0 && texAssigned < texSpecs.length && (
+                <p className="text-[10px] text-amber-300/80">
+                  {texSpecs.length - texAssigned} material(s) still bare - those parts will be
+                  invisible or untextured in game
+                </p>
+              )}
+              {!toolsOk && texWithArt > 0 && (
+                <p className="text-[10px] text-amber-300/80">
+                  My textures mode needs the Deadlock compile tools - set them up in Settings
+                  first
+                </p>
+              )}
+            </div>
+          )}
+
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {matMode === "game" && (
+              <select
+                value={material}
+                onChange={(e) => setMaterial(e.target.value)}
+                title="One game material applied to the whole model, or keep the material names from Blender (checkerboards unless they match real game materials)"
+                className="w-72 rounded-md border border-zinc-700/80 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-200 outline-none transition focus:border-rose-400/70"
+              >
+                {ws.materials.map((m) => (
+                  <option key={m} value={m}>
+                    {m.split("/").pop()} ({m})
+                  </option>
+                ))}
+                <option value="">
+                  Advanced: keep my Blender material names (must match real game vmats, else
+                  nothing renders)
+                </option>
+              </select>
+            )}
             <label className="flex items-center gap-1.5 text-[11px] text-zinc-400">
               Scale
               <input
@@ -358,13 +671,20 @@ export function ModelSwapTab({
             </label>
             <button
               onClick={() => void build()}
-              disabled={building || !cs2Ok || errorCount > 0}
+              disabled={
+                building ||
+                !cs2Ok ||
+                errorCount > 0 ||
+                (matMode === "textures" && (texAssigned === 0 || (texWithArt > 0 && !toolsOk)))
+              }
               title={
                 errorCount > 0
                   ? "Fix the preflight errors first"
                   : !cs2Ok
                     ? "CS2 Workshop Tools required"
-                    : "Compile the model via CS2 Workshop Tools"
+                    : matMode === "textures" && texAssigned === 0
+                      ? "Assign a texture or game material to at least one material first"
+                      : "Compile the model via CS2 Workshop Tools"
               }
               className="rounded-md border border-rose-400/40 bg-rose-400/10 px-3 py-1.5 text-xs font-medium text-rose-200 transition hover:bg-rose-400/20 disabled:opacity-50"
             >
@@ -372,6 +692,11 @@ export function ModelSwapTab({
             </button>
             {errorCount > 0 && (
               <span className="text-[11px] text-red-300">fix the {errorCount} error(s) above first</span>
+            )}
+            {building && (
+              <span className="text-[11px] text-zinc-500">
+                a simple model takes ~15s, a big multi-mesh one can take 10+ minutes - hang tight
+              </span>
             )}
           </div>
           {buildSteps.length > 0 && (

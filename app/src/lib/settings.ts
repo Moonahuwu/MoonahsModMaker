@@ -691,7 +691,12 @@ export function buildCompileConfig(
     modTextures: modTexCompiles,
     modelOverrides: modelOverrides
       .filter((m) => m.enabled !== false && m.artifact)
-      .map((m) => ({ targetRel: m.targetPath, artifact: m.artifact, label: m.label })),
+      .map((m) => ({
+        targetRel: m.targetPath,
+        artifact: m.artifact,
+        label: m.label,
+        materials: m.materials ?? [],
+      })),
     // Entries without media can't compile — drop them rather than failing.
     // Sounds/soundIds map to the shared library shape the backend expects.
     digimod: digimod

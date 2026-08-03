@@ -162,6 +162,8 @@ export interface ModelOverrideCompile {
   targetRel: string;
   artifact: string;
   label: string;
+  /** Custom-material files staged with the model at their own VPK paths. */
+  materials?: { targetRel: string; artifact: string }[];
 }
 
 /** List the compiled textures inside a mod vpk (panorama images excluded -
@@ -664,12 +666,45 @@ export interface ModelPreflight {
   errors: string[];
   warnings: string[];
   info: string[];
+  /** FBX material names, verbatim - drives the "My textures" assignment UI. */
+  materials: string[];
+}
+
+export interface ModelMaterialArtifact {
+  /** VPK-internal path (root-level vmat_c named after the Blender material, or a generated vtex under it). */
+  targetRel: string;
+  /** Cached compiled file, absolute. */
+  artifact: string;
 }
 
 export interface ModelBuildReport {
   ok: boolean;
   steps: string[];
   artifact: string | null;
+  /** Compiled custom-material files to ship with the model. */
+  materials: ModelMaterialArtifact[];
+}
+
+/** One FBX material's treatment: a texture set (color at minimum) OR a
+ *  mapping onto an existing game vmat path (kit meshes kept from the
+ *  decompile - SourceIO names their materials after the real vmats). */
+export interface ModelMaterialSpec {
+  name: string;
+  color: string | null;
+  normal: string | null;
+  roughness: string | null;
+  metalness: string | null;
+  gameVmat?: string | null;
+}
+
+/** Auto-matched texture set per material name (color may be missing). */
+export interface MatchedMaterial {
+  name: string;
+  color: string | null;
+  normal: string | null;
+  roughness: string | null;
+  metalness: string | null;
+  gameVmat?: string | null;
 }
 
 /** The hero's vanilla vmdl path from heroes.vdata (no `_c`). */
@@ -706,8 +741,22 @@ export function modelBuild(req: {
   /** Blender default FBX exports land x100 - 0.01 corrects; DMX is 1.0. */
   importScale: number;
   artifactOut: string;
+  /** Custom texture sets (one pbr.vfx vmat per FBX material). Needs toolsRoot + materialsOut. */
+  materials?: ModelMaterialSpec[];
+  /** Deadlock compile-tools root (CSDK) - only it has the pbr.vfx shader. */
+  toolsRoot?: string | null;
+  /** Cache dir for the compiled material files. */
+  materialsOut?: string | null;
 }): Promise<ModelBuildReport> {
   return invoke("model_build", { req });
+}
+
+/** Match texture files in a folder to FBX material names by filename prefix. */
+export function matchMaterialTextures(
+  folder: string,
+  materials: string[],
+): Promise<MatchedMaterial[]> {
+  return invoke("match_material_textures", { folder, materials });
 }
 
 /** Best-effort auto-detection of tool/game paths (Steam, CSDK, ffmpeg, helper). */
