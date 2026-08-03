@@ -21,9 +21,11 @@ export function VoicelinesPanel({
   onOpen,
   onBulkReplace,
   onBulkClear,
+  onBulkSilence,
   renderSound,
   modifiedFilter,
   hasContent,
+  isSilenced,
 }: {
   heroName: string;
   accent: string;
@@ -40,12 +42,17 @@ export function VoicelinesPanel({
   /** Bulk revert: remove custom audio from every given voiceline (back to
    *  the stock clip). Resolves true when applied. */
   onBulkClear: (vls: VoiceLine[]) => Promise<boolean>;
+  /** Bulk silence: remove the STOCK audio too - the lines play nothing in
+   *  game (Remove audio reverts them). Resolves true when applied. */
+  onBulkSilence?: (vls: VoiceLine[]) => Promise<boolean>;
   /** Render the editor panel for an opened voiceline. */
   renderSound: (sound: { eventName: string; label: string }) => React.ReactNode;
   /** "Modified only": when set, list only voicelines this returns true for. */
   modifiedFilter?: ((eventName: string) => boolean) | null;
   /** True if the voiceline already has your custom audio (row marker). */
   hasContent?: (eventName: string) => boolean;
+  /** True if the voiceline's stock audio is removed (silenced row marker). */
+  isSilenced?: (eventName: string) => boolean;
 }) {
   const [query, setQuery] = useState("");
   const [limit, setLimit] = useState(PAGE);
@@ -122,13 +129,14 @@ export function VoicelinesPanel({
     });
   }
 
-  async function applySelected(action: "replace" | "clear") {
+  async function applySelected(action: "replace" | "clear" | "silence") {
     const chosen = (voicelines ?? []).filter((v) => selected.has(v.eventName));
     if (chosen.length === 0) return;
     setApplying(true);
     try {
-      const run = action === "replace" ? onBulkReplace : onBulkClear;
-      if (await run(chosen)) setSelected(new Set());
+      const run =
+        action === "replace" ? onBulkReplace : action === "silence" ? onBulkSilence : onBulkClear;
+      if (run && (await run(chosen))) setSelected(new Set());
     } finally {
       setApplying(false);
     }
@@ -217,11 +225,21 @@ export function VoicelinesPanel({
           <span className="text-[11px] text-zinc-600">
             tip: search first, then Select all - e.g. every "laugh" line at once
           </span>
+          {onBulkSilence && (
+            <button
+              onClick={() => void applySelected("silence")}
+              disabled={selected.size === 0 || applying}
+              title="Remove the stock audio too - the selected lines play NOTHING in game (Remove audio brings them back)"
+              className="ml-auto rounded-md border border-zinc-600 px-3 py-1 text-xs font-medium text-zinc-300 transition hover:bg-zinc-700/40 disabled:opacity-40"
+            >
+              Silence{selected.size ? ` ${selected.size}` : ""}
+            </button>
+          )}
           <button
             onClick={() => void applySelected("clear")}
             disabled={selected.size === 0 || applying}
-            title="Remove your custom audio from the selected lines - they go back to the stock clips"
-            className="ml-auto rounded-md border border-red-500/40 px-3 py-1 text-xs font-medium text-red-300 transition hover:bg-red-500/10 disabled:opacity-40"
+            title="Remove your custom audio (and any silencing) from the selected lines - they go back to the stock clips"
+            className={`rounded-md border border-red-500/40 px-3 py-1 text-xs font-medium text-red-300 transition hover:bg-red-500/10 disabled:opacity-40${onBulkSilence ? "" : " ml-auto"}`}
           >
             Remove audio{selected.size ? ` from ${selected.size}` : ""}
           </button>
@@ -256,6 +274,7 @@ export function VoicelinesPanel({
         {shown.map((vl, idx) => {
           const isOpen = expanded.has(vl.eventName);
           const modded = hasContent?.(vl.eventName) ?? false;
+          const silenced = isSilenced?.(vl.eventName) ?? false;
           const isSel = selected.has(vl.eventName);
           return (
             <div
@@ -303,7 +322,18 @@ export function VoicelinesPanel({
                     style={{ backgroundColor: accent }}
                   />
                 )}
-                <span className="min-w-0 flex-1 truncate text-sm text-zinc-200" title={vl.eventName}>
+                {silenced && !modded && (
+                  <span
+                    title="Silenced - the stock audio is removed, this line plays nothing in game"
+                    className="shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-zinc-400"
+                  >
+                    silenced
+                  </span>
+                )}
+                <span
+                  className={`min-w-0 flex-1 truncate text-sm ${silenced && !modded ? "text-zinc-500 line-through decoration-zinc-600" : "text-zinc-200"}`}
+                  title={vl.eventName}
+                >
                   {vl.label}
                 </span>
                 {!selectMode && (

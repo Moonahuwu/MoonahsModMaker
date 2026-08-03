@@ -4335,6 +4335,66 @@ export default function App() {
     }
   }
 
+  /** Bulk silence: REMOVE the stock audio from many voicelines at once - the
+   *  lines play nothing in game (any custom audio goes too). The kv3 merge
+   *  deletes the stock refs from the shared events file; "Remove audio"
+   *  reverts everything back to stock. */
+  async function bulkSilenceVoicelines(vls: VoiceLine[]): Promise<boolean> {
+    const codename = selectedHero;
+    const prev = projectRef.current;
+    if (!codename || !prev || vls.length === 0) return false;
+    const withStock = vls.filter((v): v is VoiceLine & { stockRef: string } => !!v.stockRef);
+    if (withStock.length === 0) {
+      push("info", "The selected lines have no stock clip to remove");
+      return true;
+    }
+    try {
+      // Silencing edits the shared VO events file - its vanilla copy must
+      // exist in the merge base.
+      await ensureVanillaFiles([...new Set(withStock.map((v) => v.eventsRelpath))]);
+      const byId = new Map(withStock.map((v) => [heroAbilSlotId(codename, v.eventName), v]));
+      const have = new Set(prev.events.map((e) => e.id));
+      const newSlots: EventProject[] = [...byId.entries()]
+        .filter(([id]) => !have.has(id))
+        .map(([id, v]) => ({
+          id,
+          group: "heroes",
+          side: v.label,
+          eventName: v.eventName,
+          arrayKey: v.arrayKey,
+          stockEntry: "",
+          vsndDurationMode: "auto" as const,
+          vsndDurationManual: null,
+          songs: [],
+          previousOwnedNames: [],
+          excludedEntries: [],
+          removedEntries: [],
+          adopted: [],
+          eventsRelpath: v.eventsRelpath,
+        }));
+      const applyTo = (e: EventProject): EventProject => {
+        const v = byId.get(e.id);
+        if (!v) return e;
+        return {
+          ...e,
+          songs: [],
+          excludedEntries: [],
+          removedEntries: e.removedEntries.includes(v.stockRef)
+            ? e.removedEntries
+            : [...e.removedEntries, v.stockRef],
+        };
+      };
+      const next = { ...prev, events: [...prev.events.map(applyTo), ...newSlots.map(applyTo)] };
+      setProject(next);
+      void load(next);
+      push("success", `Silenced ${withStock.length} voiceline(s) - they play nothing in game now`);
+      return true;
+    } catch (e) {
+      push("error", `Silencing failed: ${e}`);
+      return false;
+    }
+  }
+
   /** Bulk revert: strip the custom audio (and the stock-clip exclusions that
    *  came with it) from many voicelines at once - the lines fall back to the
    *  stock clips. Emptied slots get pruned on the next launch. */
@@ -5896,11 +5956,14 @@ export default function App() {
               onOpen={(vl) => void openVoiceline(vl)}
               onBulkReplace={bulkReplaceVoicelines}
               onBulkClear={bulkClearVoicelines}
+              onBulkSilence={bulkSilenceVoicelines}
               renderSound={renderSound}
               // Highlight only lines with actual custom AUDIO. slotHasContent
               // also counts exclusion-only slots (e.g. the disabled stock ref
               // left behind after deleting a track), which read as phantom
-              // edits in a 1400-line list.
+              // edits in a 1400-line list. Deliberately-removed stock audio
+              // gets its own "silenced" marker instead (isSilenced below) so
+              // the state stays visible when the list is reopened.
               hasContent={(name) => {
                 if (!selectedHero) return false;
                 const slot = project?.events.find(
@@ -5908,13 +5971,25 @@ export default function App() {
                 );
                 return !!slot && (slot.songs.length > 0 || slot.adopted.length > 0);
               }}
+              isSilenced={(name) => {
+                if (!selectedHero) return false;
+                const slot = project?.events.find(
+                  (e) => e.id === heroAbilSlotId(selectedHero, name),
+                );
+                return !!slot && slot.removedEntries.length > 0;
+              }}
               modifiedFilter={
                 modifiedOnly && selectedHero
                   ? (name) => {
                       const slot = project?.events.find(
                         (e) => e.id === heroAbilSlotId(selectedHero, name),
                       );
-                      return !!slot && (slot.songs.length > 0 || slot.adopted.length > 0);
+                      return (
+                        !!slot &&
+                        (slot.songs.length > 0 ||
+                          slot.adopted.length > 0 ||
+                          slot.removedEntries.length > 0)
+                      );
                     }
                   : null
               }
