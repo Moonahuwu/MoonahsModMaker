@@ -232,6 +232,24 @@ pub fn decompile_from_vpk(
 /// references. Returns the written paths, `out_root`-relative with forward
 /// slashes. (VRF's GameFileLoader chats on stdout, so only lines that resolve
 /// under `out_root` are kept.)
+/// Export a compiled model as glTF (.glb) - Blender imports it directly and
+/// the in-app 3D preview renders it. `with_materials` also writes the
+/// model's textures as sibling PNGs the .glb references by name.
+pub fn gltf_from_vpk(
+    helper_path: &str,
+    vpk: &str,
+    internal_vmdl_c: &str,
+    out_glb: &str,
+    with_materials: bool,
+) -> Result<String, String> {
+    let mut cmd = helper_command(helper_path);
+    cmd.args(["gltf", vpk, internal_vmdl_c, out_glb]);
+    if with_materials {
+        cmd.arg("--materials");
+    }
+    run(cmd, "gltf")
+}
+
 /// One block of a compiled resource as KV3-ish text (e.g. a model's MDAT,
 /// which holds the TRUE attachment transforms the decompiler mangles).
 pub fn model_block_from_vpk(

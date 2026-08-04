@@ -685,12 +685,16 @@ static int Gltf(string[] args)
 {
     if (args.Length < 4)
     {
-        Console.Error.WriteLine("usage: gltf <vpk> <internalPath.vmdl_c> <out.glb|.gltf>");
+        Console.Error.WriteLine("usage: gltf <vpk> <internalPath.vmdl_c> <out.glb|.gltf> [--materials]");
         return 2;
     }
     var vpk = Path.GetFullPath(args[1]);
     var internalPath = args[2].Replace('\\', '/').TrimStart('/');
     var outFile = Path.GetFullPath(args[3]);
+    // Textures make the export usable as a Blender starting point and let the
+    // in-app 3D preview show the real thing; it costs a few seconds, so the
+    // caller decides.
+    var withMaterials = args.Any(a => a.Equals("--materials", StringComparison.OrdinalIgnoreCase));
 
     using var package = new Package();
     package.Read(vpk);
@@ -710,7 +714,7 @@ static int Gltf(string[] args)
     using var loader = new GameFileLoader(package, vpk);
     var exporter = new GltfModelExporter(loader)
     {
-        ExportMaterials = false,
+        ExportMaterials = withMaterials,
         ProgressReporter = new Progress<string>(s => Console.Error.WriteLine(s)),
     };
     exporter.Export(resource, outFile);

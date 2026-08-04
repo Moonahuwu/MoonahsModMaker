@@ -776,6 +776,18 @@ export function modelOpenModeldoc(req: Parameters<typeof modelBuild>[0]): Promis
   return invoke("model_open_modeldoc", { req });
 }
 
+/** Export a game model as glTF (.glb + sibling texture PNGs). With no
+ *  destDir it goes to an app-data cache (what the 3D preview loads); with
+ *  one, it exports into `<destDir>/<model>/` for editing in Blender. */
+export function modelGltf(
+  helperPath: string,
+  pakPath: string,
+  modelInternal: string,
+  destDir?: string | null,
+): Promise<string> {
+  return invoke("model_gltf", { helperPath, pakPath, modelInternal, destDir: destDir ?? null });
+}
+
 /** Card art for an object: its own color texture, decoded from the game
  *  files and cached in app-data. Rejects when the model has no material. */
 export function propThumb(

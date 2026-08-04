@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { appDataDir, join } from "@tauri-apps/api/path";
@@ -6,6 +6,7 @@ import {
   heroModelTarget,
   matchMaterialTextures,
   modelBuild,
+  modelGltf,
   modelOpenModeldoc,
   modelPreflight,
   modelWorkspace,
@@ -19,6 +20,10 @@ import type { ModelOverride } from "../types";
 import type { Settings } from "../lib/settings";
 import { useToast } from "./Toaster";
 import { ObjectPicker, objectByModel, type ObjectTarget } from "./ObjectPicker";
+// three.js is ~600KB - only pull it in when someone actually opens this tab.
+const ModelPreview3D = lazy(() =>
+  import("./ModelPreview3D").then((m) => ({ default: m.ModelPreview3D })),
+);
 
 const MESH_FILTERS = [{ name: "Model (Blender export)", extensions: ["fbx", "dmx"] }];
 const IMAGE_FILTERS = [{ name: "Texture image", extensions: ["png", "jpg", "jpeg", "tga"] }];
@@ -96,6 +101,10 @@ export function ModelSwapTab({
   const [camEdit, setCamEdit] = useState<Record<string, string>>({});
   const [showCam, setShowCam] = useState(false);
   const [openingDoc, setOpeningDoc] = useState(false);
+  // The vanilla model as glTF: shown in the 3D preview, and the same export
+  // users download to start from in Blender.
+  const [previewGlb, setPreviewGlb] = useState("");
+  const [downloading, setDownloading] = useState(false);
 
   const cs2Ok = useMemo(() => settings.cs2Root.trim().length > 0, [settings.cs2Root]);
   const toolsOk = useMemo(() => settings.csdkRoot.trim().length > 0, [settings.csdkRoot]);
@@ -118,6 +127,7 @@ export function ModelSwapTab({
 
   /** Reset every per-target editing state (both modes share the steps). */
   function clearTarget() {
+    setPreviewGlb("");
     setWs(null);
     setPreflight(null);
     setMeshFile("");
@@ -142,6 +152,7 @@ export function ModelSwapTab({
       setWsTarget(target);
       const w = await modelWorkspace(settings.vpkHelperPath, settings.deadlockPak, target);
       setWs(w);
+      void loadPreview(target);
       // A real game material by default: Blender material names that don't
       // exist as game vmats render NOTHING (red bounds box in game).
       setMaterial(w.materials[0] ?? "");
@@ -169,6 +180,7 @@ export function ModelSwapTab({
         `${target.model}_c`,
       );
       setWs(w);
+      void loadPreview(target.model);
       setMaterial(w.materials[0] ?? "");
       return w;
     } catch (e) {
@@ -176,6 +188,47 @@ export function ModelSwapTab({
       return null;
     } finally {
       setWsBusy(false);
+    }
+  }
+
+  /** Export the vanilla model as glTF for the 3D preview (cached backend
+   *  side, so revisiting a target is instant). */
+  async function loadPreview(modelInternal: string) {
+    try {
+      const glb = await modelGltf(
+        settings.vpkHelperPath,
+        settings.deadlockPak,
+        modelInternal,
+      );
+      setPreviewGlb(glb);
+    } catch {
+      setPreviewGlb(""); // preview is a bonus - never block the build on it
+    }
+  }
+
+  /** Save the vanilla model (+ its textures) somewhere the user picks, as a
+   *  Blender starting point. */
+  async function downloadForBlender() {
+    if (!wsTarget || !target) return;
+    const dest = await openDialog({
+      directory: true,
+      title: "Where should the model go?",
+    });
+    if (typeof dest !== "string") return;
+    setDownloading(true);
+    try {
+      const glb = await modelGltf(
+        settings.vpkHelperPath,
+        settings.deadlockPak,
+        wsTarget,
+        dest,
+      );
+      push("success", `${target.label} exported - import the .glb in Blender (File > Import > glTF)`);
+      void revealItemInDir(glb);
+    } catch (e) {
+      push("error", `Export failed: ${e}`);
+    } finally {
+      setDownloading(false);
     }
   }
 
@@ -660,11 +713,34 @@ export function ModelSwapTab({
         </div>
 
         {ws && (
-          <ul className="mt-3 flex list-disc flex-col gap-0.5 pl-5 text-[11px] text-zinc-500">
-            {(mode === "hero" ? KIT_RULES : OBJECT_RULES).map((r) => (
-              <li key={r}>{r}</li>
-            ))}
-          </ul>
+          <div className="mt-3 flex flex-wrap gap-4">
+            {/* The real thing, in 3D - textures alone never showed what an
+                object actually looks like. */}
+            <div className="flex w-64 shrink-0 flex-col gap-1.5">
+              <Suspense
+                fallback={
+                  <div className="flex h-48 w-full items-center justify-center rounded-lg border border-zinc-800 bg-zinc-950 text-[11px] text-zinc-500">
+                    Loading the 3D view…
+                  </div>
+                }
+              >
+                <ModelPreview3D glbPath={previewGlb} className="h-48 w-full border border-zinc-800" />
+              </Suspense>
+              <button
+                onClick={() => void downloadForBlender()}
+                disabled={downloading}
+                title="Save this model and its textures as a .glb you can import straight into Blender"
+                className="rounded-md border border-zinc-700 px-2.5 py-1 text-[11px] text-zinc-300 transition hover:bg-zinc-800 disabled:opacity-50"
+              >
+                {downloading ? "Exporting…" : "Download for Blender (.glb)"}
+              </button>
+            </div>
+            <ul className="flex min-w-[16rem] flex-1 list-disc flex-col gap-0.5 pl-5 text-[11px] text-zinc-500">
+              {(mode === "hero" ? KIT_RULES : OBJECT_RULES).map((r) => (
+                <li key={r}>{r}</li>
+              ))}
+            </ul>
+          </div>
         )}
       </section>
 

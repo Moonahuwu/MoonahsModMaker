@@ -1803,6 +1803,61 @@ pub async fn model_build(
         .map_err(|e| e.to_string())
 }
 
+/// Export a game model as glTF. With no `dest_dir` it lands in an app-data
+/// cache and is reused (that's what the in-app 3D preview loads); with one,
+/// it exports into `<dest_dir>/<model stem>/` as a Blender starting point.
+/// Textures ride along as sibling PNGs the .glb references.
+#[tauri::command]
+pub async fn model_gltf(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+    model_internal: String,
+    dest_dir: Option<String>,
+) -> Result<String, String> {
+    use tauri::Manager;
+    let cache_root = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("model_gltf");
+    tauri::async_runtime::spawn_blocking(move || {
+        let internal = model_internal.replace('\\', "/");
+        let internal_c = if internal.ends_with("_c") { internal.clone() } else { format!("{internal}_c") };
+        let stem = internal_c
+            .rsplit('/')
+            .next()
+            .unwrap_or("model")
+            .trim_end_matches(".vmdl_c")
+            .to_string();
+        let (dir, cached) = match dest_dir.as_deref().filter(|d| !d.trim().is_empty()) {
+            // Chosen folder: a fresh export in its own subfolder, so two
+            // models' textures can't overwrite each other.
+            Some(d) => (std::path::Path::new(d).join(&stem), false),
+            None => {
+                let key: String = internal_c
+                    .trim_end_matches(".vmdl_c")
+                    .chars()
+                    .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+                    .collect();
+                (cache_root.join(key), true)
+            }
+        };
+        let glb = dir.join(format!("{stem}.glb"));
+        if cached && glb.exists() {
+            return Ok(glb.to_string_lossy().into_owned());
+        }
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        crate::vpk::gltf_from_vpk(&helper_path, &pak_path, &internal_c, &glb.to_string_lossy(), true)?;
+        if !glb.exists() {
+            return Err(format!("export produced no file at {}", glb.display()));
+        }
+        Ok(glb.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// A card image for an object in the Model Replacement object picker: the
 /// model's own color texture, found by reading the compiled model's material
 /// reference and decoding that material's color map. Derived from the game
