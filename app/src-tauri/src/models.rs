@@ -390,7 +390,9 @@ fn parse_node(bytes: &[u8], off: &mut usize, wide: bool) -> Result<Option<FbxNod
         let mut o = cp;
         match parse_node(bytes, &mut o, wide)? {
             Some(c) => children.push(c),
-            None => { cp = o; break; }
+            // A null record terminates the child list; nothing reads the
+            // cursor after the loop.
+            None => break,
         }
         cp = o;
     }
@@ -1206,7 +1208,6 @@ fn build_inner(req: &ModelBuildReq, rep: &mut ModelBuildReport) -> Result<String
         ));
     }
     let vmdl_internal = req.vmdl_internal.replace('\\', "/");
-    let vmdl_dir_internal = vmdl_internal.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
     let hero_stem = vmdl_internal
         .rsplit('/')
         .next()
