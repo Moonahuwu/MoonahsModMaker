@@ -736,13 +736,21 @@ export function modelWorkspace(
 }
 
 /** Name-level FBX sanity scan against the hero's bone list. */
-export function modelPreflight(fbxPath: string, bones: string[]): Promise<ModelPreflight> {
-  return invoke("model_preflight", { fbxPath, bones });
+export function modelPreflight(
+  fbxPath: string,
+  bones: string[],
+  /** Objects aren't rigged - pass false so missing bones aren't an error. */
+  requireRig = true,
+): Promise<ModelPreflight> {
+  return invoke("model_preflight", { fbxPath, bones, requireRig });
 }
 
-/** Generate the vmdl + compile via CS2 + cache the vmdl_c artifact. */
+/** Generate the vmdl + compile + cache the vmdl_c artifact. Heroes compile
+ *  via CS2 Workshop Tools, objects via the normal Deadlock compile tools. */
 export function modelBuild(req: {
   cs2Root: string;
+  /** "hero" (CS2) or "prop" (CSDK). Omitted = hero, for older configs. */
+  kind?: "hero" | "prop";
   workspaceDir: string;
   vmdlInternal: string;
   meshFile: string;
@@ -766,6 +774,16 @@ export function modelBuild(req: {
  *  manual inspection (weights, skeleton, cameras). Same req as modelBuild. */
 export function modelOpenModeldoc(req: Parameters<typeof modelBuild>[0]): Promise<string> {
   return invoke("model_open_modeldoc", { req });
+}
+
+/** Card art for an object: its own color texture, decoded from the game
+ *  files and cached in app-data. Rejects when the model has no material. */
+export function propThumb(
+  helperPath: string,
+  pakPath: string,
+  modelInternal: string,
+): Promise<string> {
+  return invoke("prop_thumb", { helperPath, pakPath, modelInternal });
 }
 
 /** Match texture files in a folder to FBX material names by filename prefix. */

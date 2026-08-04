@@ -115,6 +115,7 @@ pub fn run() {
             commands::model_preflight,
             commands::model_build,
             commands::model_open_modeldoc,
+            commands::prop_thumb,
             commands::match_material_textures,
             commands::probe_audio,
             commands::process_audio,

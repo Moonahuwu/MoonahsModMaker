@@ -18,6 +18,7 @@ import { cHeroRoster } from "../lib/dataCache";
 import type { ModelOverride } from "../types";
 import type { Settings } from "../lib/settings";
 import { useToast } from "./Toaster";
+import { ObjectPicker, objectByModel, type ObjectTarget } from "./ObjectPicker";
 
 const MESH_FILTERS = [{ name: "Model (Blender export)", extensions: ["fbx", "dmx"] }];
 const IMAGE_FILTERS = [{ name: "Texture image", extensions: ["png", "jpg", "jpeg", "tga"] }];
@@ -33,7 +34,18 @@ const KIT_RULES = [
   "Textures: keep files named like the material (Body_Base_color.png, Body_Normal.png)",
 ];
 
+/** Objects have no armature, so the rules are much shorter. */
+const OBJECT_RULES = [
+  "No rigging needed - objects are just a mesh",
+  "Model it roughly the size of the original so it fits the world",
+  "Select all, then Object > Apply > All Transforms before export",
+  "Export as FBX (or DMX), then give each material a texture below",
+  "The original's physics and drop behaviour are kept automatically",
+];
+
 type MatMode = "textures" | "game";
+/** Which half of the tab: hero replacement (CS2) or objects (CSDK). */
+type SwapMode = "hero" | "object";
 
 /** Friendly labels for the CitadelCameraSettings_t scalars. */
 const CAMERA_LABELS: Record<string, string> = {
@@ -61,6 +73,9 @@ export function ModelSwapTab({
   onAutodetect: () => Promise<unknown>;
 }) {
   const { push } = useToast();
+  const [mode, setMode] = useState<SwapMode>("hero");
+  // The picked object (object mode); heroes use `hero` below.
+  const [obj, setObj] = useState<ObjectTarget | null>(null);
   const [heroes, setHeroes] = useState<HeroPortrait[]>([]);
   const [hero, setHero] = useState<string>("");
   const [ws, setWs] = useState<ModelWorkspace | null>(null);
@@ -101,8 +116,8 @@ export function ModelSwapTab({
     };
   }, [settings.vpkHelperPath, settings.deadlockPak, settings.showExperimentalHeroes]);
 
-  async function prepareKit(codename: string): Promise<ModelWorkspace | null> {
-    setHero(codename);
+  /** Reset every per-target editing state (both modes share the steps). */
+  function clearTarget() {
     setWs(null);
     setPreflight(null);
     setMeshFile("");
@@ -110,6 +125,12 @@ export function ModelSwapTab({
     setTexSpecs([]);
     setCamEdit({});
     setShowCam(false);
+  }
+
+  async function prepareKit(codename: string): Promise<ModelWorkspace | null> {
+    setHero(codename);
+    setObj(null);
+    clearTarget();
     if (!codename) return null;
     setWsBusy(true);
     try {
@@ -133,6 +154,31 @@ export function ModelSwapTab({
     }
   }
 
+  /** Same as prepareKit but for a catalog object (no hero roster lookup -
+   *  the model path IS the target). */
+  async function prepareObject(target: ObjectTarget): Promise<ModelWorkspace | null> {
+    setHero("");
+    setObj(target);
+    clearTarget();
+    setWsTarget(target.model);
+    setWsBusy(true);
+    try {
+      const w = await modelWorkspace(
+        settings.vpkHelperPath,
+        settings.deadlockPak,
+        `${target.model}_c`,
+      );
+      setWs(w);
+      setMaterial(w.materials[0] ?? "");
+      return w;
+    } catch (e) {
+      push("error", `Couldn't prepare ${target.label}: ${e}`);
+      return null;
+    } finally {
+      setWsBusy(false);
+    }
+  }
+
   /** Preflight + per-material texture rows for a chosen mesh file. */
   async function analyzeMesh(sel: string, w: ModelWorkspace, keepSpecs?: MatchedMaterial[]) {
     setMeshFile(sel);
@@ -143,7 +189,8 @@ export function ModelSwapTab({
     setImportScale(sel.toLowerCase().endsWith(".fbx") ? "0.01" : "1");
     if (sel.toLowerCase().endsWith(".fbx")) {
       try {
-        const pf = await modelPreflight(sel, w.bones);
+        // Objects aren't skinned - an unrigged mesh is correct for them.
+        const pf = await modelPreflight(sel, w.bones, mode === "hero");
         setPreflight(pf);
         // Kit meshes kept from the decompile carry materials named after the
         // hero's real vmats (SourceIO does that) - map those back to the
@@ -199,7 +246,17 @@ export function ModelSwapTab({
   /** Rebuild: re-open the kit and prefill the mesh + texture sets from the
    *  saved override so one click lands back at the Build button. */
   async function startRebuild(o: ModelOverride) {
-    const w = await prepareKit(o.hero);
+    // Objects carry their catalog entry via the target path; heroes go
+    // through the roster.
+    const asObject = objectByModel(o.targetPath);
+    let w: ModelWorkspace | null;
+    if (asObject) {
+      setMode("object");
+      w = await prepareObject(asObject);
+    } else {
+      setMode("hero");
+      w = await prepareKit(o.hero);
+    }
     if (!w) return;
     if (o.materialSpecs && o.materialSpecs.length > 0) {
       setMatMode("textures");
@@ -214,6 +271,27 @@ export function ModelSwapTab({
       setShowCam(true);
     }
   }
+
+  /** What's being replaced right now, in whichever mode - the build, the
+   *  override record and the ModelDoc launch all key off this. */
+  const target = useMemo(() => {
+    if (mode === "object") {
+      if (!obj) return null;
+      return {
+        kind: "prop" as const,
+        key: `obj_${obj.id}`,
+        hero: obj.id,
+        label: obj.label,
+      };
+    }
+    if (!hero) return null;
+    return {
+      kind: "hero" as const,
+      key: hero,
+      hero,
+      label: heroes.find((h) => h.codename === hero)?.displayName ?? hero,
+    };
+  }, [mode, obj, hero, heroes]);
 
   /** Camera overrides = fields the user changed away from stock. */
   function cameraOverrides(): { key: string; value: number }[] {
@@ -277,7 +355,7 @@ export function ModelSwapTab({
   }
 
   async function build() {
-    if (!ws || !meshFile || !hero) return;
+    if (!ws || !meshFile || !target) return;
     const useTextures = matMode === "textures";
     const specs = useTextures ? texSpecs.filter((s) => s.color || s.gameVmat) : [];
     if (useTextures && specs.length === 0) {
@@ -288,12 +366,13 @@ export function ModelSwapTab({
     setBuildSteps([]);
     try {
       const cacheDir = await join(await appDataDir(), "model_cache");
-      const artifactOut = await join(cacheDir, `${hero}.vmdl_c`);
-      const materialsOut = await join(cacheDir, `${hero}_mats`);
+      const artifactOut = await join(cacheDir, `${target.key}.vmdl_c`);
+      const materialsOut = await join(cacheDir, `${target.key}_mats`);
       const scale = Number(importScale) || 1;
       const camera = cameraOverrides();
       const rep = await modelBuild({
         cs2Root: settings.cs2Root,
+        kind: target.kind,
         workspaceDir: ws.dir,
         vmdlInternal: wsTarget,
         meshFile,
@@ -308,17 +387,19 @@ export function ModelSwapTab({
           metalness: s.metalness,
           gameVmat: s.gameVmat ?? null,
         })),
-        toolsRoot: useTextures ? settings.csdkRoot : null,
+        // Objects compile in the CSDK, so their builds always need it - not
+        // just when custom textures are involved.
+        toolsRoot: useTextures || target.kind === "prop" ? settings.csdkRoot : null,
         materialsOut: useTextures ? materialsOut : null,
         camera,
       });
       setBuildSteps(rep.steps);
       if (rep.ok && rep.artifact) {
-        const label = heroes.find((h) => h.codename === hero)?.displayName ?? hero;
+        const label = target.label;
         const next: ModelOverride = {
-          id: `model_${hero}`,
-          hero,
-          label: `${label} model`,
+          id: `model_${target.key}`,
+          hero: target.hero,
+          label: target.kind === "prop" ? `${label} (object)` : `${label} model`,
           targetPath: `${wsTarget}_c`,
           artifact: rep.artifact,
           meshFile,
@@ -362,9 +443,9 @@ export function ModelSwapTab({
     }
   }
 
-  /** Stage the current setup and open it in CS2's ModelDoc for inspection. */
+  /** Stage the current setup and open it in ModelDoc for inspection. */
   async function openInModeldoc() {
-    if (!ws || !meshFile || !hero) return;
+    if (!ws || !meshFile || !target) return;
     setOpeningDoc(true);
     try {
       const cacheDir = await join(await appDataDir(), "model_cache");
@@ -372,12 +453,14 @@ export function ModelSwapTab({
         matMode === "textures" ? texSpecs.filter((s) => s.color || s.gameVmat) : [];
       const msg = await modelOpenModeldoc({
         cs2Root: settings.cs2Root,
+        kind: target.kind,
         workspaceDir: ws.dir,
         vmdlInternal: wsTarget,
         meshFile,
         materialOverride: matMode === "textures" ? null : material || null,
         importScale: Number(importScale) || 1,
-        artifactOut: await join(cacheDir, `${hero}.vmdl_c`),
+        toolsRoot: settings.csdkRoot,
+        artifactOut: await join(cacheDir, `${target.key}.vmdl_c`),
         materials: specs.map((s) => ({
           name: s.name,
           color: s.color,
@@ -397,13 +480,49 @@ export function ModelSwapTab({
   }
 
   const errorCount = preflight?.errors.length ?? 0;
+  // Heroes compile in CS2, objects in the Deadlock CSDK.
+  const compilerOk = mode === "hero" ? cs2Ok : toolsOk;
   const texAssigned = texSpecs.filter((s) => s.color || s.gameVmat).length;
   const texWithArt = texSpecs.filter((s) => s.color).length;
   const camChanged = ws ? cameraOverrides().length : 0;
 
   return (
-    <div className="flex max-w-3xl flex-col gap-4">
-      {!cs2Ok && (
+    // The object picker is a grid - it needs more room than the hero form.
+    <div className={`flex flex-col gap-4 ${mode === "object" ? "max-w-5xl" : "max-w-3xl"}`}>
+      {/* Two halves of one pipeline: heroes need CS2's compiler, objects
+          build with the normal mod tools everyone already has. */}
+      <div className="flex flex-wrap items-center gap-1 text-xs">
+        {(
+          [
+            ["hero", "Heroes"],
+            ["object", "Objects"],
+          ] as [SwapMode, string][]
+        ).map(([m, label]) => (
+          <button
+            key={m}
+            onClick={() => {
+              setMode(m);
+              setHero("");
+              setObj(null);
+              clearTarget();
+            }}
+            className={`rounded-md border px-3 py-1.5 transition ${
+              mode === m
+                ? "border-rose-400/50 bg-rose-400/10 text-rose-200"
+                : "border-zinc-700 text-zinc-400 hover:bg-zinc-800"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+        <span className="ml-1 text-[11px] text-zinc-600">
+          {mode === "hero"
+            ? "put a custom character on any hero"
+            : "the urn, crates, soul containers, map props"}
+        </span>
+      </div>
+
+      {!cs2Ok && mode === "hero" && (
         <div className="rounded-xl border border-amber-500/40 bg-amber-500/5 p-4">
           <p className="text-xs font-bold uppercase tracking-widest text-amber-300">
             CS2 Workshop Tools needed
@@ -412,6 +531,7 @@ export function ModelSwapTab({
             Custom hero models need the modern Source 2 compiler, which only ships with
             Counter-Strike 2's Workshop Tools (free). In Steam: install CS2, then in its
             Installation options tick "Counter-Strike 2 Workshop Tools". Then hit detect.
+            Object swaps work without any of this.
           </p>
           <button
             onClick={() => {
@@ -478,26 +598,56 @@ export function ModelSwapTab({
 
       <section className="rounded-xl border border-zinc-800 bg-zinc-950/50 p-4">
         <h3 className="text-[11px] font-bold uppercase tracking-widest text-zinc-400">
-          1 - Pick a hero, get the Blender kit
+          {mode === "hero" ? "1 - Pick a hero, get the Blender kit" : "1 - Pick an object"}
         </h3>
+
+        {mode === "object" ? (
+          <div className="mt-3">
+            <ObjectPicker
+              helperPath={settings.vpkHelperPath}
+              pakPath={settings.deadlockPak}
+              selected={obj?.model ?? ""}
+              replaced={
+                new Set(
+                  overrides
+                    .filter((o) => o.enabled !== false)
+                    .map((o) => o.targetPath.replace(/_c$/, "")),
+                )
+              }
+              onPick={(t) => void prepareObject(t)}
+            />
+          </div>
+        ) : (
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <select
+              value={hero}
+              onChange={(e) => void prepareKit(e.target.value)}
+              className="w-56 rounded-md border border-zinc-700/80 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-200 outline-none transition focus:border-rose-400/70"
+            >
+              <option value="">Choose a hero…</option>
+              {heroes.map((h) => (
+                <option key={h.codename} value={h.codename}>
+                  {h.displayName}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
         <div className="mt-2 flex flex-wrap items-center gap-2">
-          <select
-            value={hero}
-            onChange={(e) => void prepareKit(e.target.value)}
-            className="w-56 rounded-md border border-zinc-700/80 bg-zinc-950 px-2 py-1.5 text-xs text-zinc-200 outline-none transition focus:border-rose-400/70"
-          >
-            <option value="">Choose a hero…</option>
-            {heroes.map((h) => (
-              <option key={h.codename} value={h.codename}>
-                {h.displayName}
-              </option>
-            ))}
-          </select>
-          {wsBusy && <span className="text-xs text-zinc-500">Decompiling the hero…</span>}
+          {wsBusy && (
+            <span className="text-xs text-zinc-500">
+              {mode === "hero" ? "Decompiling the hero…" : "Decompiling the object…"}
+            </span>
+          )}
           {ws && (
             <>
+              {obj && (
+                <span className="text-xs font-medium text-zinc-200">{obj.label}</span>
+              )}
               <span className="text-xs text-zinc-500">
-                {ws.files} files, {ws.bones.length} bones
+                {ws.files} files
+                {ws.bones.length > 0 ? `, ${ws.bones.length} bones` : ", no skeleton"}
               </span>
               <button
                 onClick={() => void revealItemInDir(ws.vmdl)}
@@ -508,9 +658,10 @@ export function ModelSwapTab({
             </>
           )}
         </div>
+
         {ws && (
           <ul className="mt-3 flex list-disc flex-col gap-0.5 pl-5 text-[11px] text-zinc-500">
-            {KIT_RULES.map((r) => (
+            {(mode === "hero" ? KIT_RULES : OBJECT_RULES).map((r) => (
               <li key={r}>{r}</li>
             ))}
           </ul>
@@ -801,18 +952,20 @@ export function ModelSwapTab({
               onClick={() => void build()}
               disabled={
                 building ||
-                !cs2Ok ||
+                !compilerOk ||
                 errorCount > 0 ||
                 (matMode === "textures" && (texAssigned === 0 || (texWithArt > 0 && !toolsOk)))
               }
               title={
                 errorCount > 0
                   ? "Fix the preflight errors first"
-                  : !cs2Ok
-                    ? "CS2 Workshop Tools required"
+                  : !compilerOk
+                    ? mode === "hero"
+                      ? "CS2 Workshop Tools required"
+                      : "The Deadlock compile tools are required - set them up in Settings"
                     : matMode === "textures" && texAssigned === 0
                       ? "Assign a texture or game material to at least one material first"
-                      : "Compile the model via CS2 Workshop Tools"
+                      : "Compile the model"
               }
               className="rounded-md border border-rose-400/40 bg-rose-400/10 px-3 py-1.5 text-xs font-medium text-rose-200 transition hover:bg-rose-400/20 disabled:opacity-50"
             >
@@ -820,7 +973,7 @@ export function ModelSwapTab({
             </button>
             <button
               onClick={() => void openInModeldoc()}
-              disabled={openingDoc || building || !cs2Ok}
+              disabled={openingDoc || building || !compilerOk}
               title="Stage the model and open it in CS2's ModelDoc - inspect the skeleton, your weights and the cameras by hand"
               className="rounded-md border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 transition hover:bg-zinc-800 disabled:opacity-50"
             >
@@ -831,7 +984,9 @@ export function ModelSwapTab({
             )}
             {building && (
               <span className="text-[11px] text-zinc-500">
-                a simple model takes ~15s, a big multi-mesh one can take 10+ minutes - hang tight
+                {mode === "object"
+                  ? "objects compile in a couple of seconds"
+                  : "a simple model takes ~15s, a big multi-mesh one can take 10+ minutes - hang tight"}
               </span>
             )}
           </div>

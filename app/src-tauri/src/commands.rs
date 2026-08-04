@@ -1780,9 +1780,14 @@ pub async fn model_workspace(
 pub async fn model_preflight(
     fbx_path: String,
     bones: Vec<String>,
+    require_rig: Option<bool>,
 ) -> Result<crate::models::Preflight, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        crate::models::preflight_fbx(std::path::Path::new(&fbx_path), &bones)
+        crate::models::preflight_fbx_kind(
+            std::path::Path::new(&fbx_path),
+            &bones,
+            require_rig.unwrap_or(true),
+        )
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1796,6 +1801,85 @@ pub async fn model_build(
     tauri::async_runtime::spawn_blocking(move || crate::models::build(&req))
         .await
         .map_err(|e| e.to_string())
+}
+
+/// A card image for an object in the Model Replacement object picker: the
+/// model's own color texture, found by reading the compiled model's material
+/// reference and decoding that material's color map. Derived from the game
+/// files rather than hardcoded, so it survives patches and works for any
+/// model path the user types. Cached in app-data.
+#[tauri::command]
+pub async fn prop_thumb(
+    app: tauri::AppHandle,
+    helper_path: String,
+    pak_path: String,
+    model_internal: String,
+) -> Result<String, String> {
+    use tauri::Manager;
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("prop_thumbs");
+    tauri::async_runtime::spawn_blocking(move || {
+        let internal = model_internal.replace('\\', "/");
+        let internal_c = if internal.ends_with("_c") { internal.clone() } else { format!("{internal}_c") };
+        let key: String = internal_c
+            .trim_end_matches(".vmdl_c")
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect();
+        let dir = base.join(&key);
+        let png = dir.join("thumb.png");
+        if png.exists() {
+            return Ok(png.to_string_lossy().into_owned());
+        }
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+
+        // 1. The compiled model records its material paths as plain strings.
+        let vmdl_c = dir.join("model.vmdl_c");
+        crate::vpk::extract(&helper_path, &pak_path, &internal_c, &vmdl_c.to_string_lossy())?;
+        let bytes = std::fs::read(&vmdl_c).map_err(|e| e.to_string())?;
+        let refs = crate::models::scan_vmdl_material_refs(&bytes);
+        let _ = std::fs::remove_file(&vmdl_c);
+        let vmat = refs
+            .into_iter()
+            .find(|r| r.contains('/'))
+            .ok_or("this model references no material")?;
+
+        // 2. Decompiling the material writes its textures out as PNGs; the
+        //    color map is the biggest of them.
+        let mats = dir.join("mat");
+        let _ = std::fs::create_dir_all(&mats);
+        crate::vpk::material_from_vpk(&helper_path, &pak_path, &format!("{vmat}_c"), &mats.to_string_lossy())?;
+        let mut best: Option<(u64, std::path::PathBuf)> = None;
+        fn walk(d: &std::path::Path, best: &mut Option<(u64, std::path::PathBuf)>) {
+            let Ok(rd) = std::fs::read_dir(d) else { return };
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, best);
+                } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("png")) {
+                    let name = p.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
+                    // Skip the obvious non-color maps.
+                    if ["normal", "rough", "metal", "_ao", "mask", "trans"].iter().any(|k| name.contains(k)) {
+                        continue;
+                    }
+                    let len = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+                    if best.as_ref().map(|(b, _)| len > *b).unwrap_or(true) {
+                        *best = Some((len, p));
+                    }
+                }
+            }
+        }
+        walk(&mats, &mut best);
+        let (_, src) = best.ok_or("no color texture in this model's material")?;
+        std::fs::rename(&src, &png).or_else(|_| std::fs::copy(&src, &png).map(|_| ())).map_err(|e| e.to_string())?;
+        let _ = std::fs::remove_dir_all(&mats);
+        Ok(png.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Stage the model exactly as a build would and open it in CS2's ModelDoc,

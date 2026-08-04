@@ -5646,7 +5646,7 @@ export default function App() {
                             : activeTab === PACK_BUILDER
                               ? "Organize the pack into named modules - the future split points for standalone releases. Compiling still builds everything together."
                               : activeTab === MODEL_SWAP
-                                ? "Put your own Blender model on a hero - the game's animations, cameras and hitboxes stay. Builds through CS2's Workshop Tools, ships with your normal compile."
+                                ? "Put your own model on a hero or on the game's objects - the urn, crates, soul containers, map props. The original's animations, physics and setup stay; your build ships with the normal compile."
                                 : null;
               return sub ? <p className="mt-1 text-sm text-zinc-500">{sub}</p> : null;
             })()}

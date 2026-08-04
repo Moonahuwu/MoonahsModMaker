@@ -1,0 +1,54 @@
+{
+  "note": "Curated non-hero model targets for Model Replacement. Every path verified present in the live pak (2026-08-04) and confirmed compilable by the Deadlock CSDK - object swaps need no CS2 install. Thumbnails are derived from each model's own material at runtime (prop_thumb), so nothing here needs updating when art changes.",
+  "groups": [
+    {
+      "id": "objectives",
+      "label": "Objectives",
+      "hint": "The things everyone fights over",
+      "items": [
+        { "id": "idol_urn", "label": "Urn", "hint": "the carried objective", "model": "models/props_gameplay/idol_urn/idol_urn.vmdl" },
+        { "id": "golden_idol", "label": "Golden Idol", "hint": "Sinner's Sacrifice", "model": "models/props_gameplay/golden_idol.vmdl" },
+        { "id": "rejuv_crystal", "label": "Rejuvenator crystal", "model": "models/props_gameplay/rejuv_crystal_model.vmdl" },
+        { "id": "base_core", "label": "Base core", "model": "models/props_gameplay/base_core.vmdl" }
+      ]
+    },
+    {
+      "id": "souls",
+      "label": "Souls and pickups",
+      "hint": "What drops and what you grab",
+      "items": [
+        { "id": "soul_container", "label": "Soul container", "hint": "the soul orb", "model": "models/props_gameplay/soul_container/soul_container.vmdl" },
+        { "id": "ult_pickup", "label": "Ult pickup", "model": "models/props_gameplay/ult_pickup.vmdl" },
+        { "id": "powerup", "label": "Powerup idol", "model": "models/props_gameplay/powerup/powerup_01.vmdl" },
+        { "id": "gold_coin", "label": "Gold coin", "model": "models/props_gameplay/coin/gold_coin.vmdl" },
+        { "id": "trick_shot_coin", "label": "Trick shot coin", "model": "models/props_gameplay/trick_shot_coin.vmdl" }
+      ]
+    },
+    {
+      "id": "breakables",
+      "label": "Crates and breakables",
+      "hint": "Shoot them, replace them",
+      "items": [
+        { "id": "item_container", "label": "Soul crate", "hint": "the breakable soul box", "model": "models/props_gameplay/item_container_breakable/item_container.vmdl" },
+        { "id": "xmas_giftbox", "label": "Gift box", "hint": "holiday crate variant", "model": "models/props_gameplay/item_container_breakable/xmas_giftbox.vmdl" },
+        { "id": "gold_crate", "label": "Gold crate", "model": "models/props_gameplay/gold_crate.vmdl" },
+        { "id": "wooden_crate", "label": "Wooden crate", "model": "models/props_gameplay/wooden_crate_01.vmdl" },
+        { "id": "item_crate", "label": "Item crate", "model": "models/items/item_crate.vmdl" },
+        { "id": "crate_simple", "label": "Simple crate", "model": "models/props/crate_simple_a.vmdl" },
+        { "id": "barrel", "label": "Barrel", "model": "models/props/barrel_01.vmdl" },
+        { "id": "hideout_pot", "label": "Metal pot", "hint": "hideout prop", "model": "models/hideout/hideout_pot_metal.vmdl" }
+      ]
+    },
+    {
+      "id": "world",
+      "label": "Around the map",
+      "hint": "Fixtures and critters",
+      "items": [
+        { "id": "gun_shop", "label": "Shop kiosk", "model": "models/props_gameplay/gun_shop/gun_shop.vmdl" },
+        { "id": "ammo_stand", "label": "Ammo stand", "model": "models/props_gameplay/ammo_stand/ammo_stand.vmdl" },
+        { "id": "explosive_trap", "label": "Explosive trap", "model": "models/props_gameplay/explosive_trap/explosive_trap.vmdl" },
+        { "id": "cockroach", "label": "Cockroach", "hint": "yes, really", "model": "models/props_gameplay/cockroach/cockroach.vmdl" }
+      ]
+    }
+  ]
+}

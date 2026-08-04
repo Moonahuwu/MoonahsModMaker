@@ -432,6 +432,23 @@ fn fbx_obj_name(props: &[FbxProp]) -> Option<(String, String)> {
     Some((name, class))
 }
 
+/// Name-level preflight of a Blender FBX export against the target's bone
+/// list. `require_rig` is false for objects (crates, the urn, ...): those
+/// meshes are not skinned, so missing bones are normal, not an error.
+pub fn preflight_fbx_kind(
+    path: &Path,
+    hero_bones: &[String],
+    require_rig: bool,
+) -> Result<Preflight, String> {
+    let mut rep = preflight_fbx(path, hero_bones)?;
+    if !require_rig {
+        // Drop the rigging complaints; keep every other finding.
+        rep.errors.retain(|e| !(e.contains("isn't rigged") || e.contains("armature")));
+        rep.warnings.retain(|w| !w.contains("aren't part of the hero's armature"));
+    }
+    Ok(rep)
+}
+
 /// Name-level preflight of a Blender FBX export against the hero's bone list.
 pub fn preflight_fbx(path: &Path, hero_bones: &[String]) -> Result<Preflight, String> {
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
@@ -1317,11 +1334,49 @@ pub fn match_textures(folder: &Path, materials: &[String]) -> Vec<MatchedMateria
 // Build (CS2 stage + compile + artifact)
 // ---------------------------------------------------------------------------
 
+/// Which toolchain compiles a model. Heroes carry modern AnimGraph2 /
+/// NmSkeleton nodes that ONLY CS2's Workshop Tools can compile; static props
+/// (urn, crates, soul container, ...) compile in the Deadlock CSDK itself -
+/// proven 2026-08-04 - so object swaps need no CS2 install at all.
+#[derive(serde::Deserialize, Debug, Default, Clone, Copy, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum ModelKind {
+    #[default]
+    Hero,
+    Prop,
+}
+
+/// The CSDK content addon prop builds stage into.
+pub const CSDK_PROP_ADDON: &str = "eim_props";
+
+impl ModelKind {
+    /// (content root, game dir, addon name) for this kind's toolchain root.
+    fn layout(self, root: &Path) -> (std::path::PathBuf, std::path::PathBuf, &'static str) {
+        match self {
+            ModelKind::Hero => (
+                root.join("content/csgo_addons").join(CS2_ADDON),
+                root.join("game/csgo"),
+                CS2_ADDON,
+            ),
+            ModelKind::Prop => (
+                root.join("content/citadel_addons").join(CSDK_PROP_ADDON),
+                root.join("game/citadel"),
+                CSDK_PROP_ADDON,
+            ),
+        }
+    }
+}
+
 #[derive(serde::Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelBuildReq {
-    /// CS2 install root (the dir containing `game/` and `content/`).
+    /// Hero builds: the CS2 install root. Prop builds ignore this and use
+    /// `tools_root` (the Deadlock CSDK) instead.
+    #[serde(default)]
     pub cs2_root: String,
+    /// Hero (CS2) or Prop (CSDK). Defaults to Hero for older saved configs.
+    #[serde(default)]
+    pub kind: ModelKind,
     /// The hero workspace dir from `workspace`.
     pub workspace_dir: String,
     /// Internal vmdl path (no `_c`), e.g. `models/heroes_staging/haze/haze.vmdl`.
@@ -1395,23 +1450,42 @@ fn remap_pairs(req: &ModelBuildReq) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Stage the decompiled hero tree + the user's mesh into the CS2 content
-/// addon and write the generated vmdl (mesh splice, remaps, camera edits).
-/// Shared by the compile path and "Open in ModelDoc". Returns the staged
-/// vmdl's absolute path plus human-readable step notes.
-fn stage_into_cs2(req: &ModelBuildReq) -> Result<(std::path::PathBuf, Vec<String>), String> {
-    let cs2 = Path::new(&req.cs2_root);
+/// The toolchain root a build compiles in: CS2 for heroes, the Deadlock
+/// CSDK for props.
+fn toolchain_root(req: &ModelBuildReq) -> Result<std::path::PathBuf, String> {
+    match req.kind {
+        ModelKind::Hero => {
+            if req.cs2_root.trim().is_empty() {
+                return Err("hero models need CS2 Workshop Tools - set the CS2 folder in Settings".into());
+            }
+            Ok(Path::new(&req.cs2_root).to_path_buf())
+        }
+        ModelKind::Prop => req
+            .tools_root
+            .as_deref()
+            .filter(|t| !t.trim().is_empty())
+            .map(|t| Path::new(t).to_path_buf())
+            .ok_or_else(|| "object models need the Deadlock compile tools - set them up in Settings".into()),
+    }
+}
+
+/// Stage the decompiled source tree + the user's mesh into the toolchain's
+/// content addon and write the generated vmdl (mesh splice, remaps, camera
+/// edits). Shared by the compile path and "Open in ModelDoc". Returns the
+/// staged vmdl's absolute path plus human-readable step notes.
+fn stage_sources(req: &ModelBuildReq) -> Result<(std::path::PathBuf, Vec<String>), String> {
+    let root = toolchain_root(req)?;
+    let (content, _, addon) = req.kind.layout(&root);
     let vmdl_internal = req.vmdl_internal.replace('\\', "/");
     let vmdl_dir_internal = vmdl_internal.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
     let mut notes = Vec::new();
 
-    // Fresh CS2 content stage: the whole decompiled tree (anims included -
-    // the legacy AnimationList compiles from them) + the user's mesh.
-    let content = cs2.join("content/csgo_addons").join(CS2_ADDON);
+    // Fresh content stage: the whole decompiled tree (anims included - the
+    // legacy AnimationList compiles from them) + the user's mesh.
     let stage_dir = content.join(vmdl_dir_internal.replace('/', std::path::MAIN_SEPARATOR_STR));
     let _ = std::fs::remove_dir_all(&stage_dir);
     copy_tree(Path::new(&req.workspace_dir), &content)?;
-    notes.push(format!("staged hero sources into CS2 addon {CS2_ADDON}"));
+    notes.push(format!("staged sources into the {addon} addon"));
 
     let mesh_name = Path::new(&req.mesh_file)
         .file_name()
@@ -1437,23 +1511,35 @@ fn stage_into_cs2(req: &ModelBuildReq) -> Result<(std::path::PathBuf, Vec<String
     )?;
     // Restore the EXACT vanilla attachment transforms (decompiled ones are
     // lossy - the cause of the classic centered-camera-after-swap bug).
-    let vanilla_atts = load_attachments_cache(Path::new(&req.workspace_dir));
-    if vanilla_atts.is_empty() {
-        notes.push("attachment data not cached - re-pick the hero once to refresh the kit".into());
-    } else {
-        let (corrected, fixed) = correct_attachments(&generated, &vanilla_atts);
-        generated = corrected;
-        notes.push(format!("{fixed} attachment(s) restored to exact vanilla transforms (aim/camera anchors)"));
+    // Models with no attachments at all (most props) skip this silently.
+    let has_attachments = generated.contains("_class = \"Attachment\"");
+    if has_attachments {
+        let vanilla_atts = load_attachments_cache(Path::new(&req.workspace_dir));
+        if vanilla_atts.is_empty() {
+            notes.push("attachment data not cached - re-pick this model once to refresh its kit".into());
+        } else {
+            let (corrected, fixed) = correct_attachments(&generated, &vanilla_atts);
+            generated = corrected;
+            notes.push(format!(
+                "{fixed} attachment(s) restored to exact vanilla transforms (aim/camera anchors)"
+            ));
+        }
     }
     if !req.camera.is_empty() {
         generated = apply_camera_overrides(&generated, &req.camera)?;
         notes.push(format!("camera: {} value(s) adjusted", req.camera.len()));
     }
     std::fs::write(&vmdl_abs, generated).map_err(|e| e.to_string())?;
-    notes.push(format!(
-        "generated vmdl (your mesh at scale {}, the hero's skeleton, cameras and animation refs)",
-        req.import_scale
-    ));
+    notes.push(match req.kind {
+        ModelKind::Hero => format!(
+            "generated vmdl (your mesh at scale {}, the hero's skeleton, cameras and animation refs)",
+            req.import_scale
+        ),
+        ModelKind::Prop => format!(
+            "generated vmdl (your mesh at scale {}, the object's physics and setup kept)",
+            req.import_scale
+        ),
+    });
     Ok((vmdl_abs, notes))
 }
 
@@ -1461,34 +1547,59 @@ fn stage_into_cs2(req: &ModelBuildReq) -> Result<(std::path::PathBuf, Vec<String
 /// ModelDoc so the model (weights, skeleton, camera) can be inspected by
 /// hand. Same launch pattern as the particle-editor inspector.
 pub fn open_in_modeldoc(req: &ModelBuildReq) -> Result<String, String> {
-    let cs2 = Path::new(&req.cs2_root);
-    let (_, _notes) = stage_into_cs2(req)?;
+    let root = toolchain_root(req)?;
+    let (_, _, addon) = req.kind.layout(&root);
+    let (_, _notes) = stage_sources(req)?;
     let vmdl_internal = req.vmdl_internal.replace('\\', "/");
-    let exe = cs2.join("game/bin/win64/cs2.exe");
+    // Heroes inspect in CS2's tools; props in the Deadlock CSDK's own
+    // (deadlock.exe -tools, same launch the particle inspector uses).
+    let (exe, args): (std::path::PathBuf, Vec<&str>) = match req.kind {
+        ModelKind::Hero => (root.join("game/bin/win64/cs2.exe"), vec!["-steam", "-tools"]),
+        ModelKind::Prop => (
+            ["bin_tools", "bin"]
+                .iter()
+                .map(|b| root.join("game").join(b).join("win64").join("deadlock.exe"))
+                .find(|p| p.exists())
+                .unwrap_or_else(|| root.join("game/bin_tools/win64/deadlock.exe")),
+            vec!["-tools", "-danger_mode_ignore_schema_mismatches"],
+        ),
+    };
     if !exe.exists() {
-        return Err(format!("CS2 not found at {}", exe.display()));
+        return Err(format!("tools not found at {}", exe.display()));
     }
     let mut cmd = std::process::Command::new(&exe);
     if let Some(dir) = exe.parent() {
         cmd.current_dir(dir);
     }
-    cmd.args(["-steam", "-tools", "-addon", CS2_ADDON, "-asset", &vmdl_internal]);
+    cmd.args(args);
+    cmd.args(["-addon", addon, "-asset", &vmdl_internal]);
     // Fire and forget - the tools outlive us.
-    cmd.spawn().map_err(|e| format!("launching CS2 Workshop Tools: {e}"))?;
+    cmd.spawn().map_err(|e| format!("launching the tools: {e}"))?;
     Ok(format!(
-        "staged your model into the {CS2_ADDON} addon - CS2's ModelDoc is opening (first launch takes a minute)"
+        "staged your model into the {addon} addon - ModelDoc is opening (first launch takes a minute)"
     ))
 }
 
 fn build_inner(req: &ModelBuildReq, rep: &mut ModelBuildReport) -> Result<String, String> {
-    let cs2 = Path::new(&req.cs2_root);
-    let compiler = cs2.join("game/bin/win64/resourcecompiler.exe");
-    if !compiler.exists() {
-        return Err(format!(
-            "CS2 Workshop Tools compiler not found at {} - install Counter-Strike 2 and check the Workshop Tools box in its Steam install options",
-            compiler.display()
-        ));
-    }
+    let root = toolchain_root(req)?;
+    // Heroes compile in CS2 (`game/bin`); the CSDK ships its compiler under
+    // `bin_tools` (full installs also have `bin`).
+    let compiler = match req.kind {
+        ModelKind::Hero => Some(root.join("game/bin/win64/resourcecompiler.exe"))
+            .filter(|p| p.exists())
+            .ok_or_else(|| format!(
+                "CS2 Workshop Tools compiler not found under {} - install Counter-Strike 2 and check the Workshop Tools box in its Steam install options",
+                root.display()
+            ))?,
+        ModelKind::Prop => ["game/bin_tools/win64/resourcecompiler.exe", "game/bin/win64/resourcecompiler.exe"]
+            .iter()
+            .map(|r| root.join(r))
+            .find(|p| p.exists())
+            .ok_or_else(|| format!(
+                "compile tools not found under {} - set up the compile tools in Settings",
+                root.display()
+            ))?,
+    };
     let vmdl_internal = req.vmdl_internal.replace('\\', "/");
     let hero_stem = vmdl_internal
         .rsplit('/')
@@ -1524,9 +1635,9 @@ fn build_inner(req: &ModelBuildReq, rep: &mut ModelBuildReport) -> Result<String
     }
 
     // 1+2. Shared with "Open in ModelDoc": stage the tree + generate the vmdl.
-    let (vmdl_abs, notes) = stage_into_cs2(req)?;
+    let (vmdl_abs, notes) = stage_sources(req)?;
     rep.steps.extend(notes);
-    let content = cs2.join("content/csgo_addons").join(CS2_ADDON);
+    let (content, game_dir, addon) = req.kind.layout(&root);
     let remaps = remap_pairs(req);
 
     // 3. Compile, auto-stubbing missing materials (they live in Deadlock's
@@ -1534,7 +1645,7 @@ fn build_inner(req: &ModelBuildReq, rep: &mut ModelBuildReport) -> Result<String
     //    trace in the artifact, which records the real paths).
     let mut last_out = String::new();
     for round in 1..=4 {
-        let out = run_cs2_compiler(cs2, &compiler, &vmdl_abs)?;
+        let out = run_model_compiler(&game_dir, &compiler, &vmdl_abs)?;
         // Success summary reads "OK: 1 compiled, 0 failed" - or "WARNING: 1
         // compiled, 0 failed" when benign warnings fired (unresolved bare FBX
         // material names warn but compile fine).
@@ -1587,9 +1698,11 @@ fn build_inner(req: &ModelBuildReq, rep: &mut ModelBuildReport) -> Result<String
     }
 
     // 4. Cache the artifact.
-    let compiled = cs2
-        .join("game/csgo_addons")
-        .join(CS2_ADDON)
+    let compiled = game_dir
+        .parent()
+        .map(|p| p.join(format!("{}_addons", game_dir.file_name().unwrap_or_default().to_string_lossy())))
+        .unwrap_or_default()
+        .join(addon)
         .join(format!("{vmdl_internal}_c").replace('/', std::path::MAIN_SEPARATOR_STR));
     if !compiled.exists() {
         return Err(format!("compiler reported OK but no artifact at {}", compiled.display()));
@@ -1649,8 +1762,8 @@ fn tail(s: &str, n: usize) -> String {
     lines[lines.len().saturating_sub(n)..].join("\n")
 }
 
-fn run_cs2_compiler(cs2: &Path, compiler: &Path, vmdl: &Path) -> Result<String, String> {
-    let game = cs2.join("game/csgo").to_string_lossy().into_owned();
+fn run_model_compiler(game_dir: &Path, compiler: &Path, vmdl: &Path) -> Result<String, String> {
+    let game = game_dir.to_string_lossy().into_owned();
     let input = vmdl.to_string_lossy().into_owned();
     let mut cmd = crate::procutil::quiet(compiler);
     if let Some(dir) = compiler.parent() {
@@ -2018,6 +2131,7 @@ mod tests {
         let game_vmat = ws.materials.first().cloned().expect("haze has materials");
         let req = ModelBuildReq {
             cs2_root: cs2.into(),
+            kind: ModelKind::Hero,
             workspace_dir: ws.dir.clone(),
             vmdl_internal: "models/heroes_staging/haze/haze.vmdl".into(),
             mesh_file: fbx.into(),
@@ -2224,6 +2338,59 @@ mod tests {
         let _ = std::fs::remove_dir_all(&out_cache);
     }
 
+    /// Object (non-hero) replacement end to end through the DEADLOCK CSDK -
+    /// no CS2 involved: decompile the soul container, swap in the test cube,
+    /// compile, and confirm the artifact carries the new mesh's material.
+    /// Ignored: needs this machine's game + tools installs.
+    #[test]
+    #[ignore]
+    fn e2e_prop_build_via_csdk() {
+        let helper = r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\tools\vpk-helper\dist\vpk-helper.exe";
+        let pak = r"D:\SteamLibrary\steamapps\common\Deadlock\game\citadel\pak01_dir.vpk";
+        let tools = r"C:\Users\ethob\Desktop\DeadlockModding\Reduced_CSDK_12";
+        let fbx = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/eim_testcube.fbx");
+        let scratch = std::env::temp_dir().join("eim_prop_e2e");
+        let _ = std::fs::remove_dir_all(&scratch);
+
+        let ws = workspace(
+            helper,
+            pak,
+            "models/props_gameplay/soul_container/soul_container.vmdl_c",
+            &scratch.join("ws"),
+            false,
+        )
+        .expect("workspace");
+        assert!(ws.files >= 2, "vmdl + mesh dmx: {}", ws.files);
+
+        let req = ModelBuildReq {
+            cs2_root: String::new(), // props never touch CS2
+            kind: ModelKind::Prop,
+            workspace_dir: ws.dir.clone(),
+            vmdl_internal: "models/props_gameplay/soul_container/soul_container.vmdl".into(),
+            mesh_file: fbx.into(),
+            material_override: None,
+            import_scale: 0.01,
+            artifact_out: scratch.join("soul_container.vmdl_c").to_string_lossy().into_owned(),
+            materials: vec![],
+            tools_root: Some(tools.into()),
+            materials_out: None,
+            camera: vec![],
+        };
+        let rep = build(&req);
+        for s in &rep.steps {
+            eprintln!("STEP {s}");
+        }
+        assert!(rep.ok, "{:?}", rep.steps);
+        let bytes = std::fs::read(&req.artifact_out).expect("artifact");
+        let refs = scan_vmdl_material_refs(&bytes);
+        eprintln!("REFS {refs:?}");
+        assert!(
+            refs.iter().any(|r| r.contains("eim_test")),
+            "the swapped mesh's material must be referenced: {refs:?}"
+        );
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
     /// The whole My Textures pipeline against the user's REAL sona-doorman
     /// FBX: decompile doorman, preflight lists its materials, every material
     /// gets a stand-in color texture, model compiles via CS2 + materials via
@@ -2292,6 +2459,7 @@ mod tests {
         eprintln!("SPECS {} textured, {remapped} remapped to game vmats", specs.len() - remapped);
         let req = ModelBuildReq {
             cs2_root: cs2.into(),
+            kind: ModelKind::Hero,
             workspace_dir: ws.dir.clone(),
             vmdl_internal: "models/heroes_wip/doorman_v2/doorman.vmdl".into(),
             mesh_file: fbx.into(),
