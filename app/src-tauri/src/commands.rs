@@ -1002,6 +1002,9 @@ pub struct ToolsPaths {
 #[tauri::command]
 pub async fn download_tools(app: tauri::AppHandle, url: String) -> Result<ToolsPaths, String> {
     use tauri::Manager;
+    // The URL comes in from the frontend; pin it to our own releases before it
+    // ever reaches curl's argv (see neturl.rs).
+    crate::neturl::check_https_url(&url, crate::neturl::GH_HOSTS)?;
     let tools_root = app
         .path()
         .app_data_dir()
@@ -1025,7 +1028,11 @@ pub async fn download_tools(app: tauri::AppHandle, url: String) -> Result<ToolsP
         std::fs::create_dir_all(&tools_root).map_err(|e| e.to_string())?;
         let zip = tools_root.join("eim_tools_download.zip");
         let out = crate::procutil::quiet(pick("curl"))
-            .args(["-L", "--fail", "-sS", "-o", &zip.to_string_lossy(), &url])
+            .args(["-L", "--fail", "-sS", "-o"])
+            .arg(&zip)
+            // `--` ends option parsing so the URL can never be read as a flag.
+            .arg("--")
+            .arg(&url)
             .output()
             .map_err(|e| format!("launching curl: {e}"))?;
         if !out.status.success() {
@@ -1087,6 +1094,7 @@ pub async fn download_tools(app: tauri::AppHandle, url: String) -> Result<ToolsP
 #[tauri::command]
 pub async fn download_ffmpeg(app: tauri::AppHandle, url: String) -> Result<String, String> {
     use tauri::Manager;
+    crate::neturl::check_https_url(&url, crate::neturl::GH_HOSTS)?;
     let tools_root = app
         .path()
         .app_data_dir()
@@ -1107,7 +1115,10 @@ pub async fn download_ffmpeg(app: tauri::AppHandle, url: String) -> Result<Strin
         std::fs::create_dir_all(&tools_root).map_err(|e| e.to_string())?;
         let zip = tools_root.join("eim_ffmpeg_download.zip");
         let out = crate::procutil::quiet(pick("curl"))
-            .args(["-L", "--fail", "-sS", "-o", &zip.to_string_lossy(), &url])
+            .args(["-L", "--fail", "-sS", "-o"])
+            .arg(&zip)
+            .arg("--")
+            .arg(&url)
             .output()
             .map_err(|e| format!("launching curl: {e}"))?;
         if !out.status.success() {
@@ -6286,6 +6297,10 @@ pub struct AppUpdate {
     /// Direct download URL of the release's NSIS installer asset, when one is
     /// attached — enables one-click "Install now" (else fall back to `url`).
     pub setup_asset: Option<String>,
+    /// The asset's SHA-256 as reported by the GitHub API (`digest`), when
+    /// present. Checked after download so a tampered/partial installer never
+    /// gets launched.
+    pub setup_sha256: Option<String>,
 }
 
 /// Check GitHub for a newer release. Returns None when up to date (or the
@@ -6322,20 +6337,32 @@ pub async fn check_app_update() -> Option<AppUpdate> {
             .unwrap_or("https://github.com/Moonahuwu/MoonahsModMaker/releases")
             .to_string();
         // Prefer the NSIS setup exe among the release assets (one-click path).
-        let setup_asset = body
+        let setup = body
             .get("assets")
             .and_then(|a| a.as_array())
             .and_then(|assets| {
                 assets.iter().find_map(|a| {
                     let name = a.get("name")?.as_str()?.to_lowercase();
                     if name.ends_with(".exe") && name.contains("setup") {
-                        Some(a.get("browser_download_url")?.as_str()?.to_string())
+                        let url = a.get("browser_download_url")?.as_str()?.to_string();
+                        // GitHub reports "sha256:<hex>"; older releases have no
+                        // digest at all, hence the Option.
+                        let digest = a
+                            .get("digest")
+                            .and_then(|d| d.as_str())
+                            .and_then(|d| d.strip_prefix("sha256:"))
+                            .map(|h| h.to_lowercase());
+                        Some((url, digest))
                     } else {
                         None
                     }
                 })
             });
-        Some(AppUpdate { current, latest, url, setup_asset })
+        let (setup_asset, setup_sha256) = match setup {
+            Some((u, d)) => (Some(u), d),
+            None => (None, None),
+        };
+        Some(AppUpdate { current, latest, url, setup_asset, setup_sha256 })
     })
     .await
     .ok()
@@ -6346,18 +6373,49 @@ pub async fn check_app_update() -> Option<AppUpdate> {
 /// and exit the app (NSIS can't replace a running exe). The installer takes
 /// it from there.
 #[tauri::command]
-pub async fn install_app_update(app: tauri::AppHandle, setup_url: String) -> Result<(), String> {
+pub async fn install_app_update(
+    app: tauri::AppHandle,
+    setup_url: String,
+    setup_sha256: Option<String>,
+) -> Result<(), String> {
+    // This ends in "run an exe", so the URL gets pinned to our own releases
+    // rather than trusted because the frontend handed it over.
+    crate::neturl::check_https_url(&setup_url, crate::neturl::GH_HOSTS)?;
     let dest = std::env::temp_dir().join("moonahs_mod_maker_update_setup.exe");
     let dest2 = dest.clone();
     tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+        // Never launch a stale download if this one fails halfway.
+        let _ = std::fs::remove_file(&dest2);
         let out = crate::procutil::quiet(r"C:\Windows\System32\curl.exe")
-            .args(["-sL", "-m", "300", "-H", "User-Agent: MoonahsModMaker", "-o"])
+            .args(["-sL", "--fail", "-m", "300", "-H", "User-Agent: MoonahsModMaker", "-o"])
             .arg(&dest2)
+            .arg("--")
             .arg(&setup_url)
             .output()
             .map_err(|e| e.to_string())?;
         if !out.status.success() || dest2.metadata().map(|m| m.len() < 1_000_000).unwrap_or(true) {
+            let _ = std::fs::remove_file(&dest2);
             return Err("download failed (or the file looks too small to be the installer)".into());
+        }
+        // Size is not integrity: verify the release digest when GitHub gave us
+        // one, and refuse to run the installer if it doesn't line up.
+        if let Some(expected) = setup_sha256.as_deref() {
+            let expected = expected.trim().to_lowercase();
+            if expected.len() == 64 && expected.chars().all(|c| c.is_ascii_hexdigit()) {
+                match crate::neturl::file_sha256(&dest2) {
+                    Some(actual) if actual == expected => {}
+                    Some(_) => {
+                        let _ = std::fs::remove_file(&dest2);
+                        return Err(
+                            "the downloaded installer doesn't match the checksum published with the release - not running it".into(),
+                        );
+                    }
+                    None => {
+                        let _ = std::fs::remove_file(&dest2);
+                        return Err("couldn't checksum the downloaded installer - not running it".into());
+                    }
+                }
+            }
         }
         Ok(())
     })
@@ -6848,6 +6906,9 @@ pub async fn gamebanana_download(
     model: Option<String>,
 ) -> Result<GbDownloadResult, String> {
     use tauri::Manager;
+    // `_sDownloadUrl` is attacker-controlled (mod uploader), so it gets pinned
+    // to GameBanana before it becomes a curl argument.
+    crate::neturl::check_https_url(&download_url, crate::neturl::GB_HOSTS)?;
     let dest_root = app
         .path()
         .app_data_dir()
@@ -6858,7 +6919,10 @@ pub async fn gamebanana_download(
             Some("Sound") => "Sound",
             _ => "Mod",
         };
-        let safe_name = file_name.replace(['/', '\\'], "_");
+        // `file_name` is `_sFile` straight off the GameBanana API, i.e. chosen
+        // by whoever uploaded the mod. Replacing separators wasn't enough:
+        // `..`, `C:evil.exe` and ADS suffixes all survived it.
+        let safe_name = crate::neturl::safe_file_name(&file_name, "download.bin");
         let lower = safe_name.to_lowercase();
         // Fresh dir per mod so an older version's files can't mix in.
         let dir = dest_root.join(format!("{}{mod_id}", if model == "Sound" { "s" } else { "" }));
@@ -6877,6 +6941,11 @@ pub async fn gamebanana_download(
             }
         };
         let dest = dir.join(&safe_name);
+        // Paranoia: after safe_file_name this can't fail, but a join that
+        // escaped the per-mod dir is exactly the bug we're closing.
+        if dest.parent() != Some(dir.as_path()) {
+            return Err("refusing a download that would land outside its own folder".into());
+        }
         let out = crate::procutil::quiet(pick("curl"))
             .args([
                 "-L",
@@ -6887,9 +6956,10 @@ pub async fn gamebanana_download(
                 "-H",
                 "User-Agent: MoonahsModMaker",
                 "-o",
-                &dest.to_string_lossy(),
-                &download_url,
             ])
+            .arg(&dest)
+            .arg("--")
+            .arg(&download_url)
             .output()
             .map_err(|e| format!("launching curl: {e}"))?;
         if !out.status.success() {

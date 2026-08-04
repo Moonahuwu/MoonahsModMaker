@@ -5277,7 +5277,7 @@ export default function App() {
     setUpdating(true);
     try {
       // On success the app exits and the installer takes over.
-      await installAppUpdate(appUpdate.setupAsset);
+      await installAppUpdate(appUpdate.setupAsset, appUpdate.setupSha256);
     } catch (e) {
       push("error", `Update failed: ${e} - opening the release page instead`);
       void openUrl(appUpdate.url);
