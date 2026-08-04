@@ -1199,6 +1199,8 @@ export interface AppUpdate {
   url: string;
   /** Direct installer download when the release ships one (one-click path). */
   setupAsset?: string | null;
+  /** SHA-256 published with the release asset; verified before it's run. */
+  setupSha256?: string | null;
 }
 
 /** Newer GitHub release, or null when up to date / offline. */
@@ -1207,8 +1209,11 @@ export function checkAppUpdate(): Promise<AppUpdate | null> {
 }
 
 /** One-click update: downloads the installer, launches it, exits the app. */
-export function installAppUpdate(setupUrl: string): Promise<void> {
-  return invoke("install_app_update", { setupUrl });
+export function installAppUpdate(
+  setupUrl: string,
+  setupSha256?: string | null,
+): Promise<void> {
+  return invoke("install_app_update", { setupUrl, setupSha256: setupSha256 ?? null });
 }
 
 export interface GbCredit {

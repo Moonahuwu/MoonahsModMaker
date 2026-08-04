@@ -5,6 +5,7 @@ mod digimod;
 mod host;
 mod install;
 mod models;
+mod neturl;
 mod packsync;
 mod paths;
 mod procutil;
