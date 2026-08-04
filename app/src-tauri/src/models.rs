@@ -1049,6 +1049,51 @@ pub struct MaterialSpec {
     pub game_vmat: Option<String>,
 }
 
+/// Width/height from a PNG's IHDR (bytes 16..24).
+pub fn png_size(path: &Path) -> Option<(u32, u32)> {
+    let mut head = [0u8; 24];
+    {
+        use std::io::Read;
+        let mut f = std::fs::File::open(path).ok()?;
+        f.read_exact(&mut head).ok()?;
+    }
+    if &head[..8] != b"\x89PNG\r\n\x1a\n" {
+        return None;
+    }
+    let w = u32::from_be_bytes(head[16..20].try_into().ok()?);
+    let h = u32::from_be_bytes(head[20..24].try_into().ok()?);
+    (w > 0 && h > 0).then_some((w, h))
+}
+
+/// Nearest power of two, clamped to sane texture sizes.
+pub fn nearest_pow2(v: u32) -> u32 {
+    let v = v.clamp(4, 4096);
+    let lower = 1u32 << (31 - v.leading_zeros());
+    let upper = lower.saturating_mul(2).min(4096);
+    // Round to whichever is closer (in log space this is the usual choice).
+    if v - lower <= upper.saturating_sub(v) { lower } else { upper }
+}
+
+fn resize_png(ffmpeg: Option<&str>, file: &Path, w: u32, h: u32) -> Result<(), String> {
+    let tmp = file.with_extension("resized.png");
+    let exe = ffmpeg.unwrap_or("ffmpeg");
+    let out = crate::procutil::quiet(exe)
+        .args(["-y", "-i"])
+        .arg(file)
+        .args(["-vf", &format!("scale={w}:{h}"), "-frames:v", "1"])
+        .arg(&tmp)
+        .output()
+        .map_err(|e| format!("running ffmpeg: {e}"))?;
+    if !out.status.success() || !tmp.is_file() {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!(
+            "couldn't resize {} to {w}x{h} (textures must be power-of-two)",
+            file.file_name().unwrap_or_default().to_string_lossy()
+        ));
+    }
+    std::fs::rename(&tmp, file).map_err(|e| e.to_string())
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct MaterialArtifact {
@@ -1067,6 +1112,7 @@ fn compile_materials(
     hero_stem: &str,
     specs: &[MaterialSpec],
     out_cache: &Path,
+    ffmpeg: Option<&str>,
     rep: &mut ModelBuildReport,
 ) -> Result<Vec<MaterialArtifact>, String> {
     // The downloadable tools bundle ships the compiler under `bin_tools`; a
@@ -1100,25 +1146,38 @@ fn compile_materials(
     for spec in specs {
         let Some(color_src) = spec.color.as_deref() else { continue };
         let stage_tex = |src: &str| -> Result<String, String> {
-            let mut name = Path::new(src)
-                .file_name()
+            // ALWAYS land as a real .png: resourcecompiler rejects other
+            // extensions outright ("Unknown file type" on .jpeg) and also
+            // chokes on a file merely NAMED .png that isn't one. stage_as_png
+            // sniffs the magic bytes and routes everything else via ffmpeg.
+            let stem = Path::new(src)
+                .file_stem()
                 .map(|f| f.to_string_lossy().to_lowercase())
                 .ok_or_else(|| format!("texture has no file name: {src}"))?;
-            let mut dest = tex_dir.join(&name);
+            let safe: String = stem
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+                .collect();
             // Same filename from a different folder: salt with a path hash so
             // two materials' `color.png`s can't silently share one file.
-            if dest.exists() && std::fs::metadata(&dest).map(|m| m.len()).ok()
-                != std::fs::metadata(src).map(|m| m.len()).ok()
-            {
-                let mut h: u32 = 2166136261;
-                for b in src.to_lowercase().bytes() {
-                    h = (h ^ b as u32).wrapping_mul(16777619);
-                }
-                name = format!("{h:08x}_{name}");
-                dest = tex_dir.join(&name);
+            let mut h: u32 = 2166136261;
+            for b in src.to_lowercase().bytes() {
+                h = (h ^ b as u32).wrapping_mul(16777619);
             }
+            let name = format!("{safe}_{h:08x}.png");
+            let dest = tex_dir.join(&name);
             if !dest.exists() {
-                std::fs::copy(src, &dest).map_err(|e| format!("copy {src}: {e}"))?;
+                crate::compile::stage_as_png(ffmpeg, src, &dest)
+                    .map_err(|e| format!("{}: {e}", Path::new(src).file_name().unwrap_or_default().to_string_lossy()))?;
+                // Source 2 can't mip a non-power-of-two texture ("Cannot
+                // filter non-power-of-two texture 595x441"), which kills the
+                // whole material compile - so snap the size here.
+                if let Some((w, h)) = png_size(&dest) {
+                    let (tw, th) = (nearest_pow2(w), nearest_pow2(h));
+                    if (tw, th) != (w, h) {
+                        resize_png(ffmpeg, &dest, tw, th)?;
+                    }
+                }
             }
             Ok(format!("{tex_dir_rel}/{name}"))
         };
@@ -1243,6 +1302,106 @@ pub struct MatchedMaterial {
     pub metalness: Option<String>,
 }
 
+/// Image files an FBX points at (Blender writes the texture names into
+/// RelativeFilename/Filename properties). Byte-scanned: FBX strings are
+/// stored plainly whatever the version, so this needs no format knowledge.
+pub fn scan_fbx_texture_refs(bytes: &[u8]) -> Vec<String> {
+    const EXTS: [&str; 8] = [".png", ".jpg", ".jpeg", ".tga", ".bmp", ".tif", ".tiff", ".psd"];
+    let mut out: Vec<String> = Vec::new();
+    let mut run_start: Option<usize> = None;
+    for i in 0..=bytes.len() {
+        let printable = i < bytes.len() && (0x20..0x7f).contains(&bytes[i]);
+        match (printable, run_start) {
+            (true, None) => run_start = Some(i),
+            (false, Some(s)) => {
+                if let Ok(run) = std::str::from_utf8(&bytes[s..i]) {
+                    let lower = run.to_lowercase();
+                    // A property may hold exactly one path; take the run only
+                    // when it ENDS in an image extension.
+                    if EXTS.iter().any(|e| lower.ends_with(e)) && run.len() >= 5 {
+                        let cleaned = run.trim().to_string();
+                        if !out.contains(&cleaned) {
+                            out.push(cleaned);
+                        }
+                    }
+                }
+                run_start = None;
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Resolve an FBX's texture references to real files: absolute paths as-is,
+/// otherwise by base name next to the FBX (and one level down, e.g. a
+/// `textures/` folder Blender exported alongside).
+pub fn resolve_fbx_textures(fbx: &Path) -> Vec<String> {
+    let Ok(bytes) = std::fs::read(fbx) else { return Vec::new() };
+    let refs = scan_fbx_texture_refs(&bytes);
+    if refs.is_empty() {
+        return Vec::new();
+    }
+    let dir = fbx.parent().unwrap_or(Path::new("."));
+    // Index every image near the FBX by lowercased base name.
+    let mut near: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    fn index(dir: &Path, depth: usize, near: &mut std::collections::HashMap<String, String>) {
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                if depth < 2 {
+                    index(&p, depth + 1, near);
+                }
+            } else if let Some(name) = p.file_name() {
+                let lower = name.to_string_lossy().to_lowercase();
+                if [".png", ".jpg", ".jpeg", ".tga", ".bmp", ".tif", ".tiff", ".psd"]
+                    .iter()
+                    .any(|e| lower.ends_with(e))
+                {
+                    near.entry(lower).or_insert_with(|| p.to_string_lossy().into_owned());
+                }
+            }
+        }
+    }
+    index(dir, 0, &mut near);
+
+    let mut out: Vec<String> = Vec::new();
+    for r in refs {
+        let norm = r.replace('\\', "/");
+        let base = norm.rsplit('/').next().unwrap_or(&norm).to_lowercase();
+        let hit = if Path::new(&r).is_absolute() && Path::new(&r).exists() {
+            Some(r.clone())
+        } else {
+            near.get(&base).cloned()
+        };
+        if let Some(h) = hit {
+            if !out.contains(&h) {
+                out.push(h);
+            }
+        }
+    }
+    out
+}
+
+/// Assign a list of texture FILES to material names (the shared core of the
+/// folder picker and the FBX auto-detect).
+pub fn match_texture_files(files: &[String], materials: &[String]) -> Vec<MatchedMaterial> {
+    let pairs: Vec<(String, String)> = files
+        .iter()
+        .filter_map(|p| {
+            let name = Path::new(p).file_name()?.to_string_lossy().to_lowercase();
+            let trimmed = match name.rsplit_once('.') {
+                Some((rest, tail)) if tail.chars().all(|c| c.is_ascii_digit()) => rest.to_string(),
+                _ => name,
+            };
+            let stem = trimmed.rsplit_once('.').map(|(s, _)| s.to_string()).unwrap_or(trimmed);
+            Some((stem, p.clone()))
+        })
+        .collect();
+    assign_textures(pairs, materials)
+}
+
 pub fn match_textures(folder: &Path, materials: &[String]) -> Vec<MatchedMaterial> {
     let mut files: Vec<(String, String)> = Vec::new(); // (lowercased stem, abs path)
     fn walk(dir: &Path, depth: usize, files: &mut Vec<(String, String)>) {
@@ -1270,6 +1429,11 @@ pub fn match_textures(folder: &Path, materials: &[String]) -> Vec<MatchedMateria
         }
     }
     walk(folder, 0, &mut files);
+    assign_textures(files, materials)
+}
+
+/// Prefix-assign (stem, path) pairs to material names.
+fn assign_textures(mut files: Vec<(String, String)>, materials: &[String]) -> Vec<MatchedMaterial> {
     files.sort();
 
     // Longest names first so "Body5F" beats "Body" for "body5f_base_color".
@@ -1404,6 +1568,9 @@ pub struct ModelBuildReq {
     /// Cache dir for compiled material files (vmat_c + vtex_c tree).
     #[serde(default)]
     pub materials_out: Option<String>,
+    /// ffmpeg, used to normalize textures to real PNGs before compiling.
+    #[serde(default)]
+    pub ffmpeg_path: Option<String>,
     /// Gameplay-camera value overrides spliced into the generated vmdl's
     /// CitadelCameraSettings_t (the community's "fix the camera in ModelDoc"
     /// step, without ModelDoc).
@@ -1629,6 +1796,7 @@ fn build_inner(req: &ModelBuildReq, rep: &mut ModelBuildReport) -> Result<String
                 &hero_stem,
                 &req.materials,
                 Path::new(out_cache),
+                req.ffmpeg_path.as_deref().filter(|p| !p.trim().is_empty()),
                 rep,
             )?;
         }
@@ -2148,6 +2316,7 @@ mod tests {
             }],
             tools_root: None,
             materials_out: None,
+            ffmpeg_path: None,
             // A distinctive camera edit - keyvalues embed as TEXT in the
             // artifact, so the exact string must survive the compile.
             camera: vec![CameraKey { key: "m_flCameraSideOffset".into(), value: -12.25 }],
@@ -2249,6 +2418,56 @@ mod tests {
     }
 
     #[test]
+    fn pow2_snapping_picks_the_closer_size() {
+        assert_eq!(nearest_pow2(595), 512);
+        assert_eq!(nearest_pow2(441), 512);
+        assert_eq!(nearest_pow2(1024), 1024);
+        assert_eq!(nearest_pow2(1023), 1024);
+        assert_eq!(nearest_pow2(3), 4); // clamped floor
+        assert_eq!(nearest_pow2(9000), 4096); // clamped ceiling
+    }
+
+    #[test]
+    fn fbx_texture_refs_scan_finds_image_names() {
+        // Printable runs ending in an image extension, nothing else.
+        let bytes = b"\x00\x05junkAce Of Spades_back_Normal.png\x00\x0bnot_a_path\x00Body5F_Base_color.PNG\x00mesh.fbx\x00";
+        let refs = scan_fbx_texture_refs(bytes);
+        assert!(refs.iter().any(|r| r.ends_with("Ace Of Spades_back_Normal.png")), "{refs:?}");
+        assert!(refs.iter().any(|r| r.ends_with("Body5F_Base_color.PNG")), "{refs:?}");
+        assert!(!refs.iter().any(|r| r.contains("mesh.fbx")), "{refs:?}");
+    }
+
+    /// The user's real sona export links 30+ textures by name.
+    #[test]
+    fn fbx_texture_refs_on_the_real_export_if_present() {
+        let p = Path::new(concat!(
+            r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder",
+            r"\ReferenceFiles\deadlock_moonah_doormanv4Test.fbx"
+        ));
+        if !p.exists() {
+            return;
+        }
+        let refs = scan_fbx_texture_refs(&std::fs::read(p).unwrap());
+        assert!(refs.len() > 20, "expected many texture refs, got {}", refs.len());
+        assert!(refs.iter().any(|r| r.to_lowercase().contains("normal")), "{refs:?}");
+    }
+
+    #[test]
+    fn match_texture_files_assigns_from_a_list() {
+        let files = vec![
+            r"C:\art\Body5F_Base_color.png".to_string(),
+            r"C:\art\Body5F_Normal.png".to_string(),
+            r"C:\art\Eyes_Base_color.png".to_string(),
+        ];
+        let out = match_texture_files(&files, &["Body5F".into(), "Eyes".into(), "Fluff".into()]);
+        let get = |n: &str| out.iter().find(|m| m.name == n).unwrap();
+        assert!(get("Body5F").color.as_deref().unwrap().ends_with("Body5F_Base_color.png"));
+        assert!(get("Body5F").normal.is_some());
+        assert!(get("Eyes").color.is_some());
+        assert!(get("Fluff").color.is_none());
+    }
+
+    #[test]
     fn match_textures_by_prefix_longest_name_wins() {
         let dir = std::env::temp_dir().join("eim_match_tex_test");
         let _ = std::fs::remove_dir_all(&dir);
@@ -2322,7 +2541,7 @@ mod tests {
             },
         ];
         let mut rep = ModelBuildReport::default();
-        let arts = compile_materials(tools, "haze", &specs, &out_cache, &mut rep).expect("compile");
+        let arts = compile_materials(tools, "haze", &specs, &out_cache, None, &mut rep).expect("compile");
         for s in &rep.steps {
             eprintln!("STEP {s}");
         }
@@ -2335,6 +2554,47 @@ mod tests {
         // The color texture compiled somewhere under materials/.
         assert!(arts.iter().any(|a| a.target_rel.starts_with("materials/") && a.target_rel.ends_with(".vtex_c")));
         assert!(arts.iter().all(|a| Path::new(&a.artifact).exists()));
+        let _ = std::fs::remove_dir_all(&out_cache);
+    }
+
+    /// A `.jpeg` texture must compile: resourcecompiler rejects the extension
+    /// outright ("Unknown file type"), so staging has to normalize it to a
+    /// real PNG first. Reproduces the user's steamhappy build failure.
+    #[test]
+    #[ignore]
+    fn e2e_jpeg_texture_normalizes_and_compiles() {
+        let tools = Path::new(r"C:\Users\ethob\Desktop\DeadlockModding\Reduced_CSDK_12");
+        let jpeg = Path::new(
+            r"C:\Users\ethob\AppData\Local\Temp\claude\C--Users-ethob-Desktop-DeadlockModding-EasyIntroModder\1f5318c3-f88e-405a-8761-0959a6b52035\scratchpad\jpegtest\steamhappy_roughness.jpeg",
+        );
+        if !tools.exists() || !jpeg.exists() {
+            eprintln!("skipping: tools or fixture missing");
+            return;
+        }
+        let out_cache = std::env::temp_dir().join("eim_jpeg_e2e");
+        let _ = std::fs::remove_dir_all(&out_cache);
+        let specs = vec![MaterialSpec {
+            name: "steamhappy".into(),
+            color: Some(jpeg.to_string_lossy().into_owned()),
+            normal: None,
+            roughness: Some(jpeg.to_string_lossy().into_owned()),
+            metalness: None,
+            game_vmat: None,
+        }];
+        let mut rep = ModelBuildReport::default();
+        let arts = compile_materials(tools, "idol_urn", &specs, &out_cache, None, &mut rep)
+            .expect("a .jpeg texture must compile after normalization");
+        for s in &rep.steps {
+            eprintln!("STEP {s}");
+        }
+        assert!(arts.iter().any(|a| a.target_rel == "steamhappy.vmat_c"), "{arts:?}");
+        // And the staged source really became a PNG.
+        let staged = tools.join("content/citadel_addons/eim_models/materials/eim_models/idol_urn");
+        let names: Vec<String> = std::fs::read_dir(&staged)
+            .map(|rd| rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+            .unwrap_or_default();
+        assert!(names.iter().all(|n| !n.to_lowercase().ends_with(".jpeg")), "{names:?}");
+        assert!(names.iter().any(|n| n.to_lowercase().ends_with(".png")), "{names:?}");
         let _ = std::fs::remove_dir_all(&out_cache);
     }
 
@@ -2374,6 +2634,7 @@ mod tests {
             materials: vec![],
             tools_root: Some(tools.into()),
             materials_out: None,
+            ffmpeg_path: None,
             camera: vec![],
         };
         let rep = build(&req);
@@ -2469,6 +2730,7 @@ mod tests {
             materials: specs.clone(),
             tools_root: Some(tools.into()),
             materials_out: Some(scratch.join("doorman_mats").to_string_lossy().into_owned()),
+            ffmpeg_path: None,
             camera: vec![],
         };
         let rep = build(&req);

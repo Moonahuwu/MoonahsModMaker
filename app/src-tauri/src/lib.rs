@@ -118,6 +118,7 @@ pub fn run() {
             commands::prop_thumb,
             commands::model_gltf,
             commands::match_material_textures,
+            commands::fbx_auto_textures,
             commands::probe_audio,
             commands::process_audio,
             commands::pack_vpk,

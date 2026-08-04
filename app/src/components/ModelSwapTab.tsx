@@ -4,6 +4,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { appDataDir, join } from "@tauri-apps/api/path";
 import {
   heroModelTarget,
+  fbxAutoTextures,
   matchMaterialTextures,
   modelBuild,
   modelGltf,
@@ -104,6 +105,8 @@ export function ModelSwapTab({
   // The vanilla model as glTF: shown in the 3D preview, and the same export
   // users download to start from in Blender.
   const [previewGlb, setPreviewGlb] = useState("");
+  // Preview shows the vanilla model until a mesh is picked, then yours.
+  const [previewMine, setPreviewMine] = useState(true);
   const [downloading, setDownloading] = useState(false);
 
   const cs2Ok = useMemo(() => settings.cs2Root.trim().length > 0, [settings.cs2Root]);
@@ -235,6 +238,7 @@ export function ModelSwapTab({
   /** Preflight + per-material texture rows for a chosen mesh file. */
   async function analyzeMesh(sel: string, w: ModelWorkspace, keepSpecs?: MatchedMaterial[]) {
     setMeshFile(sel);
+    setPreviewMine(true);
     setPreflight(null);
     setTexSpecs([]);
     // Blender's default FBX export is in centimeters: everything imports x100
@@ -255,10 +259,21 @@ export function ModelSwapTab({
             p,
           ]),
         );
+        // Textures the FBX itself links (Blender writes their names into the
+        // export) - resolved next to the file, so a normal export needs no
+        // folder picking at all.
+        let linked: MatchedMaterial[] = [];
+        try {
+          linked = await fbxAutoTextures(sel, pf.materials);
+        } catch {
+          /* auto-detect is a convenience - never block on it */
+        }
         setTexSpecs(
           pf.materials.map((name) => {
             const kept = keepSpecs?.find((s) => s.name === name);
             if (kept) return kept;
+            const auto = linked.find((l) => l.name === name);
+            if (auto?.color) return { ...auto, gameVmat: null };
             const game = gameByStem.get(name.toLowerCase()) ?? null;
             return {
               name,
@@ -270,6 +285,10 @@ export function ModelSwapTab({
             };
           }),
         );
+        const found = linked.filter((l) => l.color).length;
+        if (found > 0) {
+          push("success", `${found} texture(s) picked up from the model file`);
+        }
         if (pf.materials.length === 0) setMatMode("game");
       } catch (e) {
         push("error", `Preflight failed: ${e}`);
@@ -444,6 +463,7 @@ export function ModelSwapTab({
         // just when custom textures are involved.
         toolsRoot: useTextures || target.kind === "prop" ? settings.csdkRoot : null,
         materialsOut: useTextures ? materialsOut : null,
+        ffmpegPath: settings.ffmpegPath || null,
         camera,
       });
       setBuildSteps(rep.steps);
@@ -717,6 +737,25 @@ export function ModelSwapTab({
             {/* The real thing, in 3D - textures alone never showed what an
                 object actually looks like. */}
             <div className="flex w-64 shrink-0 flex-col gap-1.5">
+              {meshFile && (
+                <div className="flex items-center gap-1 text-[10px]">
+                  {([[true, "Your model"], [false, "Original"]] as [boolean, string][]).map(
+                    ([mine, label]) => (
+                      <button
+                        key={label}
+                        onClick={() => setPreviewMine(mine)}
+                        className={`rounded border px-2 py-0.5 transition ${
+                          previewMine === mine
+                            ? "border-rose-400/50 bg-rose-400/10 text-rose-200"
+                            : "border-zinc-700 text-zinc-400 hover:bg-zinc-800"
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ),
+                  )}
+                </div>
+              )}
               <Suspense
                 fallback={
                   <div className="flex h-48 w-full items-center justify-center rounded-lg border border-zinc-800 bg-zinc-950 text-[11px] text-zinc-500">
@@ -724,7 +763,18 @@ export function ModelSwapTab({
                   </div>
                 }
               >
-                <ModelPreview3D glbPath={previewGlb} className="h-48 w-full border border-zinc-800" />
+                <ModelPreview3D
+                  glbPath={previewGlb}
+                  fbxPath={
+                    meshFile && previewMine && meshFile.toLowerCase().endsWith(".fbx")
+                      ? meshFile
+                      : undefined
+                  }
+                  textures={Object.fromEntries(
+                    texSpecs.filter((s) => s.color).map((s) => [s.name, s.color as string]),
+                  )}
+                  className="h-48 w-full border border-zinc-800"
+                />
               </Suspense>
               <button
                 onClick={() => void downloadForBlender()}

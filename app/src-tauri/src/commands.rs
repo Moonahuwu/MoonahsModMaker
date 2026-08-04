@@ -1965,6 +1965,25 @@ pub async fn match_material_textures(
     .map_err(|e| e.to_string())?
 }
 
+/// Textures the FBX itself points at, resolved to real files near it and
+/// assigned to its material names - so a Blender export that already has
+/// its images linked needs no folder picking at all.
+#[tauri::command]
+pub async fn fbx_auto_textures(
+    fbx_path: String,
+    materials: Vec<String>,
+) -> Result<Vec<crate::models::MatchedMaterial>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let files = crate::models::resolve_fbx_textures(std::path::Path::new(&fbx_path));
+        if files.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(crate::models::match_texture_files(&files, &materials))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HeroPortrait {

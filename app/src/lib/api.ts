@@ -699,6 +699,15 @@ export interface ModelMaterialSpec {
   gameVmat?: string | null;
 }
 
+/** Textures the FBX already points at, assigned to its materials. Empty
+ *  when the export carries no image links. */
+export function fbxAutoTextures(
+  fbxPath: string,
+  materials: string[],
+): Promise<MatchedMaterial[]> {
+  return invoke("fbx_auto_textures", { fbxPath, materials });
+}
+
 /** Auto-matched texture set per material name (color may be missing). */
 export interface MatchedMaterial {
   name: string;
@@ -764,6 +773,8 @@ export function modelBuild(req: {
   toolsRoot?: string | null;
   /** Cache dir for the compiled material files. */
   materialsOut?: string | null;
+  /** ffmpeg - textures are normalized to real PNGs before compiling. */
+  ffmpegPath?: string | null;
   /** Camera value overrides spliced into the vmdl's CitadelCameraSettings_t. */
   camera?: CameraKey[];
 }): Promise<ModelBuildReport> {

@@ -2,8 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
+
+/** A material name -> the color texture the user assigned to it. */
+export type PreviewTextures = Record<string, string>;
 
 /**
  * Turntable preview of a game model, loaded from a .glb the backend exported
@@ -14,10 +18,16 @@ import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment
  */
 export function ModelPreview3D({
   glbPath,
+  fbxPath,
+  textures,
   className = "",
 }: {
   /** Absolute path of the exported .glb, or "" while it's being made. */
   glbPath: string;
+  /** The user's own mesh - when set, THIS renders instead of the vanilla glb. */
+  fbxPath?: string;
+  /** Color textures per material name, applied to the user's mesh. */
+  textures?: PreviewTextures;
   className?: string;
 }) {
   const holder = useRef<HTMLDivElement | null>(null);
@@ -26,7 +36,7 @@ export function ModelPreview3D({
 
   useEffect(() => {
     const mount = holder.current;
-    if (!mount || !glbPath) return;
+    if (!mount || !(fbxPath || glbPath)) return;
     setError(null);
     setReady(false);
 
@@ -71,17 +81,66 @@ export function ModelPreview3D({
 
     let root: THREE.Object3D | null = null;
     let disposed = false;
-    let src = glbPath;
+    let src = fbxPath || glbPath;
     try {
-      src = convertFileSrc(glbPath);
+      src = convertFileSrc(fbxPath || glbPath);
     } catch {
       /* outside Tauri (browser preview): fall through with the raw path */
     }
-    new GLTFLoader().load(
+    const isFbx = !!fbxPath;
+    const loader = isFbx ? new FBXLoader() : new GLTFLoader();
+    loader.load(
       src,
-      (gltf) => {
+      // FBXLoader hands back the object itself; GLTFLoader wraps it.
+      (loaded: unknown) => {
         if (disposed) return;
-        root = gltf.scene;
+        root = (loaded as { scene?: THREE.Object3D }).scene ?? (loaded as THREE.Object3D);
+        if (isFbx) {
+          // Paint the user's assigned color maps onto their own materials,
+          // so this shows what the build will actually produce.
+          const texLoader = new THREE.TextureLoader();
+          const cache = new Map<string, THREE.Texture>();
+          root.traverse((o) => {
+            const mesh = o as THREE.Mesh;
+            if (!mesh.isMesh) return;
+            const wasArray = Array.isArray(mesh.material);
+            const mats = wasArray ? (mesh.material as THREE.Material[]) : [mesh.material as THREE.Material];
+            const swapped = mats.map((m) => {
+              const name = (m as THREE.Material)?.name ?? "";
+              const src = textures?.[name];
+              const std = new THREE.MeshStandardMaterial({
+                name,
+                color: 0xffffff,
+                roughness: 0.85,
+                metalness: 0,
+              });
+              if (src) {
+                let tex = cache.get(src);
+                if (!tex) {
+                  let url = src;
+                  try {
+                    url = convertFileSrc(src);
+                  } catch {
+                    /* browser preview */
+                  }
+                  tex = texLoader.load(url);
+                  tex.colorSpace = THREE.SRGBColorSpace;
+                  tex.flipY = false; // FBX/glTF UV convention
+                  cache.set(src, tex);
+                }
+                std.map = tex;
+              } else {
+                // Unassigned materials read as "missing", not as white.
+                std.color = new THREE.Color(0x8b5cf6);
+                std.wireframe = false;
+                std.opacity = 0.85;
+                std.transparent = true;
+              }
+              return std;
+            });
+            mesh.material = wasArray ? swapped : swapped[0];
+          });
+        }
         // Source models are Z-up, glTF is Y-up. The exporter usually
         // converts, but stand the model up if it came through lying down.
         let box = new THREE.Box3().setFromObject(root);
@@ -138,14 +197,14 @@ export function ModelPreview3D({
       renderer.dispose();
       renderer.domElement.remove();
     };
-  }, [glbPath]);
+  }, [glbPath, fbxPath, textures]);
 
   return (
     <div className={`relative overflow-hidden rounded-lg bg-zinc-950 ${className}`}>
       <div ref={holder} className="h-full w-full" />
       {!ready && !error && (
         <p className="pointer-events-none absolute inset-0 flex items-center justify-center text-[11px] text-zinc-500">
-          {glbPath ? "Loading the model…" : "Preparing the model…"}
+          {fbxPath || glbPath ? "Loading the model…" : "Preparing the model…"}
         </p>
       )}
       {error && (
