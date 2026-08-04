@@ -799,6 +799,12 @@ export function modelGltf(
   return invoke("model_gltf", { helperPath, pakPath, modelInternal, destDir: destDir ?? null });
 }
 
+/** Store a rendered picture of a model as its card image (data: URL from
+ *  the 3D preview). Returns the cached PNG path. */
+export function savePropRender(modelInternal: string, dataUrl: string): Promise<string> {
+  return invoke("save_prop_render", { modelInternal, dataUrl });
+}
+
 /** Card art for an object: its own color texture, decoded from the game
  *  files and cached in app-data. Rejects when the model has no material. */
 export function propThumb(

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { propThumb } from "../lib/api";
+import { modelGltf, propThumb, savePropRender } from "../lib/api";
 import catalog from "../data/objectCatalog.json";
 
 export interface ObjectTarget {
@@ -38,10 +38,13 @@ export function objectByModel(model: string): ObjectTarget | undefined {
   return OBJECT_TARGETS.find((t) => t.model === m);
 }
 
-/** convertFileSrc throws outside Tauri (browser preview) - degrade to none. */
+/** convertFileSrc throws outside Tauri (browser preview) - degrade to none.
+ *  Any `?v=` cache-buster is split off first: it belongs on the URL, not on
+ *  the file path being converted. */
 function fileSrc(p: string): string {
+  const [path, query] = p.split("?");
   try {
-    return convertFileSrc(p);
+    return convertFileSrc(path) + (query ? `?${query}` : "");
   } catch {
     return "";
   }
@@ -70,6 +73,7 @@ export function ObjectPicker({
 }) {
   const [query, setQuery] = useState("");
   const [thumbs, setThumbs] = useState<Record<string, string | "none">>({});
+  const [rendering, setRendering] = useState(false);
   // One in-flight fetch per model, ever - the backend caches on disk too.
   const asked = useRef<Set<string>>(new Set());
 
@@ -91,18 +95,52 @@ export function ObjectPicker({
     if (!helperPath || !pakPath) return;
     let cancelled = false;
     (async () => {
-      // Sequential: each miss is a decompile, and a burst of them would
-      // stall the UI thread's IPC queue for no visible gain.
+      // Two passes, both sequential (a burst of decompiles would stall the
+      // IPC queue for no visible gain):
+      //  1. whatever art is already cached - instant, fills the grid
+      //  2. a real 3D render per model, which replaces it and is cached
+      //     from then on
+      const cached: Record<string, string> = {};
       for (const t of OBJECT_TARGETS) {
         if (cancelled) return;
         if (asked.current.has(t.model)) continue;
         asked.current.add(t.model);
         try {
           const png = await propThumb(helperPath, pakPath, t.model);
+          cached[t.model] = png;
           if (!cancelled) setThumbs((p) => ({ ...p, [t.model]: png }));
         } catch {
           if (!cancelled) setThumbs((p) => ({ ...p, [t.model]: "none" }));
         }
+      }
+      if (cancelled) return;
+      // A cached render is already named render.png - don't redo those.
+      const todo = OBJECT_TARGETS.filter(
+        (t) => !(cached[t.model] ?? "").endsWith("render.png"),
+      );
+      if (todo.length === 0) return;
+      setRendering(true);
+      // three.js only loads here, and only the first time the grid is opened
+      // with un-rendered models.
+      const { renderModelThumb, disposeThumbRenderer } = await import("../lib/thumbRender");
+      try {
+        for (const t of todo) {
+          if (cancelled) return;
+          try {
+            const glb = await modelGltf(helperPath, pakPath, t.model);
+            const dataUrl = await renderModelThumb(glb);
+            const saved = await savePropRender(t.model, dataUrl);
+            if (!cancelled) {
+              // Cache-bust: the path is stable but the picture changed.
+              setThumbs((p) => ({ ...p, [t.model]: `${saved}?v=${Date.now()}` }));
+            }
+          } catch {
+            /* keep whatever art this card already had */
+          }
+        }
+      } finally {
+        disposeThumbRenderer();
+        if (!cancelled) setRendering(false);
       }
     })();
     return () => {
@@ -122,6 +160,9 @@ export function ObjectPicker({
         <span className="text-[11px] text-zinc-600">
           objects compile with the normal mod tools - no CS2 needed
         </span>
+        {rendering && (
+          <span className="text-[11px] text-zinc-500">drawing previews…</span>
+        )}
       </div>
 
       {groups.map((g) => (
@@ -149,15 +190,27 @@ export function ObjectPicker({
                   }`}
                 >
                   {thumb && thumb !== "none" && (
+                    // A 3D render is the model on transparency - show it whole
+                    // and bright. A texture swatch is wallpaper - crop and dim
+                    // it so the label stays readable.
                     <img
                       src={fileSrc(thumb)}
                       alt=""
                       aria-hidden
-                      className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-45 transition duration-300 group-hover:scale-105 group-hover:opacity-60"
+                      className={
+                        thumb.includes("render.png")
+                          ? "pointer-events-none absolute inset-x-0 top-0 mx-auto h-[78%] w-full object-contain opacity-95 transition duration-300 group-hover:scale-105"
+                          : "pointer-events-none absolute inset-0 h-full w-full object-cover opacity-45 transition duration-300 group-hover:scale-105 group-hover:opacity-60"
+                      }
                     />
                   )}
-                  {/* Scrim so the label stays readable over any texture. */}
-                  <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-zinc-950 via-zinc-950/70 to-transparent" />
+                  <div
+                    className={`pointer-events-none absolute inset-0 ${
+                      thumb && thumb.includes("render.png")
+                        ? "bg-gradient-to-t from-zinc-950 via-zinc-950/30 to-transparent"
+                        : "bg-gradient-to-t from-zinc-950 via-zinc-950/70 to-transparent"
+                    }`}
+                  />
                   {has && (
                     <span className="absolute left-2 top-2 rounded bg-rose-400/90 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-zinc-950">
                       replaced

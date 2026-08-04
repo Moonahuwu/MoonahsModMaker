@@ -1858,6 +1858,80 @@ pub async fn model_gltf(
     .map_err(|e| e.to_string())?
 }
 
+/// Store a picture the app rendered of a model (a data: URL captured from
+/// the 3D preview) as that model's card image, so the picker shows the real
+/// thing instead of a flat texture. Cached like every other thumbnail.
+#[tauri::command]
+pub async fn save_prop_render(
+    app: tauri::AppHandle,
+    model_internal: String,
+    data_url: String,
+) -> Result<String, String> {
+    use tauri::Manager;
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("prop_thumbs");
+    tauri::async_runtime::spawn_blocking(move || {
+        let b64 = data_url
+            .split_once(";base64,")
+            .map(|(_, b)| b)
+            .ok_or("expected a base64 data URL")?;
+        let bytes = base64_decode(b64).ok_or("couldn't decode the render")?;
+        if bytes.len() < 100 || &bytes[..8] != b"\x89PNG\r\n\x1a\n" {
+            return Err("the render wasn't a PNG".into());
+        }
+        let key: String = model_internal
+            .replace('\\', "/")
+            .trim_end_matches("_c")
+            .trim_end_matches(".vmdl")
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect();
+        let dir = base.join(key);
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let png = dir.join("render.png");
+        std::fs::write(&png, &bytes).map_err(|e| e.to_string())?;
+        Ok(png.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Minimal base64 decoder (no crate needed for one call site).
+fn base64_decode(s: &str) -> Option<Vec<u8>> {
+    const fn val(c: u8) -> i16 {
+        match c {
+            b'A'..=b'Z' => (c - b'A') as i16,
+            b'a'..=b'z' => (c - b'a') as i16 + 26,
+            b'0'..=b'9' => (c - b'0') as i16 + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => -1,
+        }
+    }
+    let mut out = Vec::with_capacity(s.len() / 4 * 3);
+    let mut acc: u32 = 0;
+    let mut bits = 0u32;
+    for c in s.bytes() {
+        if c == b'=' || c.is_ascii_whitespace() {
+            continue;
+        }
+        let v = val(c);
+        if v < 0 {
+            return None;
+        }
+        acc = (acc << 6) | v as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    Some(out)
+}
+
 /// A card image for an object in the Model Replacement object picker: the
 /// model's own color texture, found by reading the compiled model's material
 /// reference and decoding that material's color map. Derived from the game
@@ -1885,6 +1959,12 @@ pub async fn prop_thumb(
             .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
             .collect();
         let dir = base.join(&key);
+        // A real 3D render of the model beats a flat texture swatch - use it
+        // whenever one has been captured (see save_prop_render).
+        let render = dir.join("render.png");
+        if render.exists() {
+            return Ok(render.to_string_lossy().into_owned());
+        }
         let png = dir.join("thumb.png");
         if png.exists() {
             return Ok(png.to_string_lossy().into_owned());

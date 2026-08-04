@@ -105,8 +105,9 @@ export function ModelSwapTab({
   // The vanilla model as glTF: shown in the 3D preview, and the same export
   // users download to start from in Blender.
   const [previewGlb, setPreviewGlb] = useState("");
-  // Preview shows the vanilla model until a mesh is picked, then yours.
-  const [previewMine, setPreviewMine] = useState(true);
+  // Default to the ORIGINAL: it renders with the game's own textures, while
+  // a freshly picked mesh has none yet and would show as a pale blob.
+  const [previewMine, setPreviewMine] = useState(false);
   const [downloading, setDownloading] = useState(false);
 
   const cs2Ok = useMemo(() => settings.cs2Root.trim().length > 0, [settings.cs2Root]);
@@ -238,7 +239,6 @@ export function ModelSwapTab({
   /** Preflight + per-material texture rows for a chosen mesh file. */
   async function analyzeMesh(sel: string, w: ModelWorkspace, keepSpecs?: MatchedMaterial[]) {
     setMeshFile(sel);
-    setPreviewMine(true);
     setPreflight(null);
     setTexSpecs([]);
     // Blender's default FBX export is in centimeters: everything imports x100

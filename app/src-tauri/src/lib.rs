@@ -116,6 +116,7 @@ pub fn run() {
             commands::model_build,
             commands::model_open_modeldoc,
             commands::prop_thumb,
+            commands::save_prop_render,
             commands::model_gltf,
             commands::match_material_textures,
             commands::fbx_auto_textures,
