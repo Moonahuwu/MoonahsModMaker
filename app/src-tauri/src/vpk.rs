@@ -232,6 +232,19 @@ pub fn decompile_from_vpk(
 /// references. Returns the written paths, `out_root`-relative with forward
 /// slashes. (VRF's GameFileLoader chats on stdout, so only lines that resolve
 /// under `out_root` are kept.)
+/// One block of a compiled resource as KV3-ish text (e.g. a model's MDAT,
+/// which holds the TRUE attachment transforms the decompiler mangles).
+pub fn model_block_from_vpk(
+    helper_path: &str,
+    vpk: &str,
+    internal_resource_c: &str,
+    block: &str,
+) -> Result<String, String> {
+    let mut cmd = helper_command(helper_path);
+    cmd.args(["modelblock", vpk, internal_resource_c, block]);
+    run(cmd, "modelblock")
+}
+
 /// Decompile a compiled model into a ModelDoc-ready source tree (the .vmdl +
 /// every referenced mesh/anim DMX) under `out_root` at their internal paths.
 pub fn model_from_vpk(

@@ -36,6 +36,7 @@ static int Dispatch(string[] args)
             "decompile" => Decompile(args),
             "material" => MaterialCmd(args),
             "model" => ModelCmd(args),
+            "modelblock" => ModelBlockCmd(args),
             "extractall" => ExtractAll(args),
             "decompileall" => DecompileAll(args),
             "gltf" => Gltf(args),
@@ -242,6 +243,42 @@ static int Decompile(string[] args)
 // preserving internal paths: the .vmat KV3 text at its own path plus every
 // reconstructed source texture (AdditionalFiles: color png, trans, masks,
 // ...) at the paths the vmat references. Prints one written path per line.
+// Print one block of a compiled resource as KV3-ish text (e.g. a model's
+// MDAT, which holds the TRUE attachment transforms - the decompiler's
+// reconstruction of those is lossy, famously breaking cameras on swaps).
+static int ModelBlockCmd(string[] args)
+{
+    if (args.Length < 4)
+    {
+        Console.Error.WriteLine("usage: modelblock <vpk> <internalResourceC> <blockType>");
+        return 2;
+    }
+    var vpk = Path.GetFullPath(args[1]);
+    var internalPath = args[2].Replace('\\', '/').TrimStart('/');
+    var blockName = args[3];
+    using var package = new Package();
+    package.Read(vpk);
+    var entry = package.FindEntry(internalPath);
+    if (entry is null)
+    {
+        Console.Error.WriteLine($"entry not found: {internalPath}");
+        return 1;
+    }
+    package.ReadEntry(entry, out var bytes);
+    using var resource = new Resource();
+    resource.Read(new MemoryStream(bytes));
+    foreach (var block in resource.Blocks)
+    {
+        if (string.Equals(block.Type.ToString(), blockName, StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine(block.ToString());
+            return 0;
+        }
+    }
+    Console.Error.WriteLine($"block not found: {blockName}");
+    return 1;
+}
+
 static int MaterialCmd(string[] args)
 {
     if (args.Length < 4)

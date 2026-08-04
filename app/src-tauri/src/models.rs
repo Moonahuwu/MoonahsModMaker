@@ -86,6 +86,18 @@ pub fn workspace(
     if !vmdl_abs.exists() {
         return Err(format!("decompile produced no vmdl at {}", vmdl_abs.display()));
     }
+    // The TRUE attachment transforms live in the compiled model's MDAT - the
+    // decompiled Attachment angles are lossy (breaks aim/camera anchors).
+    // Cache them so every build can restore the exact values. Also fills in
+    // for kits decompiled before this existed.
+    if !dir.join(ATTACHMENTS_CACHE).exists() {
+        if let Ok(mdat) = crate::vpk::model_block_from_vpk(helper, pak, &internal_c, "MDAT") {
+            let atts = parse_mdat_attachments(&mdat);
+            if !atts.is_empty() {
+                let _ = save_attachments_cache(&dir, &atts);
+            }
+        }
+    }
 
     let text = std::fs::read_to_string(&vmdl_abs).map_err(|e| e.to_string())?;
     let bones = parse_bone_names(&text);
@@ -729,6 +741,266 @@ pub fn generate_vmdl(
 }
 
 // ---------------------------------------------------------------------------
+// Attachment correction (the community's "fix the attachments" step)
+// ---------------------------------------------------------------------------
+//
+// The decompiler's Attachment reconstruction is LOSSY: converting the
+// compiled quaternion to Euler angles drops the yaw entirely on
+// gimbal-locked attachments (e.g. root_aim, pitch -90: true angles are
+// [-90, -90, 0], the decompile writes [-89.972, 0, 0]). The game hangs its
+// aim/camera transforms off these attachments, which is exactly why every
+// naive model swap ends up with a centered camera and the community fixes
+// attachment values by hand in ModelDoc. We read the TRUE transforms from
+// the vanilla compiled model's MDAT block and rewrite every Attachment
+// node in the generated vmdl.
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct VanillaAttachment {
+    pub parent: String,
+    pub origin: [f64; 3],
+    /// Source QAngle degrees (pitch, yaw, roll), converted exactly.
+    pub angles: [f64; 3],
+    pub weight: f64,
+    pub ignore_rotation: bool,
+}
+
+/// Quaternion -> Source QAngle (degrees), the exact MatrixAngles convention
+/// (including the gimbal-locked branch) so ModelDoc's AngleQuaternion
+/// round-trips back to the original quaternion.
+pub fn quat_to_qangle(x: f64, y: f64, z: f64, w: f64) -> [f64; 3] {
+    // Rotation matrix columns in Source layout: forward, left, up.
+    let forward = [
+        1.0 - 2.0 * (y * y + z * z),
+        2.0 * (x * y + w * z),
+        2.0 * (x * z - w * y),
+    ];
+    let left = [
+        2.0 * (x * y - w * z),
+        1.0 - 2.0 * (x * x + z * z),
+        2.0 * (y * z + w * x),
+    ];
+    let up_z = 1.0 - 2.0 * (x * x + y * y);
+    let xy_dist = (forward[0] * forward[0] + forward[1] * forward[1]).sqrt();
+    let deg = 180.0 / std::f64::consts::PI;
+    if xy_dist > 0.001 {
+        [
+            (-forward[2]).atan2(xy_dist) * deg,
+            forward[1].atan2(forward[0]) * deg,
+            left[2].atan2(up_z) * deg,
+        ]
+    } else {
+        // Straight up/down: yaw carries the remaining rotation, roll is 0.
+        [
+            (-forward[2]).atan2(xy_dist) * deg,
+            (-left[0]).atan2(left[1]) * deg,
+            0.0,
+        ]
+    }
+}
+
+/// Parse the FIRST `m_attachments` list of a model's MDAT block text (the
+/// per-mesh repeats are identical copies).
+pub fn parse_mdat_attachments(text: &str) -> Vec<(String, VanillaAttachment)> {
+    let mut out = Vec::new();
+    let Some(list_at) = text.find("m_attachments =") else { return out };
+    let Some(open_rel) = text[list_at..].find('[') else { return out };
+    let start = list_at + open_rel + 1;
+    let mut depth = 1i32;
+    let mut end = text.len();
+    for (i, c) in text[start..].char_indices() {
+        match c {
+            '[' | '{' => depth += 1,
+            ']' | '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = start + i;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let span = &text[start..end];
+
+    let quoted = |s: &str| -> Option<String> {
+        let a = s.find('"')? + 1;
+        let b = a + s[a..].find('"')?;
+        Some(s[a..b].to_string())
+    };
+    let first_vec = |s: &str, key: &str, n: usize| -> Option<Vec<f64>> {
+        let at = s.find(key)?;
+        let a = at + s[at..].find('[')? + 1;
+        // The value arrays are lists of vectors - take the first inner [ ... ].
+        let a = a + s[a..].find('[')? + 1;
+        let b = a + s[a..].find(']')?;
+        let vals: Vec<f64> = s[a..b]
+            .split(',')
+            .filter_map(|v| v.trim().parse().ok())
+            .collect();
+        (vals.len() == n).then_some(vals)
+    };
+    let first_num_list = |s: &str, key: &str| -> Option<f64> {
+        let at = s.find(key)?;
+        let a = at + s[at..].find('[')? + 1;
+        let b = a + s[a..].find(|c| c == ',' || c == ']')?;
+        s[a..b].trim().parse().ok()
+    };
+
+    // Entries follow as `key = "name"` blocks.
+    let mut rest = span;
+    while let Some(k) = rest.find("key = \"") {
+        let entry = &rest[k..];
+        let next = entry[7..].find("key = \"").map(|i| i + 7).unwrap_or(entry.len());
+        let entry_text = &entry[..next];
+        rest = &entry[next..];
+        let Some(name) = quoted(&entry_text[6..]) else { continue };
+        let parent = entry_text
+            .find("m_influenceNames")
+            .and_then(|i| quoted(&entry_text[i..]))
+            .unwrap_or_default();
+        let Some(rot) = first_vec(entry_text, "m_vInfluenceRotations", 4) else { continue };
+        let Some(off) = first_vec(entry_text, "m_vInfluenceOffsets", 3) else { continue };
+        let weight = first_num_list(entry_text, "m_influenceWeights").unwrap_or(1.0);
+        let ignore_rotation = entry_text
+            .find("m_bIgnoreRotation")
+            .map(|i| entry_text[i..].starts_with("m_bIgnoreRotation = true"))
+            .unwrap_or(false);
+        out.push((
+            name,
+            VanillaAttachment {
+                parent,
+                origin: [off[0], off[1], off[2]],
+                angles: quat_to_qangle(rot[0], rot[1], rot[2], rot[3]),
+                weight,
+                ignore_rotation,
+            },
+        ));
+    }
+    out
+}
+
+/// Rewrite every `_class = "Attachment"` node whose name appears in the
+/// vanilla map with the exact compiled transform. Returns the corrected
+/// text and how many attachments were fixed.
+pub fn correct_attachments(text: &str, vanilla: &[(String, VanillaAttachment)]) -> (String, usize) {
+    let map: std::collections::HashMap<&str, &VanillaAttachment> =
+        vanilla.iter().map(|(n, a)| (n.as_str(), a)).collect();
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    let mut fixed = 0usize;
+    while let Some(anchor) = rest.find("_class = \"Attachment\"") {
+        // Node span: back up to the opening brace, balance forward.
+        let Some(open) = rest[..anchor].rfind('{') else { break };
+        let mut depth = 1i32;
+        let mut close = rest.len();
+        for (i, c) in rest[open + 1..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = open + 1 + i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let node = &rest[open..=close.min(rest.len() - 1)];
+        let name = node
+            .find("name = \"")
+            .and_then(|i| node[i + 8..].find('"').map(|j| &node[i + 8..i + 8 + j]));
+        let rewritten = match name.and_then(|n| map.get(n)) {
+            Some(v) => {
+                fixed += 1;
+                let fixed_node: String = node
+                    .lines()
+                    .map(|l| {
+                        let t = l.trim_start();
+                        let ind = &l[..l.len() - t.len()];
+                        if t.starts_with("parent_bone = ") {
+                            format!("{ind}parent_bone = \"{}\"", v.parent)
+                        } else if t.starts_with("relative_origin = ") {
+                            format!(
+                                "{ind}relative_origin = [ {}, {}, {} ]",
+                                v.origin[0], v.origin[1], v.origin[2]
+                            )
+                        } else if t.starts_with("relative_angles = ") {
+                            format!(
+                                "{ind}relative_angles = [ {}, {}, {} ]",
+                                v.angles[0], v.angles[1], v.angles[2]
+                            )
+                        } else if t.starts_with("weight = ") {
+                            format!("{ind}weight = {}", v.weight)
+                        } else if t.starts_with("ignore_rotation = ") {
+                            format!("{ind}ignore_rotation = {}", v.ignore_rotation)
+                        } else {
+                            l.to_string()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                fixed_node
+            }
+            None => node.to_string(),
+        };
+        out.push_str(&rest[..open]);
+        out.push_str(&rewritten);
+        rest = &rest[close + 1..];
+    }
+    out.push_str(rest);
+    (out, fixed)
+}
+
+/// The workspace-cached vanilla attachment table (fetched from the compiled
+/// model's MDAT at kit-prep time; tab-separated for easy round-tripping).
+pub const ATTACHMENTS_CACHE: &str = "eim_attachments.tsv";
+
+pub fn save_attachments_cache(dir: &Path, list: &[(String, VanillaAttachment)]) -> std::io::Result<()> {
+    let mut s = String::new();
+    for (n, a) in list {
+        s.push_str(&format!(
+            "{n}\t{}\t{} {} {}\t{} {} {}\t{}\t{}\n",
+            a.parent,
+            a.origin[0], a.origin[1], a.origin[2],
+            a.angles[0], a.angles[1], a.angles[2],
+            a.weight,
+            a.ignore_rotation
+        ));
+    }
+    std::fs::write(dir.join(ATTACHMENTS_CACHE), s)
+}
+
+pub fn load_attachments_cache(dir: &Path) -> Vec<(String, VanillaAttachment)> {
+    let Ok(text) = std::fs::read_to_string(dir.join(ATTACHMENTS_CACHE)) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let cols: Vec<&str> = line.split('\t').collect();
+        if cols.len() != 6 {
+            continue;
+        }
+        let vec3 = |s: &str| -> Option<[f64; 3]> {
+            let v: Vec<f64> = s.split(' ').filter_map(|x| x.parse().ok()).collect();
+            (v.len() == 3).then(|| [v[0], v[1], v[2]])
+        };
+        let (Some(origin), Some(angles)) = (vec3(cols[2]), vec3(cols[3])) else { continue };
+        out.push((
+            cols[0].to_string(),
+            VanillaAttachment {
+                parent: cols[1].to_string(),
+                origin,
+                angles,
+                weight: cols[4].parse().unwrap_or(1.0),
+                ignore_rotation: cols[5] == "true",
+            },
+        ));
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
 // Custom materials (user PNGs -> real pbr.vfx vmats via the Deadlock CSDK)
 // ---------------------------------------------------------------------------
 //
@@ -1163,6 +1435,16 @@ fn stage_into_cs2(req: &ModelBuildReq) -> Result<(std::path::PathBuf, Vec<String
         &remaps,
         req.import_scale,
     )?;
+    // Restore the EXACT vanilla attachment transforms (decompiled ones are
+    // lossy - the cause of the classic centered-camera-after-swap bug).
+    let vanilla_atts = load_attachments_cache(Path::new(&req.workspace_dir));
+    if vanilla_atts.is_empty() {
+        notes.push("attachment data not cached - re-pick the hero once to refresh the kit".into());
+    } else {
+        let (corrected, fixed) = correct_attachments(&generated, &vanilla_atts);
+        generated = corrected;
+        notes.push(format!("{fixed} attachment(s) restored to exact vanilla transforms (aim/camera anchors)"));
+    }
     if !req.camera.is_empty() {
         generated = apply_camera_overrides(&generated, &req.camera)?;
         notes.push(format!("camera: {} value(s) adjusted", req.camera.len()));
@@ -1520,7 +1802,126 @@ mod tests {
         assert!(!out.contains("import_scale"), "scale 1.0 emits no line");
     }
 
-    const CAM_VMDL: &str = "{\n\trootNode =\n\t{\n\t\t_class = \"RootNode\"\n\t\tchildren =\n\t\t[\n\t\t\t{\n\t\t\t\t_class = \"GameDataList\"\n\t\t\t\tchildren = \n\t\t\t\t[\n\t\t\t\t\t{\n\t\t\t\t\t\t_class = \"GenericGameData\"\n\t\t\t\t\t\tgame_class = \"CitadelCameraSettings_t\"\n\t\t\t\t\t\tgame_keys = \n\t\t\t\t\t\t{\n\t\t\t\t\t\t\tm_flCameraSideOffset = -39.9\n\t\t\t\t\t\t\tm_flCameraBackOffset = 102.9\n\t\t\t\t\t\t\tm_vCameraParrotOffset = [ -10.0, -10.0, 10.0 ]\n\t\t\t\t\t\t}\n\t\t\t\t\t},\n\t\t\t\t]\n\t\t\t},\n\t\t]\n\t}\n}\n";
+    #[test]
+    fn quat_to_qangle_handles_gimbal_lock_exactly() {
+        // root_aim's real transform: the decompiler writes [-89.972, 0, 0]
+        // for this, silently dropping the -90 yaw - the centered-camera bug.
+        let a = quat_to_qangle(-0.5, -0.5, -0.5, 0.5);
+        assert!((a[0] + 90.0).abs() < 1e-9, "{a:?}");
+        assert!((a[1] + 90.0).abs() < 1e-9, "{a:?}");
+        assert!(a[2].abs() < 1e-9, "{a:?}");
+        let id = quat_to_qangle(0.0, 0.0, 0.0, 1.0);
+        assert!(id.iter().all(|v| v.abs() < 1e-9), "{id:?}");
+    }
+
+    const MDAT_SNIPPET: &str = r#"
+	m_attachments =
+	[
+		{
+			key = "root_aim"
+			value =
+			{
+				m_name = "root_aim"
+				m_influenceNames =
+				[
+					"root_motion",
+					"",
+					"",
+				]
+				m_vInfluenceRotations =
+				[
+					[ -0.5, -0.5, -0.5, 0.5 ],
+					[ 0.0, 0.0, 0.0, 1.0 ],
+					[ 0.0, 0.0, 0.0, 1.0 ],
+				]
+				m_vInfluenceOffsets =
+				[
+					[ 0.000015, 83.999977, 0.0 ],
+					[ 0.0, 0.0, 0.0 ],
+					[ 0.0, 0.0, 0.0 ],
+				]
+				m_influenceWeights = [ 1.0, 0.0, 0.0 ]
+				m_bInfluenceRootTransform = [ false, false, false ]
+				m_nInfluences = 1
+				m_bIgnoreRotation = false
+			}
+		},
+		{
+			key = "muzzle"
+			value =
+			{
+				m_name = "muzzle"
+				m_influenceNames =
+				[
+					"hand_R",
+					"",
+					"",
+				]
+				m_vInfluenceRotations =
+				[
+					[ 0.0, 0.0, 0.0, 1.0 ],
+					[ 0.0, 0.0, 0.0, 1.0 ],
+					[ 0.0, 0.0, 0.0, 1.0 ],
+				]
+				m_vInfluenceOffsets =
+				[
+					[ 1.5, 2.5, 3.5 ],
+					[ 0.0, 0.0, 0.0 ],
+					[ 0.0, 0.0, 0.0 ],
+				]
+				m_influenceWeights = [ 0.75, 0.0, 0.0 ]
+				m_bInfluenceRootTransform = [ false, false, false ]
+				m_nInfluences = 1
+				m_bIgnoreRotation = true
+			}
+		},
+	]
+	m_other = 1
+"#;
+
+    #[test]
+    fn mdat_attachments_parse() {
+        let atts = parse_mdat_attachments(MDAT_SNIPPET);
+        assert_eq!(atts.len(), 2, "{atts:?}");
+        let (n0, a0) = &atts[0];
+        assert_eq!(n0, "root_aim");
+        assert_eq!(a0.parent, "root_motion");
+        assert_eq!(a0.origin, [0.000015, 83.999977, 0.0]);
+        assert!((a0.angles[0] + 90.0).abs() < 1e-9 && (a0.angles[1] + 90.0).abs() < 1e-9);
+        assert!(!a0.ignore_rotation);
+        let (n1, a1) = &atts[1];
+        assert_eq!(n1, "muzzle");
+        assert_eq!(a1.parent, "hand_R");
+        assert_eq!(a1.weight, 0.75);
+        assert!(a1.ignore_rotation);
+    }
+
+    #[test]
+    fn attachments_correct_the_vmdl_nodes() {
+        let vmdl = "{\n\tchildren =\n\t[\n\t\t{\n\t\t\t_class = \"Attachment\"\n\t\t\tname = \"root_aim\"\n\t\t\tignore_rotation = false\n\t\t\tparent_bone = \"root_motion\"\n\t\t\trelative_origin = [ 0.000015, 83.999977, 0.0 ]\n\t\t\trelative_angles = [ -89.972015, 0.0, 0.0 ]\n\t\t\tweight = 1.0\n\t\t},\n\t\t{\n\t\t\t_class = \"Attachment\"\n\t\t\tname = \"unknown_att\"\n\t\t\trelative_angles = [ 1.0, 2.0, 3.0 ]\n\t\t},\n\t]\n}\n";
+        let atts = parse_mdat_attachments(MDAT_SNIPPET);
+        let (out, fixed) = correct_attachments(vmdl, &atts);
+        assert_eq!(fixed, 1);
+        assert!(out.contains("relative_angles = [ -90, -90, 0 ]"), "{out}");
+        assert!(!out.contains("-89.972015"), "{out}");
+        // Unknown attachments and everything else stay untouched.
+        assert!(out.contains("relative_angles = [ 1.0, 2.0, 3.0 ]"));
+        assert_eq!(out.matches('{').count(), out.matches('}').count());
+    }
+
+    #[test]
+    fn attachments_cache_round_trips() {
+        let dir = std::env::temp_dir().join("eim_att_cache_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let atts = parse_mdat_attachments(MDAT_SNIPPET);
+        save_attachments_cache(&dir, &atts).unwrap();
+        let loaded = load_attachments_cache(&dir);
+        assert_eq!(atts, loaded);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    const CAM_VMDL: &str ="{\n\trootNode =\n\t{\n\t\t_class = \"RootNode\"\n\t\tchildren =\n\t\t[\n\t\t\t{\n\t\t\t\t_class = \"GameDataList\"\n\t\t\t\tchildren = \n\t\t\t\t[\n\t\t\t\t\t{\n\t\t\t\t\t\t_class = \"GenericGameData\"\n\t\t\t\t\t\tgame_class = \"CitadelCameraSettings_t\"\n\t\t\t\t\t\tgame_keys = \n\t\t\t\t\t\t{\n\t\t\t\t\t\t\tm_flCameraSideOffset = -39.9\n\t\t\t\t\t\t\tm_flCameraBackOffset = 102.9\n\t\t\t\t\t\t\tm_vCameraParrotOffset = [ -10.0, -10.0, 10.0 ]\n\t\t\t\t\t\t}\n\t\t\t\t\t},\n\t\t\t\t]\n\t\t\t},\n\t\t]\n\t}\n}\n";
 
     #[test]
     fn camera_keys_parse_scalars_only() {
@@ -1664,6 +2065,52 @@ mod tests {
                 text.contains("m_flCameraSideOffset = -12.25"),
                 "camera override must ride into the artifact's keyvalues"
             );
+
+            // Attachment correction: every attachment in OUR artifact must
+            // carry the vanilla compiled transform (the decompiled values
+            // are lossy - root_aim is the famous centered-camera case).
+            let vanilla_mdat = crate::vpk::model_block_from_vpk(
+                helper,
+                pak,
+                "models/heroes_staging/haze/haze.vmdl_c",
+                "MDAT",
+            )
+            .expect("vanilla MDAT");
+            let ours_mdat = std::process::Command::new(s2v)
+                .args(["-i", &req.artifact_out, "-b", "MDAT"])
+                .output()
+                .expect("run S2V for MDAT");
+            let ours_mdat = String::from_utf8_lossy(&ours_mdat.stdout).into_owned();
+            let vanilla_atts = parse_mdat_attachments(&vanilla_mdat);
+            let our_atts: std::collections::HashMap<String, VanillaAttachment> =
+                parse_mdat_attachments(&ours_mdat).into_iter().collect();
+            assert!(!vanilla_atts.is_empty() && !our_atts.is_empty());
+            let mut checked = 0;
+            for (name, v) in &vanilla_atts {
+                let Some(o) = our_atts.get(name) else { continue };
+                checked += 1;
+                for i in 0..3 {
+                    assert!(
+                        (v.origin[i] - o.origin[i]).abs() < 0.01,
+                        "{name} origin[{i}]: vanilla {} vs ours {}",
+                        v.origin[i],
+                        o.origin[i]
+                    );
+                    assert!(
+                        (v.angles[i] - o.angles[i]).abs() < 0.05,
+                        "{name} angles[{i}]: vanilla {} vs ours {}",
+                        v.angles[i],
+                        o.angles[i]
+                    );
+                }
+            }
+            eprintln!("ATTACHMENTS VERIFIED {checked}/{}", vanilla_atts.len());
+            assert!(
+                vanilla_atts.iter().any(|(n, _)| n == "root_aim"),
+                "haze must have root_aim"
+            );
+            assert!(our_atts.contains_key("root_aim"), "our artifact must keep root_aim");
+            assert!(checked >= vanilla_atts.len() / 2, "most attachments must survive");
         }
         let _ = std::fs::remove_dir_all(&scratch);
     }
