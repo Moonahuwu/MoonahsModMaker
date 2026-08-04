@@ -36,6 +36,8 @@ const GROUPS: MenuGroup[] = [
       { slug: "card_play_subject", label: "Main mode portrait", hint: "the Geist art on the card", path: "main_menu/play/card_play_subject_psd", w: 1546, h: 2113 },
       { slug: "card_brawl", label: "Street Brawl card", path: "main_menu/play/card_brawl_psd", w: 1298, h: 2113 },
       { slug: "card_brawl_subject", label: "Street Brawl portrait", hint: "the Lash art on the card", path: "main_menu/play/card_brawl_subject_psd", w: 1546, h: 2113 },
+      { slug: "card_ranked", label: "Ranked card", path: "main_menu/play/card_ranked_psd", w: 1298, h: 2113 },
+      { slug: "card_ranked_subject", label: "Ranked portrait", hint: "the hero art on the card", path: "main_menu/play/card_ranked_subject_psd", w: 1546, h: 2113 },
       { slug: "card_bots_subject", label: "Bots portrait", path: "main_menu/play/card_bots_subject_sm_psd", w: 1112, h: 1100 },
       { slug: "card_custom", label: "Custom match card", path: "main_menu/play/card_custom_psd", w: 610, h: 852 },
       { slug: "card_custom_subject", label: "Custom match portrait", path: "main_menu/play/card_custom_subject_psd", w: 610, h: 852 },

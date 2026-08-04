@@ -7271,15 +7271,28 @@ fn hero_images_impl(
         })
         .unwrap_or_else(|| codename.clone());
 
-    let kinds: Vec<(&str, String)> = vec![
+    // Background + name-logo stems are INCONSISTENT in the game files:
+    // released heroes mostly use display-name slugs (grey_talon, holliday),
+    // WIP heroes use internal codenames (priest = Venator, doorman), and a
+    // few released ones use codenames too (astro, magician). Try every
+    // plausible stem and keep whichever file actually exists.
+    let mut stem_candidates: Vec<String> = vec![display_stem.clone()];
+    for s in [img_stem.clone(), codename.clone()] {
+        if !stem_candidates.contains(&s) {
+            stem_candidates.push(s);
+        }
+    }
+    let mut kinds: Vec<(&str, String)> = vec![
         ("card", format!("panorama/images/heroes/{img_stem}_card_psd.vtex_c")),
         ("card_critical", format!("panorama/images/heroes/{img_stem}_card_critical_psd.vtex_c")),
         ("card_gloat", format!("panorama/images/heroes/{img_stem}_card_gloat_psd.vtex_c")),
         ("vertical", format!("panorama/images/heroes/{img_stem}_vertical_psd.vtex_c")),
         ("sm", format!("panorama/images/heroes/{img_stem}_sm_psd.vtex_c")),
         ("mm", format!("panorama/images/heroes/{img_stem}_mm_psd.vtex_c")),
-        ("background", format!("panorama/images/heroes/backgrounds/{display_stem}_bg_psd.vtex_c")),
     ];
+    for s in &stem_candidates {
+        kinds.push(("background", format!("panorama/images/heroes/backgrounds/{s}_bg_psd.vtex_c")));
+    }
     // Decode any not-yet-cached textures in one helper pass.
     let missing: Vec<String> = kinds
         .iter()
@@ -7290,45 +7303,68 @@ fn hero_images_impl(
         if let Ok(pairs) = crate::vpk::texture_batch(&helper_path, &pak_path, &dir.to_string_lossy(), &missing) {
             for (stem, png) in pairs {
                 // stem is the vtex file stem — map it back to its kind slot.
-                if let Some((kind, _)) = kinds.iter().find(|(_, t)| {
+                if let Some((kind, target)) = kinds.iter().find(|(_, t)| {
                     t.rsplit('/').next().unwrap_or("").trim_end_matches(".vtex_c") == stem
                 }) {
                     let _ = std::fs::rename(&png, dir.join(format!("{kind}.png")));
+                    // Remember WHICH candidate path decoded (kinds can carry
+                    // several stems for the same kind, e.g. background).
+                    let _ = std::fs::write(dir.join(format!("{kind}.target.txt")), target);
                 }
             }
         }
     }
 
     let mut out = Vec::new();
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for (kind, target) in &kinds {
+        if !seen.insert(kind) {
+            continue; // one entry per kind - candidates share the cached png
+        }
         let png = dir.join(format!("{kind}.png"));
         if !png.exists() {
             continue; // hero lacks this asset (e.g. no gloat card yet)
         }
+        // Prefer the recorded winning path; pngs cached before the sidecar
+        // existed were all first-candidate decodes.
+        let target = std::fs::read_to_string(dir.join(format!("{kind}.target.txt")))
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| target.clone());
         let (width, height) = png_dimensions(&png).unwrap_or((0, 0));
         out.push(HeroImage {
             kind: (*kind).to_string(),
-            target: target.clone(),
+            target,
             preview: png.to_string_lossy().to_string(),
             width,
             height,
             svg: false,
         });
     }
-    // The hero-name logo is a compiled SVG: decompile for display.
+    // The hero-name logo is a compiled SVG: decompile for display. Same stem
+    // inconsistency as backgrounds - try every candidate.
     let svg_path = dir.join("logo.svg");
     if !svg_path.exists() {
-        let _ = crate::vpk::decompile_from_vpk(
-            &helper_path,
-            &pak_path,
-            &format!("panorama/images/heroes/hero_names/{display_stem}.vsvg_c"),
-            &svg_path.to_string_lossy(),
-        );
+        for s in &stem_candidates {
+            let target = format!("panorama/images/heroes/hero_names/{s}.vsvg_c");
+            if crate::vpk::decompile_from_vpk(&helper_path, &pak_path, &target, &svg_path.to_string_lossy()).is_ok()
+                && svg_path.exists()
+            {
+                let _ = std::fs::write(dir.join("logo.target.txt"), &target);
+                break;
+            }
+        }
     }
     if svg_path.exists() {
+        let target = std::fs::read_to_string(dir.join("logo.target.txt"))
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| format!("panorama/images/heroes/hero_names/{display_stem}.vsvg_c"));
         out.push(HeroImage {
             kind: "logo".into(),
-            target: format!("panorama/images/heroes/hero_names/{display_stem}.vsvg_c"),
+            target,
             preview: svg_path.to_string_lossy().to_string(),
             width: 0,
             height: 0,
