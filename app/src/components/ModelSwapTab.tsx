@@ -94,6 +94,8 @@ export function ModelSwapTab({
   const [matMode, setMatMode] = useState<MatMode>("textures");
   const [texSpecs, setTexSpecs] = useState<MatchedMaterial[]>([]);
   const [matching, setMatching] = useState(false);
+  // How many textures the model file itself supplied (null = not scanned).
+  const [autoFound, setAutoFound] = useState<number | null>(null);
   const [building, setBuilding] = useState(false);
   const [buildSteps, setBuildSteps] = useState<string[]>([]);
   const [detecting, setDetecting] = useState(false);
@@ -241,6 +243,7 @@ export function ModelSwapTab({
     setMeshFile(sel);
     setPreflight(null);
     setTexSpecs([]);
+    setAutoFound(null);
     // Blender's default FBX export is in centimeters: everything imports x100
     // without this. DMX via Blender Source 2 Tools follows the 39.37 flow = 1:1.
     setImportScale(sel.toLowerCase().endsWith(".fbx") ? "0.01" : "1");
@@ -286,6 +289,7 @@ export function ModelSwapTab({
           }),
         );
         const found = linked.filter((l) => l.color).length;
+        setAutoFound(found);
         if (found > 0) {
           push("success", `${found} texture(s) picked up from the model file`);
         }
@@ -869,6 +873,13 @@ export function ModelSwapTab({
 
           {matMode === "textures" && preflight && preflight.materials.length > 0 && (
             <div className="mt-2 flex flex-col gap-2">
+              {autoFound !== null && (
+                <p className="text-[11px] text-zinc-500">
+                  {autoFound > 0
+                    ? `${autoFound} texture(s) came from the model file itself.`
+                    : "This model file doesn't point at any textures - nothing was applied to it in Blender, or they were embedded on export. Assign them below."}
+                </p>
+              )}
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   onClick={() => void pickTextureFolder()}

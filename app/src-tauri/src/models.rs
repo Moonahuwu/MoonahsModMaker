@@ -2632,6 +2632,26 @@ mod tests {
         );
     }
 
+    /// What a bare mesh (nothing textured in Blender) yields - the
+    /// steamhappy test file. Ignored: needs that machine's download.
+    #[test]
+    #[ignore]
+    fn e2e_fbx_auto_textures_on_a_bare_mesh() {
+        let fbx = Path::new(concat!(r"C:\Users\ethob", r"\Downloads\steamhappy.fbx"));
+        if !fbx.exists() {
+            eprintln!("skipping: FBX missing");
+            return;
+        }
+        let bytes = std::fs::read(fbx).unwrap();
+        let refs = scan_fbx_texture_refs(&bytes);
+        let resolved = resolve_fbx_textures(fbx);
+        let pf = preflight_fbx_kind(fbx, &[], false).expect("preflight");
+        eprintln!("MATERIALS {:?}", pf.materials);
+        eprintln!("TEXTURE REFS {refs:?}");
+        eprintln!("RESOLVED {resolved:?}");
+        eprintln!("MESH INFO {:?}", pf.info);
+    }
+
     /// A `.jpeg` texture must compile: resourcecompiler rejects the extension
     /// outright ("Unknown file type"), so staging has to normalize it to a
     /// real PNG first. Reproduces the user's steamhappy build failure.
