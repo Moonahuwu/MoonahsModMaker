@@ -1381,6 +1381,36 @@ pub fn resolve_fbx_textures(fbx: &Path) -> Vec<String> {
             }
         }
     }
+
+    // Whatever folders those landed in are this model's texture folders -
+    // pull in every image there. Blender projects keep maps together, so a
+    // reference that went stale (renamed file, moved project) still gets
+    // picked up as long as one of its siblings resolved.
+    let folders: Vec<std::path::PathBuf> = out
+        .iter()
+        .filter_map(|p| Path::new(p).parent().map(|d| d.to_path_buf()))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    for folder in folders {
+        let Ok(rd) = std::fs::read_dir(&folder) else { continue };
+        for e in rd.flatten().take(400) {
+            let p = e.path();
+            if !p.is_file() {
+                continue;
+            }
+            let lower = p.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
+            if [".png", ".jpg", ".jpeg", ".tga", ".bmp", ".tif", ".tiff", ".psd"]
+                .iter()
+                .any(|x| lower.ends_with(x))
+            {
+                let s = p.to_string_lossy().into_owned();
+                if !out.contains(&s) {
+                    out.push(s);
+                }
+            }
+        }
+    }
     out
 }
 
@@ -2555,6 +2585,51 @@ mod tests {
         assert!(arts.iter().any(|a| a.target_rel.starts_with("materials/") && a.target_rel.ends_with(".vtex_c")));
         assert!(arts.iter().all(|a| Path::new(&a.artifact).exists()));
         let _ = std::fs::remove_dir_all(&out_cache);
+    }
+
+    /// The "import the FBX and you're done" path, on the user's real sona
+    /// export: its materials must come back with color maps resolved from
+    /// the paths Blender baked into the file. Ignored: needs that machine's
+    /// files.
+    #[test]
+    #[ignore]
+    fn e2e_fbx_auto_textures_on_the_real_export() {
+        let fbx = Path::new(
+            r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\ReferenceFiles\deadlock_moonah_doormanv4Test.fbx",
+        );
+        if !fbx.exists() {
+            eprintln!("skipping: FBX missing");
+            return;
+        }
+        let pf = preflight_fbx_kind(fbx, &[], false).expect("preflight");
+        let resolved = resolve_fbx_textures(fbx);
+        eprintln!("RESOLVED {} of {} refs", resolved.len(), scan_fbx_texture_refs(&std::fs::read(fbx).unwrap()).len());
+        for r in resolved.iter().take(4) {
+            eprintln!("  {r}");
+        }
+        let matched = match_texture_files(&resolved, &pf.materials);
+        let with_color: Vec<&MatchedMaterial> = matched.iter().filter(|m| m.color.is_some()).collect();
+        for m in &matched {
+            eprintln!(
+                "  {} -> color {} normal {} rough {}",
+                m.name,
+                m.color.is_some(),
+                m.normal.is_some(),
+                m.roughness.is_some()
+            );
+        }
+        // Only 4 of the sona's 7 materials CAN resolve on this machine: the
+        // rest were exported from an E: drive that isn't attached, so their
+        // files genuinely do not exist. This asserts the ceiling, not a wish.
+        assert!(
+            with_color.len() >= 4,
+            "expected the on-disk textures to auto-resolve, got {}",
+            with_color.len()
+        );
+        assert!(
+            matched.iter().any(|m| m.name == "Body5F" && m.color.is_some()),
+            "Body5F's texture is on disk and must be found"
+        );
     }
 
     /// A `.jpeg` texture must compile: resourcecompiler rejects the extension
