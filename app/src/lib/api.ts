@@ -659,6 +659,8 @@ export interface ModelWorkspace {
   vmdl: string;
   bones: string[];
   materials: string[];
+  /** The hero's stock gameplay-camera scalars (editable in the tab). */
+  camera: CameraKey[];
   files: number;
 }
 
@@ -707,6 +709,13 @@ export interface MatchedMaterial {
   gameVmat?: string | null;
 }
 
+/** One CitadelCameraSettings_t scalar (stock value from the hero's vmdl,
+ *  or an override to splice into the generated one). */
+export interface CameraKey {
+  key: string;
+  value: number;
+}
+
 /** The hero's vanilla vmdl path from heroes.vdata (no `_c`). */
 export function heroModelTarget(
   helperPath: string,
@@ -747,8 +756,16 @@ export function modelBuild(req: {
   toolsRoot?: string | null;
   /** Cache dir for the compiled material files. */
   materialsOut?: string | null;
+  /** Camera value overrides spliced into the vmdl's CitadelCameraSettings_t. */
+  camera?: CameraKey[];
 }): Promise<ModelBuildReport> {
   return invoke("model_build", { req });
+}
+
+/** Stage the model exactly like a build and open it in CS2's ModelDoc for
+ *  manual inspection (weights, skeleton, cameras). Same req as modelBuild. */
+export function modelOpenModeldoc(req: Parameters<typeof modelBuild>[0]): Promise<string> {
+  return invoke("model_open_modeldoc", { req });
 }
 
 /** Match texture files in a folder to FBX material names by filename prefix. */

@@ -1787,6 +1787,17 @@ pub async fn model_build(
         .map_err(|e| e.to_string())
 }
 
+/// Stage the model exactly as a build would and open it in CS2's ModelDoc,
+/// so weights / skeleton / cameras can be inspected by hand.
+#[tauri::command]
+pub async fn model_open_modeldoc(
+    req: crate::models::ModelBuildReq,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::models::open_in_modeldoc(&req))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// Auto-match texture files in a folder to the FBX's material names
 /// (`Body5F` -> `Body5F_Base_color.png` / `Body5F_Normal.png` / ...).
 #[tauri::command]

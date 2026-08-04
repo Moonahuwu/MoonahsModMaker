@@ -36,8 +36,19 @@ pub struct ModelWorkspace {
     pub bones: Vec<String>,
     /// Game material paths referenced by the hero (for the material picker).
     pub materials: Vec<String>,
+    /// The hero's gameplay-camera settings (CitadelCameraSettings_t scalars,
+    /// stock values) - the tab shows them as editable fields so nobody has
+    /// to open ModelDoc just to nudge the camera.
+    pub camera: Vec<CameraKey>,
     /// File count of the decompiled tree.
     pub files: usize,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CameraKey {
+    pub key: String,
+    pub value: f64,
 }
 
 /// Decompile `hero_vmdl_internal` (e.g. `models/heroes_staging/haze/haze.vmdl_c`)
@@ -81,14 +92,105 @@ pub fn workspace(
     // Material paths live inside the mesh DMX files (binary, but the paths
     // are plain ASCII runs), not in the vmdl.
     let materials = scan_material_refs(&dir);
+    let camera = parse_camera_keys(&text);
     let files = walk_count(&dir);
     Ok(ModelWorkspace {
         dir: dir.to_string_lossy().into_owned(),
         vmdl: vmdl_abs.to_string_lossy().into_owned(),
         bones,
         materials,
+        camera,
         files,
     })
+}
+
+/// The span of the CitadelCameraSettings_t node's `game_keys` block body
+/// (between its braces, exclusive) inside a decompiled vmdl.
+fn camera_keys_span(text: &str) -> Option<(usize, usize)> {
+    let anchor = text.find("game_class = \"CitadelCameraSettings_t\"")?;
+    let rel = text[anchor..].find("game_keys")?;
+    let open_rel = text[anchor + rel..].find('{')?;
+    let start = anchor + rel + open_rel + 1;
+    let mut depth = 1usize;
+    for (i, c) in text[start..].char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((start, start + i));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Scalar camera settings from the hero vmdl's CitadelCameraSettings_t node
+/// (vector keys like m_vCameraParrotOffset are left alone).
+pub fn parse_camera_keys(text: &str) -> Vec<CameraKey> {
+    let Some((a, b)) = camera_keys_span(text) else { return Vec::new() };
+    let mut out = Vec::new();
+    for line in text[a..b].lines() {
+        let t = line.trim();
+        if let Some((k, v)) = t.split_once(" = ") {
+            if let Ok(value) = v.trim().parse::<f64>() {
+                out.push(CameraKey { key: k.trim().to_string(), value });
+            }
+        }
+    }
+    out
+}
+
+/// Rewrite scalar values inside the vmdl's CitadelCameraSettings_t block.
+/// Keys not present are appended to the block so a future patch adding new
+/// fields can't silently drop a user's override.
+pub fn apply_camera_overrides(text: &str, overrides: &[CameraKey]) -> Result<String, String> {
+    if overrides.is_empty() {
+        return Ok(text.to_string());
+    }
+    let (a, b) = camera_keys_span(text)
+        .ok_or("the hero vmdl has no CitadelCameraSettings_t block - refresh the kit")?;
+    let block = &text[a..b];
+    // Indentation of the existing key lines (for appended keys).
+    let indent = block
+        .lines()
+        .find(|l| l.contains(" = "))
+        .map(|l| l[..l.len() - l.trim_start().len()].to_string())
+        .unwrap_or_else(|| "\t".repeat(8));
+    let mut new_block = block.to_string();
+    for ov in overrides {
+        let needle = format!("{} = ", ov.key);
+        let mut replaced = false;
+        let lines: Vec<String> = new_block
+            .lines()
+            .map(|l| {
+                if !replaced && l.trim_start().starts_with(&needle) {
+                    replaced = true;
+                    let ind = &l[..l.len() - l.trim_start().len()];
+                    format!("{ind}{} = {}", ov.key, ov.value)
+                } else {
+                    l.to_string()
+                }
+            })
+            .collect();
+        new_block = lines.join("\n");
+        if !replaced {
+            // Block body ends with the closing brace's leading whitespace -
+            // append before it, keeping the trailing shape intact.
+            let trailing_ws = new_block.len() - new_block.trim_end().len();
+            let cut = new_block.len() - trailing_ws;
+            new_block = format!(
+                "{}\n{indent}{} = {}{}",
+                &new_block[..cut],
+                ov.key,
+                ov.value,
+                &new_block[cut..]
+            );
+        }
+    }
+    Ok(format!("{}{}{}", &text[..a], new_block, &text[b..]))
 }
 
 fn walk_count(dir: &Path) -> usize {
@@ -973,6 +1075,11 @@ pub struct ModelBuildReq {
     /// Cache dir for compiled material files (vmat_c + vtex_c tree).
     #[serde(default)]
     pub materials_out: Option<String>,
+    /// Gameplay-camera value overrides spliced into the generated vmdl's
+    /// CitadelCameraSettings_t (the community's "fix the camera in ModelDoc"
+    /// step, without ModelDoc).
+    #[serde(default)]
+    pub camera: Vec<CameraKey>,
 }
 
 fn default_import_scale() -> f32 {
@@ -1000,6 +1107,93 @@ pub fn build(req: &ModelBuildReq) -> ModelBuildReport {
         Err(e) => rep.steps.push(format!("FAILED: {e}")),
     }
     rep
+}
+
+/// Game-vmat material remaps (bare lowercased mesh material name -> path).
+fn remap_pairs(req: &ModelBuildReq) -> Vec<(String, String)> {
+    req.materials
+        .iter()
+        .filter_map(|s| {
+            s.game_vmat
+                .as_ref()
+                .map(|v| (format!("{}.vmat", s.name.to_lowercase()), v.clone()))
+        })
+        .collect()
+}
+
+/// Stage the decompiled hero tree + the user's mesh into the CS2 content
+/// addon and write the generated vmdl (mesh splice, remaps, camera edits).
+/// Shared by the compile path and "Open in ModelDoc". Returns the staged
+/// vmdl's absolute path plus human-readable step notes.
+fn stage_into_cs2(req: &ModelBuildReq) -> Result<(std::path::PathBuf, Vec<String>), String> {
+    let cs2 = Path::new(&req.cs2_root);
+    let vmdl_internal = req.vmdl_internal.replace('\\', "/");
+    let vmdl_dir_internal = vmdl_internal.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+    let mut notes = Vec::new();
+
+    // Fresh CS2 content stage: the whole decompiled tree (anims included -
+    // the legacy AnimationList compiles from them) + the user's mesh.
+    let content = cs2.join("content/csgo_addons").join(CS2_ADDON);
+    let stage_dir = content.join(vmdl_dir_internal.replace('/', std::path::MAIN_SEPARATOR_STR));
+    let _ = std::fs::remove_dir_all(&stage_dir);
+    copy_tree(Path::new(&req.workspace_dir), &content)?;
+    notes.push(format!("staged hero sources into CS2 addon {CS2_ADDON}"));
+
+    let mesh_name = Path::new(&req.mesh_file)
+        .file_name()
+        .map(|f| f.to_string_lossy().into_owned())
+        .ok_or("mesh file has no name")?;
+    let mesh_dest = stage_dir.join(&mesh_name);
+    std::fs::copy(&req.mesh_file, &mesh_dest)
+        .map_err(|e| format!("copy mesh into CS2 addon: {e}"))?;
+    notes.push(format!("mesh: {mesh_name}"));
+
+    // Generate the vmdl over the staged copy. Materials mapped to game
+    // vmats become DefaultMaterialGroup remaps (bare mesh name -> path).
+    let remaps = remap_pairs(req);
+    let vmdl_abs = content.join(vmdl_internal.replace('/', std::path::MAIN_SEPARATOR_STR));
+    let src = std::fs::read_to_string(&vmdl_abs).map_err(|e| e.to_string())?;
+    let mesh_rel = format!("{vmdl_dir_internal}/{mesh_name}");
+    let mut generated = generate_vmdl(
+        &src,
+        &mesh_rel,
+        req.material_override.as_deref(),
+        &remaps,
+        req.import_scale,
+    )?;
+    if !req.camera.is_empty() {
+        generated = apply_camera_overrides(&generated, &req.camera)?;
+        notes.push(format!("camera: {} value(s) adjusted", req.camera.len()));
+    }
+    std::fs::write(&vmdl_abs, generated).map_err(|e| e.to_string())?;
+    notes.push(format!(
+        "generated vmdl (your mesh at scale {}, the hero's skeleton, cameras and animation refs)",
+        req.import_scale
+    ));
+    Ok((vmdl_abs, notes))
+}
+
+/// Stage everything exactly as a build would, then open the result in CS2's
+/// ModelDoc so the model (weights, skeleton, camera) can be inspected by
+/// hand. Same launch pattern as the particle-editor inspector.
+pub fn open_in_modeldoc(req: &ModelBuildReq) -> Result<String, String> {
+    let cs2 = Path::new(&req.cs2_root);
+    let (_, _notes) = stage_into_cs2(req)?;
+    let vmdl_internal = req.vmdl_internal.replace('\\', "/");
+    let exe = cs2.join("game/bin/win64/cs2.exe");
+    if !exe.exists() {
+        return Err(format!("CS2 not found at {}", exe.display()));
+    }
+    let mut cmd = std::process::Command::new(&exe);
+    if let Some(dir) = exe.parent() {
+        cmd.current_dir(dir);
+    }
+    cmd.args(["-steam", "-tools", "-addon", CS2_ADDON, "-asset", &vmdl_internal]);
+    // Fire and forget - the tools outlive us.
+    cmd.spawn().map_err(|e| format!("launching CS2 Workshop Tools: {e}"))?;
+    Ok(format!(
+        "staged your model into the {CS2_ADDON} addon - CS2's ModelDoc is opening (first launch takes a minute)"
+    ))
 }
 
 fn build_inner(req: &ModelBuildReq, rep: &mut ModelBuildReport) -> Result<String, String> {
@@ -1046,49 +1240,11 @@ fn build_inner(req: &ModelBuildReq, rep: &mut ModelBuildReport) -> Result<String
         }
     }
 
-    // 1. Fresh CS2 content stage: the whole decompiled tree (anims included -
-    //    the legacy AnimationList compiles from them) + the user's mesh.
+    // 1+2. Shared with "Open in ModelDoc": stage the tree + generate the vmdl.
+    let (vmdl_abs, notes) = stage_into_cs2(req)?;
+    rep.steps.extend(notes);
     let content = cs2.join("content/csgo_addons").join(CS2_ADDON);
-    let stage_dir = content.join(vmdl_dir_internal.replace('/', std::path::MAIN_SEPARATOR_STR));
-    let _ = std::fs::remove_dir_all(&stage_dir);
-    copy_tree(Path::new(&req.workspace_dir), &content)?;
-    rep.steps.push(format!("staged hero sources into CS2 addon {CS2_ADDON}"));
-
-    let mesh_name = Path::new(&req.mesh_file)
-        .file_name()
-        .map(|f| f.to_string_lossy().into_owned())
-        .ok_or("mesh file has no name")?;
-    let mesh_dest = stage_dir.join(&mesh_name);
-    std::fs::copy(&req.mesh_file, &mesh_dest)
-        .map_err(|e| format!("copy mesh into CS2 addon: {e}"))?;
-    rep.steps.push(format!("mesh: {mesh_name}"));
-
-    // 2. Generate the vmdl over the staged copy. Materials mapped to game
-    //    vmats become DefaultMaterialGroup remaps (bare mesh name -> path).
-    let remaps: Vec<(String, String)> = req
-        .materials
-        .iter()
-        .filter_map(|s| {
-            s.game_vmat
-                .as_ref()
-                .map(|v| (format!("{}.vmat", s.name.to_lowercase()), v.clone()))
-        })
-        .collect();
-    let vmdl_abs = content.join(vmdl_internal.replace('/', std::path::MAIN_SEPARATOR_STR));
-    let src = std::fs::read_to_string(&vmdl_abs).map_err(|e| e.to_string())?;
-    let mesh_rel = format!("{vmdl_dir_internal}/{mesh_name}");
-    let generated = generate_vmdl(
-        &src,
-        &mesh_rel,
-        req.material_override.as_deref(),
-        &remaps,
-        req.import_scale,
-    )?;
-    std::fs::write(&vmdl_abs, generated).map_err(|e| e.to_string())?;
-    rep.steps.push(format!(
-        "generated vmdl (your mesh at scale {}, the hero's skeleton, cameras and animation refs)",
-        req.import_scale
-    ));
+    let remaps = remap_pairs(req);
 
     // 3. Compile, auto-stubbing missing materials (they live in Deadlock's
     //    pak, not CS2's content - stubs satisfy the compiler and leave no
@@ -1363,6 +1519,56 @@ mod tests {
         assert!(!out.contains("import_scale"), "scale 1.0 emits no line");
     }
 
+    const CAM_VMDL: &str = "{\n\trootNode =\n\t{\n\t\t_class = \"RootNode\"\n\t\tchildren =\n\t\t[\n\t\t\t{\n\t\t\t\t_class = \"GameDataList\"\n\t\t\t\tchildren = \n\t\t\t\t[\n\t\t\t\t\t{\n\t\t\t\t\t\t_class = \"GenericGameData\"\n\t\t\t\t\t\tgame_class = \"CitadelCameraSettings_t\"\n\t\t\t\t\t\tgame_keys = \n\t\t\t\t\t\t{\n\t\t\t\t\t\t\tm_flCameraSideOffset = -39.9\n\t\t\t\t\t\t\tm_flCameraBackOffset = 102.9\n\t\t\t\t\t\t\tm_vCameraParrotOffset = [ -10.0, -10.0, 10.0 ]\n\t\t\t\t\t\t}\n\t\t\t\t\t},\n\t\t\t\t]\n\t\t\t},\n\t\t]\n\t}\n}\n";
+
+    #[test]
+    fn camera_keys_parse_scalars_only() {
+        let keys = parse_camera_keys(CAM_VMDL);
+        assert_eq!(keys.len(), 2, "{keys:?}");
+        assert_eq!(keys[0].key, "m_flCameraSideOffset");
+        assert_eq!(keys[0].value, -39.9);
+        assert_eq!(keys[1].key, "m_flCameraBackOffset");
+    }
+
+    #[test]
+    fn camera_overrides_replace_and_append() {
+        let out = apply_camera_overrides(
+            CAM_VMDL,
+            &[
+                CameraKey { key: "m_flCameraSideOffset".into(), value: 0.0 },
+                CameraKey { key: "m_flCameraHeightStanding".into(), value: 77.5 },
+            ],
+        )
+        .unwrap();
+        assert!(out.contains("m_flCameraSideOffset = 0"), "{out}");
+        assert!(!out.contains("-39.9"), "{out}");
+        assert!(out.contains("m_flCameraBackOffset = 102.9"), "untouched key survives");
+        assert!(out.contains("m_flCameraHeightStanding = 77.5"), "missing key appended: {out}");
+        assert!(out.contains("m_vCameraParrotOffset = [ -10.0, -10.0, 10.0 ]"), "vector untouched");
+        // Structure stays balanced.
+        assert_eq!(out.matches('{').count(), out.matches('}').count());
+        // The appended key landed INSIDE the game_keys block.
+        let (a, b) = camera_keys_span(&out).unwrap();
+        assert!(out[a..b].contains("m_flCameraHeightStanding"), "{}", &out[a..b]);
+    }
+
+    #[test]
+    fn camera_overrides_noop_without_entries() {
+        assert_eq!(apply_camera_overrides(CAM_VMDL, &[]).unwrap(), CAM_VMDL);
+    }
+
+    /// The real doorman kit vmdl parses to the full scalar camera set.
+    #[test]
+    fn camera_keys_parse_real_doorman_kit_if_present() {
+        let p = Path::new(r"C:\Users\ethob\AppData\Roaming\com.digiphoenix.deadlock-intro-tool\model_swap\doorman\models\heroes_wip\doorman_v2\doorman.vmdl");
+        if !p.exists() {
+            return;
+        }
+        let keys = parse_camera_keys(&std::fs::read_to_string(p).unwrap());
+        assert!(keys.iter().any(|k| k.key == "m_flCameraSideOffset" && k.value == -39.9), "{keys:?}");
+        assert!(keys.len() >= 7, "{keys:?}");
+    }
+
     #[test]
     fn generate_with_remaps_emits_material_group() {
         let remaps = vec![
@@ -1426,6 +1632,9 @@ mod tests {
             }],
             tools_root: None,
             materials_out: None,
+            // A distinctive camera edit - keyvalues embed as TEXT in the
+            // artifact, so the exact string must survive the compile.
+            camera: vec![CameraKey { key: "m_flCameraSideOffset".into(), value: -12.25 }],
         };
         let rep = build(&req);
         for s in &rep.steps {
@@ -1440,6 +1649,21 @@ mod tests {
             refs.iter().any(|r| r == &game_vmat),
             "remap target must appear in the artifact: {refs:?}"
         );
+        // Keyvalues compile to BINARY kv3 - decode the DATA block to verify
+        // the camera override rode through (S2V CLI, machine-local like the
+        // rest of this test's paths).
+        let s2v = Path::new(r"C:\Users\ethob\Desktop\DeadlockModding\_s2vcli\Source2Viewer-CLI.exe");
+        if s2v.exists() {
+            let out = std::process::Command::new(s2v)
+                .args(["-i", &req.artifact_out, "-b", "DATA"])
+                .output()
+                .expect("run S2V");
+            let text = String::from_utf8_lossy(&out.stdout);
+            assert!(
+                text.contains("m_flCameraSideOffset = -12.25"),
+                "camera override must ride into the artifact's keyvalues"
+            );
+        }
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
@@ -1629,6 +1853,7 @@ mod tests {
             materials: specs.clone(),
             tools_root: Some(tools.into()),
             materials_out: Some(scratch.join("doorman_mats").to_string_lossy().into_owned()),
+            camera: vec![],
         };
         let rep = build(&req);
         for s in &rep.steps {

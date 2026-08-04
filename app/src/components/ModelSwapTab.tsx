@@ -6,6 +6,7 @@ import {
   heroModelTarget,
   matchMaterialTextures,
   modelBuild,
+  modelOpenModeldoc,
   modelPreflight,
   modelWorkspace,
   type HeroPortrait,
@@ -33,6 +34,17 @@ const KIT_RULES = [
 ];
 
 type MatMode = "textures" | "game";
+
+/** Friendly labels for the CitadelCameraSettings_t scalars. */
+const CAMERA_LABELS: Record<string, string> = {
+  m_flCameraSideOffset: "Side offset",
+  m_flCameraBackOffset: "Distance behind",
+  m_flCameraBackOffsetAiming: "Distance when aiming",
+  m_flCameraHeightStanding: "Height (standing)",
+  m_flCameraHeightCrouching: "Height (crouching)",
+  m_flCameraSideOffsetZiplining: "Side offset (zipline)",
+  m_flCameraHeightOffsetZiplining: "Height offset (zipline)",
+};
 
 /** Model Replacement: put a custom Blender model on a hero. The heavy build
  *  runs here (CS2 Workshop Tools compile, cached artifact); the normal
@@ -64,6 +76,11 @@ export function ModelSwapTab({
   const [building, setBuilding] = useState(false);
   const [buildSteps, setBuildSteps] = useState<string[]>([]);
   const [detecting, setDetecting] = useState(false);
+  // Camera edits, keyed by CitadelCameraSettings_t field; raw input strings,
+  // only values that parse AND differ from stock become overrides.
+  const [camEdit, setCamEdit] = useState<Record<string, string>>({});
+  const [showCam, setShowCam] = useState(false);
+  const [openingDoc, setOpeningDoc] = useState(false);
 
   const cs2Ok = useMemo(() => settings.cs2Root.trim().length > 0, [settings.cs2Root]);
   const toolsOk = useMemo(() => settings.csdkRoot.trim().length > 0, [settings.csdkRoot]);
@@ -91,6 +108,8 @@ export function ModelSwapTab({
     setMeshFile("");
     setMaterial("");
     setTexSpecs([]);
+    setCamEdit({});
+    setShowCam(false);
     if (!codename) return null;
     setWsBusy(true);
     try {
@@ -190,6 +209,24 @@ export function ModelSwapTab({
       await analyzeMesh(o.meshFile, w);
       setMaterial(o.materialOverride ?? "");
     }
+    if (o.cameraOverrides && o.cameraOverrides.length > 0) {
+      setCamEdit(Object.fromEntries(o.cameraOverrides.map((c) => [c.key, String(c.value)])));
+      setShowCam(true);
+    }
+  }
+
+  /** Camera overrides = fields the user changed away from stock. */
+  function cameraOverrides(): { key: string; value: number }[] {
+    if (!ws) return [];
+    const out: { key: string; value: number }[] = [];
+    for (const c of ws.camera) {
+      const raw = camEdit[c.key];
+      if (raw === undefined || raw.trim() === "") continue;
+      const v = Number(raw);
+      if (!Number.isFinite(v) || v === c.value) continue;
+      out.push({ key: c.key, value: v });
+    }
+    return out;
   }
 
   /** Point at a folder; texture files auto-match material names by prefix. */
@@ -254,6 +291,7 @@ export function ModelSwapTab({
       const artifactOut = await join(cacheDir, `${hero}.vmdl_c`);
       const materialsOut = await join(cacheDir, `${hero}_mats`);
       const scale = Number(importScale) || 1;
+      const camera = cameraOverrides();
       const rep = await modelBuild({
         cs2Root: settings.cs2Root,
         workspaceDir: ws.dir,
@@ -272,6 +310,7 @@ export function ModelSwapTab({
         })),
         toolsRoot: useTextures ? settings.csdkRoot : null,
         materialsOut: useTextures ? materialsOut : null,
+        camera,
       });
       setBuildSteps(rep.steps);
       if (rep.ok && rep.artifact) {
@@ -286,6 +325,7 @@ export function ModelSwapTab({
           materialOverride: useTextures ? null : material || null,
           materials: rep.materials,
           materialSpecs: useTextures ? specs : undefined,
+          cameraOverrides: camera.length > 0 ? camera : undefined,
           enabled: true,
         };
         onChange([...overrides.filter((o) => o.id !== next.id), next]);
@@ -322,9 +362,44 @@ export function ModelSwapTab({
     }
   }
 
+  /** Stage the current setup and open it in CS2's ModelDoc for inspection. */
+  async function openInModeldoc() {
+    if (!ws || !meshFile || !hero) return;
+    setOpeningDoc(true);
+    try {
+      const cacheDir = await join(await appDataDir(), "model_cache");
+      const specs =
+        matMode === "textures" ? texSpecs.filter((s) => s.color || s.gameVmat) : [];
+      const msg = await modelOpenModeldoc({
+        cs2Root: settings.cs2Root,
+        workspaceDir: ws.dir,
+        vmdlInternal: wsTarget,
+        meshFile,
+        materialOverride: matMode === "textures" ? null : material || null,
+        importScale: Number(importScale) || 1,
+        artifactOut: await join(cacheDir, `${hero}.vmdl_c`),
+        materials: specs.map((s) => ({
+          name: s.name,
+          color: s.color,
+          normal: s.normal,
+          roughness: s.roughness,
+          metalness: s.metalness,
+          gameVmat: s.gameVmat ?? null,
+        })),
+        camera: cameraOverrides(),
+      });
+      push("info", msg);
+    } catch (e) {
+      push("error", `Couldn't open ModelDoc: ${e}`);
+    } finally {
+      setOpeningDoc(false);
+    }
+  }
+
   const errorCount = preflight?.errors.length ?? 0;
   const texAssigned = texSpecs.filter((s) => s.color || s.gameVmat).length;
   const texWithArt = texSpecs.filter((s) => s.color).length;
+  const camChanged = ws ? cameraOverrides().length : 0;
 
   return (
     <div className="flex max-w-3xl flex-col gap-4">
@@ -640,6 +715,59 @@ export function ModelSwapTab({
             </div>
           )}
 
+          {ws.camera.length > 0 && (
+            <div className="mt-3">
+              <button
+                onClick={() => setShowCam((v) => !v)}
+                className="text-[11px] text-zinc-400 transition hover:text-zinc-200"
+              >
+                {showCam ? "▾" : "▸"} Camera (optional)
+                {camChanged > 0 && (
+                  <span className="ml-1.5 rounded bg-rose-400/10 px-1.5 py-0.5 text-[9px] text-rose-200/90">
+                    {camChanged} changed
+                  </span>
+                )}
+              </button>
+              {showCam && (
+                <div className="mt-1.5 flex flex-col gap-1.5">
+                  <p className="text-[10px] text-zinc-600">
+                    The hero's third-person camera, straight from its model file - the values
+                    the community edits in ModelDoc after a swap. Tweak in small steps and
+                    test in game; blank = keep stock.
+                  </p>
+                  <div className="grid max-w-xl grid-cols-2 gap-x-4 gap-y-1">
+                    {ws.camera.map((c) => (
+                      <label
+                        key={c.key}
+                        className="flex items-center justify-between gap-2 text-[11px] text-zinc-400"
+                        title={c.key}
+                      >
+                        <span className="truncate">{CAMERA_LABELS[c.key] ?? c.key}</span>
+                        <input
+                          value={camEdit[c.key] ?? ""}
+                          onChange={(e) =>
+                            setCamEdit((prev) => ({ ...prev, [c.key]: e.target.value }))
+                          }
+                          placeholder={String(c.value)}
+                          spellCheck={false}
+                          className="w-20 rounded-md border border-zinc-700/80 bg-zinc-950 px-2 py-1 text-right text-[11px] text-zinc-200 outline-none transition placeholder:text-zinc-600 focus:border-rose-400/70"
+                        />
+                      </label>
+                    ))}
+                  </div>
+                  {camChanged > 0 && (
+                    <button
+                      onClick={() => setCamEdit({})}
+                      className="self-start rounded border border-zinc-700 px-1.5 py-0.5 text-[10px] text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-200"
+                    >
+                      Reset to stock
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="mt-2 flex flex-wrap items-center gap-2">
             {matMode === "game" && (
               <select
@@ -689,6 +817,14 @@ export function ModelSwapTab({
               className="rounded-md border border-rose-400/40 bg-rose-400/10 px-3 py-1.5 text-xs font-medium text-rose-200 transition hover:bg-rose-400/20 disabled:opacity-50"
             >
               {building ? "Building…" : "Build the model"}
+            </button>
+            <button
+              onClick={() => void openInModeldoc()}
+              disabled={openingDoc || building || !cs2Ok}
+              title="Stage the model and open it in CS2's ModelDoc - inspect the skeleton, your weights and the cameras by hand"
+              className="rounded-md border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 transition hover:bg-zinc-800 disabled:opacity-50"
+            >
+              {openingDoc ? "Opening…" : "Inspect in ModelDoc"}
             </button>
             {errorCount > 0 && (
               <span className="text-[11px] text-red-300">fix the {errorCount} error(s) above first</span>

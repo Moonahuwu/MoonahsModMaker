@@ -273,6 +273,8 @@ export interface ModelOverride {
     metalness: string | null;
     gameVmat?: string | null;
   }[];
+  /** Camera values the build spliced over the hero's stock ones. */
+  cameraOverrides?: { key: string; value: number }[];
   enabled?: boolean;
 }
 
