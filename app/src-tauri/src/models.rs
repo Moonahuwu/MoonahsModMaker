@@ -1666,6 +1666,24 @@ fn toolchain_root(req: &ModelBuildReq) -> Result<std::path::PathBuf, String> {
     }
 }
 
+/// CS2's tools expect every addon to carry an `addoninfo.txt` on BOTH sides
+/// (the stock `addon_template` has one). Without it the tools can sit on the
+/// splash screen instead of opening. Compiling never needed it, so our addon
+/// went without until ModelDoc was wired up.
+fn ensure_cs2_addoninfo(root: &Path, addon: &str) {
+    const INFO: &str = "\"AddonInfo\"\n{\n\t\"IsPlayable\"\t\"0\"\n}\n";
+    for side in ["content/csgo_addons", "game/csgo_addons"] {
+        let dir = root.join(side).join(addon);
+        if std::fs::create_dir_all(&dir).is_err() {
+            continue;
+        }
+        let info = dir.join("addoninfo.txt");
+        if !info.exists() {
+            let _ = std::fs::write(&info, INFO);
+        }
+    }
+}
+
 /// Stage the decompiled source tree + the user's mesh into the toolchain's
 /// content addon and write the generated vmdl (mesh splice, remaps, camera
 /// edits). Shared by the compile path and "Open in ModelDoc". Returns the
@@ -1673,6 +1691,9 @@ fn toolchain_root(req: &ModelBuildReq) -> Result<std::path::PathBuf, String> {
 fn stage_sources(req: &ModelBuildReq) -> Result<(std::path::PathBuf, Vec<String>), String> {
     let root = toolchain_root(req)?;
     let (content, _, addon) = req.kind.layout(&root);
+    if req.kind == ModelKind::Hero {
+        ensure_cs2_addoninfo(&root, addon);
+    }
     let vmdl_internal = req.vmdl_internal.replace('\\', "/");
     let vmdl_dir_internal = vmdl_internal.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
     let mut notes = Vec::new();
@@ -1769,11 +1790,15 @@ pub fn open_in_modeldoc(req: &ModelBuildReq) -> Result<String, String> {
         cmd.current_dir(dir);
     }
     cmd.args(args);
-    cmd.args(["-addon", addon, "-asset", &vmdl_internal]);
+    // NOTE: do NOT pass `-asset <vmdl>` here. Measured on CS2's tools: with
+    // it the process sits on the Valve splash forever (10GB+ and climbing,
+    // window never responds); with just `-addon` the tools are up in ~20s.
+    // So we open the tools on the addon and name the file to open.
+    cmd.args(["-addon", addon]);
     // Fire and forget - the tools outlive us.
     cmd.spawn().map_err(|e| format!("launching the tools: {e}"))?;
     Ok(format!(
-        "staged your model into the {addon} addon - ModelDoc is opening (first launch takes a minute)"
+        "Tools opening (~20s). In the Asset Browser pick the {addon} addon and open {vmdl_internal}"
     ))
 }
 
