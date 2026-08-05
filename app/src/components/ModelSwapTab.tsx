@@ -104,6 +104,10 @@ export function ModelSwapTab({
   const [camEdit, setCamEdit] = useState<Record<string, string>>({});
   const [showCam, setShowCam] = useState(false);
   const [openingDoc, setOpeningDoc] = useState(false);
+  // Community standard: the baked anim list is dead weight (heroes animate
+  // via their graphs) and it IS the 10-20 minute build. Off only for the
+  // rare ability echo that T-poses without it.
+  const [fastBuild, setFastBuild] = useState(true);
   // The vanilla model as glTF: shown in the 3D preview, and the same export
   // users download to start from in Blender.
   const [previewGlb, setPreviewGlb] = useState("");
@@ -468,6 +472,7 @@ export function ModelSwapTab({
         toolsRoot: useTextures || target.kind === "prop" ? settings.csdkRoot : null,
         materialsOut: useTextures ? materialsOut : null,
         ffmpegPath: settings.ffmpegPath || null,
+        skipAnims: target.kind === "hero" && fastBuild,
         camera,
       });
       setBuildSteps(rep.steps);
@@ -1075,6 +1080,20 @@ export function ModelSwapTab({
                 </option>
               </select>
             )}
+            {mode === "hero" && (
+              <label
+                className="flex items-center gap-1.5 text-[11px] text-zinc-400"
+                title="Skips compiling the baked animation list - heroes animate through their animation graphs, which are kept. Turn off and rebuild if some ability's clone or echo T-poses (known case: Haze's ult shadow)."
+              >
+                <input
+                  type="checkbox"
+                  checked={fastBuild}
+                  onChange={(e) => setFastBuild(e.target.checked)}
+                  className="accent-rose-400"
+                />
+                Fast build
+              </label>
+            )}
             <label className="flex items-center gap-1.5 text-[11px] text-zinc-400">
               Scale
               <input
@@ -1123,7 +1142,9 @@ export function ModelSwapTab({
               <span className="text-[11px] text-zinc-500">
                 {mode === "object"
                   ? "objects compile in a couple of seconds"
-                  : "a simple model takes ~15s, a big multi-mesh one can take 10+ minutes - hang tight"}
+                  : fastBuild
+                    ? "fast build: usually well under a minute"
+                    : "full build with baked animations: a big model can take 10+ minutes - hang tight"}
               </span>
             )}
           </div>

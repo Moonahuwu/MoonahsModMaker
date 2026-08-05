@@ -1197,9 +1197,12 @@ fn compile_materials(
         // Source 2 normalizes resource paths to lowercase - the compiled vmdl
         // references the lowercased material name, so the vmat file must match.
         // g_fVertexColorStrength 0 neutralizes baked vertex colors (a classic
-        // cause of black models on FBX exports).
+        // cause of black models on FBX exports). NPR lighting + depth-before-
+        // alpha are the community's "must enable for Deadlock-style" flags -
+        // without NPR a custom material reads photoreal next to the game's
+        // toon shading.
         let vmat = format!(
-            "\"Layer0\"\n{{\n\t\"shader\"\t\"pbr.vfx\"\n\t\"F_RENDER_BACKFACES\"\t\"1\"\n\t\"F_USE_STATUS_EFFECTS_PROXY\"\t\"1\"\n\t\"g_fVertexColorStrength1\"\t\"0\"\n\t\"TextureColor1\"\t\"{color}\"\n\t\"TextureNormal1\"\t{normal}\n\t\"TextureRoughness1\"\t{rough}\n\t\"TextureMetalness1\"\t{metal}\n\t\"TextureAmbientOcclusion1\"\t\"{NO_AO}\"\n}}\n"
+            "\"Layer0\"\n{{\n\t\"shader\"\t\"pbr.vfx\"\n\t\"F_RENDER_BACKFACES\"\t\"1\"\n\t\"F_USE_STATUS_EFFECTS_PROXY\"\t\"1\"\n\t\"F_USE_NPR_LIGHTING\"\t\"1\"\n\t\"F_WRITE_DEPTH_BEFORE_ALPHA_BLENDING\"\t\"1\"\n\t\"g_fVertexColorStrength1\"\t\"0\"\n\t\"TextureColor1\"\t\"{color}\"\n\t\"TextureNormal1\"\t{normal}\n\t\"TextureRoughness1\"\t{rough}\n\t\"TextureMetalness1\"\t{metal}\n\t\"TextureAmbientOcclusion1\"\t\"{NO_AO}\"\n}}\n"
         );
         let vmat_name = format!("{}.vmat", spec.name.to_lowercase());
         let vmat_abs = content.join(&vmat_name);
@@ -1601,6 +1604,14 @@ pub struct ModelBuildReq {
     /// ffmpeg, used to normalize textures to real PNGs before compiling.
     #[serde(default)]
     pub ffmpeg_path: Option<String>,
+    /// Skip compiling the embedded legacy animation list (the community
+    /// standard: heroes animate through the external AnimGraph2/NmSkeleton
+    /// graphs, which we keep - the baked list is what makes hero builds take
+    /// 10+ minutes). Rarely, an ability's echo/clone uses a baked anim (the
+    /// known case is Haze's ult shadow) - rebuild with this off if one
+    /// T-poses.
+    #[serde(default)]
+    pub skip_anims: bool,
     /// Gameplay-camera value overrides spliced into the generated vmdl's
     /// CitadelCameraSettings_t (the community's "fix the camera in ModelDoc"
     /// step, without ModelDoc).
@@ -1727,6 +1738,15 @@ fn stage_sources(req: &ModelBuildReq) -> Result<(std::path::PathBuf, Vec<String>
         &remaps,
         req.import_scale,
     )?;
+    if req.skip_anims {
+        let mut stripped = 0;
+        while remove_node(&mut generated, "AnimationList") {
+            stripped += 1;
+        }
+        if stripped > 0 {
+            notes.push("fast build: baked animation list skipped (the hero animates via its animation graphs)".into());
+        }
+    }
     // Restore the EXACT vanilla attachment transforms (decompiled ones are
     // lossy - the cause of the classic centered-camera-after-swap bug).
     // Models with no attachments at all (most props) skip this silently.
@@ -2372,6 +2392,7 @@ mod tests {
             tools_root: None,
             materials_out: None,
             ffmpeg_path: None,
+            skip_anims: false,
             // A distinctive camera edit - keyvalues embed as TEXT in the
             // artifact, so the exact string must survive the compile.
             camera: vec![CameraKey { key: "m_flCameraSideOffset".into(), value: -12.25 }],
@@ -2612,6 +2633,61 @@ mod tests {
         let _ = std::fs::remove_dir_all(&out_cache);
     }
 
+    /// Fast build: stripping the baked AnimationList (community standard)
+    /// must still produce a valid artifact with exact attachments, much
+    /// faster. Ignored: needs this machine's installs.
+    #[test]
+    #[ignore]
+    fn e2e_fast_build_skips_anims() {
+        let helper = r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\tools\vpk-helper\dist\vpk-helper.exe";
+        let pak = r"D:\SteamLibrary\steamapps\common\Deadlock\game\citadel\pak01_dir.vpk";
+        let cs2 = r"D:\SteamLibrary\steamapps\common\Counter-Strike Global Offensive";
+        let fbx = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/eim_testcube.fbx");
+        let scratch = std::env::temp_dir().join("eim_fastbuild_e2e");
+        let _ = std::fs::remove_dir_all(&scratch);
+        let ws = workspace(helper, pak, "models/heroes_staging/haze/haze.vmdl_c", &scratch.join("ws"), false)
+            .expect("workspace");
+        let t0 = std::time::Instant::now();
+        let req = ModelBuildReq {
+            cs2_root: cs2.into(),
+            kind: ModelKind::Hero,
+            workspace_dir: ws.dir.clone(),
+            vmdl_internal: "models/heroes_staging/haze/haze.vmdl".into(),
+            mesh_file: fbx.into(),
+            material_override: ws.materials.first().cloned(),
+            import_scale: 0.01,
+            artifact_out: scratch.join("haze.vmdl_c").to_string_lossy().into_owned(),
+            materials: vec![],
+            tools_root: None,
+            materials_out: None,
+            ffmpeg_path: None,
+            skip_anims: true,
+            camera: vec![],
+        };
+        let rep = build(&req);
+        let secs = t0.elapsed().as_secs_f32();
+        for s in &rep.steps {
+            eprintln!("STEP {s}");
+        }
+        eprintln!("FAST BUILD took {secs:.1}s");
+        assert!(rep.ok, "{:?}", rep.steps);
+        assert!(rep.steps.iter().any(|s| s.contains("fast build")), "{:?}", rep.steps);
+        // Attachments still exact (they live in MDAT, independent of anims).
+        let s2v = Path::new(r"C:\Users\ethob\Desktop\DeadlockModding\_s2vcli\Source2Viewer-CLI.exe");
+        if s2v.exists() {
+            let out = std::process::Command::new(s2v)
+                .args(["-i", &req.artifact_out, "-b", "MDAT"])
+                .output()
+                .expect("run S2V");
+            let ours: std::collections::HashMap<String, VanillaAttachment> =
+                parse_mdat_attachments(&String::from_utf8_lossy(&out.stdout)).into_iter().collect();
+            let root_aim = ours.get("root_aim").expect("root_aim survives");
+            assert!((root_aim.angles[0] + 90.0).abs() < 0.05, "{root_aim:?}");
+            assert!((root_aim.angles[1] + 90.0).abs() < 0.05, "{root_aim:?}");
+        }
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
     /// The "import the FBX and you're done" path, on the user's real sona
     /// export: its materials must come back with color maps resolved from
     /// the paths Blender baked into the file. Ignored: needs that machine's
@@ -2755,6 +2831,7 @@ mod tests {
             tools_root: Some(tools.into()),
             materials_out: None,
             ffmpeg_path: None,
+            skip_anims: false,
             camera: vec![],
         };
         let rep = build(&req);
@@ -2851,6 +2928,7 @@ mod tests {
             tools_root: Some(tools.into()),
             materials_out: Some(scratch.join("doorman_mats").to_string_lossy().into_owned()),
             ffmpeg_path: None,
+            skip_anims: false,
             camera: vec![],
         };
         let rep = build(&req);

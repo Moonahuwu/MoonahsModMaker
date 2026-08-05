@@ -775,6 +775,9 @@ export function modelBuild(req: {
   materialsOut?: string | null;
   /** ffmpeg - textures are normalized to real PNGs before compiling. */
   ffmpegPath?: string | null;
+  /** Skip the baked animation list (community standard - heroes animate via
+   *  their external graphs; cuts hero builds from ~20min to seconds). */
+  skipAnims?: boolean;
   /** Camera value overrides spliced into the vmdl's CitadelCameraSettings_t. */
   camera?: CameraKey[];
 }): Promise<ModelBuildReport> {
