@@ -400,6 +400,9 @@ function AttributeEditor({
 
 export function SidePanel({
   ev,
+  selectMode,
+  selected,
+  onToggleSelect,
   view,
   soundFolder,
   ffmpegPath,
@@ -438,6 +441,10 @@ export function SidePanel({
   compareByDefault: boolean;
   dropActive: boolean;
   panelRef: (el: HTMLElement | null) => void;
+  /** Multi-select mode (bulk "one file onto many slots"). */
+  selectMode?: boolean;
+  selected?: boolean;
+  onToggleSelect?: (id: string) => void;
   expandedSongs: Record<string, boolean>;
   onToggleSongExpanded: (songId: string) => void;
   onSongChange: (songId: string, patch: Partial<Song>) => void;
@@ -572,7 +579,21 @@ export function SidePanel({
     >
       <header className="mb-4 flex items-center justify-between">
         <div className="flex items-center gap-2.5">
-          <h2 className="text-lg font-semibold" style={{ color: accent }}>
+          {selectMode && (
+            <input
+              type="checkbox"
+              checked={!!selected}
+              onChange={() => onToggleSelect?.(ev.id)}
+              title="Select this slot for the bulk replace"
+              className="h-4 w-4 shrink-0 cursor-pointer"
+              style={{ accentColor: accent }}
+            />
+          )}
+          <h2
+            className={`text-lg font-semibold${selectMode ? " cursor-pointer select-none" : ""}`}
+            style={{ color: accent }}
+            onClick={selectMode ? () => onToggleSelect?.(ev.id) : undefined}
+          >
             {ev.side}
           </h2>
           <StatBadge n={total} label="in pool" tone="bg-zinc-800/80 text-zinc-400" />

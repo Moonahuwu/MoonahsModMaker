@@ -4603,6 +4603,61 @@ export default function App() {
   }
 
   // Start a replacement for a game sound: pick audio, create the override.
+  /** One audio file onto MANY slots at once: swaps each selected slot's
+   *  custom tracks for the picked file. Stock sounds are untouched - each
+   *  card's "replace" toggle still owns those. */
+  async function bulkReplaceSlots(ids: string[]): Promise<boolean> {
+    const prev = projectRef.current;
+    if (!prev || ids.length === 0) return false;
+    try {
+      const file = await pickAudioFile();
+      if (!file) return false;
+      const dur = await audioDuration(file);
+      const sanitized = await sanitizeName(baseName(file));
+      // Compile names must be unique across the project; reserve up front
+      // since all N songs land in one setProject pass.
+      const taken = new Set(prev.events.flatMap((e) => e.songs.map((s) => s.soundName)));
+      const nameFor = () => {
+        let n = sanitized;
+        let i = 2;
+        while (taken.has(n)) n = `${sanitized}_${i++}`;
+        taken.add(n);
+        return n;
+      };
+      const targets = new Set(ids);
+      const next = {
+        ...prev,
+        events: prev.events.map((e) => {
+          if (!targets.has(e.id)) return e;
+          const song: Song = {
+            id: crypto.randomUUID(),
+            label: baseName(file),
+            soundName: nameFor(),
+            sourceMp3: file,
+            trimStart: 0,
+            trimEnd: dur,
+            gainDb: DEFAULT_GAIN_DB,
+            fadeIn: 0,
+            fadeOut: 0,
+            looping: false,
+            lastCompiledHash: null,
+            order: 0,
+          };
+          // Replace, not stack - the point of the bulk is "make these all
+          // play this".
+          return { ...e, songs: [song] };
+        }),
+      };
+      setProject(next);
+      void load(next);
+      push("success", `"${baseName(file)}" set on ${ids.length} slot(s)`);
+      return true;
+    } catch (e) {
+      push("error", `Bulk replace failed: ${e}`);
+      return false;
+    }
+  }
+
   /** One audio file onto MANY sounds at once: pick the file once, then set
    *  a replacement for every ticked sound. Returns true when applied (the
    *  browser clears its selection then). */
@@ -4930,6 +4985,17 @@ export default function App() {
     }
   }
 
+  // Slot multi-select ("one file onto many slots") - session-scoped.
+  const [slotSelectMode, setSlotSelectMode] = useState(false);
+  const [slotSel, setSlotSel] = useState<Set<string>>(new Set());
+  const toggleSlotSel = (id: string) =>
+    setSlotSel((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
   const visibleSlots = (project?.events ?? []).filter(
     (e) => e.group === activeTab && (!modifiedOnly || slotHasContent(e)),
   );
@@ -5220,6 +5286,9 @@ export default function App() {
     <SidePanel
       key={ev.id}
       ev={ev}
+      selectMode={slotSelectMode}
+      selected={slotSel.has(ev.id)}
+      onToggleSelect={toggleSlotSel}
       onPasteSong={pasteSong}
       view={pools[ev.id]}
       moveTargets={isAutoSlot(ev.id) || isImportSlot(ev.id) ? MOVE_TARGETS : undefined}
@@ -6130,6 +6199,60 @@ export default function App() {
                   </span>
                 </span>
               </label>
+            )}
+            {visibleSlots.length > 1 && (
+              <div className="mb-3 flex flex-wrap items-center gap-2">
+                <button
+                  onClick={() => {
+                    setSlotSelectMode((v) => !v);
+                    setSlotSel(new Set());
+                  }}
+                  title="Pick several slots, then put one audio file on all of them"
+                  className={`rounded-md border px-2.5 py-1 text-xs transition ${
+                    slotSelectMode
+                      ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-300"
+                      : "border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200"
+                  }`}
+                >
+                  {slotSelectMode ? "✕ Cancel select" : "☑ Select multiple"}
+                </button>
+                {slotSelectMode && (
+                  <>
+                    <span className="text-xs font-medium text-zinc-300">
+                      {slotSel.size} selected
+                    </span>
+                    <button
+                      onClick={() =>
+                        setSlotSel(new Set(visibleSlots.map((e) => e.id)))
+                      }
+                      className="rounded-md border border-zinc-700 px-2 py-0.5 text-xs text-zinc-400 transition hover:border-zinc-500 hover:text-zinc-200"
+                    >
+                      Select all {visibleSlots.length}
+                    </button>
+                    <button
+                      onClick={() => setSlotSel(new Set())}
+                      disabled={slotSel.size === 0}
+                      className="rounded-md border border-zinc-700 px-2 py-0.5 text-xs text-zinc-400 transition hover:border-zinc-500 hover:text-zinc-200 disabled:opacity-40"
+                    >
+                      Deselect
+                    </button>
+                    <button
+                      onClick={() =>
+                        void bulkReplaceSlots([...slotSel]).then((ok) => {
+                          if (ok) {
+                            setSlotSel(new Set());
+                            setSlotSelectMode(false);
+                          }
+                        })
+                      }
+                      disabled={slotSel.size === 0}
+                      className="ml-auto rounded-md bg-emerald-400 px-3 py-1 text-xs font-semibold text-zinc-950 transition hover:opacity-90 disabled:opacity-40"
+                    >
+                      Replace {slotSel.size || ""} with one file…
+                    </button>
+                  </>
+                )}
+              </div>
             )}
             <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
               {visibleSlots.map(renderPanel)}
