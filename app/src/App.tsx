@@ -4603,6 +4603,49 @@ export default function App() {
   }
 
   // Start a replacement for a game sound: pick audio, create the override.
+  /** One audio file onto MANY sounds at once: pick the file once, then set
+   *  a replacement for every ticked sound. Returns true when applied (the
+   *  browser clears its selection then). */
+  async function replaceSoundsWithOne(references: string[]): Promise<boolean> {
+    if (references.length === 0) return false;
+    try {
+      const sel = await pickAudioFile();
+      if (!sel) return false;
+      const dur = await audioDuration(sel);
+      const name = baseName(sel);
+      setProject((prev) => {
+        if (!prev) return prev;
+        const targets = new Set(references);
+        const list = (prev.soundOverrides ?? []).filter((o) => !targets.has(o.targetRef));
+        for (const reference of references) {
+          list.push({
+            id: `snd_${reference.replace(/[^a-z0-9]+/gi, "_").toLowerCase()}`,
+            targetRef: reference,
+            // No per-sound label here (the browser knows them) - the file
+            // name reads better in the overrides list than a raw path.
+            label: reference.split("/").pop() ?? reference,
+            sourceAudio: sel,
+            trimStart: 0,
+            trimEnd: dur || 0,
+            gainDb: 0,
+            fadeIn: 0,
+            fadeOut: 0,
+            // Same looping rule as the single replace: `_lp` sounds must
+            // keep looping or the ambience cuts out after one play.
+            looping: /_lp(_|\.|$)/i.test(reference),
+            lastCompiledHash: null,
+          });
+        }
+        return { ...prev, soundOverrides: list };
+      });
+      push("success", `"${name}" set on ${references.length} sound(s) - compile to apply`);
+      return true;
+    } catch (e) {
+      push("error", `Couldn't pick audio: ${e}`);
+      return false;
+    }
+  }
+
   async function replaceSound(reference: string, label: string) {
     try {
       const sel = await pickAudioFile();
@@ -5802,6 +5845,7 @@ export default function App() {
             onReplace={(ref, label) => void replaceSound(ref, label)}
             onRemoveOverride={removeOverrideByRef}
             onDownloadMany={downloadManyEntries}
+            onReplaceMany={replaceSoundsWithOne}
             renderEditor={(o) => (
               <OverrideEditor
                 override={o}

@@ -30,6 +30,7 @@ export function SoundBrowser({
   onReplace,
   onRemoveOverride,
   onDownloadMany,
+  onReplaceMany,
   renderEditor,
   modifiedOnly,
 }: {
@@ -45,6 +46,9 @@ export function SoundBrowser({
   onRemoveOverride: (reference: string) => void;
   /** Decode + save stock sounds into Downloads (one or many). */
   onDownloadMany: (refs: string[]) => Promise<void>;
+  /** Put ONE picked audio file onto every selected sound. Resolves true
+   *  when applied (the selection clears then). */
+  onReplaceMany: (refs: string[]) => Promise<boolean>;
   /** Render the editor for an existing override (trim/gain/fade/loop). */
   renderEditor: (override: SoundOverride) => React.ReactNode;
   /** "Modified only": show just categories/folders/files with a replacement. */
@@ -58,6 +62,7 @@ export function SoundBrowser({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [playing, setPlaying] = useState<string | null>(null);
+  const [applying, setApplying] = useState(false);
   const [openRow, setOpenRow] = useState<string | null>(null);
   // Multi-select for batch downloads (persists while drilling across folders).
   const [sel, setSel] = useState<Set<string>>(new Set());
@@ -259,6 +264,20 @@ export function SoundBrowser({
                 {sel.size} selected
               </span>
               <button
+                disabled={applying}
+                onClick={() => {
+                  setApplying(true);
+                  void onReplaceMany(Array.from(sel))
+                    .then((ok) => ok && setSel(new Set()))
+                    .finally(() => setApplying(false));
+                }}
+                title="Pick one audio file and use it for every selected sound"
+                style={{ backgroundColor: accent }}
+                className="rounded-md px-2.5 py-0.5 text-xs font-semibold text-zinc-950 transition hover:opacity-90 disabled:opacity-50"
+              >
+                {applying ? "Applying…" : `Replace ${sel.size} with one file…`}
+              </button>
+              <button
                 disabled={downloading}
                 onClick={() => {
                   setDownloading(true);
@@ -331,7 +350,7 @@ export function SoundBrowser({
                         toggleSelect(idx, file.reference, (e as React.MouseEvent).shiftKey)
                       }
                       onChange={() => {}}
-                      title="Select for batch download (shift-click to select a range)"
+                      title="Select to replace several at once or batch download (shift-click selects a range)"
                       className="shrink-0 accent-emerald-500"
                     />
                     <button
