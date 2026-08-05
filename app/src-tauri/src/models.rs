@@ -1604,6 +1604,12 @@ pub struct ModelBuildReq {
     /// ffmpeg, used to normalize textures to real PNGs before compiling.
     #[serde(default)]
     pub ffmpeg_path: Option<String>,
+    /// Compile the STAGED vmdl as it currently is instead of re-staging and
+    /// regenerating - preserves manual ModelDoc edits made after the last
+    /// build/inspect (bodygroups, ragdoll tweaks, anything the app doesn't
+    /// automate). Meshes and textures from earlier staging stay in place.
+    #[serde(default)]
+    pub use_staged: bool,
     /// Skip compiling the embedded legacy animation list (the community
     /// standard: heroes animate through the external AnimGraph2/NmSkeleton
     /// graphs, which we keep - the baked list is what makes hero builds take
@@ -1878,8 +1884,24 @@ fn build_inner(req: &ModelBuildReq, rep: &mut ModelBuildReport) -> Result<String
     }
 
     // 1+2. Shared with "Open in ModelDoc": stage the tree + generate the vmdl.
-    let (vmdl_abs, notes) = stage_sources(req)?;
-    rep.steps.extend(notes);
+    // With `use_staged`, the staged copy IS the source of truth (the user
+    // edited it in ModelDoc) - compile it untouched.
+    let vmdl_abs = if req.use_staged {
+        let root = toolchain_root(req)?;
+        let (content, _, _) = req.kind.layout(&root);
+        let staged = content.join(vmdl_internal.replace('/', std::path::MAIN_SEPARATOR_STR));
+        if !staged.exists() {
+            return Err(
+                "no staged model to compile - run a normal Build (or Inspect in ModelDoc) first, then edit and rebuild".into(),
+            );
+        }
+        rep.steps.push("compiling your ModelDoc-edited model as is (no restaging)".into());
+        staged
+    } else {
+        let (vmdl_abs, notes) = stage_sources(req)?;
+        rep.steps.extend(notes);
+        vmdl_abs
+    };
     let (content, game_dir, addon) = req.kind.layout(&root);
     let remaps = remap_pairs(req);
 
@@ -2392,6 +2414,7 @@ mod tests {
             tools_root: None,
             materials_out: None,
             ffmpeg_path: None,
+            use_staged: false,
             skip_anims: false,
             // A distinctive camera edit - keyvalues embed as TEXT in the
             // artifact, so the exact string must survive the compile.
@@ -2633,6 +2656,74 @@ mod tests {
         let _ = std::fs::remove_dir_all(&out_cache);
     }
 
+    /// ModelDoc-edit preservation: build once, hand-edit the STAGED vmdl
+    /// (as ModelDoc saving does), rebuild with `use_staged` - the edit must
+    /// reach the artifact instead of being wiped by restaging. Ignored:
+    /// needs this machine's installs.
+    #[test]
+    #[ignore]
+    fn e2e_use_staged_preserves_manual_edits() {
+        let helper = r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\tools\vpk-helper\dist\vpk-helper.exe";
+        let pak = r"D:\SteamLibrary\steamapps\common\Deadlock\game\citadel\pak01_dir.vpk";
+        let cs2 = r"D:\SteamLibrary\steamapps\common\Counter-Strike Global Offensive";
+        let fbx = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/eim_testcube.fbx");
+        let scratch = std::env::temp_dir().join("eim_staged_e2e");
+        let _ = std::fs::remove_dir_all(&scratch);
+        let ws = workspace(helper, pak, "models/heroes_staging/haze/haze.vmdl_c", &scratch.join("ws"), false)
+            .expect("workspace");
+        let mut req = ModelBuildReq {
+            cs2_root: cs2.into(),
+            kind: ModelKind::Hero,
+            workspace_dir: ws.dir.clone(),
+            vmdl_internal: "models/heroes_staging/haze/haze.vmdl".into(),
+            mesh_file: fbx.into(),
+            material_override: ws.materials.first().cloned(),
+            import_scale: 0.01,
+            artifact_out: scratch.join("haze.vmdl_c").to_string_lossy().into_owned(),
+            materials: vec![],
+            tools_root: None,
+            materials_out: None,
+            ffmpeg_path: None,
+            use_staged: false,
+            skip_anims: true,
+            camera: vec![],
+        };
+        assert!(build(&req).ok, "normal build first");
+
+        // "ModelDoc" edits the staged copy: change a camera value by hand.
+        let staged = Path::new(cs2)
+            .join("content/csgo_addons")
+            .join(CS2_ADDON)
+            .join("models/heroes_staging/haze/haze.vmdl");
+        let text = std::fs::read_to_string(&staged).unwrap();
+        let edited = apply_camera_overrides(
+            &text,
+            &[CameraKey { key: "m_flCameraSideOffset".into(), value: -77.5 }],
+        )
+        .unwrap();
+        std::fs::write(&staged, edited).unwrap();
+
+        req.use_staged = true;
+        let rep = build(&req);
+        for s in &rep.steps {
+            eprintln!("STEP {s}");
+        }
+        assert!(rep.ok, "{:?}", rep.steps);
+        let s2v = Path::new(r"C:\Users\ethob\Desktop\DeadlockModding\_s2vcli\Source2Viewer-CLI.exe");
+        if s2v.exists() {
+            let out = std::process::Command::new(s2v)
+                .args(["-i", &req.artifact_out, "-b", "DATA"])
+                .output()
+                .expect("run S2V");
+            let text = String::from_utf8_lossy(&out.stdout);
+            assert!(
+                text.contains("m_flCameraSideOffset = -77.5"),
+                "the hand edit must survive into the artifact"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
     /// Fast build: stripping the baked AnimationList (community standard)
     /// must still produce a valid artifact with exact attachments, much
     /// faster. Ignored: needs this machine's installs.
@@ -2661,6 +2752,7 @@ mod tests {
             tools_root: None,
             materials_out: None,
             ffmpeg_path: None,
+            use_staged: false,
             skip_anims: true,
             camera: vec![],
         };
@@ -2831,6 +2923,7 @@ mod tests {
             tools_root: Some(tools.into()),
             materials_out: None,
             ffmpeg_path: None,
+            use_staged: false,
             skip_anims: false,
             camera: vec![],
         };
@@ -2928,6 +3021,7 @@ mod tests {
             tools_root: Some(tools.into()),
             materials_out: Some(scratch.join("doorman_mats").to_string_lossy().into_owned()),
             ffmpeg_path: None,
+            use_staged: false,
             skip_anims: false,
             camera: vec![],
         };

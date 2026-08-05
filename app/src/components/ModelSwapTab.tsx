@@ -434,7 +434,7 @@ export function ModelSwapTab({
     );
   }
 
-  async function build() {
+  async function build(useStaged = false) {
     if (!ws || !meshFile || !target) return;
     const useTextures = matMode === "textures";
     const specs = useTextures ? texSpecs.filter((s) => s.color || s.gameVmat) : [];
@@ -473,6 +473,7 @@ export function ModelSwapTab({
         materialsOut: useTextures ? materialsOut : null,
         ffmpegPath: settings.ffmpegPath || null,
         skipAnims: target.kind === "hero" && fastBuild,
+        useStaged,
         camera,
       });
       setBuildSteps(rep.steps);
@@ -1126,6 +1127,14 @@ export function ModelSwapTab({
               className="rounded-md border border-rose-400/40 bg-rose-400/10 px-3 py-1.5 text-xs font-medium text-rose-200 transition hover:bg-rose-400/20 disabled:opacity-50"
             >
               {building ? "Building…" : "Build the model"}
+            </button>
+            <button
+              onClick={() => void build(true)}
+              disabled={building || !compilerOk}
+              title="Compile the model exactly as it is in the tools addon right now - keeps changes you made in ModelDoc since the last build (a normal Build regenerates and would wipe them)"
+              className="rounded-md border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 transition hover:bg-zinc-800 disabled:opacity-50"
+            >
+              Build keeping ModelDoc edits
             </button>
             <button
               onClick={() => void openInModeldoc()}

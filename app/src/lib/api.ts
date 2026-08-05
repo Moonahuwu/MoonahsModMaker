@@ -778,6 +778,9 @@ export function modelBuild(req: {
   /** Skip the baked animation list (community standard - heroes animate via
    *  their external graphs; cuts hero builds from ~20min to seconds). */
   skipAnims?: boolean;
+  /** Compile the staged model AS IS - preserves manual ModelDoc edits made
+   *  since the last build instead of restaging over them. */
+  useStaged?: boolean;
   /** Camera value overrides spliced into the vmdl's CitadelCameraSettings_t. */
   camera?: CameraKey[];
 }): Promise<ModelBuildReport> {
