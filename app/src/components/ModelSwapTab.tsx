@@ -6,6 +6,7 @@ import {
   heroModelTarget,
   fbxAutoTextures,
   matchMaterialTextures,
+  meshMaterials,
   modelBuild,
   modelGltf,
   modelOpenModeldoc,
@@ -88,6 +89,8 @@ export function ModelSwapTab({
   const [wsTarget, setWsTarget] = useState<string>("");
   const [wsBusy, setWsBusy] = useState(false);
   const [meshFile, setMeshFile] = useState<string>("");
+  // All picked mesh files; the DMX flow is one file per Blender collection.
+  const [meshFiles, setMeshFiles] = useState<string[]>([]);
   const [preflight, setPreflight] = useState<ModelPreflight | null>(null);
   const [material, setMaterial] = useState<string>("");
   const [importScale, setImportScale] = useState<string>("1");
@@ -141,6 +144,7 @@ export function ModelSwapTab({
     setWs(null);
     setPreflight(null);
     setMeshFile("");
+    setMeshFiles([]);
     setMaterial("");
     setTexSpecs([]);
     setCamEdit({});
@@ -242,85 +246,107 @@ export function ModelSwapTab({
     }
   }
 
-  /** Preflight + per-material texture rows for a chosen mesh file. */
-  async function analyzeMesh(sel: string, w: ModelWorkspace, keepSpecs?: MatchedMaterial[]) {
-    setMeshFile(sel);
+  /** Preflight + per-material texture rows for the chosen mesh file(s).
+   *  DMX flows pick several files (one per Blender collection). */
+  async function analyzeMesh(
+    files: string[] | string,
+    w: ModelWorkspace,
+    keepSpecs?: MatchedMaterial[],
+  ) {
+    const list = (Array.isArray(files) ? files : [files]).filter(Boolean);
+    if (list.length === 0) return;
+    setMeshFile(list[0]);
+    setMeshFiles(list);
     setPreflight(null);
     setTexSpecs([]);
     setAutoFound(null);
     // Blender's default FBX export is in centimeters: everything imports x100
     // without this. DMX via Blender Source 2 Tools follows the 39.37 flow = 1:1.
-    setImportScale(sel.toLowerCase().endsWith(".fbx") ? "0.01" : "1");
-    if (sel.toLowerCase().endsWith(".fbx")) {
-      try {
+    const fbxes = list.filter((f) => f.toLowerCase().endsWith(".fbx"));
+    setImportScale(fbxes.length > 0 ? "0.01" : "1");
+    try {
+      // Bone/name checks are FBX-only; material names come from every file
+      // (DMX included - it stores material names, never texture paths).
+      let pf: ModelPreflight;
+      if (fbxes.length > 0) {
         // Objects aren't skinned - an unrigged mesh is correct for them.
-        const pf = await modelPreflight(sel, w.bones, mode === "hero");
-        setPreflight(pf);
-        // Kit meshes kept from the decompile carry materials named after the
-        // hero's real vmats (SourceIO does that) - map those back to the
-        // game paths automatically so only the user's own materials need
-        // texture files.
-        const gameByStem = new Map(
-          w.materials.map((p) => [
-            (p.split("/").pop() ?? p).replace(/\.vmat$/i, "").toLowerCase(),
-            p,
-          ]),
-        );
-        // Textures the FBX itself links (Blender writes their names into the
-        // export) - resolved next to the file, so a normal export needs no
-        // folder picking at all.
-        let linked: MatchedMaterial[] = [];
+        pf = await modelPreflight(fbxes[0], w.bones, mode === "hero");
+      } else {
+        pf = {
+          errors: [],
+          warnings: [],
+          info: [
+            `${list.length} DMX mesh file(s) - name checks are FBX-only, compiling directly`,
+          ],
+          materials: [],
+        };
+      }
+      const allMaterials = await meshMaterials(list);
+      pf = { ...pf, materials: allMaterials };
+      setPreflight(pf);
+      // Kit meshes kept from the decompile carry materials named after the
+      // hero's real vmats (SourceIO does that) - map those back to the
+      // game paths automatically so only the user's own materials need
+      // texture files.
+      const gameByStem = new Map(
+        w.materials.map((p) => [
+          (p.split("/").pop() ?? p).replace(/\.vmat$/i, "").toLowerCase(),
+          p,
+        ]),
+      );
+      // Textures the FBX files link (Blender writes their names into the
+      // export) - DMX links none, so those rows start bare.
+      let linked: MatchedMaterial[] = [];
+      for (const f of fbxes) {
         try {
-          linked = await fbxAutoTextures(sel, pf.materials);
+          const found = await fbxAutoTextures(f, pf.materials);
+          for (const m of found) {
+            if (m.color && !linked.some((l) => l.name === m.name && l.color)) {
+              linked = [...linked.filter((l) => l.name !== m.name), m];
+            }
+          }
         } catch {
           /* auto-detect is a convenience - never block on it */
         }
-        setTexSpecs(
-          pf.materials.map((name) => {
-            const kept = keepSpecs?.find((s) => s.name === name);
-            if (kept) return kept;
-            const auto = linked.find((l) => l.name === name);
-            if (auto?.color) return { ...auto, gameVmat: null };
-            const game = gameByStem.get(name.toLowerCase()) ?? null;
-            return {
-              name,
-              color: null,
-              normal: null,
-              roughness: null,
-              metalness: null,
-              gameVmat: game,
-            };
-          }),
-        );
-        const found = linked.filter((l) => l.color).length;
-        setAutoFound(found);
-        if (found > 0) {
-          push("success", `${found} texture(s) picked up from the model file`);
-        }
-        if (pf.materials.length === 0) setMatMode("game");
-      } catch (e) {
-        push("error", `Preflight failed: ${e}`);
       }
-    } else {
-      setPreflight({
-        errors: [],
-        warnings: [],
-        info: ["DMX file: preflight checks are FBX-only, compiling directly"],
-        materials: [],
-      });
-      setMatMode("game");
+      setTexSpecs(
+        pf.materials.map((name) => {
+          const kept = keepSpecs?.find((s) => s.name === name);
+          if (kept) return kept;
+          const auto = linked.find((l) => l.name === name);
+          if (auto?.color) return { ...auto, gameVmat: null };
+          const game = gameByStem.get(name.toLowerCase()) ?? null;
+          return {
+            name,
+            color: null,
+            normal: null,
+            roughness: null,
+            metalness: null,
+            gameVmat: game,
+          };
+        }),
+      );
+      const found = linked.filter((l) => l.color).length;
+      setAutoFound(found);
+      if (found > 0) {
+        push("success", `${found} texture(s) picked up from the model file`);
+      }
+      if (pf.materials.length === 0) setMatMode("game");
+    } catch (e) {
+      push("error", `Preflight failed: ${e}`);
     }
   }
 
   async function pickMesh() {
     if (!ws) return;
     const sel = await openDialog({
-      multiple: false,
+      multiple: true,
       filters: MESH_FILTERS,
-      title: "Your exported model (FBX or DMX)",
+      title: "Your exported model - FBX, or every DMX of the export",
     });
-    if (typeof sel !== "string") return;
-    await analyzeMesh(sel, ws);
+    const list = typeof sel === "string" ? [sel] : Array.isArray(sel) ? sel : [];
+    if (list.length === 0) return;
+    await analyzeMesh(list, ws);
   }
 
   /** Rebuild: re-open the kit and prefill the mesh + texture sets from the
@@ -338,12 +364,13 @@ export function ModelSwapTab({
       w = await prepareKit(o.hero);
     }
     if (!w) return;
+    const files = o.meshFiles && o.meshFiles.length > 0 ? o.meshFiles : o.meshFile;
     if (o.materialSpecs && o.materialSpecs.length > 0) {
       setMatMode("textures");
-      await analyzeMesh(o.meshFile, w, o.materialSpecs);
+      await analyzeMesh(files, w, o.materialSpecs);
     } else {
       setMatMode("game");
-      await analyzeMesh(o.meshFile, w);
+      await analyzeMesh(files, w);
       setMaterial(o.materialOverride ?? "");
     }
     if (o.cameraOverrides && o.cameraOverrides.length > 0) {
@@ -456,6 +483,7 @@ export function ModelSwapTab({
         workspaceDir: ws.dir,
         vmdlInternal: wsTarget,
         meshFile,
+        meshFiles,
         materialOverride: useTextures ? null : material || null,
         importScale: scale,
         artifactOut,
@@ -486,6 +514,7 @@ export function ModelSwapTab({
           targetPath: `${wsTarget}_c`,
           artifact: rep.artifact,
           meshFile,
+          meshFiles,
           materialOverride: useTextures ? null : material || null,
           materials: rep.materials,
           materialSpecs: useTextures ? specs : undefined,
@@ -540,6 +569,7 @@ export function ModelSwapTab({
         workspaceDir: ws.dir,
         vmdlInternal: wsTarget,
         meshFile,
+        meshFiles,
         materialOverride: matMode === "textures" ? null : material || null,
         importScale: Number(importScale) || 1,
         toolsRoot: settings.csdkRoot,
@@ -814,7 +844,11 @@ export function ModelSwapTab({
               onClick={() => void pickMesh()}
               className="rounded-md border border-rose-400/40 bg-rose-400/10 px-3 py-1.5 text-xs font-medium text-rose-200 transition hover:bg-rose-400/20"
             >
-              {meshFile ? "Change file…" : "Pick your FBX / DMX…"}
+              {meshFiles.length > 1
+                ? `Change files… (${meshFiles.length} picked)`
+                : meshFile
+                  ? "Change file…"
+                  : "Pick your FBX / DMX files…"}
             </button>
             {meshFile && (
               <span className="truncate text-xs text-zinc-400" title={meshFile}>

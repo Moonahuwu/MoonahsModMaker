@@ -699,6 +699,12 @@ export interface ModelMaterialSpec {
   gameVmat?: string | null;
 }
 
+/** Material names across mesh files (FBX or DMX). DMX has no texture paths
+ *  at all, so its materials always start unassigned. */
+export function meshMaterials(paths: string[]): Promise<string[]> {
+  return invoke("mesh_materials", { paths });
+}
+
 /** Textures the FBX already points at, assigned to its materials. Empty
  *  when the export carries no image links. */
 export function fbxAutoTextures(
@@ -763,6 +769,9 @@ export function modelBuild(req: {
   workspaceDir: string;
   vmdlInternal: string;
   meshFile: string;
+  /** Several mesh files (DMX flow: one per Blender collection). Wins over
+   *  meshFile when non-empty; each becomes its own mesh named by stem. */
+  meshFiles?: string[];
   materialOverride: string | null;
   /** Blender default FBX exports land x100 - 0.01 corrects; DMX is 1.0. */
   importScale: number;

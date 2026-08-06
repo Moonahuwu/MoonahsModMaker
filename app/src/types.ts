@@ -258,6 +258,8 @@ export interface ModelOverride {
   artifact: string;
   /** The user's mesh file the build used (for rebuilds). */
   meshFile: string;
+  /** All mesh files when the build used several (DMX-per-collection flow). */
+  meshFiles?: string[];
   /** Game material applied to the whole model, or null = Blender names. */
   materialOverride?: string | null;
   /** Compiled custom-material files shipped with the model (targetRel = VPK

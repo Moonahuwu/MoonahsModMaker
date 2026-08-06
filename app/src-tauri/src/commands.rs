@@ -2045,6 +2045,16 @@ pub async fn match_material_textures(
     .map_err(|e| e.to_string())?
 }
 
+/// Material names across mesh files (FBX or DMX, deduped in order). DMX
+/// carries material NAMES only - no texture paths - so this is what drives
+/// the My Textures rows for the Blender Source 2 Tools export flow.
+#[tauri::command]
+pub async fn mesh_materials(paths: Vec<String>) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || Ok(crate::models::scan_mesh_materials(&paths)))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// Textures the FBX itself points at, resolved to real files near it and
 /// assigned to its material names - so a Blender export that already has
 /// its images linked needs no folder picking at all.

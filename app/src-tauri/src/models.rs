@@ -432,6 +432,97 @@ fn fbx_obj_name(props: &[FbxProp]) -> Option<(String, String)> {
     Some((name, class))
 }
 
+/// Material names out of a binary DMX (Blender Source 2 Tools export).
+/// DMX stores NO texture paths at all - just material names on DmeMaterial
+/// elements - so this feeds the same My Textures matching the FBX path uses.
+/// Layout (binary 9): header line + NUL, int32 prefix, int32 string count,
+/// N NUL-terminated strings, int32 element count, then per element:
+/// int32 type-string index, int32 name-string index, 16-byte GUID.
+pub fn scan_dmx_materials(bytes: &[u8]) -> Vec<String> {
+    fn parse(bytes: &[u8]) -> Option<Vec<String>> {
+        let header_end = bytes.windows(4).position(|w| w == b"-->\n")? + 4;
+        if *bytes.get(header_end)? != 0 {
+            return None;
+        }
+        let mut o = header_end + 1;
+        let read_i32 = |o: &mut usize| -> Option<i32> {
+            let v = i32::from_le_bytes(bytes.get(*o..*o + 4)?.try_into().ok()?);
+            *o += 4;
+            Some(v)
+        };
+        let _prefix = read_i32(&mut o)?;
+        let nstr = read_i32(&mut o)?;
+        if !(0..1_000_000).contains(&nstr) {
+            return None;
+        }
+        let mut strings = Vec::with_capacity(nstr as usize);
+        for _ in 0..nstr {
+            let end = bytes[o..].iter().position(|b| *b == 0)? + o;
+            strings.push(String::from_utf8_lossy(&bytes[o..end]).into_owned());
+            o = end + 1;
+        }
+        let nelem = read_i32(&mut o)?;
+        if !(0..10_000_000).contains(&nelem) {
+            return None;
+        }
+        let mut mats = Vec::new();
+        for _ in 0..nelem {
+            let t = read_i32(&mut o)?;
+            let n = read_i32(&mut o)?;
+            o += 16; // GUID
+            if strings.get(t as usize).map(|s| s == "DmeMaterial").unwrap_or(false) {
+                if let Some(name) = strings.get(n as usize) {
+                    if !name.is_empty() && !mats.contains(name) {
+                        mats.push(name.clone());
+                    }
+                }
+            }
+        }
+        Some(mats)
+    }
+    parse(bytes).unwrap_or_default()
+}
+
+/// Combined material list of several mesh files (FBX or DMX), deduped in
+/// encounter order - drives the My Textures rows for multi-file exports.
+pub fn scan_mesh_materials(paths: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for p in paths {
+        let lower = p.to_lowercase();
+        let names: Vec<String> = if lower.ends_with(".dmx") {
+            std::fs::read(p).map(|b| scan_dmx_materials(&b)).unwrap_or_default()
+        } else if lower.ends_with(".fbx") {
+            std::fs::read(p)
+                .ok()
+                .and_then(|b| parse_fbx(&b).ok())
+                .map(|roots| {
+                    let mut m = Vec::new();
+                    if let Some(objects) = roots.iter().find(|n| n.name == "Objects") {
+                        for node in &objects.children {
+                            if node.name == "Material" {
+                                if let Some((name, _)) = fbx_obj_name(&node.props) {
+                                    if !m.contains(&name) {
+                                        m.push(name);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    m
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        for n in names {
+            if !out.contains(&n) {
+                out.push(n);
+            }
+        }
+    }
+    out
+}
+
 /// Name-level preflight of a Blender FBX export against the target's bone
 /// list. `require_rig` is false for objects (crates, the urn, ...): those
 /// meshes are not skinned, so missing bones are normal, not an error.
@@ -696,21 +787,39 @@ fn children_span(text: &str, class_name: &str, from: usize) -> Option<(usize, us
 /// lists, NmSkeleton/AnimGraph2 references) rides through untouched.
 pub fn generate_vmdl(
     src: &str,
-    mesh_rel: &str,
+    mesh_rels: &[String],
     material_override: Option<&str>,
     material_remaps: &[(String, String)],
     import_scale: f32,
 ) -> Result<String, String> {
     let mut text = src.to_string();
 
+    if mesh_rels.is_empty() {
+        return Err("no mesh files given".into());
+    }
     let scale_line = if (import_scale - 1.0).abs() > 1e-6 {
         format!("\n\t\t\t\t\t\t\timport_scale = {import_scale}")
     } else {
         String::new()
     };
-    let mesh_block = format!(
-        "[\n\t\t\t\t\t\t{{\n\t\t\t\t\t\t\t_class = \"RenderMeshFile\"\n\t\t\t\t\t\t\tname = \"body\"\n\t\t\t\t\t\t\tfilename = \"{mesh_rel}\"{scale_line}\n\t\t\t\t\t\t}},\n\t\t\t\t\t]"
-    );
+    // One RenderMeshFile per mesh, named after its stem (the Blender Source
+    // 2 Tools DMX flow exports one file per collection).
+    let entries: String = mesh_rels
+        .iter()
+        .map(|rel| {
+            let stem = rel
+                .rsplit('/')
+                .next()
+                .unwrap_or("mesh")
+                .rsplit_once('.')
+                .map(|(s, _)| s)
+                .unwrap_or("mesh");
+            format!(
+                "\n\t\t\t\t\t\t{{\n\t\t\t\t\t\t\t_class = \"RenderMeshFile\"\n\t\t\t\t\t\t\tname = \"{stem}\"\n\t\t\t\t\t\t\tfilename = \"{rel}\"{scale_line}\n\t\t\t\t\t\t}},"
+            )
+        })
+        .collect();
+    let mesh_block = format!("[{entries}\n\t\t\t\t\t]");
     let (a, b) = children_span(&text, "RenderMeshList", 0)
         .ok_or("vmdl has no RenderMeshList - refresh the hero kit")?;
     text.replace_range(a..b, &mesh_block);
@@ -1579,7 +1688,13 @@ pub struct ModelBuildReq {
     /// Internal vmdl path (no `_c`), e.g. `models/heroes_staging/haze/haze.vmdl`.
     pub vmdl_internal: String,
     /// The user's mesh file (fbx/dmx), absolute.
+    #[serde(default)]
     pub mesh_file: String,
+    /// Several mesh files (the Blender Source 2 Tools DMX flow exports one
+    /// DMX per collection). When non-empty this wins over `mesh_file`; each
+    /// file becomes its own RenderMeshFile named after its stem.
+    #[serde(default)]
+    pub mesh_files: Vec<String>,
     /// Game material to apply to the whole model, or None to keep the mesh's
     /// own Blender material names.
     pub material_override: Option<String>,
@@ -1722,24 +1837,36 @@ fn stage_sources(req: &ModelBuildReq) -> Result<(std::path::PathBuf, Vec<String>
     copy_tree(Path::new(&req.workspace_dir), &content)?;
     notes.push(format!("staged sources into the {addon} addon"));
 
-    let mesh_name = Path::new(&req.mesh_file)
-        .file_name()
-        .map(|f| f.to_string_lossy().into_owned())
-        .ok_or("mesh file has no name")?;
-    let mesh_dest = stage_dir.join(&mesh_name);
-    std::fs::copy(&req.mesh_file, &mesh_dest)
-        .map_err(|e| format!("copy mesh into CS2 addon: {e}"))?;
-    notes.push(format!("mesh: {mesh_name}"));
+    // One or many mesh files (the DMX flow exports one per collection).
+    let mesh_files: Vec<&str> = if req.mesh_files.is_empty() {
+        vec![req.mesh_file.as_str()]
+    } else {
+        req.mesh_files.iter().map(|s| s.as_str()).collect()
+    };
+    let mut mesh_rels: Vec<String> = Vec::new();
+    for mf in &mesh_files {
+        let mesh_name = Path::new(mf)
+            .file_name()
+            .map(|f| f.to_string_lossy().into_owned())
+            .ok_or("mesh file has no name")?;
+        std::fs::copy(mf, stage_dir.join(&mesh_name))
+            .map_err(|e| format!("copy mesh into the addon: {e}"))?;
+        mesh_rels.push(format!("{vmdl_dir_internal}/{mesh_name}"));
+    }
+    notes.push(if mesh_rels.len() == 1 {
+        format!("mesh: {}", mesh_rels[0].rsplit('/').next().unwrap_or(""))
+    } else {
+        format!("{} mesh files staged", mesh_rels.len())
+    });
 
     // Generate the vmdl over the staged copy. Materials mapped to game
     // vmats become DefaultMaterialGroup remaps (bare mesh name -> path).
     let remaps = remap_pairs(req);
     let vmdl_abs = content.join(vmdl_internal.replace('/', std::path::MAIN_SEPARATOR_STR));
     let src = std::fs::read_to_string(&vmdl_abs).map_err(|e| e.to_string())?;
-    let mesh_rel = format!("{vmdl_dir_internal}/{mesh_name}");
     let mut generated = generate_vmdl(
         &src,
-        &mesh_rel,
+        &mesh_rels,
         req.material_override.as_deref(),
         &remaps,
         req.import_scale,
@@ -1791,41 +1918,55 @@ fn stage_sources(req: &ModelBuildReq) -> Result<(std::path::PathBuf, Vec<String>
 /// ModelDoc so the model (weights, skeleton, camera) can be inspected by
 /// hand. Same launch pattern as the particle-editor inspector.
 pub fn open_in_modeldoc(req: &ModelBuildReq) -> Result<String, String> {
-    let root = toolchain_root(req)?;
-    let (_, _, addon) = req.kind.layout(&root);
-    let (_, _notes) = stage_sources(req)?;
     let vmdl_internal = req.vmdl_internal.replace('\\', "/");
-    // Heroes inspect in CS2's tools; props in the Deadlock CSDK's own
-    // (deadlock.exe -tools, same launch the particle inspector uses).
-    let (exe, args): (std::path::PathBuf, Vec<&str>) = match req.kind {
-        ModelKind::Hero => (root.join("game/bin/win64/cs2.exe"), vec!["-steam", "-tools"]),
-        ModelKind::Prop => (
-            ["bin_tools", "bin"]
-                .iter()
-                .map(|b| root.join("game").join(b).join("win64").join("deadlock.exe"))
-                .find(|p| p.exists())
-                .unwrap_or_else(|| root.join("game/bin_tools/win64/deadlock.exe")),
-            vec!["-tools", "-danger_mode_ignore_schema_mismatches"],
-        ),
-    };
-    if !exe.exists() {
-        return Err(format!("tools not found at {}", exe.display()));
+    let vmdl_dir_internal = vmdl_internal.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+    let (_, _notes) = stage_sources(req)?;
+
+    // ModelDoc runs in the DEADLOCK CSDK for BOTH kinds - it is the stable
+    // one (CS2's tools crash-prone for editing, and its `-asset` launch
+    // hangs on the splash; the CSDK opens straight into the model, same
+    // launch the particle inspector uses). Heroes therefore get their CS2
+    // stage MIRRORED into the CSDK model addon for editing; a "Build
+    // keeping ModelDoc edits" pulls the edits back before compiling.
+    let tools = req
+        .tools_root
+        .as_deref()
+        .filter(|t| !t.trim().is_empty())
+        .ok_or("ModelDoc needs the Deadlock compile tools - set them up in Settings")?;
+    let tools = Path::new(tools);
+    if req.kind == ModelKind::Hero {
+        let cs2 = Path::new(&req.cs2_root);
+        let src_dir = cs2
+            .join("content/csgo_addons")
+            .join(CS2_ADDON)
+            .join(vmdl_dir_internal.replace('/', std::path::MAIN_SEPARATOR_STR));
+        let dest_dir = tools
+            .join("content/citadel_addons")
+            .join(CSDK_PROP_ADDON)
+            .join(vmdl_dir_internal.replace('/', std::path::MAIN_SEPARATOR_STR));
+        let _ = std::fs::remove_dir_all(&dest_dir);
+        copy_tree(&src_dir, &dest_dir)?;
     }
+    let exe = ["bin_tools", "bin"]
+        .iter()
+        .map(|b| tools.join("game").join(b).join("win64").join("deadlock.exe"))
+        .find(|p| p.exists())
+        .ok_or("deadlock.exe not found in the compile tools - re-run the tools setup in Settings")?;
     let mut cmd = std::process::Command::new(&exe);
     if let Some(dir) = exe.parent() {
         cmd.current_dir(dir);
     }
-    cmd.args(args);
-    // NOTE: do NOT pass `-asset <vmdl>` here. Measured on CS2's tools: with
-    // it the process sits on the Valve splash forever (10GB+ and climbing,
-    // window never responds); with just `-addon` the tools are up in ~20s.
-    // So we open the tools on the addon and name the file to open.
-    cmd.args(["-addon", addon]);
+    cmd.args([
+        "-tools",
+        "-danger_mode_ignore_schema_mismatches",
+        "-addon",
+        CSDK_PROP_ADDON,
+        "-asset",
+        &vmdl_internal,
+    ]);
     // Fire and forget - the tools outlive us.
     cmd.spawn().map_err(|e| format!("launching the tools: {e}"))?;
-    Ok(format!(
-        "Tools opening (~20s). In the Asset Browser pick the {addon} addon and open {vmdl_internal}"
-    ))
+    Ok("ModelDoc is opening in the Deadlock tools (takes a bit). Edit and save there, then use \"Build keeping ModelDoc edits\"".into())
 }
 
 fn build_inner(req: &ModelBuildReq, rep: &mut ModelBuildReport) -> Result<String, String> {
@@ -1890,6 +2031,33 @@ fn build_inner(req: &ModelBuildReq, rep: &mut ModelBuildReport) -> Result<String
         let root = toolchain_root(req)?;
         let (content, _, _) = req.kind.layout(&root);
         let staged = content.join(vmdl_internal.replace('/', std::path::MAIN_SEPARATOR_STR));
+        // Heroes EDIT in the CSDK's ModelDoc but COMPILE in CS2 - when the
+        // CSDK mirror is newer, pull it back over the CS2 stage first
+        // (whole model dir: ModelDoc may have added meshes alongside).
+        if req.kind == ModelKind::Hero {
+            if let Some(tools) = req.tools_root.as_deref().filter(|t| !t.trim().is_empty()) {
+                let dir_internal = vmdl_internal.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+                let csdk_dir = Path::new(tools)
+                    .join("content/citadel_addons")
+                    .join(CSDK_PROP_ADDON)
+                    .join(dir_internal.replace('/', std::path::MAIN_SEPARATOR_STR));
+                let csdk_vmdl = Path::new(tools)
+                    .join("content/citadel_addons")
+                    .join(CSDK_PROP_ADDON)
+                    .join(vmdl_internal.replace('/', std::path::MAIN_SEPARATOR_STR));
+                let newer = match (csdk_vmdl.metadata().and_then(|m| m.modified()), staged.metadata().and_then(|m| m.modified())) {
+                    (Ok(a), Ok(b)) => a > b,
+                    (Ok(_), Err(_)) => true,
+                    _ => false,
+                };
+                if newer {
+                    let cs2_dir = content
+                        .join(dir_internal.replace('/', std::path::MAIN_SEPARATOR_STR));
+                    copy_tree(&csdk_dir, &cs2_dir)?;
+                    rep.steps.push("pulled your ModelDoc edits from the Deadlock tools".into());
+                }
+            }
+        }
         if !staged.exists() {
             return Err(
                 "no staged model to compile - run a normal Build (or Inspect in ModelDoc) first, then edit and rebuild".into(),
@@ -2158,7 +2326,7 @@ mod tests {
     #[test]
     fn generate_replaces_meshes_lods_and_bodygroups() {
         let out =
-            generate_vmdl(MINI_VMDL, "models/x/custom.fbx", Some("models/a/b.vmat"), &[], 0.01).unwrap();
+            generate_vmdl(MINI_VMDL, &["models/x/custom.fbx".to_string()], Some("models/a/b.vmat"), &[], 0.01).unwrap();
         assert!(out.contains("import_scale = 0.01"), "scale line present");
         assert!(out.contains("custom.fbx"), "user mesh referenced");
         assert!(!out.contains("x_gun.dmx"), "old meshes gone");
@@ -2175,7 +2343,7 @@ mod tests {
 
     #[test]
     fn generate_without_material_override_keeps_materials_out() {
-        let out = generate_vmdl(MINI_VMDL, "m.fbx", None, &[], 1.0).unwrap();
+        let out = generate_vmdl(MINI_VMDL, &["m.fbx".to_string()], None, &[], 1.0).unwrap();
         assert!(!out.contains("MaterialGroupList"));
         assert!(!out.contains("import_scale"), "scale 1.0 emits no line");
     }
@@ -2355,7 +2523,7 @@ mod tests {
             ("doorman_door.vmat".to_string(), "models/heroes_wip/doorman/materials/doorman_door.vmat".to_string()),
             ("eyes.vmat".to_string(), "models/x/eyes.vmat".to_string()),
         ];
-        let out = generate_vmdl(MINI_VMDL, "m.fbx", None, &remaps, 1.0).unwrap();
+        let out = generate_vmdl(MINI_VMDL, &["m.fbx".to_string()], None, &remaps, 1.0).unwrap();
         assert!(out.contains("DefaultMaterialGroup"), "{out}");
         assert!(out.contains("from = \"doorman_door.vmat\""), "{out}");
         assert!(out.contains("to = \"models/heroes_wip/doorman/materials/doorman_door.vmat\""));
@@ -2400,6 +2568,7 @@ mod tests {
             workspace_dir: ws.dir.clone(),
             vmdl_internal: "models/heroes_staging/haze/haze.vmdl".into(),
             mesh_file: fbx.into(),
+            mesh_files: vec![],
             material_override: None,
             import_scale: 0.01,
             artifact_out: scratch.join("haze.vmdl_c").to_string_lossy().into_owned(),
@@ -2677,6 +2846,7 @@ mod tests {
             workspace_dir: ws.dir.clone(),
             vmdl_internal: "models/heroes_staging/haze/haze.vmdl".into(),
             mesh_file: fbx.into(),
+            mesh_files: vec![],
             material_override: ws.materials.first().cloned(),
             import_scale: 0.01,
             artifact_out: scratch.join("haze.vmdl_c").to_string_lossy().into_owned(),
@@ -2724,6 +2894,96 @@ mod tests {
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
+    /// DMX scanner against the user's REAL Blender Source 2 Tools export.
+    #[test]
+    #[ignore]
+    fn e2e_dmx_materials_on_the_real_export() {
+        let p = Path::new(concat!(
+            r"C:\Users\ethob\Desktop\PhilFolio\Projects\Moonah\DoormanNardo",
+            r"\MoonahDoormanREMASTER\Export\doorman_body_default.dmx"
+        ));
+        if !p.exists() {
+            eprintln!("skipping: DMX missing");
+            return;
+        }
+        let mats = scan_dmx_materials(&std::fs::read(p).unwrap());
+        eprintln!("DMX MATERIALS {mats:?}");
+        assert!(mats.contains(&"Body5F".to_string()), "{mats:?}");
+        assert!(mats.contains(&"doorman_body".to_string()), "{mats:?}");
+        assert!(mats.len() >= 4, "{mats:?}");
+    }
+
+    /// The community DMX flow end to end: doorman rebuilt from the user's
+    /// real multi-DMX export (one file per Blender collection), fast build,
+    /// via CS2. Ignored: needs that machine's files + installs.
+    #[test]
+    #[ignore]
+    fn e2e_doorman_multi_dmx_build() {
+        let helper = r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\tools\vpk-helper\dist\vpk-helper.exe";
+        let pak = r"D:\SteamLibrary\steamapps\common\Deadlock\game\citadel\pak01_dir.vpk";
+        let cs2 = r"D:\SteamLibrary\steamapps\common\Counter-Strike Global Offensive";
+        let exp = Path::new(concat!(
+            r"C:\Users\ethob\Desktop\PhilFolio\Projects\Moonah\DoormanNardo",
+            r"\MoonahDoormanREMASTER\Export"
+        ));
+        if !exp.exists() {
+            eprintln!("skipping: export folder missing");
+            return;
+        }
+        // Every root-level DMX; the anims/ subfolder is animation data, not
+        // meshes.
+        let mut meshes: Vec<String> = std::fs::read_dir(exp)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.path().is_file())
+            .filter(|e| e.path().extension().is_some_and(|x| x.eq_ignore_ascii_case("dmx")))
+            .map(|e| e.path().to_string_lossy().into_owned())
+            .collect();
+        meshes.sort();
+        eprintln!("MESHES {}: {meshes:#?}", meshes.len());
+        assert!(meshes.len() >= 5);
+        let all_mats = scan_mesh_materials(&meshes);
+        eprintln!("ALL MATERIALS {all_mats:?}");
+
+        let scratch = std::env::temp_dir().join("eim_dmx_e2e");
+        let _ = std::fs::remove_dir_all(&scratch);
+        let ws = workspace(
+            helper,
+            pak,
+            "models/heroes_wip/doorman_v2/doorman.vmdl_c",
+            &scratch.join("ws"),
+            false,
+        )
+        .expect("workspace");
+        let t0 = std::time::Instant::now();
+        let req = ModelBuildReq {
+            cs2_root: cs2.into(),
+            kind: ModelKind::Hero,
+            workspace_dir: ws.dir.clone(),
+            vmdl_internal: "models/heroes_wip/doorman_v2/doorman.vmdl".into(),
+            mesh_file: String::new(),
+            mesh_files: meshes,
+            material_override: ws.materials.first().cloned(),
+            import_scale: 1.0, // DMX via the community 39.37 flow is 1:1
+            artifact_out: scratch.join("doorman.vmdl_c").to_string_lossy().into_owned(),
+            materials: vec![],
+            tools_root: None,
+            materials_out: None,
+            ffmpeg_path: None,
+            use_staged: false,
+            skip_anims: true,
+            camera: vec![],
+        };
+        let rep = build(&req);
+        for s in &rep.steps {
+            eprintln!("STEP {s}");
+        }
+        eprintln!("DMX BUILD took {:.1}s", t0.elapsed().as_secs_f32());
+        assert!(rep.ok, "{:?}", rep.steps);
+        assert!(std::path::Path::new(&req.artifact_out).exists());
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
     /// Fast build: stripping the baked AnimationList (community standard)
     /// must still produce a valid artifact with exact attachments, much
     /// faster. Ignored: needs this machine's installs.
@@ -2745,6 +3005,7 @@ mod tests {
             workspace_dir: ws.dir.clone(),
             vmdl_internal: "models/heroes_staging/haze/haze.vmdl".into(),
             mesh_file: fbx.into(),
+            mesh_files: vec![],
             material_override: ws.materials.first().cloned(),
             import_scale: 0.01,
             artifact_out: scratch.join("haze.vmdl_c").to_string_lossy().into_owned(),
@@ -2916,6 +3177,7 @@ mod tests {
             workspace_dir: ws.dir.clone(),
             vmdl_internal: "models/props_gameplay/soul_container/soul_container.vmdl".into(),
             mesh_file: fbx.into(),
+            mesh_files: vec![],
             material_override: None,
             import_scale: 0.01,
             artifact_out: scratch.join("soul_container.vmdl_c").to_string_lossy().into_owned(),
@@ -3014,6 +3276,7 @@ mod tests {
             workspace_dir: ws.dir.clone(),
             vmdl_internal: "models/heroes_wip/doorman_v2/doorman.vmdl".into(),
             mesh_file: fbx.into(),
+            mesh_files: vec![],
             material_override: None,
             import_scale: 0.01,
             artifact_out: scratch.join("doorman.vmdl_c").to_string_lossy().into_owned(),
