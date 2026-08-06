@@ -724,6 +724,8 @@ export interface MatchedMaterial {
   roughness: string | null;
   metalness: string | null;
   effect?: string | null;
+  fxPeriod?: number | null;
+  fxIntensity?: number | null;
   gameVmat?: string | null;
 }
 

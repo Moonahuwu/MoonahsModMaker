@@ -506,6 +506,8 @@ export function ModelSwapTab({
           roughness: s.roughness,
           metalness: s.metalness,
           effect: s.effect ?? null,
+          fxPeriod: s.fxPeriod ?? null,
+          fxIntensity: s.fxIntensity ?? null,
           gameVmat: s.gameVmat ?? null,
         })),
         // Objects compile in the CSDK, so their builds always need it - not
@@ -614,6 +616,8 @@ export function ModelSwapTab({
           roughness: s.roughness,
           metalness: s.metalness,
           effect: s.effect ?? null,
+          fxPeriod: s.fxPeriod ?? null,
+          fxIntensity: s.fxIntensity ?? null,
           gameVmat: s.gameVmat ?? null,
         })),
         camera: cameraOverrides(),
@@ -1018,8 +1022,47 @@ export function ModelSwapTab({
                           <option value="space">fx: space glow</option>
                           <option value="cosmic">fx: cosmic veil</option>
                           <option value="pulse">fx: pulse glow</option>
+                          <option value="glass">fx: glass</option>
+                          <option value="ghost">fx: ghost</option>
+                          <option value="sheen">fx: fabric sheen</option>
+                          <option value="unlit">fx: flat toon</option>
                         </select>
                         )}
+                        {settings.experimentalMaterialFx && s.effect === "pulse" && (
+                          <input
+                            value={s.fxPeriod ?? ""}
+                            onChange={(e) =>
+                              setTexSpecs((prev) =>
+                                prev.map((x) =>
+                                  x.name === s.name
+                                    ? { ...x, fxPeriod: Number(e.target.value) || null }
+                                    : x,
+                                ),
+                              )
+                            }
+                            placeholder="2"
+                            title="Pulse length in seconds (one full bright-dim cycle)"
+                            className="w-10 shrink-0 rounded border border-zinc-700/80 bg-zinc-950 px-1 py-0.5 text-right text-[10px] text-zinc-300 outline-none placeholder:text-zinc-600"
+                          />
+                        )}
+                        {settings.experimentalMaterialFx &&
+                          (s.effect === "pulse" || s.effect === "space" || s.effect === "cosmic") && (
+                            <input
+                              value={s.fxIntensity ?? ""}
+                              onChange={(e) =>
+                                setTexSpecs((prev) =>
+                                  prev.map((x) =>
+                                    x.name === s.name
+                                      ? { ...x, fxIntensity: Number(e.target.value) || null }
+                                      : x,
+                                  ),
+                                )
+                              }
+                              placeholder={s.effect === "cosmic" ? "4" : "6"}
+                              title="Glow intensity (peak brightness)"
+                              className="w-10 shrink-0 rounded border border-zinc-700/80 bg-zinc-950 px-1 py-0.5 text-right text-[10px] text-zinc-300 outline-none placeholder:text-zinc-600"
+                            />
+                          )}
                         <button
                           onClick={() =>
                             setTexSpecs((prev) =>

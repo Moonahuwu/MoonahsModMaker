@@ -1150,11 +1150,18 @@ pub struct MaterialSpec {
     pub normal: Option<String>,
     pub roughness: Option<String>,
     pub metalness: Option<String>,
-    /// Optional look applied on top: "space" = glowing, slowly drifting
-    /// starfield (self-illum masked by the color map + scrolling normal -
-    /// the community void-skin recipe).
+    /// Optional look applied on top: "space" (glowing drifting starfield),
+    /// "cosmic" (Valve's parallax deep-space), "pulse" (breathing glow),
+    /// "glass", "ghost" (cloak refraction), "sheen" (fabric), "unlit"
+    /// (flat toon).
     #[serde(default)]
     pub effect: Option<String>,
+    /// Pulse only: seconds per pulse (default 2).
+    #[serde(default)]
+    pub fx_period: Option<f64>,
+    /// Glow presets: peak self-illum brightness (defaults per preset).
+    #[serde(default)]
+    pub fx_intensity: Option<f64>,
     /// Map this material to an EXISTING game vmat path instead of compiling
     /// one - the vmdl gets a material-group remap. This is how kit meshes
     /// kept from the decompile (SourceIO names them after the real vmats,
@@ -1260,7 +1267,7 @@ fn compile_materials(
     for spec in specs {
         let fx = spec.effect.as_deref().unwrap_or("");
         let space = fx == "space";
-        let has_fx = matches!(fx, "space" | "cosmic" | "pulse");
+        let has_fx = matches!(fx, "space" | "cosmic" | "pulse" | "glass" | "ghost" | "sheen" | "unlit");
         // Any effect with no texture: fall back to the bundled starfield,
         // so one dropdown pick is the whole setup.
         let starfield_path;
@@ -1350,20 +1357,37 @@ fn compile_materials(
         // slowly, and a real noise normal scrolls over it faster for
         // shimmer (the viscous mod's trick - it never scrolls the albedo,
         // but with our flat default normals that alone showed nothing).
+        // Glow presets honor fx_intensity (peak self-illum brightness).
+        let glow = |default: f64| spec.fx_intensity.unwrap_or(default).clamp(0.1, 50.0);
         let effect_block = match fx {
             "space" => format!(
-                "\t\"F_SELF_ILLUM\"\t\"1\"\n\t\"F_ENABLE_TEXTURE_TRANSFORMS\"\t\"1\"\n\t\"TextureSelfIllumMask1\"\t\"{color}\"\n\t\"g_flSelfIllumScale1\"\t\"6\"\n\t\"g_flSelfIllumAlbedoFactor1\"\t\"1\"\n\t\"g_vAlbedoScrollSpeed1\"\t\"[0.015000 0.008000 0.000000 0.000000]\"\n\t\"g_vNormalAndRoughnessScrollSpeed1\"\t\"[0.400000 0.200000 0.000000 0.000000]\"\n"
+                "\t\"F_SELF_ILLUM\"\t\"1\"\n\t\"F_ENABLE_TEXTURE_TRANSFORMS\"\t\"1\"\n\t\"TextureSelfIllumMask1\"\t\"{color}\"\n\t\"g_flSelfIllumScale1\"\t\"{}\"\n\t\"g_flSelfIllumAlbedoFactor1\"\t\"1\"\n\t\"g_vAlbedoScrollSpeed1\"\t\"[0.015000 0.008000 0.000000 0.000000]\"\n\t\"g_vNormalAndRoughnessScrollSpeed1\"\t\"[0.400000 0.200000 0.000000 0.000000]\"\n",
+                glow(6.0)
             ),
             // Valve's own parallax deep-space (the Pocket briefcase look):
             // view-dependent depth from the shader, no scroll needed.
             "cosmic" => format!(
-                "\t\"F_COSMIC_VEIL\"\t\"1\"\n\t\"F_SELF_ILLUM\"\t\"1\"\n\t\"TextureSelfIllumMask1\"\t\"{color}\"\n\t\"g_flSelfIllumScale1\"\t\"4\"\n\t\"g_flSelfIllumAlbedoFactor1\"\t\"1\"\n"
+                "\t\"F_COSMIC_VEIL\"\t\"1\"\n\t\"F_SELF_ILLUM\"\t\"1\"\n\t\"TextureSelfIllumMask1\"\t\"{color}\"\n\t\"g_flSelfIllumScale1\"\t\"{}\"\n\t\"g_flSelfIllumAlbedoFactor1\"\t\"1\"\n",
+                glow(4.0)
             ),
             // A dynamic expression breathes the glow at runtime
             // (probe-verified: the CSDK compiles DynamicParams to bytecode).
-            "pulse" => format!(
-                "\t\"F_SELF_ILLUM\"\t\"1\"\n\t\"TextureSelfIllumMask1\"\t\"{color}\"\n\t\"g_flSelfIllumAlbedoFactor1\"\t\"1\"\n\t\"DynamicParams\"\n\t{{\n\t\t\"g_flSelfIllumScale1\"\t\"( sin( Time * 3.0 ) * 2.5 ) + 3.5\"\n\t}}\n"
-            ),
+            // sin period P seconds -> w = 2*pi/P; glow swings 1..peak.
+            "pulse" => {
+                let period = spec.fx_period.unwrap_or(2.0).clamp(0.1, 60.0);
+                let peak = glow(6.0).max(1.2);
+                let w = std::f64::consts::TAU / period;
+                let amp = (peak - 1.0) / 2.0;
+                let base = (peak + 1.0) / 2.0;
+                format!(
+                    "\t\"F_SELF_ILLUM\"\t\"1\"\n\t\"TextureSelfIllumMask1\"\t\"{color}\"\n\t\"g_flSelfIllumAlbedoFactor1\"\t\"1\"\n\t\"DynamicParams\"\n\t{{\n\t\t\"g_flSelfIllumScale1\"\t\"( sin( Time * {w:.4} ) * {amp:.3} ) + {base:.3}\"\n\t}}\n"
+                )
+            }
+            // Probe-verified simple looks (all compile clean via the CSDK).
+            "glass" => "\t\"F_GLASS\"\t\"1\"\n".to_string(),
+            "ghost" => "\t\"F_CLOAK\"\t\"1\"\n\t\"g_flCloakFactor1\"\t\"0.85\"\n".to_string(),
+            "sheen" => "\t\"F_SHEEN\"\t\"1\"\n".to_string(),
+            "unlit" => "\t\"F_UNLIT\"\t\"1\"\n".to_string(),
             _ => String::new(),
         };
         let vmat = format!(
@@ -2646,6 +2670,8 @@ mod tests {
                 roughness: None,
                 metalness: None,
                 effect: None,
+                fx_period: None,
+                fx_intensity: None,
                 game_vmat: Some(game_vmat.clone()),
             }],
             tools_root: None,
@@ -2867,6 +2893,8 @@ mod tests {
                 metalness: None,
                 // The void-skin recipe must compile too.
                 effect: Some("space".into()),
+                fx_period: None,
+                fx_intensity: None,
                 game_vmat: None,
             },
             MaterialSpec {
@@ -2876,6 +2904,8 @@ mod tests {
                 roughness: None,
                 metalness: None,
                 effect: None,
+                fx_period: None,
+                fx_intensity: None,
                 game_vmat: None,
             },
             // Fully automatic effects: NO texture given - the bundled
@@ -2887,6 +2917,8 @@ mod tests {
                 roughness: None,
                 metalness: None,
                 effect: Some("space".into()),
+                fx_period: None,
+                fx_intensity: None,
                 game_vmat: None,
             },
             MaterialSpec {
@@ -2896,6 +2928,8 @@ mod tests {
                 roughness: None,
                 metalness: None,
                 effect: Some("cosmic".into()),
+                fx_period: None,
+                fx_intensity: None,
                 game_vmat: None,
             },
             MaterialSpec {
@@ -2905,7 +2939,30 @@ mod tests {
                 roughness: None,
                 metalness: None,
                 effect: Some("pulse".into()),
+                // Tuned: slow 4s pulse peaking at 10.
+                fx_period: Some(4.0),
+                fx_intensity: Some(10.0),
                 game_vmat: None,
+            },
+            MaterialSpec {
+                name: "auto_glass".into(),
+                color: None, normal: None, roughness: None, metalness: None,
+                effect: Some("glass".into()), fx_period: None, fx_intensity: None, game_vmat: None,
+            },
+            MaterialSpec {
+                name: "auto_ghost".into(),
+                color: None, normal: None, roughness: None, metalness: None,
+                effect: Some("ghost".into()), fx_period: None, fx_intensity: None, game_vmat: None,
+            },
+            MaterialSpec {
+                name: "auto_sheen".into(),
+                color: None, normal: None, roughness: None, metalness: None,
+                effect: Some("sheen".into()), fx_period: None, fx_intensity: None, game_vmat: None,
+            },
+            MaterialSpec {
+                name: "auto_unlit".into(),
+                color: None, normal: None, roughness: None, metalness: None,
+                effect: Some("unlit".into()), fx_period: None, fx_intensity: None, game_vmat: None,
             },
         ];
         let mut rep = ModelBuildReport::default();
@@ -2919,7 +2976,10 @@ mod tests {
         // Root-level vmat_c per spec, lowercased, spaces preserved.
         assert!(arts.iter().any(|a| a.target_rel == "eim_test.vmat_c"));
         assert!(arts.iter().any(|a| a.target_rel == "ace of spades_back.vmat_c"));
-        for name in ["auto_space.vmat_c", "auto_cosmic.vmat_c", "auto_pulse.vmat_c"] {
+        for name in [
+            "auto_space.vmat_c", "auto_cosmic.vmat_c", "auto_pulse.vmat_c",
+            "auto_glass.vmat_c", "auto_ghost.vmat_c", "auto_sheen.vmat_c", "auto_unlit.vmat_c",
+        ] {
             assert!(
                 arts.iter().any(|a| a.target_rel == name),
                 "textureless {name} must compile from the bundled starfield: {arts:?}"
@@ -3235,6 +3295,8 @@ mod tests {
             roughness: Some(jpeg.to_string_lossy().into_owned()),
             metalness: None,
                 effect: None,
+                fx_period: None,
+                fx_intensity: None,
             game_vmat: None,
         }];
         let mut rep = ModelBuildReport::default();
@@ -3363,6 +3425,8 @@ mod tests {
                         roughness: None,
                         metalness: None,
                 effect: None,
+                fx_period: None,
+                fx_intensity: None,
                         game_vmat: Some(path.clone()),
                     },
                     None => MaterialSpec {
@@ -3372,6 +3436,8 @@ mod tests {
                         roughness: None,
                         metalness: None,
                 effect: None,
+                fx_period: None,
+                fx_intensity: None,
                         game_vmat: None,
                     },
                 }
