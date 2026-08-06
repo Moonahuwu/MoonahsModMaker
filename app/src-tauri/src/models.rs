@@ -1258,13 +1258,15 @@ fn compile_materials(
 
     let mut inputs: Vec<String> = Vec::new();
     for spec in specs {
-        let space = matches!(spec.effect.as_deref(), Some("space"));
-        // "space" with no texture: fall back to the bundled starfield, so
-        // one dropdown pick is the whole setup.
+        let fx = spec.effect.as_deref().unwrap_or("");
+        let space = fx == "space";
+        let has_fx = matches!(fx, "space" | "cosmic" | "pulse");
+        // Any effect with no texture: fall back to the bundled starfield,
+        // so one dropdown pick is the whole setup.
         let starfield_path;
         let color_src = match spec.color.as_deref() {
             Some(c) => c,
-            None if space => {
+            None if has_fx => {
                 let dest = tex_dir.join("eim_starfield.png");
                 if !dest.exists() {
                     std::fs::write(&dest, STARFIELD_PNG).map_err(|e| e.to_string())?;
@@ -1348,12 +1350,21 @@ fn compile_materials(
         // slowly, and a real noise normal scrolls over it faster for
         // shimmer (the viscous mod's trick - it never scrolls the albedo,
         // but with our flat default normals that alone showed nothing).
-        let effect_block = if space {
-            format!(
+        let effect_block = match fx {
+            "space" => format!(
                 "\t\"F_SELF_ILLUM\"\t\"1\"\n\t\"F_ENABLE_TEXTURE_TRANSFORMS\"\t\"1\"\n\t\"TextureSelfIllumMask1\"\t\"{color}\"\n\t\"g_flSelfIllumScale1\"\t\"6\"\n\t\"g_flSelfIllumAlbedoFactor1\"\t\"1\"\n\t\"g_vAlbedoScrollSpeed1\"\t\"[0.015000 0.008000 0.000000 0.000000]\"\n\t\"g_vNormalAndRoughnessScrollSpeed1\"\t\"[0.400000 0.200000 0.000000 0.000000]\"\n"
-            )
-        } else {
-            String::new()
+            ),
+            // Valve's own parallax deep-space (the Pocket briefcase look):
+            // view-dependent depth from the shader, no scroll needed.
+            "cosmic" => format!(
+                "\t\"F_COSMIC_VEIL\"\t\"1\"\n\t\"F_SELF_ILLUM\"\t\"1\"\n\t\"TextureSelfIllumMask1\"\t\"{color}\"\n\t\"g_flSelfIllumScale1\"\t\"4\"\n\t\"g_flSelfIllumAlbedoFactor1\"\t\"1\"\n"
+            ),
+            // A dynamic expression breathes the glow at runtime
+            // (probe-verified: the CSDK compiles DynamicParams to bytecode).
+            "pulse" => format!(
+                "\t\"F_SELF_ILLUM\"\t\"1\"\n\t\"TextureSelfIllumMask1\"\t\"{color}\"\n\t\"g_flSelfIllumAlbedoFactor1\"\t\"1\"\n\t\"DynamicParams\"\n\t{{\n\t\t\"g_flSelfIllumScale1\"\t\"( sin( Time * 3.0 ) * 2.5 ) + 3.5\"\n\t}}\n"
+            ),
+            _ => String::new(),
         };
         let vmat = format!(
             "\"Layer0\"\n{{\n\t\"shader\"\t\"pbr.vfx\"\n\t\"F_RENDER_BACKFACES\"\t\"1\"\n\t\"F_USE_STATUS_EFFECTS_PROXY\"\t\"1\"\n\t\"F_USE_NPR_LIGHTING\"\t\"1\"\n\t\"F_WRITE_DEPTH_BEFORE_ALPHA_BLENDING\"\t\"1\"\n{effect_block}\t\"g_fVertexColorStrength1\"\t\"0\"\n\t\"TextureColor1\"\t\"{color}\"\n\t\"TextureNormal1\"\t{normal}\n\t\"TextureRoughness1\"\t{rough}\n\t\"TextureMetalness1\"\t{metal}\n\t\"TextureAmbientOcclusion1\"\t\"{NO_AO}\"\n}}\n"
@@ -2060,11 +2071,7 @@ fn build_inner(req: &ModelBuildReq, rep: &mut ModelBuildReport) -> Result<String
         if req.material_override.is_some() {
             return Err("custom textures and a game material override can't be combined - pick one".into());
         }
-        if req
-            .materials
-            .iter()
-            .any(|s| s.color.is_some() || matches!(s.effect.as_deref(), Some("space")))
-        {
+        if req.materials.iter().any(|s| s.color.is_some() || s.effect.is_some()) {
             let tools = req
                 .tools_root
                 .as_deref()
@@ -2871,8 +2878,8 @@ mod tests {
                 effect: None,
                 game_vmat: None,
             },
-            // Fully automatic space: NO texture given - the bundled
-            // starfield must kick in and compile.
+            // Fully automatic effects: NO texture given - the bundled
+            // starfield must kick in and every preset must compile.
             MaterialSpec {
                 name: "auto_space".into(),
                 color: None,
@@ -2880,6 +2887,24 @@ mod tests {
                 roughness: None,
                 metalness: None,
                 effect: Some("space".into()),
+                game_vmat: None,
+            },
+            MaterialSpec {
+                name: "auto_cosmic".into(),
+                color: None,
+                normal: None,
+                roughness: None,
+                metalness: None,
+                effect: Some("cosmic".into()),
+                game_vmat: None,
+            },
+            MaterialSpec {
+                name: "auto_pulse".into(),
+                color: None,
+                normal: None,
+                roughness: None,
+                metalness: None,
+                effect: Some("pulse".into()),
                 game_vmat: None,
             },
         ];
@@ -2894,10 +2919,12 @@ mod tests {
         // Root-level vmat_c per spec, lowercased, spaces preserved.
         assert!(arts.iter().any(|a| a.target_rel == "eim_test.vmat_c"));
         assert!(arts.iter().any(|a| a.target_rel == "ace of spades_back.vmat_c"));
-        assert!(
-            arts.iter().any(|a| a.target_rel == "auto_space.vmat_c"),
-            "textureless space material must compile from the bundled starfield: {arts:?}"
-        );
+        for name in ["auto_space.vmat_c", "auto_cosmic.vmat_c", "auto_pulse.vmat_c"] {
+            assert!(
+                arts.iter().any(|a| a.target_rel == name),
+                "textureless {name} must compile from the bundled starfield: {arts:?}"
+            );
+        }
         // The color texture compiled somewhere under materials/.
         assert!(arts.iter().any(|a| a.target_rel.starts_with("materials/") && a.target_rel.ends_with(".vtex_c")));
         assert!(arts.iter().all(|a| Path::new(&a.artifact).exists()));

@@ -475,7 +475,7 @@ export function ModelSwapTab({
     const specs = useTextures
       ? texSpecs
           .map((s) => (fxOn ? s : { ...s, effect: null }))
-          .filter((s) => s.color || s.gameVmat || s.effect === "space")
+          .filter((s) => s.color || s.gameVmat || !!s.effect)
       : [];
     if (useTextures && specs.length === 0) {
       push("error", "Assign a texture or game material to at least one material first");
@@ -632,7 +632,7 @@ export function ModelSwapTab({
   // Heroes compile in CS2, objects in the Deadlock CSDK.
   const compilerOk = mode === "hero" ? cs2Ok : toolsOk;
   const texAssigned = texSpecs.filter(
-    (s) => s.color || s.gameVmat || (settings.experimentalMaterialFx && s.effect === "space"),
+    (s) => s.color || s.gameVmat || (settings.experimentalMaterialFx && !!s.effect),
   ).length;
   const texWithArt = texSpecs.filter((s) => s.color).length;
   const camChanged = ws ? cameraOverrides().length : 0;
@@ -1016,6 +1016,8 @@ export function ModelSwapTab({
                         >
                           <option value="">fx: none</option>
                           <option value="space">fx: space glow</option>
+                          <option value="cosmic">fx: cosmic veil</option>
+                          <option value="pulse">fx: pulse glow</option>
                         </select>
                         )}
                         <button
@@ -1054,13 +1056,17 @@ export function ModelSwapTab({
                           ✕
                         </button>
                       </>
-                    ) : s.effect === "space" ? (
+                    ) : s.effect ? (
                       <>
                         <span
                           className="truncate text-violet-300"
-                          title="No texture needed - the app's built-in starfield glows and drifts on this part"
+                          title="No texture needed - the app's built-in starfield powers this effect"
                         >
-                          built-in starfield
+                          {s.effect === "cosmic"
+                            ? "cosmic veil (built-in)"
+                            : s.effect === "pulse"
+                              ? "pulse glow (built-in)"
+                              : "built-in starfield"}
                         </span>
                         <button
                           onClick={() =>
