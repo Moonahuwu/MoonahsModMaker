@@ -696,6 +696,8 @@ export interface ModelMaterialSpec {
   normal: string | null;
   roughness: string | null;
   metalness: string | null;
+  /** Optional look: "space" = glowing, drifting starfield. */
+  effect?: string | null;
   gameVmat?: string | null;
 }
 
@@ -721,6 +723,7 @@ export interface MatchedMaterial {
   normal: string | null;
   roughness: string | null;
   metalness: string | null;
+  effect?: string | null;
   gameVmat?: string | null;
 }
 

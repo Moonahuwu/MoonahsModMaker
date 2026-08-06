@@ -1150,6 +1150,11 @@ pub struct MaterialSpec {
     pub normal: Option<String>,
     pub roughness: Option<String>,
     pub metalness: Option<String>,
+    /// Optional look applied on top: "space" = glowing, slowly drifting
+    /// starfield (self-illum masked by the color map + scrolling normal -
+    /// the community void-skin recipe).
+    #[serde(default)]
+    pub effect: Option<String>,
     /// Map this material to an EXISTING game vmat path instead of compiling
     /// one - the vmdl gets a material-group remap. This is how kit meshes
     /// kept from the decompile (SourceIO names them after the real vmats,
@@ -1310,8 +1315,21 @@ fn compile_materials(
         // alpha are the community's "must enable for Deadlock-style" flags -
         // without NPR a custom material reads photoreal next to the game's
         // toon shading.
+        //
+        // "space": the community void-skin recipe (decoded from the
+        // void-space-viscous mod): the color map doubles as a self-illum
+        // mask so bright stars GLOW, and the normal/roughness UVs drift so
+        // the field slowly moves.
+        let space = matches!(spec.effect.as_deref(), Some("space"));
+        let effect_block = if space {
+            format!(
+                "\t\"F_SELF_ILLUM\"\t\"1\"\n\t\"F_ENABLE_TEXTURE_TRANSFORMS\"\t\"1\"\n\t\"TextureSelfIllumMask1\"\t\"{color}\"\n\t\"g_flSelfIllumScale1\"\t\"6\"\n\t\"g_flSelfIllumAlbedoFactor1\"\t\"1\"\n\t\"g_vNormalAndRoughnessScrollSpeed1\"\t\"[0.400000 0.200000 0.000000 0.000000]\"\n"
+            )
+        } else {
+            String::new()
+        };
         let vmat = format!(
-            "\"Layer0\"\n{{\n\t\"shader\"\t\"pbr.vfx\"\n\t\"F_RENDER_BACKFACES\"\t\"1\"\n\t\"F_USE_STATUS_EFFECTS_PROXY\"\t\"1\"\n\t\"F_USE_NPR_LIGHTING\"\t\"1\"\n\t\"F_WRITE_DEPTH_BEFORE_ALPHA_BLENDING\"\t\"1\"\n\t\"g_fVertexColorStrength1\"\t\"0\"\n\t\"TextureColor1\"\t\"{color}\"\n\t\"TextureNormal1\"\t{normal}\n\t\"TextureRoughness1\"\t{rough}\n\t\"TextureMetalness1\"\t{metal}\n\t\"TextureAmbientOcclusion1\"\t\"{NO_AO}\"\n}}\n"
+            "\"Layer0\"\n{{\n\t\"shader\"\t\"pbr.vfx\"\n\t\"F_RENDER_BACKFACES\"\t\"1\"\n\t\"F_USE_STATUS_EFFECTS_PROXY\"\t\"1\"\n\t\"F_USE_NPR_LIGHTING\"\t\"1\"\n\t\"F_WRITE_DEPTH_BEFORE_ALPHA_BLENDING\"\t\"1\"\n{effect_block}\t\"g_fVertexColorStrength1\"\t\"0\"\n\t\"TextureColor1\"\t\"{color}\"\n\t\"TextureNormal1\"\t{normal}\n\t\"TextureRoughness1\"\t{rough}\n\t\"TextureMetalness1\"\t{metal}\n\t\"TextureAmbientOcclusion1\"\t\"{NO_AO}\"\n}}\n"
         );
         let vmat_name = format!("{}.vmat", spec.name.to_lowercase());
         let vmat_abs = content.join(&vmat_name);
@@ -2578,6 +2596,7 @@ mod tests {
                 normal: None,
                 roughness: None,
                 metalness: None,
+                effect: None,
                 game_vmat: Some(game_vmat.clone()),
             }],
             tools_root: None,
@@ -2797,6 +2816,8 @@ mod tests {
                 normal: Some(png.into()),
                 roughness: Some(png.into()),
                 metalness: None,
+                // The void-skin recipe must compile too.
+                effect: Some("space".into()),
                 game_vmat: None,
             },
             MaterialSpec {
@@ -2805,6 +2826,7 @@ mod tests {
                 normal: None,
                 roughness: None,
                 metalness: None,
+                effect: None,
                 game_vmat: None,
             },
         ];
@@ -3128,6 +3150,7 @@ mod tests {
             normal: None,
             roughness: Some(jpeg.to_string_lossy().into_owned()),
             metalness: None,
+                effect: None,
             game_vmat: None,
         }];
         let mut rep = ModelBuildReport::default();
@@ -3255,6 +3278,7 @@ mod tests {
                         normal: None,
                         roughness: None,
                         metalness: None,
+                effect: None,
                         game_vmat: Some(path.clone()),
                     },
                     None => MaterialSpec {
@@ -3263,6 +3287,7 @@ mod tests {
                         normal: None,
                         roughness: None,
                         metalness: None,
+                effect: None,
                         game_vmat: None,
                     },
                 }

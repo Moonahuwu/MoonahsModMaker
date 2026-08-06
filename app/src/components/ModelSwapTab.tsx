@@ -5,6 +5,7 @@ import { appDataDir, join } from "@tauri-apps/api/path";
 import {
   heroModelTarget,
   fbxAutoTextures,
+  fileStamp,
   matchMaterialTextures,
   meshMaterials,
   modelBuild,
@@ -107,6 +108,10 @@ export function ModelSwapTab({
   const [camEdit, setCamEdit] = useState<Record<string, string>>({});
   const [showCam, setShowCam] = useState(false);
   const [openingDoc, setOpeningDoc] = useState(false);
+  // Stamp of the CSDK-staged vmdl when ModelDoc was opened; a different
+  // stamp on window focus = the user saved edits there.
+  const [docStamp, setDocStamp] = useState<string | null>(null);
+  const [docEdited, setDocEdited] = useState(false);
   // Community standard: the baked anim list is dead weight (heroes animate
   // via their graphs) and it IS the 10-20 minute build. Off only for the
   // rare ability echo that T-poses without it.
@@ -493,6 +498,7 @@ export function ModelSwapTab({
           normal: s.normal,
           roughness: s.roughness,
           metalness: s.metalness,
+          effect: s.effect ?? null,
           gameVmat: s.gameVmat ?? null,
         })),
         // Objects compile in the CSDK, so their builds always need it - not
@@ -522,6 +528,7 @@ export function ModelSwapTab({
           enabled: true,
         };
         onChange([...overrides.filter((o) => o.id !== next.id), next]);
+        if (useStaged) setDocEdited(false);
         push("success", `${label} model built - Compile & Install ships it`);
         // Bare material names ship at the VPK root - two heroes using the
         // same Blender material name would overwrite each other's textures.
@@ -555,6 +562,25 @@ export function ModelSwapTab({
     }
   }
 
+  /** The CSDK-side staged vmdl - the file ModelDoc actually edits. */
+  function csdkStagedVmdl(): string {
+    if (!wsTarget || !settings.csdkRoot) return "";
+    return `${settings.csdkRoot}/content/citadel_addons/eim_props/${wsTarget}`;
+  }
+
+  // Coming back from ModelDoc: if the staged file changed since we opened
+  // it, light up the compile button so the right next step is obvious.
+  useEffect(() => {
+    if (!docStamp) return;
+    const check = async () => {
+      const now = await fileStamp(csdkStagedVmdl()).catch(() => "");
+      if (now && now !== docStamp) setDocEdited(true);
+    };
+    window.addEventListener("focus", check);
+    return () => window.removeEventListener("focus", check);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [docStamp, wsTarget, settings.csdkRoot]);
+
   /** Stage the current setup and open it in ModelDoc for inspection. */
   async function openInModeldoc() {
     if (!ws || !meshFile || !target) return;
@@ -580,11 +606,14 @@ export function ModelSwapTab({
           normal: s.normal,
           roughness: s.roughness,
           metalness: s.metalness,
+          effect: s.effect ?? null,
           gameVmat: s.gameVmat ?? null,
         })),
         camera: cameraOverrides(),
       });
       push("info", msg);
+      setDocEdited(false);
+      setDocStamp(await fileStamp(csdkStagedVmdl()).catch(() => null));
     } catch (e) {
       push("error", `Couldn't open ModelDoc: ${e}`);
     } finally {
@@ -960,6 +989,24 @@ export function ModelSwapTab({
                               {k}
                             </span>
                           ))}
+                        <select
+                          value={s.effect ?? ""}
+                          onChange={(e) => {
+                            const v = e.target.value || null;
+                            setTexSpecs((prev) =>
+                              prev.map((x) => (x.name === s.name ? { ...x, effect: v } : x)),
+                            );
+                          }}
+                          title="Optional look on top of the texture. Space: the bright parts glow and the surface slowly drifts - the community void-skin recipe. Best with a starfield or nebula image as the color texture."
+                          className={`shrink-0 rounded border bg-zinc-950 px-1 py-0.5 text-[10px] outline-none transition ${
+                            s.effect
+                              ? "border-violet-400/60 text-violet-300"
+                              : "border-zinc-700/80 text-zinc-500"
+                          }`}
+                        >
+                          <option value="">fx: none</option>
+                          <option value="space">fx: space glow</option>
+                        </select>
                         <button
                           onClick={() =>
                             setTexSpecs((prev) =>
@@ -1162,22 +1209,37 @@ export function ModelSwapTab({
             >
               {building ? "Building…" : "Build the model"}
             </button>
-            <button
-              onClick={() => void build(true)}
-              disabled={building || !compilerOk}
-              title="Compile the model exactly as it is in the tools addon right now - keeps changes you made in ModelDoc since the last build (a normal Build regenerates and would wipe them)"
-              className="rounded-md border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 transition hover:bg-zinc-800 disabled:opacity-50"
+            {/* The ModelDoc round-trip: open there, edit, come back, compile
+                what you edited. Grouped so the loop reads as one thing. */}
+            <div
+              className={`flex items-center gap-1 rounded-lg border px-1.5 py-1 ${
+                docEdited ? "border-violet-400/60 bg-violet-400/5" : "border-zinc-800"
+              }`}
+              title="Advanced: edit the staged model by hand in the Deadlock tools' ModelDoc (animations, bodygroups, ragdoll), save there, then compile it from here"
             >
-              Build keeping ModelDoc edits
-            </button>
-            <button
-              onClick={() => void openInModeldoc()}
-              disabled={openingDoc || building || !compilerOk}
-              title="Stage the model and open it in CS2's ModelDoc - inspect the skeleton, your weights and the cameras by hand"
-              className="rounded-md border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 transition hover:bg-zinc-800 disabled:opacity-50"
-            >
-              {openingDoc ? "Opening…" : "Inspect in ModelDoc"}
-            </button>
+              <span className="pl-1 text-[9px] font-bold uppercase tracking-widest text-zinc-600">
+                ModelDoc
+              </span>
+              <button
+                onClick={() => void openInModeldoc()}
+                disabled={openingDoc || building || !toolsOk}
+                className="rounded-md px-2 py-1 text-xs text-zinc-300 transition hover:bg-zinc-800 disabled:opacity-50"
+              >
+                {openingDoc ? "Opening…" : "1. Edit there"}
+              </button>
+              <span className="text-zinc-700">→</span>
+              <button
+                onClick={() => void build(true)}
+                disabled={building || !compilerOk}
+                className={`rounded-md px-2 py-1 text-xs transition disabled:opacity-50 ${
+                  docEdited
+                    ? "bg-violet-400/20 font-medium text-violet-200 hover:bg-violet-400/30"
+                    : "text-zinc-300 hover:bg-zinc-800"
+                }`}
+              >
+                {docEdited ? "2. Compile your edits ●" : "2. Compile your edits"}
+              </button>
+            </div>
             {errorCount > 0 && (
               <span className="text-[11px] text-red-300">fix the {errorCount} error(s) above first</span>
             )}

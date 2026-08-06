@@ -273,6 +273,7 @@ export interface ModelOverride {
     normal: string | null;
     roughness: string | null;
     metalness: string | null;
+    effect?: string | null;
     gameVmat?: string | null;
   }[];
   /** Camera values the build spliced over the hero's stock ones. */
