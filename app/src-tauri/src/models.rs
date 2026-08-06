@@ -1258,7 +1258,22 @@ fn compile_materials(
 
     let mut inputs: Vec<String> = Vec::new();
     for spec in specs {
-        let Some(color_src) = spec.color.as_deref() else { continue };
+        let space = matches!(spec.effect.as_deref(), Some("space"));
+        // "space" with no texture: fall back to the bundled starfield, so
+        // one dropdown pick is the whole setup.
+        let starfield_path;
+        let color_src = match spec.color.as_deref() {
+            Some(c) => c,
+            None if space => {
+                let dest = tex_dir.join("eim_starfield.png");
+                if !dest.exists() {
+                    std::fs::write(&dest, STARFIELD_PNG).map_err(|e| e.to_string())?;
+                }
+                starfield_path = dest.to_string_lossy().into_owned();
+                &starfield_path
+            }
+            None => continue,
+        };
         let stage_tex = |src: &str| -> Result<String, String> {
             // ALWAYS land as a real .png: resourcecompiler rejects other
             // extensions outright ("Unknown file type" on .jpeg) and also
@@ -1320,7 +1335,6 @@ fn compile_materials(
         // void-space-viscous mod): the color map doubles as a self-illum
         // mask so bright stars GLOW, and the normal/roughness UVs drift so
         // the field slowly moves.
-        let space = matches!(spec.effect.as_deref(), Some("space"));
         let effect_block = if space {
             format!(
                 "\t\"F_SELF_ILLUM\"\t\"1\"\n\t\"F_ENABLE_TEXTURE_TRANSFORMS\"\t\"1\"\n\t\"TextureSelfIllumMask1\"\t\"{color}\"\n\t\"g_flSelfIllumScale1\"\t\"6\"\n\t\"g_flSelfIllumAlbedoFactor1\"\t\"1\"\n\t\"g_vNormalAndRoughnessScrollSpeed1\"\t\"[0.400000 0.200000 0.000000 0.000000]\"\n"
@@ -1673,6 +1687,10 @@ pub enum ModelKind {
 /// The CSDK content addon prop builds stage into.
 pub const CSDK_PROP_ADDON: &str = "eim_props";
 
+/// Bundled procedural starfield (our own generated art) - the automatic
+/// color texture for "space glow" materials when the user supplies none.
+pub const STARFIELD_PNG: &[u8] = include_bytes!("../resources_src/eim_starfield.png");
+
 impl ModelKind {
     /// (content root, game dir, addon name) for this kind's toolchain root.
     fn layout(self, root: &Path) -> (std::path::PathBuf, std::path::PathBuf, &'static str) {
@@ -2022,7 +2040,11 @@ fn build_inner(req: &ModelBuildReq, rep: &mut ModelBuildReport) -> Result<String
         if req.material_override.is_some() {
             return Err("custom textures and a game material override can't be combined - pick one".into());
         }
-        if req.materials.iter().any(|s| s.color.is_some()) {
+        if req
+            .materials
+            .iter()
+            .any(|s| s.color.is_some() || matches!(s.effect.as_deref(), Some("space")))
+        {
             let tools = req
                 .tools_root
                 .as_deref()
@@ -2829,6 +2851,17 @@ mod tests {
                 effect: None,
                 game_vmat: None,
             },
+            // Fully automatic space: NO texture given - the bundled
+            // starfield must kick in and compile.
+            MaterialSpec {
+                name: "auto_space".into(),
+                color: None,
+                normal: None,
+                roughness: None,
+                metalness: None,
+                effect: Some("space".into()),
+                game_vmat: None,
+            },
         ];
         let mut rep = ModelBuildReport::default();
         let arts = compile_materials(tools, "haze", &specs, &out_cache, None, &mut rep).expect("compile");
@@ -2841,6 +2874,10 @@ mod tests {
         // Root-level vmat_c per spec, lowercased, spaces preserved.
         assert!(arts.iter().any(|a| a.target_rel == "eim_test.vmat_c"));
         assert!(arts.iter().any(|a| a.target_rel == "ace of spades_back.vmat_c"));
+        assert!(
+            arts.iter().any(|a| a.target_rel == "auto_space.vmat_c"),
+            "textureless space material must compile from the bundled starfield: {arts:?}"
+        );
         // The color texture compiled somewhere under materials/.
         assert!(arts.iter().any(|a| a.target_rel.starts_with("materials/") && a.target_rel.ends_with(".vtex_c")));
         assert!(arts.iter().all(|a| Path::new(&a.artifact).exists()));

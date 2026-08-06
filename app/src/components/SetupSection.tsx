@@ -277,6 +277,13 @@ export function SetupSection({
               accent="accent-amber-500"
             />
             <Toggle
+              checked={settings.experimentalMaterialFx}
+              onChange={(v) => update({ experimentalMaterialFx: v })}
+              title="Material effects (space glow)"
+              desc="Adds an fx dropdown to Model Replacement texture rows - e.g. a glowing, drifting starfield on any part. Ships with a built-in starfield, no texture needed."
+              accent="accent-amber-500"
+            />
+            <Toggle
               checked={settings.experimentalServer}
               onChange={(v) => update({ experimentalServer: v })}
               title="Custom Server (config editor / randomizer / hosting)"

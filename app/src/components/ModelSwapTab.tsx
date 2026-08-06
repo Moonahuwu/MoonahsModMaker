@@ -469,7 +469,14 @@ export function ModelSwapTab({
   async function build(useStaged = false) {
     if (!ws || !meshFile || !target) return;
     const useTextures = matMode === "textures";
-    const specs = useTextures ? texSpecs.filter((s) => s.color || s.gameVmat) : [];
+    // Experimental toggles are authoritative: fx picked while the toggle was
+    // on must not ship after it's turned off.
+    const fxOn = settings.experimentalMaterialFx;
+    const specs = useTextures
+      ? texSpecs
+          .map((s) => (fxOn ? s : { ...s, effect: null }))
+          .filter((s) => s.color || s.gameVmat || s.effect === "space")
+      : [];
     if (useTextures && specs.length === 0) {
       push("error", "Assign a texture or game material to at least one material first");
       return;
@@ -624,7 +631,9 @@ export function ModelSwapTab({
   const errorCount = preflight?.errors.length ?? 0;
   // Heroes compile in CS2, objects in the Deadlock CSDK.
   const compilerOk = mode === "hero" ? cs2Ok : toolsOk;
-  const texAssigned = texSpecs.filter((s) => s.color || s.gameVmat).length;
+  const texAssigned = texSpecs.filter(
+    (s) => s.color || s.gameVmat || (settings.experimentalMaterialFx && s.effect === "space"),
+  ).length;
   const texWithArt = texSpecs.filter((s) => s.color).length;
   const camChanged = ws ? cameraOverrides().length : 0;
 
@@ -989,6 +998,7 @@ export function ModelSwapTab({
                               {k}
                             </span>
                           ))}
+                        {settings.experimentalMaterialFx && (
                         <select
                           value={s.effect ?? ""}
                           onChange={(e) => {
@@ -1007,6 +1017,7 @@ export function ModelSwapTab({
                           <option value="">fx: none</option>
                           <option value="space">fx: space glow</option>
                         </select>
+                        )}
                         <button
                           onClick={() =>
                             setTexSpecs((prev) =>
@@ -1043,6 +1054,26 @@ export function ModelSwapTab({
                           ✕
                         </button>
                       </>
+                    ) : s.effect === "space" ? (
+                      <>
+                        <span
+                          className="truncate text-violet-300"
+                          title="No texture needed - the app's built-in starfield glows and drifts on this part"
+                        >
+                          built-in starfield
+                        </span>
+                        <button
+                          onClick={() =>
+                            setTexSpecs((prev) =>
+                              prev.map((x) => (x.name === s.name ? { ...x, effect: null } : x)),
+                            )
+                          }
+                          className="shrink-0 rounded px-1 text-zinc-600 transition hover:bg-zinc-800 hover:text-red-300"
+                          title="Remove the space effect"
+                        >
+                          ✕
+                        </button>
+                      </>
                     ) : (
                       <>
                         <button
@@ -1051,6 +1082,21 @@ export function ModelSwapTab({
                         >
                           Pick color texture…
                         </button>
+                        {settings.experimentalMaterialFx && (
+                          <button
+                            onClick={() =>
+                              setTexSpecs((prev) =>
+                                prev.map((x) =>
+                                  x.name === s.name ? { ...x, effect: "space", gameVmat: null } : x,
+                                ),
+                              )
+                            }
+                            title="Glowing, drifting starfield on this part - uses the app's built-in space texture, nothing else needed"
+                            className="rounded border border-violet-400/40 px-1.5 py-0.5 text-[10px] text-violet-300 transition hover:bg-violet-400/10"
+                          >
+                            space glow
+                          </button>
+                        )}
                         <select
                           value=""
                           onChange={(e) => {

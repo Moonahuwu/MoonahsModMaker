@@ -61,6 +61,8 @@ export interface Settings {
   /** Experimental: reveal the VFX/particle recolor feature — the Effects tab and
    *  the per-item effect section. Off by default (very WIP). */
   experimentalEffects: boolean;
+  /** Material fx dropdown in Model Replacement (space glow etc.). */
+  experimentalMaterialFx: boolean;
   /** Experimental: reveal the Custom Server tab (config editor / randomizer /
    *  hosting). Off by default; the tab stays visible while a project already
    *  carries gameplay edits so they can't get stranded. */
@@ -215,6 +217,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showExperimentalHeroes: false,
   compareByDefault: false,
   experimentalEffects: false,
+  experimentalMaterialFx: false,
   experimentalServer: false,
   experimentalUiMaster: false,
   experimentalEasyCompile: false,
