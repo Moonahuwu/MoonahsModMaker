@@ -1007,7 +1007,7 @@ export function ModelSwapTab({
                               prev.map((x) => (x.name === s.name ? { ...x, effect: v } : x)),
                             );
                           }}
-                          title="Optional look on top of the texture. Space: the bright parts glow and the surface slowly drifts - the community void-skin recipe. Best with a starfield or nebula image as the color texture."
+                          title="Space applies to THIS texture: its bright parts glow and the surface drifts. For the classic star-field look, remove the texture (x) instead - the row switches to the app's built-in starfield."
                           className={`shrink-0 rounded border bg-zinc-950 px-1 py-0.5 text-[10px] outline-none transition ${
                             s.effect
                               ? "border-violet-400/60 text-violet-300"

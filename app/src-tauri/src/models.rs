@@ -1313,6 +1313,15 @@ fn compile_materials(
         let color = stage_tex(color_src)?;
         let normal = match &spec.normal {
             Some(p) => format!("\"{}\"", stage_tex(p)?),
+            // Space needs a REAL normal texture: the drifting shimmer comes
+            // from scrolling it, and scrolling a flat literal shows nothing.
+            None if space => {
+                let dest = tex_dir.join("eim_space_normal.png");
+                if !dest.exists() {
+                    std::fs::write(&dest, SPACE_NORMAL_PNG).map_err(|e| e.to_string())?;
+                }
+                format!("\"{tex_dir_rel}/eim_space_normal.png\"")
+            }
             None => format!("\"{FLAT_NORMAL}\""),
         };
         let rough = match &spec.roughness {
@@ -1335,9 +1344,13 @@ fn compile_materials(
         // void-space-viscous mod): the color map doubles as a self-illum
         // mask so bright stars GLOW, and the normal/roughness UVs drift so
         // the field slowly moves.
+        // Two motions make the field FLOW: the star albedo itself drifts
+        // slowly, and a real noise normal scrolls over it faster for
+        // shimmer (the viscous mod's trick - it never scrolls the albedo,
+        // but with our flat default normals that alone showed nothing).
         let effect_block = if space {
             format!(
-                "\t\"F_SELF_ILLUM\"\t\"1\"\n\t\"F_ENABLE_TEXTURE_TRANSFORMS\"\t\"1\"\n\t\"TextureSelfIllumMask1\"\t\"{color}\"\n\t\"g_flSelfIllumScale1\"\t\"6\"\n\t\"g_flSelfIllumAlbedoFactor1\"\t\"1\"\n\t\"g_vNormalAndRoughnessScrollSpeed1\"\t\"[0.400000 0.200000 0.000000 0.000000]\"\n"
+                "\t\"F_SELF_ILLUM\"\t\"1\"\n\t\"F_ENABLE_TEXTURE_TRANSFORMS\"\t\"1\"\n\t\"TextureSelfIllumMask1\"\t\"{color}\"\n\t\"g_flSelfIllumScale1\"\t\"6\"\n\t\"g_flSelfIllumAlbedoFactor1\"\t\"1\"\n\t\"g_vAlbedoScrollSpeed1\"\t\"[0.015000 0.008000 0.000000 0.000000]\"\n\t\"g_vNormalAndRoughnessScrollSpeed1\"\t\"[0.400000 0.200000 0.000000 0.000000]\"\n"
             )
         } else {
             String::new()
@@ -1690,6 +1703,13 @@ pub const CSDK_PROP_ADDON: &str = "eim_props";
 /// Bundled procedural starfield (our own generated art) - the automatic
 /// color texture for "space glow" materials when the user supplies none.
 pub const STARFIELD_PNG: &[u8] = include_bytes!("../resources_src/eim_starfield.png");
+
+/// Bundled tileable noise normal map. Scrolling a normal makes a surface
+/// shimmer and flow - but generated materials default to a FLAT normal
+/// literal, and scrolling a constant is invisible (why the first space
+/// builds didn't move). Space materials get this unless the user supplied
+/// a real normal map.
+pub const SPACE_NORMAL_PNG: &[u8] = include_bytes!("../resources_src/eim_space_normal.png");
 
 impl ModelKind {
     /// (content root, game dir, addon name) for this kind's toolchain root.
