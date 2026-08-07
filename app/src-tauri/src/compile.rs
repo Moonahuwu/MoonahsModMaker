@@ -1501,7 +1501,7 @@ fn vmat_texture_refs(text: &str) -> Vec<(String, String)> {
 
 /// Strip the VRF-emitted `"Compiled Textures" { ... }` block from a decompiled
 /// vmat so resourcecompiler only sees source parameters.
-fn strip_compiled_textures(text: &str) -> String {
+pub(crate) fn strip_compiled_textures(text: &str) -> String {
     let Some(start) = text.find("\"Compiled Textures\"") else {
         return text.to_string();
     };

@@ -698,6 +698,12 @@ export interface ModelMaterialSpec {
   metalness: string | null;
   /** Optional look: "space" = glowing, drifting starfield. */
   effect?: string | null;
+  /** Pulse only: seconds per pulse. */
+  fxPeriod?: number | null;
+  /** Glow presets: peak brightness. */
+  fxIntensity?: number | null;
+  /** Space only: drift speed multiplier (1 = normal). */
+  fxSpeed?: number | null;
   gameVmat?: string | null;
 }
 
@@ -726,6 +732,7 @@ export interface MatchedMaterial {
   effect?: string | null;
   fxPeriod?: number | null;
   fxIntensity?: number | null;
+  fxSpeed?: number | null;
   gameVmat?: string | null;
 }
 
@@ -789,6 +796,10 @@ export function modelBuild(req: {
   materialsOut?: string | null;
   /** ffmpeg - textures are normalized to real PNGs before compiling. */
   ffmpegPath?: string | null;
+  /** vpk helper + game pak - needed when an effect goes ON a game material
+   *  (the vanilla vmat gets decompiled and the effect spliced into it). */
+  helperPath?: string | null;
+  pakPath?: string | null;
   /** Skip the baked animation list (community standard - heroes animate via
    *  their external graphs; cuts hero builds from ~20min to seconds). */
   skipAnims?: boolean;

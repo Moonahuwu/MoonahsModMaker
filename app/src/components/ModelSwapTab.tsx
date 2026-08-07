@@ -520,6 +520,7 @@ export function ModelSwapTab({
           effect: s.effect ?? null,
           fxPeriod: s.fxPeriod ?? null,
           fxIntensity: s.fxIntensity ?? null,
+          fxSpeed: s.fxSpeed ?? null,
           gameVmat: s.gameVmat ?? null,
         })),
         // Objects compile in the CSDK, so their builds always need it - not
@@ -527,6 +528,8 @@ export function ModelSwapTab({
         toolsRoot: useTextures || target.kind === "prop" ? settings.csdkRoot : null,
         materialsOut: useTextures ? materialsOut : null,
         ffmpegPath: settings.ffmpegPath || null,
+        helperPath: settings.vpkHelperPath || null,
+        pakPath: settings.deadlockPak || null,
         skipAnims: target.kind === "hero" && fastBuild,
         useStaged,
         camera,
@@ -627,9 +630,9 @@ export function ModelSwapTab({
           normal: s.normal,
           roughness: s.roughness,
           metalness: s.metalness,
-          effect: s.effect ?? null,
-          fxPeriod: s.fxPeriod ?? null,
-          fxIntensity: s.fxIntensity ?? null,
+          // ModelDoc staging never compiles materials, so fx'd game rows
+          // stage as their plain vanilla mapping (the fx shows in-game).
+          effect: null,
           gameVmat: s.gameVmat ?? null,
         })),
         camera: cameraOverrides(),
@@ -652,6 +655,71 @@ export function ModelSwapTab({
   ).length;
   const texWithArt = texSpecs.filter((s) => s.color).length;
   const camChanged = ws ? cameraOverrides().length : 0;
+
+  /** Patch one material row by name. */
+  const patchSpec = (name: string, up: Partial<MatchedMaterial>) =>
+    setTexSpecs((prev) => prev.map((x) => (x.name === name ? { ...x, ...up } : x)));
+
+  /** Fx dropdown + tuning inputs, shared by every material-row flavor
+   *  (your-texture rows, game-material rows, built-in starfield rows). */
+  const fxControls = (s: MatchedMaterial, opts?: { onGame?: boolean }) => {
+    if (!settings.experimentalMaterialFx) return null;
+    const num = (v: string) => Number(v) || null;
+    return (
+      <>
+        <select
+          value={s.effect ?? ""}
+          onChange={(e) => patchSpec(s.name, { effect: e.target.value || null })}
+          title={
+            opts?.onGame
+              ? "Apply a look ON TOP of the game material: its vanilla textures stay, and only this model changes - other users of the material keep the stock look"
+              : "Space applies to THIS texture: its bright parts glow and the surface drifts. For the classic star-field look, remove the texture (x) instead - the row switches to the app's built-in starfield."
+          }
+          className={`shrink-0 rounded border bg-zinc-950 px-1 py-0.5 text-[10px] outline-none transition ${
+            s.effect
+              ? "border-violet-400/60 text-violet-300"
+              : "border-zinc-700/80 text-zinc-500"
+          }`}
+        >
+          <option value="">fx: none</option>
+          <option value="space">fx: space glow</option>
+          <option value="cosmic">fx: cosmic veil</option>
+          <option value="pulse">fx: pulse glow</option>
+          <option value="glass">fx: glass</option>
+          <option value="ghost">fx: ghost</option>
+          <option value="sheen">fx: fabric sheen</option>
+          <option value="unlit">fx: flat toon</option>
+        </select>
+        {s.effect === "pulse" && (
+          <input
+            value={s.fxPeriod ?? ""}
+            onChange={(e) => patchSpec(s.name, { fxPeriod: num(e.target.value) })}
+            placeholder="2"
+            title="Pulse length in seconds (one full bright-dim cycle)"
+            className="w-10 shrink-0 rounded border border-zinc-700/80 bg-zinc-950 px-1 py-0.5 text-right text-[10px] text-zinc-300 outline-none placeholder:text-zinc-600"
+          />
+        )}
+        {(s.effect === "pulse" || s.effect === "space" || s.effect === "cosmic") && (
+          <input
+            value={s.fxIntensity ?? ""}
+            onChange={(e) => patchSpec(s.name, { fxIntensity: num(e.target.value) })}
+            placeholder={s.effect === "cosmic" ? "4" : "6"}
+            title="Glow intensity (peak brightness)"
+            className="w-10 shrink-0 rounded border border-zinc-700/80 bg-zinc-950 px-1 py-0.5 text-right text-[10px] text-zinc-300 outline-none placeholder:text-zinc-600"
+          />
+        )}
+        {s.effect === "space" && (
+          <input
+            value={s.fxSpeed ?? ""}
+            onChange={(e) => patchSpec(s.name, { fxSpeed: num(e.target.value) })}
+            placeholder="1"
+            title="Drift speed: 1 is normal, 2 twice as fast, 0.5 half speed"
+            className="w-10 shrink-0 rounded border border-zinc-700/80 bg-zinc-950 px-1 py-0.5 text-right text-[10px] text-zinc-300 outline-none placeholder:text-zinc-600"
+          />
+        )}
+      </>
+    );
+  };
 
   return (
     // The object picker is a grid - it needs more room than the hero form.
@@ -1052,67 +1120,7 @@ export function ModelSwapTab({
                               {k}
                             </span>
                           ))}
-                        {settings.experimentalMaterialFx && (
-                        <select
-                          value={s.effect ?? ""}
-                          onChange={(e) => {
-                            const v = e.target.value || null;
-                            setTexSpecs((prev) =>
-                              prev.map((x) => (x.name === s.name ? { ...x, effect: v } : x)),
-                            );
-                          }}
-                          title="Space applies to THIS texture: its bright parts glow and the surface drifts. For the classic star-field look, remove the texture (x) instead - the row switches to the app's built-in starfield."
-                          className={`shrink-0 rounded border bg-zinc-950 px-1 py-0.5 text-[10px] outline-none transition ${
-                            s.effect
-                              ? "border-violet-400/60 text-violet-300"
-                              : "border-zinc-700/80 text-zinc-500"
-                          }`}
-                        >
-                          <option value="">fx: none</option>
-                          <option value="space">fx: space glow</option>
-                          <option value="cosmic">fx: cosmic veil</option>
-                          <option value="pulse">fx: pulse glow</option>
-                          <option value="glass">fx: glass</option>
-                          <option value="ghost">fx: ghost</option>
-                          <option value="sheen">fx: fabric sheen</option>
-                          <option value="unlit">fx: flat toon</option>
-                        </select>
-                        )}
-                        {settings.experimentalMaterialFx && s.effect === "pulse" && (
-                          <input
-                            value={s.fxPeriod ?? ""}
-                            onChange={(e) =>
-                              setTexSpecs((prev) =>
-                                prev.map((x) =>
-                                  x.name === s.name
-                                    ? { ...x, fxPeriod: Number(e.target.value) || null }
-                                    : x,
-                                ),
-                              )
-                            }
-                            placeholder="2"
-                            title="Pulse length in seconds (one full bright-dim cycle)"
-                            className="w-10 shrink-0 rounded border border-zinc-700/80 bg-zinc-950 px-1 py-0.5 text-right text-[10px] text-zinc-300 outline-none placeholder:text-zinc-600"
-                          />
-                        )}
-                        {settings.experimentalMaterialFx &&
-                          (s.effect === "pulse" || s.effect === "space" || s.effect === "cosmic") && (
-                            <input
-                              value={s.fxIntensity ?? ""}
-                              onChange={(e) =>
-                                setTexSpecs((prev) =>
-                                  prev.map((x) =>
-                                    x.name === s.name
-                                      ? { ...x, fxIntensity: Number(e.target.value) || null }
-                                      : x,
-                                  ),
-                                )
-                              }
-                              placeholder={s.effect === "cosmic" ? "4" : "6"}
-                              title="Glow intensity (peak brightness)"
-                              className="w-10 shrink-0 rounded border border-zinc-700/80 bg-zinc-950 px-1 py-0.5 text-right text-[10px] text-zinc-300 outline-none placeholder:text-zinc-600"
-                            />
-                          )}
+                        {fxControls(s)}
                         <button
                           onClick={() =>
                             setTexSpecs((prev) =>
@@ -1137,6 +1145,7 @@ export function ModelSwapTab({
                         >
                           game: {s.gameVmat.split("/").pop()}
                         </span>
+                        {fxControls(s, { onGame: true })}
                         <button
                           onClick={() =>
                             setTexSpecs((prev) =>
@@ -1161,6 +1170,7 @@ export function ModelSwapTab({
                               ? "pulse glow (built-in)"
                               : "built-in starfield"}
                         </span>
+                        {fxControls(s)}
                         <button
                           onClick={() =>
                             setTexSpecs((prev) =>

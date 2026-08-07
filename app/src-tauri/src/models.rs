@@ -1162,6 +1162,9 @@ pub struct MaterialSpec {
     /// Glow presets: peak self-illum brightness (defaults per preset).
     #[serde(default)]
     pub fx_intensity: Option<f64>,
+    /// Space only: drift speed multiplier (default 1).
+    #[serde(default)]
+    pub fx_speed: Option<f64>,
     /// Map this material to an EXISTING game vmat path instead of compiling
     /// one - the vmdl gets a material-group remap. This is how kit meshes
     /// kept from the decompile (SourceIO names them after the real vmats,
@@ -1224,6 +1227,97 @@ pub struct MaterialArtifact {
     pub artifact: String,
 }
 
+/// Upsert `"key" "value"` lines into a decompiled vmat (replace an existing
+/// key's value, else insert before the final closing brace). `raw_blocks`
+/// (e.g. a DynamicParams block) are appended verbatim when their first line
+/// isn't already present.
+fn splice_vmat_params(text: &str, pairs: &[(String, String)], raw_blocks: &[String]) -> String {
+    let mut lines: Vec<String> = text.lines().map(|l| l.to_string()).collect();
+    // The material body's final `}` - insert new lines just before it.
+    let close = lines.iter().rposition(|l| l.trim() == "}").unwrap_or(lines.len());
+    let mut insert_at = close;
+    for (key, value) in pairs {
+        let needle = format!("\"{key}\"");
+        if let Some(line) = lines.iter_mut().find(|l| l.trim_start().starts_with(&needle)) {
+            *line = format!("\t\"{key}\"\t\"{value}\"");
+        } else {
+            lines.insert(insert_at, format!("\t\"{key}\"\t\"{value}\""));
+            insert_at += 1;
+        }
+    }
+    for block in raw_blocks {
+        let first = block.lines().next().unwrap_or("").trim().to_string();
+        if !first.is_empty() && !lines.iter().any(|l| l.trim() == first) {
+            for b in block.lines() {
+                lines.insert(insert_at, b.to_string());
+                insert_at += 1;
+            }
+        }
+    }
+    lines.join("\n") + "\n"
+}
+
+/// The fx recipe as (key, value) pairs + raw blocks, for splicing into an
+/// EXISTING (decompiled game) material. `illum_mask` is what glow presets
+/// mask with - the material's own color map when it has one.
+fn fx_splice_parts(spec: &MaterialSpec, illum_mask: &str) -> (Vec<(String, String)>, Vec<String>) {
+    let fx = spec.effect.as_deref().unwrap_or("");
+    let glow = |d: f64| spec.fx_intensity.unwrap_or(d).clamp(0.1, 50.0);
+    let s = |v: &str| v.to_string();
+    match fx {
+        "space" => {
+            let speed = spec.fx_speed.unwrap_or(1.0).clamp(0.0, 20.0);
+            (
+                vec![
+                    (s("F_SELF_ILLUM"), s("1")),
+                    (s("F_ENABLE_TEXTURE_TRANSFORMS"), s("1")),
+                    (s("TextureSelfIllumMask1"), illum_mask.to_string()),
+                    (s("g_flSelfIllumScale1"), format!("{}", glow(6.0))),
+                    (s("g_flSelfIllumAlbedoFactor1"), s("1")),
+                    (s("g_vAlbedoScrollSpeed1"), format!("[{:.6} {:.6} 0.000000 0.000000]", 0.015 * speed, 0.008 * speed)),
+                    (s("g_vNormalAndRoughnessScrollSpeed1"), format!("[{:.6} {:.6} 0.000000 0.000000]", 0.4 * speed, 0.2 * speed)),
+                ],
+                vec![],
+            )
+        }
+        "cosmic" => (
+            vec![
+                (s("F_COSMIC_VEIL"), s("1")),
+                (s("F_SELF_ILLUM"), s("1")),
+                (s("TextureSelfIllumMask1"), illum_mask.to_string()),
+                (s("g_flSelfIllumScale1"), format!("{}", glow(4.0))),
+                (s("g_flSelfIllumAlbedoFactor1"), s("1")),
+            ],
+            vec![],
+        ),
+        "pulse" => {
+            let period = spec.fx_period.unwrap_or(2.0).clamp(0.1, 60.0);
+            let peak = glow(6.0).max(1.2);
+            let w = std::f64::consts::TAU / period;
+            let amp = (peak - 1.0) / 2.0;
+            let base = (peak + 1.0) / 2.0;
+            (
+                vec![
+                    (s("F_SELF_ILLUM"), s("1")),
+                    (s("TextureSelfIllumMask1"), illum_mask.to_string()),
+                    (s("g_flSelfIllumAlbedoFactor1"), s("1")),
+                ],
+                vec![format!(
+                    "\t\"DynamicParams\"\n\t{{\n\t\t\"g_flSelfIllumScale1\"\t\"( sin( Time * {w:.4} ) * {amp:.3} ) + {base:.3}\"\n\t}}"
+                )],
+            )
+        }
+        "glass" => (vec![(s("F_GLASS"), s("1"))], vec![]),
+        "ghost" => (
+            vec![(s("F_CLOAK"), s("1")), (s("g_flCloakFactor1"), s("0.85"))],
+            vec![],
+        ),
+        "sheen" => (vec![(s("F_SHEEN"), s("1"))], vec![]),
+        "unlit" => (vec![(s("F_UNLIT"), s("1"))], vec![]),
+        _ => (vec![], vec![]),
+    }
+}
+
 /// Compile one pbr.vfx vmat per spec in the CSDK's `eim_models` addon and cache
 /// every produced file (vmat_c + generated vtex_c) under `out_cache`, keyed by
 /// its VPK-internal path. The whole game-side addon tree is collected: child
@@ -1234,6 +1328,8 @@ fn compile_materials(
     specs: &[MaterialSpec],
     out_cache: &Path,
     ffmpeg: Option<&str>,
+    helper: Option<&str>,
+    pak: Option<&str>,
     rep: &mut ModelBuildReport,
 ) -> Result<Vec<MaterialArtifact>, String> {
     // The downloadable tools bundle ships the compiler under `bin_tools`; a
@@ -1268,6 +1364,54 @@ fn compile_materials(
         let fx = spec.effect.as_deref().unwrap_or("");
         let space = fx == "space";
         let has_fx = matches!(fx, "space" | "cosmic" | "pulse" | "glass" | "ghost" | "sheen" | "unlit");
+        // Fx ON a game material: decompile the vanilla vmat (source + its
+        // textures land at their vanilla-rel paths under `content`), strip
+        // VRF's "Compiled Textures" block, splice the fx params in, and
+        // recompile it AT THE BARE MESH-MATERIAL NAME. The spec is excluded
+        // from the vmdl's remap list, so only THIS model gets the look - the
+        // real game material is untouched for everything else.
+        if let Some(gv) = spec.game_vmat.as_deref() {
+            if !has_fx {
+                continue; // pure remap - nothing to compile
+            }
+            let (Some(helper), Some(pak)) = (helper, pak) else {
+                return Err(
+                    "applying an effect to a game material needs the game install + vpk helper - re-run path autodetect in Settings".into(),
+                );
+            };
+            let gv_norm = gv.replace('\\', "/");
+            crate::vpk::material_from_vpk(helper, pak, &format!("{gv_norm}_c"), &content.to_string_lossy())
+                .map_err(|e| format!("decompile {gv_norm}: {e}"))?;
+            let src_abs = content.join(gv_norm.replace('/', std::path::MAIN_SEPARATOR_STR));
+            let text = std::fs::read_to_string(&src_abs)
+                .map_err(|e| format!("read decompiled {gv_norm}: {e}"))?;
+            let text = crate::compile::strip_compiled_textures(&text);
+            // Glow presets: keep the material's OWN selfillum mask when it's
+            // a real one (authored glow spots stay authored), else mask by
+            // its color map, else glow everything evenly.
+            let tex_param = |prefix: &str| {
+                text.lines().find_map(|l| {
+                    let parts: Vec<&str> = l.split('"').collect();
+                    (parts.len() >= 4
+                        && parts[1].starts_with(prefix)
+                        && !parts[3].is_empty()
+                        && !parts[3].starts_with('[')
+                        && !parts[3].starts_with("materials/default/"))
+                    .then(|| parts[3].to_string())
+                })
+            };
+            let mask = tex_param("TextureSelfIllumMask")
+                .or_else(|| tex_param("TextureColor"))
+                .unwrap_or_else(|| "[1.000000 1.000000 1.000000 0.000000]".to_string());
+            let (pairs, blocks) = fx_splice_parts(spec, &mask);
+            let spliced = splice_vmat_params(&text, &pairs, &blocks);
+            let vmat_name = format!("{}.vmat", spec.name.to_lowercase());
+            let vmat_abs = content.join(&vmat_name);
+            std::fs::write(&vmat_abs, spliced).map_err(|e| e.to_string())?;
+            inputs.push(vmat_abs.to_string_lossy().into_owned());
+            rep.steps.push(format!("fx '{fx}' spliced into {gv_norm}"));
+            continue;
+        }
         // Any effect with no texture: fall back to the bundled starfield,
         // so one dropdown pick is the whole setup.
         let starfield_path;
@@ -1360,10 +1504,18 @@ fn compile_materials(
         // Glow presets honor fx_intensity (peak self-illum brightness).
         let glow = |default: f64| spec.fx_intensity.unwrap_or(default).clamp(0.1, 50.0);
         let effect_block = match fx {
-            "space" => format!(
-                "\t\"F_SELF_ILLUM\"\t\"1\"\n\t\"F_ENABLE_TEXTURE_TRANSFORMS\"\t\"1\"\n\t\"TextureSelfIllumMask1\"\t\"{color}\"\n\t\"g_flSelfIllumScale1\"\t\"{}\"\n\t\"g_flSelfIllumAlbedoFactor1\"\t\"1\"\n\t\"g_vAlbedoScrollSpeed1\"\t\"[0.015000 0.008000 0.000000 0.000000]\"\n\t\"g_vNormalAndRoughnessScrollSpeed1\"\t\"[0.400000 0.200000 0.000000 0.000000]\"\n",
-                glow(6.0)
-            ),
+            "space" => {
+                // Drift speed multiplier scales both motions together.
+                let speed = spec.fx_speed.unwrap_or(1.0).clamp(0.0, 20.0);
+                format!(
+                    "\t\"F_SELF_ILLUM\"\t\"1\"\n\t\"F_ENABLE_TEXTURE_TRANSFORMS\"\t\"1\"\n\t\"TextureSelfIllumMask1\"\t\"{color}\"\n\t\"g_flSelfIllumScale1\"\t\"{}\"\n\t\"g_flSelfIllumAlbedoFactor1\"\t\"1\"\n\t\"g_vAlbedoScrollSpeed1\"\t\"[{:.6} {:.6} 0.000000 0.000000]\"\n\t\"g_vNormalAndRoughnessScrollSpeed1\"\t\"[{:.6} {:.6} 0.000000 0.000000]\"\n",
+                    glow(6.0),
+                    0.015 * speed,
+                    0.008 * speed,
+                    0.4 * speed,
+                    0.2 * speed
+                )
+            }
             // Valve's own parallax deep-space (the Pocket briefcase look):
             // view-dependent depth from the shader, no scroll needed.
             "cosmic" => format!(
@@ -1810,6 +1962,12 @@ pub struct ModelBuildReq {
     /// ffmpeg, used to normalize textures to real PNGs before compiling.
     #[serde(default)]
     pub ffmpeg_path: Option<String>,
+    /// vpk helper + game pak - lets fx-on-a-game-material decompile the
+    /// vanilla vmat to splice effects into it.
+    #[serde(default)]
+    pub helper_path: Option<String>,
+    #[serde(default)]
+    pub pak_path: Option<String>,
     /// Compile the STAGED vmdl as it currently is instead of re-staging and
     /// regenerating - preserves manual ModelDoc edits made after the last
     /// build/inspect (bodygroups, ragdoll tweaks, anything the app doesn't
@@ -1859,9 +2017,12 @@ pub fn build(req: &ModelBuildReq) -> ModelBuildReport {
 }
 
 /// Game-vmat material remaps (bare lowercased mesh material name -> path).
+/// A game material WITH an effect is not remapped: the build compiles a
+/// spliced copy at the bare name instead, scoped to this model only.
 fn remap_pairs(req: &ModelBuildReq) -> Vec<(String, String)> {
     req.materials
         .iter()
+        .filter(|s| s.effect.is_none())
         .filter_map(|s| {
             s.game_vmat
                 .as_ref()
@@ -2110,6 +2271,8 @@ fn build_inner(req: &ModelBuildReq, rep: &mut ModelBuildReport) -> Result<String
                 &req.materials,
                 Path::new(out_cache),
                 req.ffmpeg_path.as_deref().filter(|p| !p.trim().is_empty()),
+                req.helper_path.as_deref().filter(|p| !p.trim().is_empty()),
+                req.pak_path.as_deref().filter(|p| !p.trim().is_empty()),
                 rep,
             )?;
         }
@@ -2672,11 +2835,14 @@ mod tests {
                 effect: None,
                 fx_period: None,
                 fx_intensity: None,
+                fx_speed: None,
                 game_vmat: Some(game_vmat.clone()),
             }],
             tools_root: None,
             materials_out: None,
             ffmpeg_path: None,
+            helper_path: None,
+            pak_path: None,
             use_staged: false,
             skip_anims: false,
             // A distinctive camera edit - keyvalues embed as TEXT in the
@@ -2874,6 +3040,43 @@ mod tests {
         assert!(!refs.iter().any(|r| r.contains(".vmat_c")), "{refs:?}");
     }
 
+    #[test]
+    fn splice_vmat_params_replaces_and_inserts() {
+        let vmat = "\"Layer0\"\n{\n\t\"shader\"\t\"pbr.vfx\"\n\t\"F_SELF_ILLUM\"\t\"1\"\n\t\"F_SELF_ILLUM_FRESNEL\"\t\"1\"\n\t\"g_flSelfIllumScale1\"\t\"0\"\n\t\"TextureColor1\"\t\"models/x/door_color.png\"\n}\n";
+        let spec = MaterialSpec {
+            name: "door".into(),
+            color: None, normal: None, roughness: None, metalness: None,
+            effect: Some("space".into()),
+            fx_period: None,
+            fx_intensity: Some(9.0),
+            fx_speed: Some(2.0),
+            game_vmat: Some("models/x/door.vmat".into()),
+        };
+        let (pairs, blocks) = fx_splice_parts(&spec, "models/x/door_color.png");
+        let out = splice_vmat_params(vmat, &pairs, &blocks);
+        // Existing keys replaced in place, not duplicated.
+        assert_eq!(out.matches("\"g_flSelfIllumScale1\"").count(), 1, "{out}");
+        assert!(out.contains("\t\"g_flSelfIllumScale1\"\t\"9\""), "{out}");
+        // The closing-quote needle must NOT swallow the FRESNEL variant.
+        assert!(out.contains("\"F_SELF_ILLUM_FRESNEL\"\t\"1\""), "{out}");
+        // New keys land inside the block, speed-scaled (0.015*2, 0.4*2).
+        assert!(out.contains("\"g_vAlbedoScrollSpeed1\"\t\"[0.030000 0.016000 0.000000 0.000000]\""), "{out}");
+        assert!(out.contains("\"g_vNormalAndRoughnessScrollSpeed1\"\t\"[0.800000 0.400000 0.000000 0.000000]\""), "{out}");
+        assert!(out.contains("\"TextureSelfIllumMask1\"\t\"models/x/door_color.png\""), "{out}");
+        let close = out.rfind('}').unwrap();
+        let last_key = out.rfind("ScrollSpeed1").unwrap();
+        assert!(last_key < close, "inserted keys must sit inside the braces");
+
+        // Pulse: the DynamicParams block appends verbatim, once.
+        let pulse = MaterialSpec { effect: Some("pulse".into()), ..spec };
+        let (pairs, blocks) = fx_splice_parts(&pulse, "[1.000000 1.000000 1.000000 0.000000]");
+        let out = splice_vmat_params(vmat, &pairs, &blocks);
+        assert_eq!(out.matches("\"DynamicParams\"").count(), 1, "{out}");
+        assert!(out.contains("sin( Time"), "{out}");
+        let out2 = splice_vmat_params(&out, &pairs, &blocks);
+        assert_eq!(out2.matches("\"DynamicParams\"").count(), 1, "resplice must not duplicate");
+    }
+
     /// Custom materials end to end against the real local CSDK: two specs
     /// (one full PBR set, one color-only) compile into vmat_c + vtex_c files
     /// cached with VPK-ready rel paths. Ignored: needs this machine's tools.
@@ -2895,6 +3098,7 @@ mod tests {
                 effect: Some("space".into()),
                 fx_period: None,
                 fx_intensity: None,
+                fx_speed: None,
                 game_vmat: None,
             },
             MaterialSpec {
@@ -2906,6 +3110,7 @@ mod tests {
                 effect: None,
                 fx_period: None,
                 fx_intensity: None,
+                fx_speed: None,
                 game_vmat: None,
             },
             // Fully automatic effects: NO texture given - the bundled
@@ -2919,6 +3124,7 @@ mod tests {
                 effect: Some("space".into()),
                 fx_period: None,
                 fx_intensity: None,
+                fx_speed: None,
                 game_vmat: None,
             },
             MaterialSpec {
@@ -2930,6 +3136,7 @@ mod tests {
                 effect: Some("cosmic".into()),
                 fx_period: None,
                 fx_intensity: None,
+                fx_speed: None,
                 game_vmat: None,
             },
             MaterialSpec {
@@ -2942,31 +3149,48 @@ mod tests {
                 // Tuned: slow 4s pulse peaking at 10.
                 fx_period: Some(4.0),
                 fx_intensity: Some(10.0),
+                fx_speed: None,
                 game_vmat: None,
             },
             MaterialSpec {
                 name: "auto_glass".into(),
                 color: None, normal: None, roughness: None, metalness: None,
-                effect: Some("glass".into()), fx_period: None, fx_intensity: None, game_vmat: None,
+                effect: Some("glass".into()), fx_period: None, fx_intensity: None, fx_speed: None, game_vmat: None,
             },
             MaterialSpec {
                 name: "auto_ghost".into(),
                 color: None, normal: None, roughness: None, metalness: None,
-                effect: Some("ghost".into()), fx_period: None, fx_intensity: None, game_vmat: None,
+                effect: Some("ghost".into()), fx_period: None, fx_intensity: None, fx_speed: None, game_vmat: None,
             },
             MaterialSpec {
                 name: "auto_sheen".into(),
                 color: None, normal: None, roughness: None, metalness: None,
-                effect: Some("sheen".into()), fx_period: None, fx_intensity: None, game_vmat: None,
+                effect: Some("sheen".into()), fx_period: None, fx_intensity: None, fx_speed: None, game_vmat: None,
             },
             MaterialSpec {
                 name: "auto_unlit".into(),
                 color: None, normal: None, roughness: None, metalness: None,
-                effect: Some("unlit".into()), fx_period: None, fx_intensity: None, game_vmat: None,
+                effect: Some("unlit".into()), fx_period: None, fx_intensity: None, fx_speed: None, game_vmat: None,
+            },
+            // Tuned starfield: 3x drift speed, brighter glow.
+            MaterialSpec {
+                name: "speedy_space".into(),
+                color: None, normal: None, roughness: None, metalness: None,
+                effect: Some("space".into()), fx_period: None, fx_intensity: Some(12.0), fx_speed: Some(3.0), game_vmat: None,
+            },
+            // Fx ON a real game material: decompile doorman's door vmat,
+            // splice the space recipe in, recompile at the bare mesh name.
+            MaterialSpec {
+                name: "door_fx".into(),
+                color: None, normal: None, roughness: None, metalness: None,
+                effect: Some("space".into()), fx_period: None, fx_intensity: None, fx_speed: None,
+                game_vmat: Some("models/heroes_wip/doorman/materials/doorman_door.vmat".into()),
             },
         ];
+        let helper = r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\tools\vpk-helper\dist\vpk-helper.exe";
+        let pak = r"D:\SteamLibrary\steamapps\common\Deadlock\game\citadel\pak01_dir.vpk";
         let mut rep = ModelBuildReport::default();
-        let arts = compile_materials(tools, "haze", &specs, &out_cache, None, &mut rep).expect("compile");
+        let arts = compile_materials(tools, "haze", &specs, &out_cache, None, Some(helper), Some(pak), &mut rep).expect("compile");
         for s in &rep.steps {
             eprintln!("STEP {s}");
         }
@@ -2979,12 +3203,23 @@ mod tests {
         for name in [
             "auto_space.vmat_c", "auto_cosmic.vmat_c", "auto_pulse.vmat_c",
             "auto_glass.vmat_c", "auto_ghost.vmat_c", "auto_sheen.vmat_c", "auto_unlit.vmat_c",
+            "speedy_space.vmat_c",
         ] {
             assert!(
                 arts.iter().any(|a| a.target_rel == name),
                 "textureless {name} must compile from the bundled starfield: {arts:?}"
             );
         }
+        // The game-material splice compiled at the bare mesh-material name.
+        assert!(
+            arts.iter().any(|a| a.target_rel == "door_fx.vmat_c"),
+            "fx-on-game-material must produce a bare-name vmat_c: {arts:?}"
+        );
+        assert!(
+            rep.steps.iter().any(|s| s.contains("spliced into models/heroes_wip/doorman")),
+            "{:?}",
+            rep.steps
+        );
         // The color texture compiled somewhere under materials/.
         assert!(arts.iter().any(|a| a.target_rel.starts_with("materials/") && a.target_rel.ends_with(".vtex_c")));
         assert!(arts.iter().all(|a| Path::new(&a.artifact).exists()));
@@ -3020,6 +3255,8 @@ mod tests {
             tools_root: None,
             materials_out: None,
             ffmpeg_path: None,
+            helper_path: None,
+            pak_path: None,
             use_staged: false,
             skip_anims: true,
             camera: vec![],
@@ -3136,6 +3373,8 @@ mod tests {
             tools_root: None,
             materials_out: None,
             ffmpeg_path: None,
+            helper_path: None,
+            pak_path: None,
             use_staged: false,
             skip_anims: true,
             camera: vec![],
@@ -3179,6 +3418,8 @@ mod tests {
             tools_root: None,
             materials_out: None,
             ffmpeg_path: None,
+            helper_path: None,
+            pak_path: None,
             use_staged: false,
             skip_anims: true,
             camera: vec![],
@@ -3297,10 +3538,11 @@ mod tests {
                 effect: None,
                 fx_period: None,
                 fx_intensity: None,
+                fx_speed: None,
             game_vmat: None,
         }];
         let mut rep = ModelBuildReport::default();
-        let arts = compile_materials(tools, "idol_urn", &specs, &out_cache, None, &mut rep)
+        let arts = compile_materials(tools, "idol_urn", &specs, &out_cache, None, None, None, &mut rep)
             .expect("a .jpeg texture must compile after normalization");
         for s in &rep.steps {
             eprintln!("STEP {s}");
@@ -3354,6 +3596,8 @@ mod tests {
             tools_root: Some(tools.into()),
             materials_out: None,
             ffmpeg_path: None,
+            helper_path: None,
+            pak_path: None,
             use_staged: false,
             skip_anims: false,
             camera: vec![],
@@ -3427,6 +3671,7 @@ mod tests {
                 effect: None,
                 fx_period: None,
                 fx_intensity: None,
+                fx_speed: None,
                         game_vmat: Some(path.clone()),
                     },
                     None => MaterialSpec {
@@ -3438,6 +3683,7 @@ mod tests {
                 effect: None,
                 fx_period: None,
                 fx_intensity: None,
+                fx_speed: None,
                         game_vmat: None,
                     },
                 }
@@ -3459,6 +3705,8 @@ mod tests {
             tools_root: Some(tools.into()),
             materials_out: Some(scratch.join("doorman_mats").to_string_lossy().into_owned()),
             ffmpeg_path: None,
+            helper_path: None,
+            pak_path: None,
             use_staged: false,
             skip_anims: false,
             camera: vec![],
