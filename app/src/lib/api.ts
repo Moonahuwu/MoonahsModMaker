@@ -704,6 +704,10 @@ export interface ModelMaterialSpec {
   fxIntensity?: number | null;
   /** Space only: drift speed multiplier (1 = normal). */
   fxSpeed?: number | null;
+  /** Space only: star set - null/"classic" = procedural, "hubble" = NASA. */
+  fxVariant?: string | null;
+  /** Space only: glow hue in degrees (null = warm white). */
+  fxHue?: number | null;
   gameVmat?: string | null;
 }
 
@@ -733,6 +737,8 @@ export interface MatchedMaterial {
   fxPeriod?: number | null;
   fxIntensity?: number | null;
   fxSpeed?: number | null;
+  fxVariant?: string | null;
+  fxHue?: number | null;
   gameVmat?: string | null;
 }
 

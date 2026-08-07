@@ -521,6 +521,8 @@ export function ModelSwapTab({
           fxPeriod: s.fxPeriod ?? null,
           fxIntensity: s.fxIntensity ?? null,
           fxSpeed: s.fxSpeed ?? null,
+          fxVariant: s.fxVariant ?? null,
+          fxHue: s.fxHue ?? null,
           gameVmat: s.gameVmat ?? null,
         })),
         // Objects compile in the CSDK, so their builds always need it - not
@@ -709,13 +711,41 @@ export function ModelSwapTab({
           />
         )}
         {s.effect === "space" && (
-          <input
-            value={s.fxSpeed ?? ""}
-            onChange={(e) => patchSpec(s.name, { fxSpeed: num(e.target.value) })}
-            placeholder="1"
-            title="Drift speed: 1 is normal, 2 twice as fast, 0.5 half speed"
-            className="w-10 shrink-0 rounded border border-zinc-700/80 bg-zinc-950 px-1 py-0.5 text-right text-[10px] text-zinc-300 outline-none placeholder:text-zinc-600"
-          />
+          <>
+            <input
+              value={s.fxSpeed ?? ""}
+              onChange={(e) => patchSpec(s.name, { fxSpeed: num(e.target.value) })}
+              placeholder="1"
+              title="Drift speed: 1 is normal, 2 twice as fast, 0.5 half speed"
+              className="w-10 shrink-0 rounded border border-zinc-700/80 bg-zinc-950 px-1 py-0.5 text-right text-[10px] text-zinc-300 outline-none placeholder:text-zinc-600"
+            />
+            <select
+              value={s.fxVariant ?? "classic"}
+              onChange={(e) =>
+                patchSpec(s.name, {
+                  fxVariant: e.target.value === "classic" ? null : e.target.value,
+                })
+              }
+              title="Star set: classic = the app's own field, hubble = real NASA Hubble telescope imagery (public domain - credit NASA when you publish)"
+              className="shrink-0 rounded border border-zinc-700/80 bg-zinc-950 px-1 py-0.5 text-[10px] text-zinc-400 outline-none"
+            >
+              <option value="classic">stars: classic</option>
+              <option value="hubble">stars: hubble</option>
+            </select>
+            <input
+              type="range"
+              min={0}
+              max={360}
+              value={s.fxHue ?? 14}
+              onChange={(e) => patchSpec(s.name, { fxHue: Number(e.target.value) })}
+              title="Star color - drag to tint the glow (left edge: warm white)"
+              className="h-1.5 w-20 shrink-0 cursor-pointer appearance-none rounded-full"
+              style={{
+                background:
+                  "linear-gradient(to right, #f55, #ff5, #5f5, #5ff, #55f, #f5f, #f55)",
+              }}
+            />
+          </>
         )}
       </>
     );

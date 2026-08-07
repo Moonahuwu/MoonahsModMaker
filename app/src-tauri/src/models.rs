@@ -1240,6 +1240,14 @@ pub struct MaterialSpec {
     /// Space only: drift speed multiplier (default 1).
     #[serde(default)]
     pub fx_speed: Option<f64>,
+    /// Space only: which star set - None/"classic" = our procedural art,
+    /// "hubble" = real NASA Hubble imagery (public domain).
+    #[serde(default)]
+    pub fx_variant: Option<String>,
+    /// Space only: glow hue in degrees (0-360). None = the warm white the
+    /// community mod uses. Textures are grayscale, so this is the color.
+    #[serde(default)]
+    pub fx_hue: Option<f64>,
     /// Map this material to an EXISTING game vmat path instead of compiling
     /// one - the vmdl gets a material-group remap. This is how kit meshes
     /// kept from the decompile (SourceIO names them after the real vmats,
@@ -1353,7 +1361,7 @@ fn fx_splice_parts(spec: &MaterialSpec, illum_mask: &str) -> (Vec<(String, Strin
                     (s("TextureSelfIllumMask1"), illum_mask.to_string()),
                     (s("g_flSelfIllumScale1"), format!("{}", glow(10.0))),
                     (s("g_flSelfIllumAlbedoFactor1"), s("0")),
-                    (s("g_vSelfIllumTint1"), s("[1.000000 0.615686 0.498039 1.000000]")),
+                    (s("g_vSelfIllumTint1"), space_glow_tint(spec.fx_hue)),
                     (s("g_vSelfIllumScrollSpeed1"), format!("[{:.6} {:.6} 0.000000 0.000000]", 0.1 * speed, 0.05 * speed)),
                     (s("g_vNormalAndRoughnessScrollSpeed1"), format!("[{:.6} {:.6} 0.000000 0.000000]", 0.4 * speed, 0.2 * speed)),
                 ],
@@ -1483,11 +1491,17 @@ fn compile_materials(
                 })
             };
             let mask = if fx == "space" {
-                let dest = tex_dir.join("eim_starlight.png");
+                let (name, bytes): (&str, &[u8]) =
+                    if spec.fx_variant.as_deref() == Some("hubble") {
+                        ("eim_hubble_light.png", HUBBLE_LIGHT_PNG)
+                    } else {
+                        ("eim_starlight.png", STARLIGHT_PNG)
+                    };
+                let dest = tex_dir.join(name);
                 if !dest.exists() {
-                    std::fs::write(&dest, STARLIGHT_PNG).map_err(|e| e.to_string())?;
+                    std::fs::write(&dest, bytes).map_err(|e| e.to_string())?;
                 }
-                format!("{tex_dir_rel}/eim_starlight.png")
+                format!("{tex_dir_rel}/{name}")
             } else {
                 tex_param("TextureSelfIllumMask")
                     .or_else(|| tex_param("TextureColor"))
@@ -1508,9 +1522,15 @@ fn compile_materials(
         let color_src = match spec.color.as_deref() {
             Some(c) => c,
             None if has_fx => {
-                let dest = tex_dir.join("eim_starfield.png");
+                let (name, bytes): (&str, &[u8]) =
+                    if spec.fx_variant.as_deref() == Some("hubble") {
+                        ("eim_hubble_field.png", HUBBLE_FIELD_PNG)
+                    } else {
+                        ("eim_starfield.png", STARFIELD_PNG)
+                    };
+                let dest = tex_dir.join(name);
                 if !dest.exists() {
-                    std::fs::write(&dest, STARFIELD_PNG).map_err(|e| e.to_string())?;
+                    std::fs::write(&dest, bytes).map_err(|e| e.to_string())?;
                 }
                 starfield_path = dest.to_string_lossy().into_owned();
                 &starfield_path
@@ -1599,16 +1619,33 @@ fn compile_materials(
             "space" => {
                 // Drift speed multiplier scales all three motions together.
                 let speed = spec.fx_speed.unwrap_or(1.0).clamp(0.0, 20.0);
+                let hubble = spec.fx_variant.as_deref() == Some("hubble");
+                let (light_name, light_bytes): (&str, &[u8]) = if hubble {
+                    ("eim_hubble_light.png", HUBBLE_LIGHT_PNG)
+                } else {
+                    ("eim_starlight.png", STARLIGHT_PNG)
+                };
                 let starlight = {
-                    let dest = tex_dir.join("eim_starlight.png");
+                    let dest = tex_dir.join(light_name);
                     if !dest.exists() {
-                        std::fs::write(&dest, STARLIGHT_PNG).map_err(|e| e.to_string())?;
+                        std::fs::write(&dest, light_bytes).map_err(|e| e.to_string())?;
                     }
-                    format!("{tex_dir_rel}/eim_starlight.png")
+                    format!("{tex_dir_rel}/{light_name}")
+                };
+                // Hue colors BOTH layers (the shipped fields are grayscale);
+                // untouched it stays the mod's warm-white: peach glow over
+                // an untinted field.
+                let albedo_tint = match spec.fx_hue {
+                    Some(h) => {
+                        let (r, g, b) = hue_rgb(h, 0.45);
+                        format!("[{r:.6} {g:.6} {b:.6} 1.000000]")
+                    }
+                    None => "[1.000000 1.000000 1.000000 1.000000]".to_string(),
                 };
                 format!(
-                    "\t\"F_SELF_ILLUM\"\t\"1\"\n\t\"F_ENABLE_TEXTURE_TRANSFORMS\"\t\"1\"\n\t\"F_GLASS\"\t\"1\"\n\t\"TextureSelfIllumMask1\"\t\"{starlight}\"\n\t\"g_flSelfIllumScale1\"\t\"{}\"\n\t\"g_flSelfIllumAlbedoFactor1\"\t\"1\"\n\t\"g_vSelfIllumTint1\"\t\"[1.000000 0.615686 0.498039 1.000000]\"\n\t\"g_vAlbedoScrollSpeed1\"\t\"[0.000000 {:.6} 0.000000 0.000000]\"\n\t\"g_vSelfIllumScrollSpeed1\"\t\"[{:.6} {:.6} 0.000000 0.000000]\"\n\t\"g_vNormalAndRoughnessScrollSpeed1\"\t\"[{:.6} {:.6} 0.000000 0.000000]\"\n",
+                    "\t\"F_SELF_ILLUM\"\t\"1\"\n\t\"F_ENABLE_TEXTURE_TRANSFORMS\"\t\"1\"\n\t\"F_GLASS\"\t\"1\"\n\t\"TextureSelfIllumMask1\"\t\"{starlight}\"\n\t\"g_flSelfIllumScale1\"\t\"{}\"\n\t\"g_flSelfIllumAlbedoFactor1\"\t\"1\"\n\t\"g_vSelfIllumTint1\"\t\"{}\"\n\t\"g_vColorTint1\"\t\"{albedo_tint}\"\n\t\"g_vAlbedoScrollSpeed1\"\t\"[0.000000 {:.6} 0.000000 0.000000]\"\n\t\"g_vSelfIllumScrollSpeed1\"\t\"[{:.6} {:.6} 0.000000 0.000000]\"\n\t\"g_vNormalAndRoughnessScrollSpeed1\"\t\"[{:.6} {:.6} 0.000000 0.000000]\"\n",
                     glow(10.0),
+                    space_glow_tint(spec.fx_hue),
                     -0.1 * speed,
                     0.1 * speed,
                     0.05 * speed,
@@ -1996,6 +2033,38 @@ pub const STARFIELD_PNG: &[u8] = include_bytes!("../resources_src/eim_starfield.
 /// albedo field (the community void skin's depth trick - two star layers
 /// in relative motion, plus the drifting normal, make "3 layers").
 pub const STARLIGHT_PNG: &[u8] = include_bytes!("../resources_src/eim_starlight.png");
+
+/// The "hubble" star set: real NASA Hubble Space Telescope imagery
+/// (public domain; the same source the community void skin credits),
+/// grayscaled so the hue tint can color it. Field = albedo, light = the
+/// scrolling glow mask.
+pub const HUBBLE_FIELD_PNG: &[u8] = include_bytes!("../resources_src/eim_hubble_field.png");
+pub const HUBBLE_LIGHT_PNG: &[u8] = include_bytes!("../resources_src/eim_hubble_light.png");
+
+/// Hue (degrees) -> RGB at the given saturation, value 1 - the space
+/// preset's tint math (textures ship grayscale, color is a material param).
+fn hue_rgb(hue: f64, sat: f64) -> (f64, f64, f64) {
+    let h = hue.rem_euclid(360.0) / 60.0;
+    let c = sat;
+    let x = c * (1.0 - (h % 2.0 - 1.0).abs());
+    let (r, g, b) = match h as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    (r + 1.0 - sat, g + 1.0 - sat, b + 1.0 - sat)
+}
+
+/// The space glow tint: the community mod's warm peach unless a hue is
+/// picked (peach = hue 14 at half saturation, so the slider's default
+/// position reproduces it).
+fn space_glow_tint(fx_hue: Option<f64>) -> String {
+    let (r, g, b) = hue_rgb(fx_hue.unwrap_or(14.0), 0.50);
+    format!("[{r:.6} {g:.6} {b:.6} 1.000000]")
+}
 
 /// Bundled tileable noise normal map. Scrolling a normal makes a surface
 /// shimmer and flow - but generated materials default to a FLAT normal
@@ -2864,6 +2933,21 @@ mod tests {
     const CAM_VMDL: &str ="{\n\trootNode =\n\t{\n\t\t_class = \"RootNode\"\n\t\tchildren =\n\t\t[\n\t\t\t{\n\t\t\t\t_class = \"GameDataList\"\n\t\t\t\tchildren = \n\t\t\t\t[\n\t\t\t\t\t{\n\t\t\t\t\t\t_class = \"GenericGameData\"\n\t\t\t\t\t\tgame_class = \"CitadelCameraSettings_t\"\n\t\t\t\t\t\tgame_keys = \n\t\t\t\t\t\t{\n\t\t\t\t\t\t\tm_flCameraSideOffset = -39.9\n\t\t\t\t\t\t\tm_flCameraBackOffset = 102.9\n\t\t\t\t\t\t\tm_vCameraParrotOffset = [ -10.0, -10.0, 10.0 ]\n\t\t\t\t\t\t}\n\t\t\t\t\t},\n\t\t\t\t]\n\t\t\t},\n\t\t]\n\t}\n}\n";
 
     #[test]
+    fn space_hue_tint_math() {
+        // Default = the community mod's warm peach (hue 14, half sat).
+        let d = space_glow_tint(None);
+        assert!(d.starts_with("[1.000000 0.6"), "{d}");
+        // Pure hues at sat 0.5: red keeps R at 1, blue keeps B at 1.
+        let (r, g, b) = hue_rgb(0.0, 0.5);
+        assert!((r - 1.0).abs() < 1e-6 && (g - 0.5).abs() < 1e-6 && (b - 0.5).abs() < 1e-6);
+        let (r, g, b) = hue_rgb(240.0, 0.5);
+        assert!((b - 1.0).abs() < 1e-6 && (r - 0.5).abs() < 1e-6 && (g - 0.5).abs() < 1e-6);
+        // Wraps: 360 == 0, negatives fold in.
+        assert_eq!(hue_rgb(360.0, 0.5), hue_rgb(0.0, 0.5));
+        assert_eq!(hue_rgb(-120.0, 0.5), hue_rgb(240.0, 0.5));
+    }
+
+    #[test]
     fn modeldoc_unloadables_strip_and_restore_roundtrip() {
         let vmdl = "{\n\trootNode =\n\t{\n\t\t_class = \"RootNode\"\n\t\tchildren =\n\t\t[\n\t\t\t{\n\t\t\t\t_class = \"MaterialGroupList\"\n\t\t\t\tchildren = [ ]\n\t\t\t},\n\t\t\t{\n\t\t\t\t_class = \"NmSkeletonList\"\n\t\t\t\tchildren =\n\t\t\t\t[\n\t\t\t\t\t{\n\t\t\t\t\t\t_class = \"NmSkeletonFile\"\n\t\t\t\t\t\tskeleton_file = \"models/x/x.vnmskel\"\n\t\t\t\t\t},\n\t\t\t\t]\n\t\t\t},\n\t\t\t{\n\t\t\t\t_class = \"AnimGraph2List\"\n\t\t\t\tchildren =\n\t\t\t\t[\n\t\t\t\t\t{\n\t\t\t\t\t\t_class = \"AnimGraph2File\"\n\t\t\t\t\t\tgraph_file = \"models/x/hero.vnmgraph\"\n\t\t\t\t\t},\n\t\t\t\t]\n\t\t\t},\n\t\t]\n\t}\n}\n";
         let pristine = vmdl.to_string();
@@ -3034,6 +3118,8 @@ mod tests {
                 fx_period: None,
                 fx_intensity: None,
                 fx_speed: None,
+                fx_variant: None,
+                fx_hue: None,
                 game_vmat: Some(game_vmat.clone()),
             }],
             tools_root: None,
@@ -3248,6 +3334,8 @@ mod tests {
             fx_period: None,
             fx_intensity: Some(9.0),
             fx_speed: Some(2.0),
+            fx_variant: None,
+            fx_hue: None,
             game_vmat: Some("models/x/door.vmat".into()),
         };
         let (pairs, blocks) = fx_splice_parts(&spec, "models/x/door_color.png");
@@ -3300,6 +3388,8 @@ mod tests {
                 fx_period: None,
                 fx_intensity: None,
                 fx_speed: None,
+                fx_variant: None,
+                fx_hue: None,
                 game_vmat: None,
             },
             MaterialSpec {
@@ -3312,6 +3402,8 @@ mod tests {
                 fx_period: None,
                 fx_intensity: None,
                 fx_speed: None,
+                fx_variant: None,
+                fx_hue: None,
                 game_vmat: None,
             },
             // Fully automatic effects: NO texture given - the bundled
@@ -3326,6 +3418,8 @@ mod tests {
                 fx_period: None,
                 fx_intensity: None,
                 fx_speed: None,
+                fx_variant: None,
+                fx_hue: None,
                 game_vmat: None,
             },
             MaterialSpec {
@@ -3338,6 +3432,8 @@ mod tests {
                 fx_period: None,
                 fx_intensity: None,
                 fx_speed: None,
+                fx_variant: None,
+                fx_hue: None,
                 game_vmat: None,
             },
             MaterialSpec {
@@ -3351,41 +3447,52 @@ mod tests {
                 fx_period: Some(4.0),
                 fx_intensity: Some(10.0),
                 fx_speed: None,
+                fx_variant: None,
+                fx_hue: None,
                 game_vmat: None,
             },
             MaterialSpec {
                 name: "auto_glass".into(),
                 color: None, normal: None, roughness: None, metalness: None,
-                effect: Some("glass".into()), fx_period: None, fx_intensity: None, fx_speed: None, game_vmat: None,
+                effect: Some("glass".into()), fx_period: None, fx_intensity: None, fx_speed: None, fx_variant: None, fx_hue: None, game_vmat: None,
             },
             MaterialSpec {
                 name: "auto_ghost".into(),
                 color: None, normal: None, roughness: None, metalness: None,
-                effect: Some("ghost".into()), fx_period: None, fx_intensity: None, fx_speed: None, game_vmat: None,
+                effect: Some("ghost".into()), fx_period: None, fx_intensity: None, fx_speed: None, fx_variant: None, fx_hue: None, game_vmat: None,
             },
             MaterialSpec {
                 name: "auto_sheen".into(),
                 color: None, normal: None, roughness: None, metalness: None,
-                effect: Some("sheen".into()), fx_period: None, fx_intensity: None, fx_speed: None, game_vmat: None,
+                effect: Some("sheen".into()), fx_period: None, fx_intensity: None, fx_speed: None, fx_variant: None, fx_hue: None, game_vmat: None,
             },
             MaterialSpec {
                 name: "auto_unlit".into(),
                 color: None, normal: None, roughness: None, metalness: None,
-                effect: Some("unlit".into()), fx_period: None, fx_intensity: None, fx_speed: None, game_vmat: None,
+                effect: Some("unlit".into()), fx_period: None, fx_intensity: None, fx_speed: None, fx_variant: None, fx_hue: None, game_vmat: None,
             },
             // Tuned starfield: 3x drift speed, brighter glow.
             MaterialSpec {
                 name: "speedy_space".into(),
                 color: None, normal: None, roughness: None, metalness: None,
-                effect: Some("space".into()), fx_period: None, fx_intensity: Some(12.0), fx_speed: Some(3.0), game_vmat: None,
+                effect: Some("space".into()), fx_period: None, fx_intensity: Some(12.0), fx_speed: Some(3.0), fx_variant: None, fx_hue: None, game_vmat: None,
             },
             // Fx ON a real game material: decompile doorman's door vmat,
             // splice the space recipe in, recompile at the bare mesh name.
+            // Hubble star set + a blue hue while at it.
             MaterialSpec {
                 name: "door_fx".into(),
                 color: None, normal: None, roughness: None, metalness: None,
                 effect: Some("space".into()), fx_period: None, fx_intensity: None, fx_speed: None,
+                fx_variant: Some("hubble".into()), fx_hue: Some(220.0),
                 game_vmat: Some("models/heroes_wip/doorman/materials/doorman_door.vmat".into()),
+            },
+            // The NASA set must also work as the textureless fallback.
+            MaterialSpec {
+                name: "auto_hubble".into(),
+                color: None, normal: None, roughness: None, metalness: None,
+                effect: Some("space".into()), fx_period: None, fx_intensity: None, fx_speed: None,
+                fx_variant: Some("hubble".into()), fx_hue: Some(300.0), game_vmat: None,
             },
         ];
         let helper = r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\tools\vpk-helper\dist\vpk-helper.exe";
@@ -3411,10 +3518,15 @@ mod tests {
                 "textureless {name} must compile from the bundled starfield: {arts:?}"
             );
         }
-        // The game-material splice compiled at the bare mesh-material name.
+        // The game-material splice compiled at the bare mesh-material name,
+        // and the NASA fallback field compiled too.
         assert!(
             arts.iter().any(|a| a.target_rel == "door_fx.vmat_c"),
             "fx-on-game-material must produce a bare-name vmat_c: {arts:?}"
+        );
+        assert!(
+            arts.iter().any(|a| a.target_rel == "auto_hubble.vmat_c"),
+            "hubble star set must compile from the bundled NASA field: {arts:?}"
         );
         assert!(
             rep.steps.iter().any(|s| s.contains("spliced into models/heroes_wip/doorman")),
@@ -3740,6 +3852,8 @@ mod tests {
                 fx_period: None,
                 fx_intensity: None,
                 fx_speed: None,
+                fx_variant: None,
+                fx_hue: None,
             game_vmat: None,
         }];
         let mut rep = ModelBuildReport::default();
@@ -3873,6 +3987,8 @@ mod tests {
                 fx_period: None,
                 fx_intensity: None,
                 fx_speed: None,
+                fx_variant: None,
+                fx_hue: None,
                         game_vmat: Some(path.clone()),
                     },
                     None => MaterialSpec {
@@ -3885,6 +4001,8 @@ mod tests {
                 fx_period: None,
                 fx_intensity: None,
                 fx_speed: None,
+                fx_variant: None,
+                fx_hue: None,
                         game_vmat: None,
                     },
                 }
