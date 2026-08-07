@@ -151,3 +151,33 @@
     transform: none !important;
   }
 }
+
+/* eim-slider: range inputs in the material fx tune panel. Thumb styling
+   needs real pseudo-element CSS, which Tailwind can't do inline. A row's
+   inline background (the hue rainbow) wins over the default track color. */
+.eim-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 5px;
+  border-radius: 9999px;
+  background: #27272a;
+  outline: none;
+}
+.eim-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 11px;
+  height: 11px;
+  border-radius: 9999px;
+  background: #e4e4e7;
+  border: 1px solid #71717a;
+  cursor: pointer;
+}
+.eim-slider::-moz-range-thumb {
+  width: 11px;
+  height: 11px;
+  border-radius: 9999px;
+  background: #e4e4e7;
+  border: 1px solid #71717a;
+  cursor: pointer;
+}

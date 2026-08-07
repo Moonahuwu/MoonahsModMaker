@@ -133,6 +133,47 @@ export function ModelSwapTab({
   const cs2Ok = useMemo(() => settings.cs2Root.trim().length > 0, [settings.cs2Root]);
   const toolsOk = useMemo(() => settings.csdkRoot.trim().length > 0, [settings.csdkRoot]);
 
+  // Browser-preview mock (dev builds only, opt-in via ?mockmats): seeds a
+  // fake materials list so the dense fx rows can be styled and checked in a
+  // plain browser, where no Tauri backend data exists.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    if (!new URLSearchParams(window.location.search).has("mockmats")) return;
+    const gv = "models/heroes_wip/doorman/materials/doorman_door.vmat";
+    setMode("hero");
+    setHero("doorman");
+    setWsTarget("models/heroes_wip/doorman_v2/doorman.vmdl");
+    setWs({
+      dir: "C:/mock/ws",
+      vmdl: "doorman.vmdl",
+      bones: [],
+      materials: [gv, gv.replace("door", "gun"), gv.replace("door", "keyglow")],
+      camera: [
+        { key: "m_flCameraSideOffset", value: -12.25 },
+        { key: "m_flCameraBackOffset", value: 102.9 },
+      ],
+      files: 42,
+    });
+    setMeshFile("C:/mock/doorman_body.dmx");
+    setMeshFiles(["C:/mock/doorman_body.dmx"]);
+    setPreflight({
+      errors: [],
+      warnings: [],
+      info: [],
+      materials: ["doorman_body", "Body5F", "Fluff", "Eyes", "doorman_door"],
+    });
+    setAutoFound(2);
+    setTexSpecs([
+      { name: "doorman_body", color: null, normal: null, roughness: null, metalness: null, effect: "space", fxIntensity: 12, fxSpeed: 0.5, fxVariant: "hubble", fxHue: 220 },
+      { name: "Body5F", color: "C:/mock/Body_Base_color.png", normal: "C:/mock/Body_Normal.png", roughness: null, metalness: null },
+      { name: "Fluff", color: "C:/mock/Fluff_Base_color.png", normal: null, roughness: null, metalness: null, effect: "pulse", fxPeriod: 4, fxIntensity: 10 },
+      { name: "Eyes", color: null, normal: null, roughness: null, metalness: null },
+      { name: "doorman_door", color: null, normal: null, roughness: null, metalness: null, effect: "space", gameVmat: gv },
+    ]);
+    setFxOpen({ doorman_body: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     if (!settings.vpkHelperPath || !settings.deadlockPak) return;
     let cancelled = false;
@@ -662,16 +703,23 @@ export function ModelSwapTab({
   const patchSpec = (name: string, up: Partial<MatchedMaterial>) =>
     setTexSpecs((prev) => prev.map((x) => (x.name === name ? { ...x, ...up } : x)));
 
-  /** Fx dropdown + tuning inputs, shared by every material-row flavor
-   *  (your-texture rows, game-material rows, built-in starfield rows). */
-  const fxControls = (s: MatchedMaterial, opts?: { onGame?: boolean }) => {
+  /** Rows with their tune panel open (fx presets with adjustable knobs). */
+  const [fxOpen, setFxOpen] = useState<Record<string, boolean>>({});
+  const FX_TUNABLE = ["space", "cosmic", "pulse"];
+
+  /** The fx dropdown + a "tune" toggle - the knobs live in a labeled panel
+   *  under the row (fxPanel), not crammed into the row itself. */
+  const fxInline = (s: MatchedMaterial, opts?: { onGame?: boolean }) => {
     if (!settings.experimentalMaterialFx) return null;
-    const num = (v: string) => Number(v) || null;
     return (
       <>
         <select
           value={s.effect ?? ""}
-          onChange={(e) => patchSpec(s.name, { effect: e.target.value || null })}
+          onChange={(e) => {
+            const v = e.target.value || null;
+            patchSpec(s.name, { effect: v });
+            setFxOpen((prev) => ({ ...prev, [s.name]: !!v && FX_TUNABLE.includes(v) }));
+          }}
           title={
             opts?.onGame
               ? "Apply a look ON TOP of the game material: its vanilla textures stay, and only this model changes - other users of the material keep the stock look"
@@ -692,62 +740,131 @@ export function ModelSwapTab({
           <option value="sheen">fx: fabric sheen</option>
           <option value="unlit">fx: flat toon</option>
         </select>
-        {s.effect === "pulse" && (
-          <input
-            value={s.fxPeriod ?? ""}
-            onChange={(e) => patchSpec(s.name, { fxPeriod: num(e.target.value) })}
-            placeholder="2"
-            title="Pulse length in seconds (one full bright-dim cycle)"
-            className="w-10 shrink-0 rounded border border-zinc-700/80 bg-zinc-950 px-1 py-0.5 text-right text-[10px] text-zinc-300 outline-none placeholder:text-zinc-600"
-          />
-        )}
-        {(s.effect === "pulse" || s.effect === "space" || s.effect === "cosmic") && (
-          <input
-            value={s.fxIntensity ?? ""}
-            onChange={(e) => patchSpec(s.name, { fxIntensity: num(e.target.value) })}
-            placeholder={s.effect === "cosmic" ? "4" : s.effect === "space" ? "10" : "6"}
-            title="Glow intensity (peak brightness)"
-            className="w-10 shrink-0 rounded border border-zinc-700/80 bg-zinc-950 px-1 py-0.5 text-right text-[10px] text-zinc-300 outline-none placeholder:text-zinc-600"
-          />
-        )}
-        {s.effect === "space" && (
-          <>
-            <input
-              value={s.fxSpeed ?? ""}
-              onChange={(e) => patchSpec(s.name, { fxSpeed: num(e.target.value) })}
-              placeholder="1"
-              title="Drift speed: 1 is normal, 2 twice as fast, 0.5 half speed"
-              className="w-10 shrink-0 rounded border border-zinc-700/80 bg-zinc-950 px-1 py-0.5 text-right text-[10px] text-zinc-300 outline-none placeholder:text-zinc-600"
-            />
-            <select
-              value={s.fxVariant ?? "classic"}
-              onChange={(e) =>
-                patchSpec(s.name, {
-                  fxVariant: e.target.value === "classic" ? null : e.target.value,
-                })
-              }
-              title="Star set: classic = the app's own field, hubble = real NASA Hubble telescope imagery (public domain - credit NASA when you publish)"
-              className="shrink-0 rounded border border-zinc-700/80 bg-zinc-950 px-1 py-0.5 text-[10px] text-zinc-400 outline-none"
-            >
-              <option value="classic">stars: classic</option>
-              <option value="hubble">stars: hubble</option>
-            </select>
-            <input
-              type="range"
-              min={0}
-              max={360}
-              value={s.fxHue ?? 14}
-              onChange={(e) => patchSpec(s.name, { fxHue: Number(e.target.value) })}
-              title="Star color - drag to tint the glow (left edge: warm white)"
-              className="h-1.5 w-20 shrink-0 cursor-pointer appearance-none rounded-full"
-              style={{
-                background:
-                  "linear-gradient(to right, #f55, #ff5, #5f5, #5ff, #55f, #f5f, #f55)",
-              }}
-            />
-          </>
+        {s.effect && FX_TUNABLE.includes(s.effect) && (
+          <button
+            onClick={() => setFxOpen((prev) => ({ ...prev, [s.name]: !prev[s.name] }))}
+            title="Show or hide this effect's settings"
+            className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] transition ${
+              fxOpen[s.name]
+                ? "border-violet-400/60 bg-violet-400/10 text-violet-300"
+                : "border-zinc-700/80 text-zinc-500 hover:text-zinc-300"
+            }`}
+          >
+            tune
+          </button>
         )}
       </>
+    );
+  };
+
+  /** One labeled knob: name + slider + live value readout. */
+  const fxKnob = (
+    label: string,
+    value: number,
+    min: number,
+    max: number,
+    step: number,
+    title: string,
+    onSet: (v: number) => void,
+    display?: string,
+  ) => (
+    <label className="flex items-center gap-1.5" title={title}>
+      <span className="w-11 text-right text-[9px] uppercase tracking-wide text-zinc-500">
+        {label}
+      </span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={Math.min(Math.max(value, min), max)}
+        onChange={(e) => onSet(Number(e.target.value))}
+        className="eim-slider w-24 shrink-0 cursor-pointer"
+      />
+      <span className="w-8 text-[10px] tabular-nums text-zinc-300">{display ?? value}</span>
+    </label>
+  );
+
+  /** The labeled settings panel for a row's effect. */
+  const fxPanel = (s: MatchedMaterial) => {
+    if (!settings.experimentalMaterialFx || !s.effect) return null;
+    if (!FX_TUNABLE.includes(s.effect) || !fxOpen[s.name]) return null;
+    const glowDefault = s.effect === "cosmic" ? 4 : s.effect === "space" ? 10 : 6;
+    return (
+      <div className="ml-44 flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded border-l-2 border-violet-400/25 bg-zinc-900/40 px-2.5 py-1.5">
+        {fxKnob(
+          "glow",
+          s.fxIntensity ?? glowDefault,
+          0.5,
+          30,
+          0.5,
+          "Peak brightness of the glow",
+          (v) => patchSpec(s.name, { fxIntensity: v }),
+        )}
+        {s.effect === "pulse" &&
+          fxKnob(
+            "pulse",
+            s.fxPeriod ?? 2,
+            0.25,
+            10,
+            0.25,
+            "Seconds per pulse (one full bright-dim cycle)",
+            (v) => patchSpec(s.name, { fxPeriod: v }),
+            `${s.fxPeriod ?? 2}s`,
+          )}
+        {s.effect === "space" && (
+          <>
+            {fxKnob(
+              "speed",
+              s.fxSpeed ?? 1,
+              0.05,
+              4,
+              0.05,
+              "Drift speed: 1 is normal, left is slower, right is faster",
+              (v) => patchSpec(s.name, { fxSpeed: v }),
+              `${(s.fxSpeed ?? 1).toFixed(2)}x`,
+            )}
+            <label
+              className="flex items-center gap-1.5"
+              title="Star color - drag to tint the glow (left edge: warm white)"
+            >
+              <span className="w-11 text-right text-[9px] uppercase tracking-wide text-zinc-500">
+                color
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={360}
+                value={s.fxHue ?? 14}
+                onChange={(e) => patchSpec(s.name, { fxHue: Number(e.target.value) })}
+                className="eim-slider w-24 shrink-0 cursor-pointer"
+                style={{
+                  background:
+                    "linear-gradient(to right, #f55, #ff5, #5f5, #5ff, #55f, #f5f, #f55)",
+                }}
+              />
+            </label>
+            <label
+              className="flex items-center gap-1.5"
+              title="Star set: classic = the app's own field, hubble = real NASA Hubble telescope imagery (public domain - credit NASA when you publish)"
+            >
+              <span className="text-[9px] uppercase tracking-wide text-zinc-500">stars</span>
+              <select
+                value={s.fxVariant ?? "classic"}
+                onChange={(e) =>
+                  patchSpec(s.name, {
+                    fxVariant: e.target.value === "classic" ? null : e.target.value,
+                  })
+                }
+                className="rounded border border-zinc-700/80 bg-zinc-950 px-1 py-0.5 text-[10px] text-zinc-400 outline-none"
+              >
+                <option value="classic">classic</option>
+                <option value="hubble">hubble</option>
+              </select>
+            </label>
+          </>
+        )}
+      </div>
     );
   };
 
@@ -1124,7 +1241,8 @@ export function ModelSwapTab({
               </div>
               <div className="flex max-h-64 flex-col gap-1 overflow-y-auto pr-1">
                 {texSpecs.map((s) => (
-                  <div key={s.name} className="flex items-center gap-2 text-[11px]">
+                  <div key={s.name} className="flex flex-col gap-1">
+                  <div className="flex items-center gap-2 text-[11px]">
                     <span
                       className={`w-44 shrink-0 truncate ${s.color || s.gameVmat ? "text-zinc-200" : "text-zinc-500"}`}
                       title={s.name}
@@ -1150,7 +1268,7 @@ export function ModelSwapTab({
                               {k}
                             </span>
                           ))}
-                        {fxControls(s)}
+                        {fxInline(s)}
                         <button
                           onClick={() =>
                             setTexSpecs((prev) =>
@@ -1175,7 +1293,7 @@ export function ModelSwapTab({
                         >
                           game: {s.gameVmat.split("/").pop()}
                         </span>
-                        {fxControls(s, { onGame: true })}
+                        {fxInline(s, { onGame: true })}
                         <button
                           onClick={() =>
                             setTexSpecs((prev) =>
@@ -1200,7 +1318,7 @@ export function ModelSwapTab({
                               ? "pulse glow (built-in)"
                               : "built-in starfield"}
                         </span>
-                        {fxControls(s)}
+                        {fxInline(s)}
                         <button
                           onClick={() =>
                             setTexSpecs((prev) =>
@@ -1257,6 +1375,8 @@ export function ModelSwapTab({
                         </select>
                       </>
                     )}
+                  </div>
+                  {fxPanel(s)}
                   </div>
                 ))}
               </div>
