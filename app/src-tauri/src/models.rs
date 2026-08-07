@@ -752,6 +752,81 @@ fn remove_node(text: &mut String, class_name: &str) -> bool {
     true
 }
 
+/// Non-destructive twin of `remove_node`: the byte span of the first
+/// `_class = "X"` node's `{ ... }` block.
+fn find_node_block(text: &str, class_name: &str) -> Option<(usize, usize)> {
+    let anchor = text.find(&format!("_class = \"{class_name}\""))?;
+    let open = text[..anchor].rfind('{')?;
+    let bytes = text.as_bytes();
+    let mut depth = 0i32;
+    let mut in_str = false;
+    for (i, &b) in bytes[open..].iter().enumerate() {
+        match b {
+            b'"' => in_str = !in_str,
+            b'{' if !in_str => depth += 1,
+            b'}' if !in_str => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((open, open + i + 1));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The modern anim-graph list nodes the CSDK's ModelDoc cannot LOAD ("Failed
+/// to allocate an instance of class 'NmSkeletonList'/'AnimGraph2List'" - the
+/// same missing-DLL-classes gap that forces hero COMPILES through CS2).
+/// They're runtime hookups, nothing ModelDoc-editable, so the mirror opened
+/// for editing goes without them and they're restored on pull-back.
+const MODELDOC_UNLOADABLE: [&str; 2] = ["NmSkeletonList", "AnimGraph2List"];
+
+/// Strip the unloadable nodes so the CSDK's ModelDoc can open the file.
+fn strip_modeldoc_unloadables(text: &mut String) -> usize {
+    let mut n = 0;
+    for class in MODELDOC_UNLOADABLE {
+        while remove_node(text, class) {
+            n += 1;
+        }
+    }
+    n
+}
+
+/// Splice any unloadable node the (ModelDoc-edited) text lacks back into its
+/// RootNode children, taking each block verbatim from the pristine vmdl.
+fn restore_modeldoc_unloadables(edited: &mut String, pristine: &str) -> Result<usize, String> {
+    let mut restored = 0;
+    for class in MODELDOC_UNLOADABLE {
+        if edited.contains(&format!("_class = \"{class}\"")) {
+            continue;
+        }
+        let Some((s, e)) = find_node_block(pristine, class) else {
+            continue; // the vanilla model never had this one
+        };
+        // Carry the block's leading indentation over for readable output.
+        let line_start = pristine[..s].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let prefix = &pristine[line_start..s];
+        let prefix = if prefix.trim().is_empty() { prefix } else { "" };
+        let (_, kids_end) = children_span(edited, "RootNode", 0)
+            .ok_or("the edited model lost its node list - run a normal Build instead")?;
+        let close = kids_end - 1; // the children array's `]`
+        let mut insert = String::new();
+        let before = edited[..close].trim_end();
+        if !before.ends_with('[') && !before.ends_with(',') {
+            insert.push(',');
+        }
+        insert.push('\n');
+        insert.push_str(prefix);
+        insert.push_str(&pristine[s..e]);
+        insert.push_str(",\n");
+        edited.insert_str(close, &insert);
+        restored += 1;
+    }
+    Ok(restored)
+}
+
 /// Find the `children = [ ... ]` span (bracket-balanced) of the first node of
 /// `class_name` at or after `from`. Returns (start_of_open_bracket, end_after_close).
 fn children_span(text: &str, class_name: &str, from: usize) -> Option<(usize, usize)> {
@@ -2198,6 +2273,18 @@ pub fn open_in_modeldoc(req: &ModelBuildReq) -> Result<String, String> {
             .join(vmdl_dir_internal.replace('/', std::path::MAIN_SEPARATOR_STR));
         let _ = std::fs::remove_dir_all(&dest_dir);
         copy_tree(&src_dir, &dest_dir)?;
+        // The CSDK's ModelDoc refuses to LOAD hero vmdls carrying the modern
+        // anim-graph nodes (its DLLs lack those classes) - strip them from
+        // the editing mirror; the pull-back restores them before compiling.
+        let mirror_vmdl = tools
+            .join("content/citadel_addons")
+            .join(CSDK_PROP_ADDON)
+            .join(vmdl_internal.replace('/', std::path::MAIN_SEPARATOR_STR));
+        let mut text = std::fs::read_to_string(&mirror_vmdl)
+            .map_err(|e| format!("read the mirrored vmdl: {e}"))?;
+        if strip_modeldoc_unloadables(&mut text) > 0 {
+            std::fs::write(&mirror_vmdl, text).map_err(|e| e.to_string())?;
+        }
     }
     let exe = ["bin_tools", "bin"]
         .iter()
@@ -2309,6 +2396,28 @@ fn build_inner(req: &ModelBuildReq, rep: &mut ModelBuildReport) -> Result<String
                         .join(dir_internal.replace('/', std::path::MAIN_SEPARATOR_STR));
                     copy_tree(&csdk_dir, &cs2_dir)?;
                     rep.steps.push("pulled your ModelDoc edits from the Deadlock tools".into());
+                    // The editing mirror went WITHOUT the modern anim-graph
+                    // nodes (the CSDK's ModelDoc can't load them) - splice
+                    // them back from the pristine kit before compiling, or
+                    // the hero would lose its runtime animation graphs.
+                    let pristine = Path::new(&req.workspace_dir)
+                        .join(vmdl_internal.replace('/', std::path::MAIN_SEPARATOR_STR));
+                    let pristine_text = std::fs::read_to_string(&pristine).unwrap_or_default();
+                    if let Ok(mut edited) = std::fs::read_to_string(&staged) {
+                        let n = restore_modeldoc_unloadables(&mut edited, &pristine_text)?;
+                        if n > 0 {
+                            std::fs::write(&staged, edited).map_err(|e| e.to_string())?;
+                            rep.steps.push(format!(
+                                "{n} runtime animation hookup(s) restored (set aside while ModelDoc had the file)"
+                            ));
+                        } else if pristine_text.is_empty()
+                            && !edited.contains("_class = \"NmSkeletonList\"")
+                        {
+                            rep.steps.push(
+                                "WARNING: couldn't read the model kit to restore its animation hookups - if animations break in-game, re-pick the model and run a normal Build".into(),
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -2722,6 +2831,64 @@ mod tests {
     }
 
     const CAM_VMDL: &str ="{\n\trootNode =\n\t{\n\t\t_class = \"RootNode\"\n\t\tchildren =\n\t\t[\n\t\t\t{\n\t\t\t\t_class = \"GameDataList\"\n\t\t\t\tchildren = \n\t\t\t\t[\n\t\t\t\t\t{\n\t\t\t\t\t\t_class = \"GenericGameData\"\n\t\t\t\t\t\tgame_class = \"CitadelCameraSettings_t\"\n\t\t\t\t\t\tgame_keys = \n\t\t\t\t\t\t{\n\t\t\t\t\t\t\tm_flCameraSideOffset = -39.9\n\t\t\t\t\t\t\tm_flCameraBackOffset = 102.9\n\t\t\t\t\t\t\tm_vCameraParrotOffset = [ -10.0, -10.0, 10.0 ]\n\t\t\t\t\t\t}\n\t\t\t\t\t},\n\t\t\t\t]\n\t\t\t},\n\t\t]\n\t}\n}\n";
+
+    #[test]
+    fn modeldoc_unloadables_strip_and_restore_roundtrip() {
+        let vmdl = "{\n\trootNode =\n\t{\n\t\t_class = \"RootNode\"\n\t\tchildren =\n\t\t[\n\t\t\t{\n\t\t\t\t_class = \"MaterialGroupList\"\n\t\t\t\tchildren = [ ]\n\t\t\t},\n\t\t\t{\n\t\t\t\t_class = \"NmSkeletonList\"\n\t\t\t\tchildren =\n\t\t\t\t[\n\t\t\t\t\t{\n\t\t\t\t\t\t_class = \"NmSkeletonFile\"\n\t\t\t\t\t\tskeleton_file = \"models/x/x.vnmskel\"\n\t\t\t\t\t},\n\t\t\t\t]\n\t\t\t},\n\t\t\t{\n\t\t\t\t_class = \"AnimGraph2List\"\n\t\t\t\tchildren =\n\t\t\t\t[\n\t\t\t\t\t{\n\t\t\t\t\t\t_class = \"AnimGraph2File\"\n\t\t\t\t\t\tgraph_file = \"models/x/hero.vnmgraph\"\n\t\t\t\t\t},\n\t\t\t\t]\n\t\t\t},\n\t\t]\n\t}\n}\n";
+        let pristine = vmdl.to_string();
+        let mut mirror = vmdl.to_string();
+        assert_eq!(strip_modeldoc_unloadables(&mut mirror), 2);
+        assert!(!mirror.contains("NmSkeletonList") && !mirror.contains("AnimGraph2List"));
+        assert!(mirror.contains("MaterialGroupList"), "other nodes stay");
+
+        // "ModelDoc" saves the stripped file (formatting churn simulated by
+        // an extra key), then the pull-back restores both nodes.
+        let mut edited = mirror.replace(
+            "_class = \"MaterialGroupList\"",
+            "_class = \"MaterialGroupList\"\n\t\t\t\tnote = \"edited\"",
+        );
+        let n = restore_modeldoc_unloadables(&mut edited, &pristine).expect("restore");
+        assert_eq!(n, 2, "{edited}");
+        assert!(edited.contains("_class = \"NmSkeletonList\""));
+        assert!(edited.contains("_class = \"AnimGraph2List\""));
+        assert!(edited.contains("note = \"edited\""), "the manual edit survives");
+        // Both landed INSIDE the RootNode children array.
+        let (open, close) = children_span(&edited, "RootNode", 0).expect("children parse");
+        let inside = &edited[open..close];
+        assert!(inside.contains("NmSkeletonList") && inside.contains("AnimGraph2List"));
+        // Restoring again is a no-op (both present already).
+        let again = restore_modeldoc_unloadables(&mut edited, &pristine).expect("restore 2");
+        assert_eq!(again, 0);
+        assert_eq!(edited.matches("NmSkeletonList").count(), 1);
+    }
+
+    /// Against the REAL mirrored doorman vmdl (the exact file the user's
+    /// ModelDoc refused to load): strip must remove both modern nodes and
+    /// restore must bring them back intact. Ignored: needs the local stage.
+    #[test]
+    #[ignore]
+    fn e2e_strip_restore_on_real_doorman() {
+        let p = Path::new(r"C:\Users\ethob\Desktop\DeadlockModding\Reduced_CSDK_12\content\citadel_addons\eim_props\models\heroes_wip\doorman_v2\doorman.vmdl");
+        if !p.exists() {
+            eprintln!("no staged doorman - skipping");
+            return;
+        }
+        let pristine = std::fs::read_to_string(p).unwrap();
+        assert!(pristine.contains("_class = \"NmSkeletonList\""), "stage predates the strip fix");
+        let mut mirror = pristine.clone();
+        let stripped = strip_modeldoc_unloadables(&mut mirror);
+        assert_eq!(stripped, 2, "doorman carries exactly the two unloadable nodes");
+        let mut edited = mirror.clone();
+        let n = restore_modeldoc_unloadables(&mut edited, &pristine).expect("restore");
+        assert_eq!(n, 2);
+        for class in MODELDOC_UNLOADABLE {
+            let (s, e) = find_node_block(&pristine, class).unwrap();
+            assert!(
+                edited.contains(&pristine[s..e]),
+                "{class} must come back byte-identical"
+            );
+        }
+    }
 
     #[test]
     fn camera_keys_parse_scalars_only() {
