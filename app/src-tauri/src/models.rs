@@ -1340,6 +1340,10 @@ fn fx_splice_parts(spec: &MaterialSpec, illum_mask: &str) -> (Vec<(String, Strin
     let glow = |d: f64| spec.fx_intensity.unwrap_or(d).clamp(0.1, 50.0);
     let s = |v: &str| v.to_string();
     match fx {
+        // On a game material the garment's own albedo stays PUT (scrolling
+        // it would make the fabric crawl) - the starlight mask drifts over
+        // it instead, glowing independently of the albedo (factor 0: dark
+        // suits still get bright stars), plus the normal shimmer.
         "space" => {
             let speed = spec.fx_speed.unwrap_or(1.0).clamp(0.0, 20.0);
             (
@@ -1347,9 +1351,10 @@ fn fx_splice_parts(spec: &MaterialSpec, illum_mask: &str) -> (Vec<(String, Strin
                     (s("F_SELF_ILLUM"), s("1")),
                     (s("F_ENABLE_TEXTURE_TRANSFORMS"), s("1")),
                     (s("TextureSelfIllumMask1"), illum_mask.to_string()),
-                    (s("g_flSelfIllumScale1"), format!("{}", glow(6.0))),
-                    (s("g_flSelfIllumAlbedoFactor1"), s("1")),
-                    (s("g_vAlbedoScrollSpeed1"), format!("[{:.6} {:.6} 0.000000 0.000000]", 0.015 * speed, 0.008 * speed)),
+                    (s("g_flSelfIllumScale1"), format!("{}", glow(10.0))),
+                    (s("g_flSelfIllumAlbedoFactor1"), s("0")),
+                    (s("g_vSelfIllumTint1"), s("[1.000000 0.615686 0.498039 1.000000]")),
+                    (s("g_vSelfIllumScrollSpeed1"), format!("[{:.6} {:.6} 0.000000 0.000000]", 0.1 * speed, 0.05 * speed)),
                     (s("g_vNormalAndRoughnessScrollSpeed1"), format!("[{:.6} {:.6} 0.000000 0.000000]", 0.4 * speed, 0.2 * speed)),
                 ],
                 vec![],
@@ -1461,8 +1466,10 @@ fn compile_materials(
             let text = std::fs::read_to_string(&src_abs)
                 .map_err(|e| format!("read decompiled {gv_norm}: {e}"))?;
             let text = crate::compile::strip_compiled_textures(&text);
-            // Glow presets: keep the material's OWN selfillum mask when it's
-            // a real one (authored glow spots stay authored), else mask by
+            // Space: the drifting starlight layer IS the point - it becomes
+            // the mask, scrolled over the untouched garment. Other glow
+            // presets keep the material's OWN selfillum mask when it's a
+            // real one (authored glow spots stay authored), else mask by
             // its color map, else glow everything evenly.
             let tex_param = |prefix: &str| {
                 text.lines().find_map(|l| {
@@ -1475,9 +1482,17 @@ fn compile_materials(
                     .then(|| parts[3].to_string())
                 })
             };
-            let mask = tex_param("TextureSelfIllumMask")
-                .or_else(|| tex_param("TextureColor"))
-                .unwrap_or_else(|| "[1.000000 1.000000 1.000000 0.000000]".to_string());
+            let mask = if fx == "space" {
+                let dest = tex_dir.join("eim_starlight.png");
+                if !dest.exists() {
+                    std::fs::write(&dest, STARLIGHT_PNG).map_err(|e| e.to_string())?;
+                }
+                format!("{tex_dir_rel}/eim_starlight.png")
+            } else {
+                tex_param("TextureSelfIllumMask")
+                    .or_else(|| tex_param("TextureColor"))
+                    .unwrap_or_else(|| "[1.000000 1.000000 1.000000 0.000000]".to_string())
+            };
             let (pairs, blocks) = fx_splice_parts(spec, &mask);
             let spliced = splice_vmat_params(&text, &pairs, &blocks);
             let vmat_name = format!("{}.vmat", spec.name.to_lowercase());
@@ -1554,6 +1569,9 @@ fn compile_materials(
         };
         let rough = match &spec.roughness {
             Some(p) => format!("\"{}\"", stage_tex(p)?),
+            // Space is mirror-smooth (the mod ships roughness 0) - with
+            // F_GLASS that's the wet specular sparkle.
+            None if space => "\"[0.000000 0.000000 0.000000 0.000000]\"".to_string(),
             None => format!("\"{MATTE}\""),
         };
         let metal = match &spec.metalness {
@@ -1568,25 +1586,32 @@ fn compile_materials(
         // without NPR a custom material reads photoreal next to the game's
         // toon shading.
         //
-        // "space": the community void-skin recipe (decoded from the
-        // void-space-viscous mod): the color map doubles as a self-illum
-        // mask so bright stars GLOW, and the normal/roughness UVs drift so
-        // the field slowly moves.
-        // Two motions make the field FLOW: the star albedo itself drifts
-        // slowly, and a real noise normal scrolls over it faster for
-        // shimmer (the viscous mod's trick - it never scrolls the albedo,
-        // but with our flat default normals that alone showed nothing).
+        // "space": the community void-skin recipe, decoded IN FULL from the
+        // void-space-viscous mod. Three stages in relative motion make the
+        // depth: the albedo star field drifts one way, a SEPARATE pinpoint
+        // "star light" texture in the self-illum mask slot scrolls at its
+        // own speed (glints wander across the field), and the noise normal
+        // scrolls fastest for shimmer. Glow scale 10 with the mod's warm
+        // tint, plus F_GLASS for the wet sparkle.
         // Glow presets honor fx_intensity (peak self-illum brightness).
         let glow = |default: f64| spec.fx_intensity.unwrap_or(default).clamp(0.1, 50.0);
         let effect_block = match fx {
             "space" => {
-                // Drift speed multiplier scales both motions together.
+                // Drift speed multiplier scales all three motions together.
                 let speed = spec.fx_speed.unwrap_or(1.0).clamp(0.0, 20.0);
+                let starlight = {
+                    let dest = tex_dir.join("eim_starlight.png");
+                    if !dest.exists() {
+                        std::fs::write(&dest, STARLIGHT_PNG).map_err(|e| e.to_string())?;
+                    }
+                    format!("{tex_dir_rel}/eim_starlight.png")
+                };
                 format!(
-                    "\t\"F_SELF_ILLUM\"\t\"1\"\n\t\"F_ENABLE_TEXTURE_TRANSFORMS\"\t\"1\"\n\t\"TextureSelfIllumMask1\"\t\"{color}\"\n\t\"g_flSelfIllumScale1\"\t\"{}\"\n\t\"g_flSelfIllumAlbedoFactor1\"\t\"1\"\n\t\"g_vAlbedoScrollSpeed1\"\t\"[{:.6} {:.6} 0.000000 0.000000]\"\n\t\"g_vNormalAndRoughnessScrollSpeed1\"\t\"[{:.6} {:.6} 0.000000 0.000000]\"\n",
-                    glow(6.0),
-                    0.015 * speed,
-                    0.008 * speed,
+                    "\t\"F_SELF_ILLUM\"\t\"1\"\n\t\"F_ENABLE_TEXTURE_TRANSFORMS\"\t\"1\"\n\t\"F_GLASS\"\t\"1\"\n\t\"TextureSelfIllumMask1\"\t\"{starlight}\"\n\t\"g_flSelfIllumScale1\"\t\"{}\"\n\t\"g_flSelfIllumAlbedoFactor1\"\t\"1\"\n\t\"g_vSelfIllumTint1\"\t\"[1.000000 0.615686 0.498039 1.000000]\"\n\t\"g_vAlbedoScrollSpeed1\"\t\"[0.000000 {:.6} 0.000000 0.000000]\"\n\t\"g_vSelfIllumScrollSpeed1\"\t\"[{:.6} {:.6} 0.000000 0.000000]\"\n\t\"g_vNormalAndRoughnessScrollSpeed1\"\t\"[{:.6} {:.6} 0.000000 0.000000]\"\n",
+                    glow(10.0),
+                    -0.1 * speed,
+                    0.1 * speed,
+                    0.05 * speed,
                     0.4 * speed,
                     0.2 * speed
                 )
@@ -1965,6 +1990,12 @@ pub const CSDK_PROP_ADDON: &str = "eim_props";
 /// Bundled procedural starfield (our own generated art) - the automatic
 /// color texture for "space glow" materials when the user supplies none.
 pub const STARFIELD_PNG: &[u8] = include_bytes!("../resources_src/eim_starfield.png");
+
+/// Companion glow layer: near-black pinpoint-star field used as the
+/// self-illum mask, scrolled at its OWN speed so glints wander across the
+/// albedo field (the community void skin's depth trick - two star layers
+/// in relative motion, plus the drifting normal, make "3 layers").
+pub const STARLIGHT_PNG: &[u8] = include_bytes!("../resources_src/eim_starlight.png");
 
 /// Bundled tileable noise normal map. Scrolling a normal makes a surface
 /// shimmer and flow - but generated materials default to a FLAT normal
@@ -3226,9 +3257,12 @@ mod tests {
         assert!(out.contains("\t\"g_flSelfIllumScale1\"\t\"9\""), "{out}");
         // The closing-quote needle must NOT swallow the FRESNEL variant.
         assert!(out.contains("\"F_SELF_ILLUM_FRESNEL\"\t\"1\""), "{out}");
-        // New keys land inside the block, speed-scaled (0.015*2, 0.4*2).
-        assert!(out.contains("\"g_vAlbedoScrollSpeed1\"\t\"[0.030000 0.016000 0.000000 0.000000]\""), "{out}");
+        // New keys land inside the block, speed-scaled (0.1*2, 0.4*2). The
+        // garment albedo is NOT scrolled on game materials.
+        assert!(!out.contains("g_vAlbedoScrollSpeed1"), "{out}");
+        assert!(out.contains("\"g_vSelfIllumScrollSpeed1\"\t\"[0.200000 0.100000 0.000000 0.000000]\""), "{out}");
         assert!(out.contains("\"g_vNormalAndRoughnessScrollSpeed1\"\t\"[0.800000 0.400000 0.000000 0.000000]\""), "{out}");
+        assert!(out.contains("\"g_flSelfIllumAlbedoFactor1\"\t\"0\""), "dark suits still get bright stars: {out}");
         assert!(out.contains("\"TextureSelfIllumMask1\"\t\"models/x/door_color.png\""), "{out}");
         let close = out.rfind('}').unwrap();
         let last_key = out.rfind("ScrollSpeed1").unwrap();

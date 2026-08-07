@@ -703,7 +703,7 @@ export function ModelSwapTab({
           <input
             value={s.fxIntensity ?? ""}
             onChange={(e) => patchSpec(s.name, { fxIntensity: num(e.target.value) })}
-            placeholder={s.effect === "cosmic" ? "4" : "6"}
+            placeholder={s.effect === "cosmic" ? "4" : s.effect === "space" ? "10" : "6"}
             title="Glow intensity (peak brightness)"
             className="w-10 shrink-0 rounded border border-zinc-700/80 bg-zinc-950 px-1 py-0.5 text-right text-[10px] text-zinc-300 outline-none placeholder:text-zinc-600"
           />
