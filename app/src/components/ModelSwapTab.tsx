@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { appDataDir, join } from "@tauri-apps/api/path";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import {
   heroModelTarget,
   fbxAutoTextures,
@@ -13,6 +14,7 @@ import {
   modelOpenModeldoc,
   modelPreflight,
   modelWorkspace,
+  propThumb,
   type HeroPortrait,
   type MatchedMaterial,
   type ModelPreflight,
@@ -119,6 +121,10 @@ export function ModelSwapTab({
   // The vanilla model as glTF: shown in the 3D preview, and the same export
   // users download to start from in Blender.
   const [previewGlb, setPreviewGlb] = useState("");
+  // 3D is opt-in: the turntable runs a constant render loop and lags the
+  // app, so targets open on a static thumbnail with a load button.
+  const [show3d, setShow3d] = useState(false);
+  const [previewThumb, setPreviewThumb] = useState("");
   // Default to the ORIGINAL: it renders with the game's own textures, while
   // a freshly picked mesh has none yet and would show as a pale blob.
   const [previewMine, setPreviewMine] = useState(false);
@@ -146,6 +152,8 @@ export function ModelSwapTab({
   /** Reset every per-target editing state (both modes share the steps). */
   function clearTarget() {
     setPreviewGlb("");
+    setShow3d(false);
+    setPreviewThumb("");
     setWs(null);
     setPreflight(null);
     setMeshFile("");
@@ -171,7 +179,9 @@ export function ModelSwapTab({
       setWsTarget(target);
       const w = await modelWorkspace(settings.vpkHelperPath, settings.deadlockPak, target);
       setWs(w);
-      void loadPreview(target);
+      void propThumb(settings.vpkHelperPath, settings.deadlockPak, target)
+        .then(setPreviewThumb)
+        .catch(() => {});
       // A real game material by default: Blender material names that don't
       // exist as game vmats render NOTHING (red bounds box in game).
       setMaterial(w.materials[0] ?? "");
@@ -199,7 +209,9 @@ export function ModelSwapTab({
         `${target.model}_c`,
       );
       setWs(w);
-      void loadPreview(target.model);
+      void propThumb(settings.vpkHelperPath, settings.deadlockPak, target.model)
+        .then(setPreviewThumb)
+        .catch(() => {});
       setMaterial(w.materials[0] ?? "");
       return w;
     } catch (e) {
@@ -819,7 +831,7 @@ export function ModelSwapTab({
             {/* The real thing, in 3D - textures alone never showed what an
                 object actually looks like. */}
             <div className="flex w-64 shrink-0 flex-col gap-1.5">
-              {meshFile && (
+              {show3d && meshFile && (
                 <div className="flex items-center gap-1 text-[10px]">
                   {([[true, "Your model"], [false, "Original"]] as [boolean, string][]).map(
                     ([mine, label]) => (
@@ -836,28 +848,66 @@ export function ModelSwapTab({
                       </button>
                     ),
                   )}
+                  <button
+                    onClick={() => setShow3d(false)}
+                    title="Close the 3D view (it renders continuously and costs performance)"
+                    className="ml-auto rounded border border-zinc-700 px-1.5 py-0.5 text-zinc-500 transition hover:bg-zinc-800 hover:text-zinc-300"
+                  >
+                    ✕ close 3D
+                  </button>
                 </div>
               )}
-              <Suspense
-                fallback={
-                  <div className="flex h-48 w-full items-center justify-center rounded-lg border border-zinc-800 bg-zinc-950 text-[11px] text-zinc-500">
-                    Loading the 3D view…
-                  </div>
-                }
-              >
-                <ModelPreview3D
-                  glbPath={previewGlb}
-                  fbxPath={
-                    meshFile && previewMine && meshFile.toLowerCase().endsWith(".fbx")
-                      ? meshFile
-                      : undefined
+              {show3d ? (
+                <Suspense
+                  fallback={
+                    <div className="flex h-48 w-full items-center justify-center rounded-lg border border-zinc-800 bg-zinc-950 text-[11px] text-zinc-500">
+                      Loading the 3D view…
+                    </div>
                   }
-                  textures={Object.fromEntries(
-                    texSpecs.filter((s) => s.color).map((s) => [s.name, s.color as string]),
+                >
+                  <ModelPreview3D
+                    glbPath={previewGlb}
+                    fbxPath={
+                      meshFile && previewMine && meshFile.toLowerCase().endsWith(".fbx")
+                        ? meshFile
+                        : undefined
+                    }
+                    textures={Object.fromEntries(
+                      texSpecs.filter((s) => s.color).map((s) => [s.name, s.color as string]),
+                    )}
+                    className="h-48 w-full border border-zinc-800"
+                  />
+                </Suspense>
+              ) : (
+                // Static placeholder: the cached card art with a load button.
+                // The 3D turntable renders every frame, so it stays off
+                // until asked for.
+                <button
+                  onClick={() => {
+                    setShow3d(true);
+                    if (!previewGlb && wsTarget) void loadPreview(wsTarget);
+                  }}
+                  className="group relative flex h-48 w-full items-center justify-center overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950 transition hover:border-zinc-600"
+                >
+                  {previewThumb && (
+                    <img
+                      src={(() => {
+                        try {
+                          return convertFileSrc(previewThumb);
+                        } catch {
+                          return "";
+                        }
+                      })()}
+                      alt=""
+                      aria-hidden
+                      className="pointer-events-none absolute inset-0 h-full w-full object-contain opacity-50 transition group-hover:opacity-70"
+                    />
                   )}
-                  className="h-48 w-full border border-zinc-800"
-                />
-              </Suspense>
+                  <span className="relative rounded-md border border-zinc-600 bg-zinc-900/80 px-3 py-1.5 text-[11px] font-medium text-zinc-200 backdrop-blur transition group-hover:border-rose-400/50 group-hover:text-rose-200">
+                    ▶ Show 3D preview
+                  </span>
+                </button>
+              )}
               <button
                 onClick={() => void downloadForBlender()}
                 disabled={downloading}
