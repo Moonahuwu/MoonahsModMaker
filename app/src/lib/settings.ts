@@ -122,6 +122,9 @@ export interface Settings {
   /** CS2 install root (with Workshop Tools) - the current-schema Source 2
    *  compiler Model Replacement builds through. Machine path. */
   cs2Root: string;
+  /** Blender executable - powers Model Replacement's auto-rig. Empty = the
+   *  app autodetects (Steam library / Program Files). Machine path. */
+  blenderPath: string;
   /** Baseline of known game sound events (`relpath::eventName`), seeded on the
    *  first "Fix for new patch". Future fixes diff the live game against this so
    *  only events a NEW patch added surface in the "New / Unsorted" tab. */
@@ -239,6 +242,7 @@ export const DEFAULT_SETTINGS: Settings = {
   activeProfile: "",
   sharedPackDir: "",
   cs2Root: "",
+  blenderPath: "",
   knownSoundEvents: [],
   knownSweepFiles: [],
   uiSoundsMigrated: false,

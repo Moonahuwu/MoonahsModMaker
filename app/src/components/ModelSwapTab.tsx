@@ -10,6 +10,7 @@ import {
   matchMaterialTextures,
   meshMaterials,
   modelBuild,
+  modelAutorig,
   modelGltf,
   modelOpenModeldoc,
   modelPreflight,
@@ -405,6 +406,44 @@ export function ModelSwapTab({
     const list = typeof sel === "string" ? [sel] : Array.isArray(sel) ? sel : [];
     if (list.length === 0) return;
     await analyzeMesh(list, ws);
+  }
+
+  const [rigging, setRigging] = useState(false);
+
+  /** No Blender skills needed: bind a model to the hero's skeleton
+   *  automatically (weight transfer from the hero's own body). */
+  async function autoRig() {
+    if (!ws || !target) return;
+    const sel = await openDialog({
+      multiple: false,
+      filters: [{ name: "Model to rig", extensions: ["fbx", "obj", "glb", "gltf"] }],
+      title: "Model to auto-rig onto this hero (no rigging needed)",
+    });
+    if (typeof sel !== "string") return;
+    setRigging(true);
+    try {
+      // The hero's .glb export is the skeleton + weight source (cached
+      // after the first time - same file as "Download for Blender").
+      const glb = await modelGltf(settings.vpkHelperPath, settings.deadlockPak, wsTarget);
+      const cacheDir = await join(await appDataDir(), "model_cache");
+      const out = await join(cacheDir, `${target.key}_autorig.fbx`);
+      const res = await modelAutorig({
+        blenderPath: settings.blenderPath || null,
+        heroGlb: glb,
+        modelPath: sel,
+        outFbx: out,
+        mode: "transfer",
+      });
+      await analyzeMesh([res.outFbx], ws);
+      push(
+        "success",
+        "Auto-rigged onto the hero's skeleton. Assign textures below and Build. Works best on humanoid-ish models - joints may need hand-tuning in Blender for a perfect fit.",
+      );
+    } catch (e) {
+      push("error", `Auto-rig failed: ${e}`);
+    } finally {
+      setRigging(false);
+    }
   }
 
   /** Rebuild: re-open the kit and prefill the mesh + texture sets from the
@@ -1157,6 +1196,16 @@ export function ModelSwapTab({
                   ? "Change file…"
                   : "Pick your FBX / DMX files…"}
             </button>
+            {mode === "hero" && (
+              <button
+                onClick={() => void autoRig()}
+                disabled={rigging}
+                title="Model not rigged to this hero? Pick it and the app binds it to the hero's skeleton for you (via Blender, found automatically). Best on humanoid-ish models standing like the hero."
+                className="rounded-md border border-violet-400/40 bg-violet-400/10 px-3 py-1.5 text-xs font-medium text-violet-200 transition hover:bg-violet-400/20 disabled:opacity-50"
+              >
+                {rigging ? "Rigging…" : "Auto-rig a model…"}
+              </button>
+            )}
             {meshFile && (
               <span className="truncate text-xs text-zinc-400" title={meshFile}>
                 {meshFile.split(/[\\/]/).pop()}

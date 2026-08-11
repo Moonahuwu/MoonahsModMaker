@@ -118,6 +118,7 @@ pub fn run() {
             commands::prop_thumb,
             commands::save_prop_render,
             commands::model_gltf,
+            commands::model_autorig,
             commands::match_material_textures,
             commands::fbx_auto_textures,
             commands::mesh_materials,

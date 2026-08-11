@@ -393,6 +393,12 @@ export function SetupSection({
               hint="VRF's Source2Viewer.exe - enables 'Open in real viewer' for effects"
             />
             <Field
+              label="Blender path (optional)"
+              value={settings.blenderPath}
+              onChange={(v) => update({ blenderPath: v })}
+              hint="blender.exe - powers Model Replacement's auto-rig. Blank = found automatically (Steam / Program Files)"
+            />
+            <Field
               label="Sound folder (content-relative)"
               value={settings.soundFolder}
               onChange={(v) => update({ soundFolder: v })}

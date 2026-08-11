@@ -824,6 +824,28 @@ export function modelOpenModeldoc(req: Parameters<typeof modelBuild>[0]): Promis
   return invoke("model_open_modeldoc", { req });
 }
 
+/** Auto-rig a custom model onto a hero's skeleton via headless Blender.
+ *  "transfer" copies skin weights from the hero's own body (humanoid-ish
+ *  models); "rigid" binds everything solid to one bone (cars, props).
+ *  Returns the build-ready FBX path + a note for the toast. */
+export function modelAutorig(req: {
+  blenderPath?: string | null;
+  heroGlb: string;
+  modelPath: string;
+  outFbx: string;
+  mode: "transfer" | "rigid";
+  rigidBone?: string | null;
+}): Promise<{ outFbx: string; note: string; blender: string }> {
+  return invoke("model_autorig", {
+    blenderPath: req.blenderPath ?? null,
+    heroGlb: req.heroGlb,
+    modelPath: req.modelPath,
+    outFbx: req.outFbx,
+    mode: req.mode,
+    rigidBone: req.rigidBone ?? null,
+  });
+}
+
 /** Export a game model as glTF (.glb + sibling texture PNGs). With no
  *  destDir it goes to an app-data cache (what the 3D preview loads); with
  *  one, it exports into `<destDir>/<model>/` for editing in Blender. */

@@ -2041,6 +2041,70 @@ pub const STARLIGHT_PNG: &[u8] = include_bytes!("../resources_src/eim_starlight.
 pub const HUBBLE_FIELD_PNG: &[u8] = include_bytes!("../resources_src/eim_hubble_field.png");
 pub const HUBBLE_LIGHT_PNG: &[u8] = include_bytes!("../resources_src/eim_hubble_light.png");
 
+/// The bundled Blender auto-rig script: binds a custom model to a hero's
+/// skeleton headlessly (weight transfer from the hero's own body, or a rigid
+/// one-bone bind), normalizes scale/transforms/names, exports a build-ready
+/// FBX. Proven e2e: its output preflights clean and compiles via CS2.
+pub const AUTORIG_PY: &str = include_str!("../resources_src/eim_autorig.py");
+
+/// Run the auto-rig script through a headless Blender. Returns the script's
+/// success marker line (mesh/bone counts) for the UI toast.
+pub fn autorig(
+    blender: &Path,
+    hero_glb: &Path,
+    model: &Path,
+    out_fbx: &Path,
+    mode: &str,
+    rigid_bone: Option<&str>,
+) -> Result<String, String> {
+    if !blender.exists() {
+        return Err(format!("Blender not found at {}", blender.display()));
+    }
+    if !hero_glb.exists() {
+        return Err("the hero's Blender model isn't exported yet - open its 3D preview or Download for Blender once".into());
+    }
+    if !model.exists() {
+        return Err(format!("model file not found: {}", model.display()));
+    }
+    let script = std::env::temp_dir().join("eim_autorig.py");
+    std::fs::write(&script, AUTORIG_PY).map_err(|e| format!("writing the rig script: {e}"))?;
+    let mut cmd = std::process::Command::new(blender);
+    cmd.args(["--background", "--factory-startup", "--python"])
+        .arg(&script)
+        .arg("--")
+        .arg("--hero-glb")
+        .arg(hero_glb)
+        .arg("--model")
+        .arg(model)
+        .arg("--out")
+        .arg(out_fbx)
+        .args(["--mode", mode]);
+    if let Some(b) = rigid_bone.filter(|b| !b.trim().is_empty()) {
+        cmd.args(["--rigid-bone", b]);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    let out = cmd.output().map_err(|e| format!("launching Blender: {e}"))?;
+    let text = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    if let Some(line) = text.lines().find(|l| l.starts_with("EIM_AUTORIG_OK")) {
+        if out_fbx.exists() {
+            return Ok(line.trim().to_string());
+        }
+    }
+    if let Some(line) = text.lines().find(|l| l.starts_with("EIM_AUTORIG_ERR")) {
+        return Err(line.trim_start_matches("EIM_AUTORIG_ERR").trim().to_string());
+    }
+    let tail: String = text.lines().rev().take(6).collect::<Vec<_>>().join(" | ");
+    Err(format!("Blender auto-rig failed: {tail}"))
+}
+
 /// Hue (degrees) -> RGB at the given saturation, value 1 - the space
 /// preset's tint math (textures ship grayscale, color is a material param).
 fn hue_rgb(hue: f64, sat: f64) -> (f64, f64, f64) {
@@ -2931,6 +2995,80 @@ mod tests {
     }
 
     const CAM_VMDL: &str ="{\n\trootNode =\n\t{\n\t\t_class = \"RootNode\"\n\t\tchildren =\n\t\t[\n\t\t\t{\n\t\t\t\t_class = \"GameDataList\"\n\t\t\t\tchildren = \n\t\t\t\t[\n\t\t\t\t\t{\n\t\t\t\t\t\t_class = \"GenericGameData\"\n\t\t\t\t\t\tgame_class = \"CitadelCameraSettings_t\"\n\t\t\t\t\t\tgame_keys = \n\t\t\t\t\t\t{\n\t\t\t\t\t\t\tm_flCameraSideOffset = -39.9\n\t\t\t\t\t\t\tm_flCameraBackOffset = 102.9\n\t\t\t\t\t\t\tm_vCameraParrotOffset = [ -10.0, -10.0, 10.0 ]\n\t\t\t\t\t\t}\n\t\t\t\t\t},\n\t\t\t\t]\n\t\t\t},\n\t\t]\n\t}\n}\n";
+
+    /// The whole auto-rig chain, end to end on real installs: headless
+    /// Blender runs the SHIPPED script (weight transfer from the hero's own
+    /// body onto a de-rigged copy of it, standing in for a downloaded
+    /// unrigged humanoid), and the produced FBX must sail through the same
+    /// gates a hand-rigged export does - preflight clean against the hero's
+    /// real skeleton, then a full CS2 hero build. Ignored: local-only.
+    #[test]
+    #[ignore]
+    fn e2e_autorigged_fbx_preflights_and_builds() {
+        let helper = r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\tools\vpk-helper\dist\vpk-helper.exe";
+        let pak = r"D:\SteamLibrary\steamapps\common\Deadlock\game\citadel\pak01_dir.vpk";
+        let cs2 = r"D:\SteamLibrary\steamapps\common\Counter-Strike Global Offensive";
+        let blender = Path::new(r"D:\SteamLibrary\steamapps\common\Blender\blender.exe");
+        let glb = Path::new(
+            r"C:\Users\ethob\AppData\Roaming\com.digiphoenix.deadlock-intro-tool\model_gltf\models_heroes_wip_doorman_v2_doorman\doorman.glb",
+        );
+        if !blender.exists() || !glb.exists() {
+            eprintln!("blender or the cached doorman glb missing - skipping");
+            return;
+        }
+        let scratch = std::env::temp_dir().join("eim_autorig_e2e");
+        let _ = std::fs::remove_dir_all(&scratch);
+        let out = scratch.join("autorigged.fbx");
+        let note = autorig(blender, glb, glb, &out, "transfer", None).expect("autorig");
+        eprintln!("AUTORIG {note}");
+        let fbx = out.to_string_lossy().into_owned();
+        let fbx = fbx.as_str();
+        let ws = workspace(
+            helper,
+            pak,
+            "models/heroes_wip/doorman_v2/doorman.vmdl_c",
+            &scratch.join("ws"),
+            false,
+        )
+        .expect("workspace");
+
+        let pf = preflight_fbx(Path::new(fbx), &ws.bones).expect("preflight");
+        for e in &pf.errors {
+            eprintln!("PF ERR {e}");
+        }
+        for w in &pf.warnings {
+            eprintln!("PF WARN {w}");
+        }
+        assert!(pf.errors.is_empty(), "auto-rigged fbx must preflight clean: {:?}", pf.errors);
+
+        let req = ModelBuildReq {
+            cs2_root: cs2.into(),
+            kind: ModelKind::Hero,
+            workspace_dir: ws.dir.clone(),
+            vmdl_internal: "models/heroes_wip/doorman_v2/doorman.vmdl".into(),
+            mesh_file: fbx.into(),
+            mesh_files: vec![],
+            material_override: None,
+            import_scale: 0.01,
+            artifact_out: scratch.join("doorman.vmdl_c").to_string_lossy().into_owned(),
+            materials: vec![],
+            tools_root: None,
+            materials_out: None,
+            ffmpeg_path: None,
+            helper_path: None,
+            pak_path: None,
+            use_staged: false,
+            skip_anims: true,
+            camera: vec![],
+        };
+        let rep = build(&req);
+        for s in &rep.steps {
+            eprintln!("STEP {s}");
+        }
+        assert!(rep.ok, "{:?}", rep.steps);
+        assert!(Path::new(&req.artifact_out).exists());
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
 
     #[test]
     fn space_hue_tint_math() {

@@ -1170,6 +1170,68 @@ pub fn list_soundevent_files(
     Ok(out)
 }
 
+/// Best-effort Blender autodetect: the Steam install in any library, else the
+/// newest `C:\Program Files\Blender Foundation\Blender X.Y`.
+fn find_blender() -> Option<std::path::PathBuf> {
+    for lib in steam_libraries() {
+        let p = lib.join("steamapps/common/Blender/blender.exe");
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    let mut best: Option<std::path::PathBuf> = None;
+    if let Ok(rd) = std::fs::read_dir(r"C:\Program Files\Blender Foundation") {
+        let mut dirs: Vec<_> = rd.flatten().map(|e| e.path()).collect();
+        dirs.sort(); // version-named folders - the last sorts newest
+        for d in dirs.into_iter().rev() {
+            let p = d.join("blender.exe");
+            if p.exists() {
+                best = Some(p);
+                break;
+            }
+        }
+    }
+    best
+}
+
+/// Auto-rig a custom model onto a hero's skeleton via headless Blender:
+/// weight transfer from the hero's own body ("transfer") or a one-bone rigid
+/// bind ("rigid"). Returns { outFbx, note, blender } - the produced FBX feeds
+/// the normal mesh-pick flow.
+#[tauri::command]
+pub async fn model_autorig(
+    blender_path: Option<String>,
+    hero_glb: String,
+    model_path: String,
+    out_fbx: String,
+    mode: String,
+    rigid_bone: Option<String>,
+) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let blender = match blender_path.as_deref().filter(|p| !p.trim().is_empty()) {
+            Some(p) => std::path::PathBuf::from(p),
+            None => find_blender().ok_or(
+                "Blender not found - install it (free, also on Steam) or set its path in Settings",
+            )?,
+        };
+        let note = crate::models::autorig(
+            &blender,
+            std::path::Path::new(&hero_glb),
+            std::path::Path::new(&model_path),
+            std::path::Path::new(&out_fbx),
+            &mode,
+            rigid_bone.as_deref(),
+        )?;
+        Ok(serde_json::json!({
+            "outFbx": out_fbx,
+            "note": note,
+            "blender": blender.to_string_lossy(),
+        }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Scan the Deadlock addons folder for occupied `pakNN_dir.vpk` slots + the next
 /// free one (drives the install slot picker UI).
 #[tauri::command]
