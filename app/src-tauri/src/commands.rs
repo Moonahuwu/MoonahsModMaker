@@ -1178,20 +1178,24 @@ pub fn scan_addon_slots(addons_dir: String) -> SlotScan {
 }
 
 /// Install a compiled `.vpk` into Deadlock's `game/citadel/addons` folder.
-/// `slot = None` auto-picks the lowest free slot; `Some(n)` overwrites slot `n`
-/// (backing up any existing occupant). `patch_gameinfo` adds the addons search
-/// path to `gameinfo.gi` if missing.
+/// `slot = None` auto-picks: the remembered `reuse_slot` when its file still
+/// byte-matches `reuse_bytes` (our previous install), else the lowest free
+/// slot. `Some(n)` overwrites slot `n` (backing up any existing occupant).
+/// `patch_gameinfo` adds the addons search path to `gameinfo.gi` if missing.
 #[tauri::command]
 pub fn install_to_game(
     src_vpk: String,
     addons_dir: String,
     slot: Option<u32>,
+    reuse_slot: Option<u32>,
+    reuse_bytes: Option<u64>,
     patch_gameinfo: bool,
 ) -> Result<InstallResult, String> {
     install::install(
         std::path::Path::new(&src_vpk),
         std::path::Path::new(&addons_dir),
         slot,
+        reuse_slot.zip(reuse_bytes),
         patch_gameinfo,
     )
 }

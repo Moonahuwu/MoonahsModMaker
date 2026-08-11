@@ -53,17 +53,36 @@ fn next_free_slot(used: &[u32]) -> Option<u32> {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SlotFile {
+    pub slot: u32,
+    pub bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SlotScan {
     pub used: Vec<u32>,
     pub next_free: Option<u32>,
     pub max_slot: u32,
+    /// Size of the PLAIN `pakNN_dir.vpk` in each used slot (the file our own
+    /// installs write) - lets the UI tell "still my last install" from "someone
+    /// else took this slot".
+    pub files: Vec<SlotFile>,
 }
 
 /// Scan the addons folder for occupied slots + the next free one (for the UI).
 pub fn scan_slots(addons_dir: &Path) -> SlotScan {
     let used = used_slots(addons_dir);
     let next_free = next_free_slot(&used);
-    SlotScan { used, next_free, max_slot: MAX_SLOT }
+    let files = used
+        .iter()
+        .filter_map(|&slot| {
+            std::fs::metadata(addons_dir.join(format!("pak{slot:02}_dir.vpk")))
+                .ok()
+                .map(|m| SlotFile { slot, bytes: m.len() })
+        })
+        .collect();
+    SlotScan { used, next_free, max_slot: MAX_SLOT, files }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -81,6 +100,9 @@ pub struct InstallResult {
     pub gameinfo_patched: bool,
     /// Human note about the gameinfo step (already present / patched / skipped).
     pub gameinfo_note: String,
+    /// Size of the installed file - remembered by the UI so the NEXT auto
+    /// install can prove the slot still holds this exact install.
+    pub bytes: u64,
 }
 
 fn timestamp() -> u64 {
@@ -93,7 +115,10 @@ fn timestamp() -> u64 {
 /// Install `src_vpk` into `addons_dir`.
 ///
 /// - `slot: Some(n)` installs into (and overwrites) slot `n`; `None` auto-picks
-///   the lowest free slot.
+///   a slot: the remembered `reuse` slot when it still holds our previous
+///   install (exact size match on the plain `pakNN_dir.vpk`), else the lowest
+///   free slot. That keeps "Auto" replacing YOUR OWN pak on recompiles instead
+///   of stacking new slots, without ever clobbering a slot another mod took.
 /// - An existing file in the chosen slot is backed up under
 ///   `addons_dir/.eim_backups/` before being overwritten (install aborts rather
 ///   than destroy a file it can't back up).
@@ -103,6 +128,7 @@ pub fn install(
     src_vpk: &Path,
     addons_dir: &Path,
     slot: Option<u32>,
+    reuse: Option<(u32, u64)>,
     patch_gameinfo: bool,
 ) -> Result<InstallResult, String> {
     if !src_vpk.exists() {
@@ -120,8 +146,21 @@ pub fn install(
             }
             n
         }
-        None => next_free_slot(&used)
-            .ok_or_else(|| format!("no free addon slots - all {MAX_SLOT} are in use"))?,
+        None => {
+            // Reuse the remembered slot only while the file there is still the
+            // exact one we wrote (checked NOW, not against a stale UI scan).
+            let reused = reuse.filter(|(rs, rb)| {
+                (1..=MAX_SLOT).contains(rs)
+                    && std::fs::metadata(addons_dir.join(format!("pak{rs:02}_dir.vpk")))
+                        .map(|m| m.len() == *rb)
+                        .unwrap_or(false)
+            });
+            match reused {
+                Some((rs, _)) => rs,
+                None => next_free_slot(&used)
+                    .ok_or_else(|| format!("no free addon slots - all {MAX_SLOT} are in use"))?,
+            }
+        }
     };
 
     let target = addons_dir.join(format!("pak{slot:02}_dir.vpk"));
@@ -139,7 +178,8 @@ pub fn install(
         (false, None)
     };
 
-    std::fs::copy(src_vpk, &target).map_err(|e| format!("copying vpk into addons: {e}"))?;
+    let bytes =
+        std::fs::copy(src_vpk, &target).map_err(|e| format!("copying vpk into addons: {e}"))?;
 
     let (gameinfo_patched, gameinfo_note) = if patch_gameinfo {
         match ensure_addons_searchpath(addons_dir) {
@@ -158,6 +198,7 @@ pub fn install(
         backup,
         gameinfo_patched,
         gameinfo_note,
+        bytes,
     })
 }
 
@@ -253,6 +294,40 @@ mod tests {
         assert_eq!(next_free_slot(&[1, 2, 4]), Some(3));
         assert_eq!(next_free_slot(&[]), Some(1));
         assert_eq!(next_free_slot(&(1..=MAX_SLOT).collect::<Vec<_>>()), None);
+    }
+
+    #[test]
+    fn auto_install_reuses_own_slot_by_size_only() {
+        let dir = std::env::temp_dir().join(format!("eim_reuse_test_{}", timestamp()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src1 = dir.join("build1.vpk");
+        let src2 = dir.join("build2.vpk");
+        std::fs::write(&src1, b"12345").unwrap(); // 5 bytes
+        std::fs::write(&src2, b"1234567").unwrap(); // 7 bytes
+
+        // First auto install: next free = slot 1.
+        let r1 = install(&src1, &dir, None, None, false).expect("install 1");
+        assert_eq!((r1.slot, r1.bytes, r1.replaced), (1, 5, false));
+
+        // Recompile + auto install with the remembered (slot, bytes): the slot
+        // still holds our 5-byte file, so it's REPLACED, not stacked.
+        let r2 = install(&src2, &dir, None, Some((1, 5)), false).expect("install 2");
+        assert_eq!((r2.slot, r2.bytes, r2.replaced), (1, 7, true));
+
+        // Stale memory (file there is 7 bytes now, we remember 5 = not ours
+        // anymore): auto falls back to the next free slot instead of clobbering.
+        let r3 = install(&src1, &dir, None, Some((1, 5)), false).expect("install 3");
+        assert_eq!((r3.slot, r3.replaced), (2, false));
+
+        // Remembered slot's file deleted: fine, it's free again anyway.
+        std::fs::remove_file(dir.join("pak02_dir.vpk")).unwrap();
+        let r4 = install(&src1, &dir, None, Some((2, 5)), false).expect("install 4");
+        assert_eq!((r4.slot, r4.replaced), (2, false));
+
+        // The scan reports plain-file sizes for the ownership hint.
+        let scan = scan_slots(&dir);
+        assert!(scan.files.iter().any(|f| f.slot == 1 && f.bytes == 7), "{:?}", scan.files);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

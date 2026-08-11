@@ -871,6 +871,9 @@ export interface SlotScan {
   /** Lowest free slot, or null if all are taken. */
   nextFree: number | null;
   maxSlot: number;
+  /** Size of the plain pakNN_dir.vpk in each used slot (the file our installs
+   *  write) - lets the UI tell "still my last install" from "slot taken". */
+  files: { slot: number; bytes: number }[];
 }
 
 /** Scan the Deadlock addons folder for used pakNN slots + the next free one. */
@@ -885,17 +888,29 @@ export interface InstallResult {
   backup: string | null;
   gameinfoPatched: boolean;
   gameinfoNote: string;
+  /** Installed file size - remember with the slot for the next auto install. */
+  bytes: number;
 }
 
-/** Install a compiled .vpk into Deadlock's addons folder. `slot = null` auto-picks
- *  the next free slot; a number overwrites that slot (backing up any occupant). */
+/** Install a compiled .vpk into Deadlock's addons folder. `slot = null` auto-picks:
+ *  the remembered `reuse` slot while its file still byte-matches our previous
+ *  install, else the next free slot. A number overwrites that exact slot
+ *  (backing up any occupant). */
 export function installToGame(
   srcVpk: string,
   addonsDir: string,
   slot: number | null,
   patchGameinfo: boolean,
+  reuse?: { slot: number; bytes: number } | null,
 ): Promise<InstallResult> {
-  return invoke("install_to_game", { srcVpk, addonsDir, slot, patchGameinfo });
+  return invoke("install_to_game", {
+    srcVpk,
+    addonsDir,
+    slot,
+    reuseSlot: reuse?.slot ?? null,
+    reuseBytes: reuse?.bytes ?? null,
+    patchGameinfo,
+  });
 }
 
 export interface HeroPortrait {
@@ -1745,11 +1760,16 @@ export function loadSettings<T = unknown>(): Promise<T | null> {
 }
 
 /** Compile/install preferences that travel WITH a profile - above all the
- *  pinned game slot, so each profile keeps replacing the pakNN it installed
- *  to before instead of stealing whatever slot the last profile used. */
+ *  install-slot memory, so each profile keeps replacing the pakNN it
+ *  installed to before instead of stealing whatever slot the last profile
+ *  used. */
 export interface ProfileCompilePrefs {
-  /** null = auto (next free slot, pinned after the first install). */
+  /** null = Auto (reuse this profile's last install, else next free slot);
+   *  a number = always that exact slot. */
   installSlot: number | null;
+  /** Auto mode's memory: where the last install landed and how big the file
+   *  was - reused only while the slot still holds that exact file. */
+  lastInstall: { slot: number; bytes: number } | null;
   installAfterCompile: boolean;
   outputMode: "folder" | "vpk";
   vpkName: string;

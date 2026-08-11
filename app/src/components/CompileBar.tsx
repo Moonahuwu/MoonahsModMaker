@@ -249,10 +249,12 @@ export function CompileBar({
         settings.addonsDir,
         settings.installSlot,
         settings.patchGameinfo,
+        // Auto mode replaces our own previous install (verified by size at
+        // install time) instead of stacking a new slot per compile - the
+        // MODE choice itself stays Auto, it never flips to a pinned slot.
+        settings.installSlot === null ? settings.lastInstall : null,
       );
-      // "Add" mode (null) pins the resolved slot so repeated installs reuse it
-      // instead of filling new slots; switch back to Auto to grab a new one.
-      if (settings.installSlot === null) update({ installSlot: res.slot });
+      update({ lastInstall: { slot: res.slot, bytes: res.bytes } });
       const extras = [
         res.replaced ? "replaced existing" : null,
         res.gameinfoPatched ? "gameinfo patched" : null,
@@ -402,6 +404,16 @@ export function CompileBar({
   }
 
   const auto = settings.installSlot === null;
+  // Auto's resolved target for the hint: the remembered slot while its file
+  // still matches our last install byte-for-byte, else the next free slot.
+  const autoReuse =
+    auto &&
+    settings.lastInstall &&
+    slots?.files?.some(
+      (f) => f.slot === settings.lastInstall?.slot && f.bytes === settings.lastInstall?.bytes,
+    )
+      ? settings.lastInstall.slot
+      : null;
   const fixedTaken =
     !auto && slots?.used.includes(settings.installSlot as number) === true;
   const busy = running || installing || launching || fixing;
@@ -821,7 +833,7 @@ export function CompileBar({
                   className={`px-3 py-1 font-medium transition ${
                     auto ? "bg-zinc-100 text-zinc-900" : "text-zinc-400 hover:text-zinc-200"
                   }`}
-                  title="Install into the lowest free addon slot"
+                  title="Install into the next free slot, then keep replacing that same install on later compiles - never overwrites another mod's slot"
                 >
                   Auto (next free)
                 </button>
@@ -865,11 +877,13 @@ export function CompileBar({
 
               <span className="text-zinc-500">
                 {auto
-                  ? slots?.nextFree
-                    ? `installs as ${pakName(slots.nextFree)} (${slots.used.length}/${slots.maxSlot} slots used)`
-                    : slots
-                      ? "no free slots - all 99 in use"
-                      : "set addons folder in Setup"
+                  ? autoReuse
+                    ? `installs as ${pakName(autoReuse)} (replacing your last install)`
+                    : slots?.nextFree
+                      ? `installs as ${pakName(slots.nextFree)} (${slots.used.length}/${slots.maxSlot} slots used)`
+                      : slots
+                        ? "no free slots - all 99 in use"
+                        : "set addons folder in Setup"
                   : `installs as ${pakName(settings.installSlot ?? 1)}`}
               </span>
 
@@ -1050,8 +1064,8 @@ export function CompileBar({
         <span className="truncate text-xs text-zinc-500">
           {songCount} song{songCount === 1 ? "" : "s"}
           {modCount > 0 ? ` · ${modCount} mod${modCount === 1 ? "" : "s"}` : ""}
-          {auto && slots?.nextFree
-            ? ` · installs to ${pakName(slots.nextFree)}`
+          {auto && (autoReuse ?? slots?.nextFree)
+            ? ` · installs to ${pakName(autoReuse ?? slots?.nextFree ?? 1)}`
             : !auto
               ? ` · installs to ${pakName(settings.installSlot ?? 1)}`
               : ""}

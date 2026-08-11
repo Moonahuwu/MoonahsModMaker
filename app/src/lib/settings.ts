@@ -48,10 +48,14 @@ export interface Settings {
   installAfterCompile: boolean;
   /** Patch gameinfo.gi's addons search path on install if it's missing. */
   patchGameinfo: boolean;
-  /** Install slot: null = auto-pick the next free slot; a number = overwrite that
-   *  pakNN_dir.vpk. Set to the resolved slot after an auto install so repeated
-   *  compile+installs reuse the same slot instead of filling new ones. */
+  /** Install slot: null = Auto (keep replacing this profile's own last install,
+   *  else pick the next free slot); a number = always overwrite that exact
+   *  pakNN_dir.vpk. The choice is durable - Auto never flips itself off. */
   installSlot: number | null;
+  /** Auto mode's memory: where the last install landed + the installed file's
+   *  size. The next auto install replaces that slot only while the file there
+   *  is still byte-for-byte ours - else it falls back to next-free. */
+  lastInstall: { slot: number; bytes: number } | null;
   /** Set once the first-run setup wizard has been completed or skipped. */
   firstRunDone: boolean;
   /** Show disabled / in-development ("experimental") heroes in the Heroes grid. */
@@ -213,6 +217,7 @@ export const DEFAULT_SETTINGS: Settings = {
   installAfterCompile: false,
   patchGameinfo: true,
   installSlot: null,
+  lastInstall: null,
   firstRunDone: false,
   showExperimentalHeroes: false,
   compareByDefault: false,
@@ -304,6 +309,7 @@ export function useSettings() {
 export function compilePrefsOf(s: Settings): ProfileCompilePrefs {
   return {
     installSlot: s.installSlot,
+    lastInstall: s.lastInstall,
     installAfterCompile: s.installAfterCompile,
     outputMode: s.outputMode,
     vpkName: s.vpkName,

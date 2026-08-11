@@ -1657,6 +1657,7 @@ export default function App() {
       importedMods: settings.importedMods,
       compilePrefs: {
         installSlot: settings.installSlot,
+        lastInstall: settings.lastInstall,
         installAfterCompile: settings.installAfterCompile,
         outputMode: settings.outputMode,
         vpkName: settings.vpkName,
@@ -1668,9 +1669,10 @@ export default function App() {
     project,
     settings.importedMods,
     settings.activeProfile,
-    // The mirrored compile prefs - an install pinning the slot must reach
-    // the profile file, or the pin dies on the next switch.
+    // The mirrored compile prefs - an install's slot memory must reach the
+    // profile file, or the memory dies on the next switch.
     settings.installSlot,
+    settings.lastInstall,
     settings.installAfterCompile,
     settings.outputMode,
     settings.vpkName,
@@ -1789,7 +1791,9 @@ export default function App() {
       // any (pre-feature saves) gets its slot reset to auto: the global slot
       // belongs to the profile being left, and installing over it would
       // replace that profile's mod in the game.
-      ...(blob?.compilePrefs ?? { installSlot: null }),
+      installSlot: null,
+      lastInstall: null,
+      ...(blob?.compilePrefs ?? {}),
     });
     void load(proj);
     void healProjectSources(proj);
@@ -1821,8 +1825,8 @@ export default function App() {
         project: def,
         importedMods: [],
         // Fresh profile, fresh slot: auto picks the next free one on its
-        // first install and pins it from then on.
-        compilePrefs: { ...compilePrefsOf(settingsRef.current), installSlot: null },
+        // first install and keeps replacing that install from then on.
+        compilePrefs: { ...compilePrefsOf(settingsRef.current), installSlot: null, lastInstall: null },
       };
       await saveProfile(name, blob);
       setProfiles(await listProfiles());
@@ -1846,7 +1850,7 @@ export default function App() {
         importedMods: settingsRef.current.importedMods,
         // The copy keeps every pref EXCEPT the pinned slot - two profiles
         // sharing a slot would overwrite each other's install.
-        compilePrefs: { ...compilePrefsOf(settingsRef.current), installSlot: null },
+        compilePrefs: { ...compilePrefsOf(settingsRef.current), installSlot: null, lastInstall: null },
       };
       await saveProfile(name, blob);
       setProfiles(await listProfiles());
@@ -1922,7 +1926,7 @@ export default function App() {
         project: rest.project,
         importedMods: rest.importedMods ?? [],
         // The author's pinned install slot is their machine's, not this one's.
-        compilePrefs: { ...(rest.compilePrefs ?? compilePrefsOf(settingsRef.current)), installSlot: null },
+        compilePrefs: { ...(rest.compilePrefs ?? compilePrefsOf(settingsRef.current)), installSlot: null, lastInstall: null },
       };
       await saveProfile(res.name, blob);
       setProfiles(await listProfiles());
