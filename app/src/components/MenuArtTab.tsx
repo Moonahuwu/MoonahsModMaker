@@ -151,11 +151,18 @@ export function MenuArtTab({
   // Power-user row: replace ANY panorama image by its internal path.
   const [customPath, setCustomPath] = useState("");
   const [customBusy, setCustomBusy] = useState(false);
+  /** Entries some other tab manages (its own remove/toggle lives there). */
+  const ownedElsewhere = (id: string) =>
+    id.startsWith("heroimg_") || (id.startsWith("icon_") && !id.startsWith("icon_import_"));
   const customMods = iconMods.filter(
     (m) =>
       m.id.startsWith("menuart_custom_") ||
       (m.id.startsWith("menuart_") &&
-        !GROUPS.some((g) => g.slots.some((s) => m.id === idOf(s.slug)))),
+        !GROUPS.some((g) => g.slots.some((s) => m.id === idOf(s.slug)))) ||
+      // Everything unclaimed lands here too - above all images adopted by a
+      // pack merge (icon_import_*). This list is the only place those can
+      // be seen and removed, or they'd ship invisibly forever.
+      (!m.id.startsWith("menuart_") && !ownedElsewhere(m.id)),
   );
 
   async function addCustom() {
@@ -304,11 +311,23 @@ export function MenuArtTab({
                 <span className="min-w-0 flex-1 truncate font-mono text-zinc-300" title={m.targetVtexc}>
                   {m.targetVtexc}
                 </span>
+                {m.id.startsWith("icon_import_") && (
+                  <span
+                    className="shrink-0 rounded bg-sky-400/10 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-sky-300/80"
+                    title="Adopted from a merged mod pack - remove it here if you don't want it in this profile"
+                  >
+                    imported
+                  </span>
+                )}
+                {m.enabled === false && (
+                  <span className="shrink-0 text-[10px] text-zinc-600">off</span>
+                )}
                 <span className="shrink-0 text-[10px] tabular-nums text-zinc-600">
                   {m.width}x{m.height}
                 </span>
                 <button
                   onClick={() => onChange(iconMods.filter((x) => x.id !== m.id))}
+                  title="Remove this image from the pack"
                   className="shrink-0 rounded px-1.5 text-red-400/80 transition hover:bg-red-500/10 hover:text-red-300"
                 >
                   ✕
