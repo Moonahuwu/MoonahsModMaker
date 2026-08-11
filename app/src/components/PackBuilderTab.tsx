@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { PackModule } from "../types";
@@ -93,19 +93,46 @@ function sortItems(items: PackItem[]): PackItem[] {
   });
 }
 
+/** Kinds a row can remove directly. Jumpscares/Gameplay are aggregates with
+ *  whole tabs behind them - they only link, never delete from here. */
+function removeHint(item: PackItem): string | null {
+  const kind = item.key.split(":")[0];
+  switch (kind) {
+    case "slot":
+      return "Clear this slot's songs and edits (the slot itself stays in its tab)";
+    case "mod":
+      return "Remove this bundled mod from the pack (the vpk file on disk stays)";
+    case "digimod":
+    case "gameplay":
+      return null;
+    default:
+      return "Remove this from the pack";
+  }
+}
+
 function ItemRow({
   item,
   moduleId,
   modules,
   onAssign,
+  onRemove,
 }: {
   item: PackItem;
   /** "" = Core. */
   moduleId: string;
   modules: PackModule[];
   onAssign: (key: string, moduleId: string) => void;
+  onRemove: (item: PackItem) => void;
 }) {
   const tint = KIND_TINT[item.kind] ?? "#a1a1aa";
+  // Two-step remove: first click arms, second click (within 4s) deletes.
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!armed) return;
+    const id = setTimeout(() => setArmed(false), 4000);
+    return () => clearTimeout(id);
+  }, [armed]);
+  const hint = removeHint(item);
   return (
     <div className="flex items-center gap-2 rounded-md px-2 py-1 text-xs hover:bg-zinc-900/70">
       <span
@@ -136,6 +163,35 @@ function ItemRow({
           </option>
         ))}
       </select>
+      {hint ? (
+        armed ? (
+          <button
+            onClick={() => {
+              setArmed(false);
+              onRemove(item);
+            }}
+            title={hint}
+            className="shrink-0 rounded border border-red-500/60 bg-red-500/15 px-1.5 py-0.5 text-[10px] font-medium text-red-300 transition hover:bg-red-500/25"
+          >
+            sure?
+          </button>
+        ) : (
+          <button
+            onClick={() => setArmed(true)}
+            title={hint}
+            className="shrink-0 rounded px-1.5 py-0.5 text-zinc-600 transition hover:bg-red-500/10 hover:text-red-300"
+          >
+            ✕
+          </button>
+        )
+      ) : (
+        <span
+          className="shrink-0 px-1.5 py-0.5 text-[10px] text-zinc-700"
+          title="Managed in its own tab (Jumpscares / Custom Server) - clear it there"
+        >
+          tab
+        </span>
+      )}
     </div>
   );
 }
@@ -225,12 +281,14 @@ export function PackBuilderTab({
   modules,
   conflicts,
   onChange,
+  onRemoveItem,
   onExportModule,
 }: {
   items: PackItem[];
   modules: PackModule[];
   conflicts: ModuleConflict[];
   onChange: (modules: PackModule[]) => void;
+  onRemoveItem: (item: PackItem) => void;
   onExportModule: (
     mod: PackModule,
     baseDir: string,
@@ -422,7 +480,7 @@ export function PackBuilderTab({
               </p>
             ) : (
               coreItems.map((i) => (
-                <ItemRow key={i.key} item={i} moduleId="" modules={modules} onAssign={assign} />
+                <ItemRow key={i.key} item={i} moduleId="" modules={modules} onAssign={assign} onRemove={onRemoveItem} />
               ))
             )}
           </ModuleCard>
@@ -446,7 +504,7 @@ export function PackBuilderTab({
                   </p>
                 ) : (
                   mine.map((i) => (
-                    <ItemRow key={i.key} item={i} moduleId={m.id} modules={modules} onAssign={assign} />
+                    <ItemRow key={i.key} item={i} moduleId={m.id} modules={modules} onAssign={assign} onRemove={onRemoveItem} />
                   ))
                 )}
                 {stale > 0 && (

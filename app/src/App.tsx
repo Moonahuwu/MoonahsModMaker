@@ -1385,6 +1385,89 @@ export default function App() {
     return out;
   }, [project, settings.importedMods]);
 
+  /** Pack Builder's direct remove: strip one piece out of the pack from the
+   *  one place that lists everything. Slots are structural, so their remove
+   *  CLEARS the slot's songs/edits (the slot stays); bundled mods drop from
+   *  this profile's list only (the vpk file and its credits/excludes stay,
+   *  same as the combiner tab's remove); override entries delete outright.
+   *  Jumpscares/Gameplay are aggregates managed in their own tabs. */
+  function removePackItem(item: PackItem) {
+    const sep = item.key.indexOf(":");
+    const kind = sep < 0 ? item.key : item.key.slice(0, sep);
+    const id = sep < 0 ? "" : item.key.slice(sep + 1);
+    if (kind === "mod") {
+      updateSettings({
+        importedMods: settingsRef.current.importedMods.filter(
+          (p) => bundledModKey(p) !== item.key,
+        ),
+      });
+    }
+    setProject((prev) => {
+      if (!prev) return prev;
+      const next = { ...prev };
+      switch (kind) {
+        case "slot":
+          next.events = prev.events.map((e) =>
+            e.id === id
+              ? {
+                  ...e,
+                  songs: [],
+                  adopted: [],
+                  excludedEntries: [],
+                  removedEntries: [],
+                  attributeOverrides: [],
+                }
+              : e,
+          );
+          break;
+        case "icon":
+          next.iconMods = (prev.iconMods ?? []).filter((m) => m.id !== id);
+          break;
+        case "sound":
+          next.soundOverrides = (prev.soundOverrides ?? []).filter((o) => o.id !== id);
+          break;
+        case "effect":
+          next.effectOverrides = (prev.effectOverrides ?? []).filter((o) => o.id !== id);
+          break;
+        case "poster":
+          next.posterOverrides = (prev.posterOverrides ?? []).filter((o) => o.id !== id);
+          break;
+        case "herotex":
+          next.heroTextures = (prev.heroTextures ?? []).filter((t) => t.id !== id);
+          break;
+        case "ui":
+          next.uiOverrides = (prev.uiOverrides ?? []).filter((u) => u.targetRel !== id);
+          break;
+        case "modtex":
+          next.modTextureOverrides = (prev.modTextureOverrides ?? []).filter(
+            (o) => o.id !== id,
+          );
+          break;
+        case "model":
+          next.modelOverrides = (prev.modelOverrides ?? []).filter((o) => o.id !== id);
+          break;
+        case "mod":
+          break; // settings-side removal above; still clean module layouts
+        default:
+          return prev;
+      }
+      // Ghost keys must not linger in module layouts.
+      if (prev.modules?.some((m) => m.items.includes(item.key)))
+        next.modules = (prev.modules ?? []).map((m) =>
+          m.items.includes(item.key)
+            ? { ...m, items: m.items.filter((k) => k !== item.key) }
+            : m,
+        );
+      return next;
+    });
+    push(
+      "success",
+      kind === "slot"
+        ? `${item.label}: slot cleared (the slot itself stays)`
+        : `Removed from the pack: ${item.label}`,
+    );
+  }
+
   // Pack Builder conflict check: two modules that ship the SAME output file
   // can't be installed together - separate addon paks both carry the file and
   // the lower slot silently wins (the jumpscare-gone-quiet bug). Warn early,
@@ -5864,6 +5947,7 @@ export default function App() {
               setProject((prev) => (prev ? { ...prev, modules: mods } : prev))
             }
             onExportModule={exportModule}
+            onRemoveItem={removePackItem}
           />
         ) : activeTab === ITEMS ? (
           <ItemsTab
