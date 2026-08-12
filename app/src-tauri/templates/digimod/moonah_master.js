@@ -193,17 +193,23 @@ function anitaCallback(id, value) {
 
 (function () {
     var menuConfig = {
-        title: "MoonahMasterUI (Mod Maker)",
+        title: CONFIG.TITLE || "MoonahMasterUI (Mod Maker)",
         description: "Jumpscare & Death Manager - configured in Moonahs Mod Maker",
         elements: [
             { type: "toggle", label: "Enable Mod", id: "IS_ENABLED", defaultValue: CONFIG.IS_ENABLED },
-            { type: "stepper", label: "RNG Interval", id: "RNG_INTERVAL", min: 5, max: 120, step: 1, defaultValue: CONFIG.RNG_INTERVAL },
-            { type: "stepper", label: "Scare Chance %", id: "SCARE_CHANCE", min: 1, max: 100, step: 1, defaultValue: CONFIG.SCARE_CHANCE },
-            { type: "stepper", label: "Death Chance %", id: "DEATH_CHANCE", min: 0, max: 100, step: 1, defaultValue: CONFIG.DEATH_CHANCE },
-            { type: "button", label: "Test Random Scare", id: "TEST_SCARE" },
-            { type: "button", label: "Test Random Death", id: "TEST_DEATH" },
         ],
     };
+    // Controls only for what this build actually ships: a jumpscare-only
+    // mod shows no death rows in the menu, and vice versa.
+    if (LIBRARY.SCARES.length > 0) {
+        menuConfig.elements.push({ type: "stepper", label: "RNG Interval", id: "RNG_INTERVAL", min: 5, max: 120, step: 1, defaultValue: CONFIG.RNG_INTERVAL });
+        menuConfig.elements.push({ type: "stepper", label: "Scare Chance %", id: "SCARE_CHANCE", min: 1, max: 100, step: 1, defaultValue: CONFIG.SCARE_CHANCE });
+        menuConfig.elements.push({ type: "button", label: "Test Random Scare", id: "TEST_SCARE" });
+    }
+    if (LIBRARY.DEATHS.length > 0) {
+        menuConfig.elements.push({ type: "stepper", label: "Death Chance %", id: "DEATH_CHANCE", min: 0, max: 100, step: 1, defaultValue: CONFIG.DEATH_CHANCE });
+        menuConfig.elements.push({ type: "button", label: "Test Random Death", id: "TEST_DEATH" });
+    }
     var i;
     for (i = 0; i < LIBRARY.SCARES.length; i++) {
         menuConfig.elements.push({ type: "button", label: "Test: " + LIBRARY.SCARES[i].name, id: "TEST_LIB_SCARES_" + i });

@@ -229,6 +229,8 @@ export function listUiMods(addonsDir: string): Promise<UiModVpk[]> {
 /** An existing MoonahMasterUI/DigiMaster pak parsed back into an editable config: media is
  *  extracted to real files in app-data, sounds decoded to playable audio. */
 export interface DigimodImport {
+  /** Custom menu title recovered from the pak (null = the stock name). */
+  title?: string | null;
   rngInterval: number;
   scareChance: number;
   deathChance: number;

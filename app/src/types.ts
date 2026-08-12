@@ -351,6 +351,8 @@ export interface DigiSound {
 
 /** Jumpscares/Deaths tab config — generates the whole HUD mod on compile. */
 export interface DigimodConfig {
+  /** In-game F8 menu title. Empty = the stock "MoonahMasterUI (Mod Maker)". */
+  title?: string;
   rngInterval: number;
   scareChance: number;
   deathChance: number;

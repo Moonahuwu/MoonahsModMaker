@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { checkPaths } from "../lib/api";
-import { DEATHS_RELEASED } from "../lib/settings";
 import type { Settings } from "../lib/settings";
 
 /** The tool's GameBanana page — the credits chip links here. */
@@ -213,7 +212,7 @@ export function SetupSection({
             <Toggle
               checked={settings.enableJumpscares}
               onChange={(v) => update({ enableJumpscares: v })}
-              title={DEATHS_RELEASED ? "Jumpscares / Deaths (MoonahMasterUI)" : "Jumpscares (MoonahMasterUI)"}
+              title="Jumpscares / Deaths (MoonahMasterUI)"
               desc="Show the Jumpscares tab without the mod installed: start from a blank template, add your own videos and sounds, and compiling generates the whole mod for you. The tab always shows when the mod is detected in your addons."
             />
           </div>

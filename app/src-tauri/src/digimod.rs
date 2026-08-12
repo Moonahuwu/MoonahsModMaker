@@ -82,8 +82,11 @@ fn file_identity(p: &str) -> String {
 /// Fingerprint of the whole digimod config + every source file's identity.
 fn digimod_fingerprint(dm: &DigimodCompile) -> String {
     let mut key = format!(
-        "v2|{}|{}|{}\n",
-        dm.rng_interval, dm.scare_chance, dm.death_chance
+        "v3|{}|{}|{}|{}\n",
+        dm.title.as_deref().unwrap_or(""),
+        dm.rng_interval,
+        dm.scare_chance,
+        dm.death_chance
     );
     for e in dm.scares.iter().chain(dm.deaths.iter()) {
         key.push_str(&file_identity(&e.source_media));
@@ -218,10 +221,32 @@ fn gen_soundevents(dm: &DigimodCompile) -> String {
     out
 }
 
+/// The stock F8 menu title (also the fallback in the JS template).
+const STOCK_TITLE: &str = "MoonahMasterUI (Mod Maker)";
+
+/// The user's menu title, made safe for a JS string literal AND for the
+/// text-scan importer: quotes/backslashes are swapped out, not escaped
+/// (an escaped quote would truncate `str_after` on re-import).
+fn menu_title(dm: &DigimodCompile) -> String {
+    let t = dm.title.as_deref().map(str::trim).unwrap_or("");
+    if t.is_empty() {
+        return STOCK_TITLE.into();
+    }
+    t.chars()
+        .map(|c| match c {
+            '"' => '\'',
+            '\\' => '/',
+            c if c.is_control() => ' ',
+            c => c,
+        })
+        .collect()
+}
+
 /// Generate moonah_master.js from the template + this config.
 fn gen_js(dm: &DigimodCompile) -> String {
     let config = format!(
-        "{{ IS_ENABLED: true, RNG_INTERVAL: {}, SCARE_CHANCE: {}, DEATH_CHANCE: {} }}",
+        "{{ IS_ENABLED: true, TITLE: \"{}\", RNG_INTERVAL: {}, SCARE_CHANCE: {}, DEATH_CHANCE: {} }}",
+        menu_title(dm),
         dm.rng_interval.clamp(5, 600),
         dm.scare_chance.min(100),
         dm.death_chance.min(100),
@@ -581,6 +606,8 @@ pub fn compile_digimod(
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DigimodImport {
+    /// Custom menu title recovered from the pak (None = the stock name).
+    pub title: Option<String>,
     pub rng_interval: u32,
     pub scare_chance: u32,
     pub death_chance: u32,
@@ -863,7 +890,15 @@ pub fn import_from_vpk(helper: &str, vpk: &str, dest_dir: &Path) -> Result<Digim
     if scares.is_empty() && deaths.is_empty() {
         return Err("no media entries found in this pak's MoonahMasterUI library".into());
     }
+    // Title: CONFIG.TITLE in current paks; older paks hardcode it in
+    // menuConfig (`title: "…"`). The stock name maps back to None so a
+    // plain import doesn't read as a custom title.
+    let title = str_after(&js, "TITLE:")
+        .or_else(|| str_after(&js, "title:"))
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty() && t != STOCK_TITLE);
     Ok(DigimodImport {
+        title,
         rng_interval: num_after(&js, "RNG_INTERVAL").unwrap_or(60.0) as u32,
         scare_chance: num_after(&js, "SCARE_CHANCE").unwrap_or(3.0) as u32,
         death_chance: num_after(&js, "DEATH_CHANCE").unwrap_or(100.0) as u32,
@@ -967,6 +1002,40 @@ var LIBRARY = {
         // The pak reuses events across entries — the library must be deduped
         // (fewer sounds than entries proves sharing survived the import).
         assert!(imp.sounds.len() < imp.scares.len() + imp.deaths.len());
+    }
+
+    #[test]
+    fn menu_title_custom_stock_and_sanitized() {
+        let dm = |t: Option<&str>| crate::compile::DigimodCompile {
+            title: t.map(String::from),
+            rng_interval: 60,
+            scare_chance: 3,
+            death_chance: 100,
+            scares: vec![],
+            deaths: vec![],
+            sounds: vec![],
+            merge_vpks: vec![],
+        };
+        assert_eq!(super::menu_title(&dm(None)), super::STOCK_TITLE);
+        assert_eq!(super::menu_title(&dm(Some("  "))), super::STOCK_TITLE);
+        assert_eq!(super::menu_title(&dm(Some("Furry Scares"))), "Furry Scares");
+        // Quotes/backslashes are swapped, not escaped — an escaped quote
+        // would truncate the text-scan importer on re-import.
+        assert_eq!(super::menu_title(&dm(Some("say \"boo\"\\now"))), "say 'boo'/now");
+    }
+
+    #[test]
+    fn title_recovers_from_config_and_legacy_menuconfig() {
+        // Current paks carry it in CONFIG…
+        let js = "var CONFIG = { IS_ENABLED: true, TITLE: \"Furry Scares\", RNG_INTERVAL: 60 };";
+        assert_eq!(str_after(js, "TITLE:").as_deref(), Some("Furry Scares"));
+        // …legacy paks only hardcode menuConfig's title (lowercase key).
+        let legacy = "var menuConfig = {\n    title: \"MoonahMasterUI (Mod Maker)\",\n";
+        assert_eq!(str_after(legacy, "TITLE:"), None);
+        assert_eq!(
+            str_after(legacy, "title:").as_deref(),
+            Some("MoonahMasterUI (Mod Maker)")
+        );
     }
 
     #[test]

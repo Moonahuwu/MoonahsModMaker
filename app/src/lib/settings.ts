@@ -158,14 +158,6 @@ export interface Settings {
   >;
 }
 
-/** Release gate: the Deaths half of the Jumpscares feature is held back from
- *  the public for now (the death-detection poller is patch-fragile). DEV-only
- *  on purpose: the dev app (npm run tauri dev) shows and compiles Deaths for
- *  local testing, while every release build hides them - it can't ship by
- *  accident. Saved death entries ride along untouched either way. Replace
- *  with `true` to release Deaths to everyone. */
-export const DEATHS_RELEASED = import.meta.env.DEV;
-
 const REPO = "C:/Users/ethob/Desktop/DeadlockModding/EasyIntroModder";
 const CSDK = "C:/Users/ethob/Desktop/DeadlockModding/Reduced_CSDK_12";
 
@@ -726,15 +718,12 @@ export function buildCompileConfig(
               e.soundId && sounds.some((s) => s.id === e.soundId) ? e.soundId : null,
           });
           return {
+            title: (digimod.title ?? "").trim() || null,
             rngInterval: digimod.rngInterval,
             scareChance: digimod.scareChance,
             deathChance: digimod.deathChance,
             scares: digimod.scares.filter((e) => e.sourceMedia).map(entry),
-            // Deaths are held back from the build while unreleased - the
-            // entries stay saved in the project, they just don't compile.
-            deaths: DEATHS_RELEASED
-              ? digimod.deaths.filter((e) => e.sourceMedia).map(entry)
-              : [],
+            deaths: digimod.deaths.filter((e) => e.sourceMedia).map(entry),
             sounds: sounds.map((s) => ({
               id: s.id,
               sourceAudio: s.sourceAudio,

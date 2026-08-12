@@ -392,6 +392,10 @@ impl EffectCompile {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DigimodCompile {
+    /// Custom in-game F8 menu title; None/empty = the stock
+    /// "MoonahMasterUI (Mod Maker)".
+    #[serde(default)]
+    pub title: Option<String>,
     pub rng_interval: u32,
     pub scare_chance: u32,
     pub death_chance: u32,

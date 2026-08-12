@@ -104,7 +104,7 @@ import { getCopiedSound } from "./lib/soundClipboard";
 import { CustomServer } from "./components/CustomServer";
 import { ProfileSwitcher } from "./components/ProfileSwitcher";
 import { useToast } from "./components/Toaster";
-import { useSettings, slotSoundFolder, sheetSiblingsKey, compilePrefsOf, buildCompileConfig, buildCreditsText, directReplaceTarget, slotNeedsEventsMerge, worldOverrideCategory, DEATHS_RELEASED, FFMPEG_BUNDLE_URL, TOOLS_BUNDLE_URL, type Settings } from "./lib/settings";
+import { useSettings, slotSoundFolder, sheetSiblingsKey, compilePrefsOf, buildCompileConfig, buildCreditsText, directReplaceTarget, slotNeedsEventsMerge, worldOverrideCategory, FFMPEG_BUNDLE_URL, TOOLS_BUNDLE_URL, type Settings } from "./lib/settings";
 import { songHash, overrideHash, effectHash, posterHash, heroTexHash, modTexHash } from "./lib/songHash";
 import type { AttributeOverride, EffectOverride, EventProject, EventView, HeroTextureOverride, LibraryItem, PackModule, PosterOverride, Project, Song, SongLayer, SoundOverride } from "./types";
 import { GameBananaBrowser } from "./components/GameBananaBrowser";
@@ -5837,9 +5837,7 @@ export default function App() {
                         : activeTab === MENU_ART
                           ? "Replace the game's screen art - the play-mode cards, their hero portraits, or any menu image by path."
                         : activeTab === JUMPSCARES
-                          ? DEATHS_RELEASED
-                            ? "Random jumpscares while you play + videos when you die - your MoonahMasterUI mod, configured here and rebuilt on compile."
-                            : "Random jumpscares while you play - your MoonahMasterUI mod, configured here and rebuilt on compile."
+                          ? "Random jumpscares while you play + videos when you die - your MoonahMasterUI mod, configured here and rebuilt on compile."
                           : activeTab === UIMASTER
                             ? "Edit the game's UI files directly - decompiled to source, compiled back into your mod. Very experimental."
                             : activeTab === PACK_BUILDER
