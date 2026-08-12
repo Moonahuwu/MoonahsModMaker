@@ -121,6 +121,8 @@ export interface CompileConfig {
   outputDir: string;
   outputMode: string;
   vpkName: string;
+  /** Also write a ready-to-share .zip next to each packed variant vpk. */
+  zipOutput?: boolean;
   writeEncodingTxt: boolean;
   skipCompile: boolean;
   importedMods: string[];

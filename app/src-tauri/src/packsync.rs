@@ -347,6 +347,28 @@ pub struct ReleasePackage {
     pub description_path: String,
 }
 
+/// Zip plain files (stored under their own file names, deflated) into
+/// `zip_path`. Returns the finished zip's size in bytes. Used by the
+/// compile pipeline's "zip the .vpk too" option.
+pub(crate) fn zip_paths(zip_path: &Path, files: &[&Path]) -> Result<u64, String> {
+    let file =
+        std::fs::File::create(zip_path).map_err(|e| format!("{}: {e}", zip_path.display()))?;
+    let mut z = zip::ZipWriter::new(file);
+    let opts = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    for p in files {
+        let name = p
+            .file_name()
+            .map(|f| f.to_string_lossy().into_owned())
+            .ok_or_else(|| format!("no file name: {}", p.display()))?;
+        z.start_file(&name, opts).map_err(|e| e.to_string())?;
+        let mut src = std::fs::File::open(p).map_err(|e| format!("{}: {e}", p.display()))?;
+        std::io::copy(&mut src, &mut z).map_err(|e| e.to_string())?;
+    }
+    z.finish().map_err(|e| e.to_string())?;
+    Ok(std::fs::metadata(zip_path).map(|m| m.len()).unwrap_or(0))
+}
+
 pub fn package_release(
     vpk: &Path,
     out_dir: &Path,
@@ -393,6 +415,24 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn zip_paths_zips_named_files() {
+        let root = temp_root("zip");
+        let vpk = root.join("pak01_dir.vpk");
+        std::fs::write(&vpk, b"vpk-bytes").unwrap();
+        let credits = root.join("credits.txt");
+        std::fs::write(&credits, "credit line").unwrap();
+        let zip_path = root.join("pak01_dir.zip");
+        let bytes = zip_paths(&zip_path, &[vpk.as_path(), credits.as_path()]).unwrap();
+        assert!(bytes > 0);
+        let mut ar = zip::ZipArchive::new(std::fs::File::open(&zip_path).unwrap()).unwrap();
+        let names: Vec<String> = (0..ar.len())
+            .map(|i| ar.by_index(i).unwrap().name().to_string())
+            .collect();
+        assert_eq!(names, vec!["pak01_dir.vpk", "credits.txt"]);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

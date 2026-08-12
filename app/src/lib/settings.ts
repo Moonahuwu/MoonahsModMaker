@@ -18,6 +18,9 @@ export interface Settings {
   outputDir: string;
   outputMode: "folder" | "vpk";
   vpkName: string;
+  /** Also write a ready-to-share .zip next to the compiled .vpk (combined
+   *  zips carry credits.txt too). Off removes stale zips to stay in sync. */
+  zipAfterCompile: boolean;
   /** Other mods' pak01_dir.vpk paths to combine in on compile. */
   importedMods: string[];
   /** Per-mod files DESELECTED in the import review (mod vpk path → raw internal
@@ -197,6 +200,7 @@ export const DEFAULT_SETTINGS: Settings = {
   outputDir: IS_DEV ? `${REPO}/output` : "",
   outputMode: "vpk",
   vpkName: "pak01_dir.vpk",
+  zipAfterCompile: false,
   importedMods: [],
   importedModExcludes: {},
   importedModCredits: {},

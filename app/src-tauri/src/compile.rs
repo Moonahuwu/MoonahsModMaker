@@ -130,6 +130,11 @@ pub struct CompileConfig {
     pub output_mode: String,
     #[serde(default = "default_vpk_name")]
     pub vpk_name: String,
+    /// Also write a ready-to-share `<vpk stem>.zip` next to each packed
+    /// variant vpk (combined zips carry credits.txt too). Off = stale zips
+    /// are removed so an old artifact can't be uploaded by mistake.
+    #[serde(default)]
+    pub zip_output: bool,
     /// Write a `sounds/encoding.txt` (mp3 compress) into the content tree so the
     /// compiled audio is compressed like the community templates.
     #[serde(default = "default_true")]
@@ -3211,6 +3216,9 @@ fn estimate_steps(cfg: &CompileConfig) -> usize {
     if !cfg.imported_mods.is_empty() {
         est += 3; // the combined/ variant stages + packs too
     }
+    if cfg.zip_output && cfg.output_mode == "vpk" && !cfg.export_only {
+        est += if cfg.imported_mods.is_empty() { 1 } else { 2 }; // one zip per variant
+    }
     if !cfg.ui_overrides.is_empty() {
         est += 2; // write batch + compile batch
     }
@@ -4453,6 +4461,58 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
         }
     }
 
+    // Optional share zip: `<vpk stem>.zip` next to each packed variant vpk
+    // (combined zips carry credits.txt too, so attribution ships with the
+    // pack). Freshness is checked HERE, not via the build stamp, so a
+    // hand-deleted zip comes back even on an otherwise-skipped compile.
+    // With the option off, stale zips are removed - same keep-in-sync rule
+    // as credits.txt, so an old artifact can't be uploaded by mistake.
+    // Never on exports: the user-chosen folder isn't ours to clean.
+    if cfg.output_mode == "vpk" && !cfg.export_only {
+        for v in &variants {
+            let vpk_path = output_dir.join(v.name).join(&cfg.vpk_name);
+            let zip_path = vpk_path.with_extension("zip");
+            if !cfg.zip_output {
+                let _ = std::fs::remove_file(&zip_path);
+                continue;
+            }
+            if !vpk_path.exists() {
+                continue;
+            }
+            let zip_current = match (
+                std::fs::metadata(&zip_path).and_then(|m| m.modified()),
+                std::fs::metadata(&vpk_path).and_then(|m| m.modified()),
+            ) {
+                (Ok(z), Ok(p)) => z >= p,
+                _ => false,
+            };
+            if zip_current {
+                report.ok_step(format!("[{}] zip", v.name), "unchanged - skipped");
+                continue;
+            }
+            let credits = output_dir.join(v.name).join("credits.txt");
+            let mut files: Vec<&Path> = vec![&vpk_path];
+            if v.with_imported && credits.exists() {
+                files.push(&credits);
+            }
+            match crate::packsync::zip_paths(&zip_path, &files) {
+                Ok(bytes) => report.ok_step(
+                    format!("[{}] zip", v.name),
+                    format!(
+                        "{} ({:.1} MB){}",
+                        zip_path
+                            .file_name()
+                            .map(|f| f.to_string_lossy().into_owned())
+                            .unwrap_or_default(),
+                        bytes as f64 / 1_048_576.0,
+                        if files.len() > 1 { " - includes credits.txt" } else { "" },
+                    ),
+                ),
+                Err(e) => report.soft_fail(format!("[{}] zip", v.name), e),
+            }
+        }
+    }
+
     // Report the output dir (contains mine/ and, if combined, combined/).
     report.output_path = Some(output_dir.to_string_lossy().into_owned());
 
@@ -5620,6 +5680,7 @@ mod tests {
             output_dir: std::env::temp_dir().join("eim_ui_e2e_out").to_string_lossy().into_owned(),
             output_mode: "vpk".into(),
             vpk_name: "pak01_dir.vpk".into(),
+            zip_output: false,
             write_encoding_txt: false,
             skip_compile: false,
             imported_mods: vec![],
@@ -5687,6 +5748,7 @@ mod tests {
             output_dir: out.to_string_lossy().into_owned(),
             output_mode: "vpk".into(),
             vpk_name: "pak01_dir.vpk".into(),
+            zip_output: false,
             write_encoding_txt: true,
             skip_compile: false,
             imported_mods: vec![],
@@ -5937,6 +5999,7 @@ mod tests {
             output_dir: out.to_string_lossy().into_owned(),
             output_mode: "vpk".into(),
             vpk_name: "pak01_dir.vpk".into(),
+            zip_output: false,
             write_encoding_txt: true,
             skip_compile: false,
             imported_mods: vec![],
@@ -6063,6 +6126,7 @@ mod tests {
             output_dir: out.to_string_lossy().into_owned(),
             output_mode: "vpk".into(),
             vpk_name: "pak01_dir.vpk".into(),
+            zip_output: false,
             write_encoding_txt: true,
             skip_compile: false,
             imported_mods: vec![],
@@ -6170,6 +6234,7 @@ mod tests {
             output_dir: out.to_string_lossy().into_owned(),
             output_mode: "vpk".into(),
             vpk_name: "pak01_dir.vpk".into(),
+            zip_output: false,
             write_encoding_txt: true,
             skip_compile: false,
             imported_mods: vec![],

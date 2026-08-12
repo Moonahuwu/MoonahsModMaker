@@ -322,7 +322,11 @@ export function CompileBar({
             return cat === "other" || !ex.has(`__cat:${cat}`);
           })
         : [];
-      const config = buildCompileConfig(s, evts, false, iconMods, soundOverrides, effectOverrides, gameplay, global, world, posterOverrides, digimod, uiOverrides, pools, heroTextures, modTextureOverrides, modelOverrides);
+      const config = {
+        ...buildCompileConfig(s, evts, false, iconMods, soundOverrides, effectOverrides, gameplay, global, world, posterOverrides, digimod, uiOverrides, pools, heroTextures, modTextureOverrides, modelOverrides),
+        // Main compiles only - exports and Pack Builder builds zip themselves.
+        zipOutput: s.outputMode === "vpk" && s.zipAfterCompile,
+      };
       const r = await compileProject(config);
       setReport(r);
       if (r.ok) {
@@ -396,6 +400,21 @@ export function CompileBar({
     if (report?.outputPath) {
       try {
         await revealItemInDir(report.outputPath);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  /** Reveal the freshly-built artifact in Explorer: the .vpk itself when
+   *  packing (selected in its folder), else the loose build folder. */
+  async function openBuildLocation() {
+    const fallback = success?.path ?? settings.outputDir;
+    try {
+      await revealItemInDir(settings.outputMode === "vpk" ? installSrcVpk(settings) : fallback);
+    } catch {
+      try {
+        await revealItemInDir(fallback);
       } catch {
         /* ignore */
       }
@@ -964,6 +983,20 @@ export function CompileBar({
                   className="w-36 rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 text-zinc-200 outline-none focus:border-violet-500/70"
                 />
               )}
+              {settings.outputMode === "vpk" && (
+                <label
+                  className="inline-flex items-center gap-1.5 text-zinc-400"
+                  title="Also write a ready-to-share .zip next to the compiled .vpk (a combined build's zip carries credits.txt too). Unchecking removes the zip on the next compile."
+                >
+                  <input
+                    type="checkbox"
+                    checked={settings.zipAfterCompile}
+                    onChange={(e) => update({ zipAfterCompile: e.target.checked })}
+                    className="accent-emerald-500"
+                  />
+                  zip the .vpk too
+                </label>
+              )}
               <span className="truncate text-zinc-600">→ {settings.outputDir}</span>
               <button
                 onClick={() => void fixForNewPatch()}
@@ -1003,6 +1036,17 @@ export function CompileBar({
               </span>
             )}
             <span className="ml-auto flex gap-2">
+              <button
+                onClick={() => void openBuildLocation()}
+                title={
+                  settings.outputMode === "vpk"
+                    ? "Show the compiled .vpk in Explorer"
+                    : "Show the loose build folder in Explorer"
+                }
+                className="rounded-md border border-zinc-600 px-3 py-1 text-xs font-semibold text-zinc-300 transition hover:border-zinc-400 hover:text-white"
+              >
+                Open folder
+              </button>
               {!settings.installAfterCompile && (
                 <button
                   onClick={() => void install()}
