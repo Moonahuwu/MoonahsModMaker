@@ -38,7 +38,7 @@ const IMAGE_FILTERS = [{ name: "Texture image", extensions: ["png", "jpg", "jpeg
 const KIT_RULES = [
   "Import the kit's DMX meshes with SourceIO, or model over them",
   "Rig your mesh to the hero's armature bones (names must match)",
-  "Vertex groups not named after a bone must be deleted",
+  "Extra bones (tails, physics chains) are fine - they ride with their parent bone, they just won't animate",
   "Avoid .001-style name suffixes and spaces in material names",
   "Select all, then Object > Apply > All Transforms before export",
   "Export as FBX (or DMX Binary 9 / Model22 via Blender Source 2 Tools)",
@@ -443,6 +443,41 @@ export function ModelSwapTab({
       push("error", `Auto-rig failed: ${e}`);
     } finally {
       setRigging(false);
+    }
+  }
+
+  const [fixing, setFixing] = useState(false);
+  /** File types Blender can re-import for the cleanup pass (DMX can't). */
+  const FIXABLE = /\.(fbx|obj|glb|gltf)$/i;
+
+  /** Rig-preserving cleanup via headless Blender: bake un-applied transforms,
+   *  strip vertex colors, fix .001 names, bind weightless meshes to their
+   *  nearest bone. The user's bones, weights and meshes are all KEPT. */
+  async function autoFix() {
+    if (!ws || !target || meshFiles.length !== 1) return;
+    setFixing(true);
+    try {
+      // The glb is required by the command's signature; clean mode ignores it
+      // (cached after the first preview/download, so usually instant).
+      const glb = await modelGltf(settings.vpkHelperPath, settings.deadlockPak, wsTarget);
+      const cacheDir = await join(await appDataDir(), "model_cache");
+      const out = await join(cacheDir, `${target.key}_fixed.fbx`);
+      const res = await modelAutorig({
+        blenderPath: settings.blenderPath || null,
+        heroGlb: glb,
+        modelPath: meshFiles[0],
+        outFbx: out,
+        mode: "clean",
+      });
+      await analyzeMesh([res.outFbx], ws);
+      push(
+        "success",
+        "Model cleaned up - transforms baked, names fixed, loose parts bound. Your rigging and meshes were kept; check the list above.",
+      );
+    } catch (e) {
+      push("error", `Auto-fix failed: ${e}`);
+    } finally {
+      setFixing(false);
     }
   }
 
@@ -1229,6 +1264,23 @@ export function ModelSwapTab({
                   {i}
                 </p>
               ))}
+              {(preflight.errors.length > 0 || preflight.warnings.length > 0) &&
+                meshFiles.length === 1 &&
+                FIXABLE.test(meshFiles[0]) && (
+                  <div className="mt-1 flex flex-wrap items-center gap-2">
+                    <button
+                      onClick={() => void autoFix()}
+                      disabled={fixing || rigging}
+                      title="Blender (found automatically) bakes the un-applied transforms, strips vertex colors, renames .001 names and binds weightless meshes to the nearest bone. Your rigging, bones and meshes are all kept - nothing is deleted."
+                      className="rounded-md border border-violet-400/40 bg-violet-400/10 px-3 py-1.5 text-xs font-medium text-violet-200 transition hover:bg-violet-400/20 disabled:opacity-50"
+                    >
+                      {fixing ? "Fixing…" : "⚙ Fix model automatically"}
+                    </button>
+                    <span className="text-zinc-600">
+                      bakes transforms, fixes names, binds loose parts - your rigging is kept
+                    </span>
+                  </div>
+                )}
             </div>
           )}
         </section>

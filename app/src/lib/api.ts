@@ -837,7 +837,9 @@ export function modelAutorig(req: {
   heroGlb: string;
   modelPath: string;
   outFbx: string;
-  mode: "transfer" | "rigid";
+  /** "transfer" = weight-transfer rig, "rigid" = one-bone bind,
+   *  "clean" = rig-preserving cleanup (transforms/names/colors/loose parts). */
+  mode: "transfer" | "rigid" | "clean";
   rigidBone?: string | null;
 }): Promise<{ outFbx: string; note: string; blender: string }> {
   return invoke("model_autorig", {

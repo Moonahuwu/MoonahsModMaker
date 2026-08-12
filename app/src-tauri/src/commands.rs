@@ -1195,9 +1195,11 @@ fn find_blender() -> Option<std::path::PathBuf> {
 }
 
 /// Auto-rig a custom model onto a hero's skeleton via headless Blender:
-/// weight transfer from the hero's own body ("transfer") or a one-bone rigid
-/// bind ("rigid"). Returns { outFbx, note, blender } - the produced FBX feeds
-/// the normal mesh-pick flow.
+/// weight transfer from the hero's own body ("transfer"), a one-bone rigid
+/// bind ("rigid"), or a rig-preserving cleanup pass ("clean": bake transforms,
+/// strip vertex colors, fix names, bind weightless meshes - for hand-rigged
+/// models that preflight rejects). Returns { outFbx, note, blender } - the
+/// produced FBX feeds the normal mesh-pick flow.
 #[tauri::command]
 pub async fn model_autorig(
     blender_path: Option<String>,

@@ -94,6 +94,106 @@ def apply_all(objs):
         bpy.context.view_layer.objects.active = objs[0]
         bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
 
+# --- clean: fix what blocks a build WITHOUT touching the rigging ------------
+# For hand-rigged or ported models that preflight rejects: bake un-applied
+# object transforms, strip vertex colors, fix .001/dotted names, sanitize
+# material names, and rigid-bind weightless meshes (physics helpers) to
+# their nearest bone. Weights, bones and meshes are all KEPT - extra bones
+# beyond the hero's compile fine and ride with their parent (proven vs the
+# real CS2 compiler). --hero-glb is accepted but unused here.
+if opts["mode"] == "clean":
+    import re
+    from mathutils import Vector
+
+    user_objs = import_any(opts["model"])
+    meshes = [o for o in user_objs if o.type == "MESH"]
+    if not meshes:
+        die("no meshes found in the model file")
+    arm = next((o for o in user_objs if o.type == "ARMATURE"), None)
+
+    # Un-parent keep-transform, then bake EVERYTHING to identity. Baking the
+    # armature moves its rest pose to world space right alongside the baked
+    # mesh data, so the bind is preserved.
+    bpy.ops.object.select_all(action="DESELECT")
+    for o in meshes:
+        o.select_set(True)
+    bpy.context.view_layer.objects.active = meshes[0]
+    bpy.ops.object.parent_clear(type="CLEAR_KEEP_TRANSFORM")
+    apply_all(meshes + ([arm] if arm else []))
+
+    for i, o in enumerate(meshes):
+        # Vertex colors can render the model black in game - drop them.
+        if hasattr(o.data, "color_attributes"):
+            for ca in list(o.data.color_attributes):
+                o.data.color_attributes.remove(ca)
+        # .001 suffixes / dots upset the model tools; keep names recognizable.
+        base = re.sub(r"\.\d+$", "", o.name).replace(".", "_") or f"part_{i + 1}"
+        if base != o.name:
+            o.name = base  # Blender re-suffixes on collision; rare and harmless
+        o.data.name = o.name
+
+    # Material names travel into the game build - same cleanup as auto-rig.
+    for o in meshes:
+        for slot in o.material_slots:
+            if slot.material:
+                clean = re.sub(r"\.\d+$", "", slot.material.name).replace(" ", "_")
+                if clean and clean != slot.material.name:
+                    existing = bpy.data.materials.get(clean)
+                    if existing is not None:
+                        slot.material = existing
+                    else:
+                        slot.material.name = clean
+
+    # Weightless meshes (ported physics/collision helpers) ride their nearest
+    # bone solid instead of floating detached from the hero.
+    bound = 0
+    if arm is not None:
+        def nearest_bone(point):
+            best, best_d = None, None
+            for b in arm.data.bones:
+                d = (b.head_local - point).length
+                if best_d is None or d < best_d:
+                    best, best_d = b.name, d
+            return best
+
+        for o in meshes:
+            has_weights = bool(o.vertex_groups) and any(len(v.groups) for v in o.data.vertices)
+            if not has_weights:
+                center = sum((o.matrix_world @ v.co for v in o.data.vertices), Vector()) / max(
+                    1, len(o.data.vertices)
+                )
+                bone = nearest_bone(center)
+                if bone:
+                    vg = o.vertex_groups.get(bone) or o.vertex_groups.new(name=bone)
+                    vg.add(range(len(o.data.vertices)), 1.0, "REPLACE")
+                    bound += 1
+
+        # Re-bind: every deforming mesh gets the armature modifier + parent
+        # (transforms are identity now, so a plain parent set is exact).
+        for o in meshes:
+            if o.vertex_groups:
+                mod = next((m for m in o.modifiers if m.type == "ARMATURE"), None)
+                if mod is None:
+                    mod = o.modifiers.new(name="Armature", type="ARMATURE")
+                mod.object = arm
+                o.parent = arm
+
+    bpy.ops.object.select_all(action="SELECT")
+    os.makedirs(os.path.dirname(opts["out"]), exist_ok=True)
+    bpy.ops.export_scene.fbx(
+        filepath=opts["out"],
+        use_selection=True,
+        object_types={"ARMATURE", "MESH"},
+        add_leaf_bones=False,
+        bake_anim=False,
+        mesh_smooth_type="FACE",
+    )
+    print(
+        f"EIM_AUTORIG_OK meshes={len(meshes)} rigged={sum(1 for o in meshes if o.vertex_groups)} bound={bound} out={opts['out']}",
+        flush=True,
+    )
+    sys.exit(0)
+
 # --- Hero kit: armature + its skinned body (the weight source) --------------
 hero_objs = import_any(opts["hero_glb"])
 armature = next((o for o in hero_objs if o.type == "ARMATURE"), None)

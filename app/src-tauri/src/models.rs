@@ -535,7 +535,8 @@ pub fn preflight_fbx_kind(
     if !require_rig {
         // Drop the rigging complaints; keep every other finding.
         rep.errors.retain(|e| !(e.contains("isn't rigged") || e.contains("armature")));
-        rep.warnings.retain(|w| !w.contains("aren't part of the hero's armature"));
+        rep.info.retain(|i| !i.contains("extra bone(s) beyond the hero's armature"));
+        rep.warnings.retain(|w| !w.contains("carry no skin weights"));
     }
     Ok(rep)
 }
@@ -562,6 +563,9 @@ pub fn preflight_fbx(path: &Path, hero_bones: &[String]) -> Result<Preflight, St
     let mut dot001: Vec<String> = Vec::new();
     let mut spaced: Vec<String> = Vec::new();
     let mut material_names: Vec<String> = Vec::new();
+    // One "Skin" deformer per skinned mesh - fewer skins than meshes means
+    // some meshes carry no weights at all (ported physics helpers, usually).
+    let mut skin_count: usize = 0;
 
     for node in &objects.children {
         match node.name.as_str() {
@@ -644,6 +648,13 @@ pub fn preflight_fbx(path: &Path, hero_bones: &[String]) -> Result<Preflight, St
                     }
                 }
             }
+            "Deformer" => {
+                if let Some((_, class)) = fbx_obj_name(&node.props) {
+                    if class == "Skin" {
+                        skin_count += 1;
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -671,11 +682,21 @@ pub fn preflight_fbx(path: &Path, hero_bones: &[String]) -> Result<Preflight, St
         out.info.push(format!("{matched} of {} hero bones present", hero_bones.len()));
         if !extra.is_empty() {
             let shown: Vec<&str> = extra.iter().take(6).map(|s| s.as_str()).collect();
-            out.warnings.push(format!(
-                "{} bone(s) aren't part of the hero's armature ({}{}) - fine for added cloth bones, otherwise remove them",
+            // Proven vs the real CS2 compiler (e2e_extra_bone_fbx_builds_via
+            // _cs2): unknown bones compile fine and join the model skeleton -
+            // they just aren't driven by the hero's animations.
+            out.info.push(format!(
+                "{} extra bone(s) beyond the hero's armature ({}{}) - fine: they build in and ride with their parent bone, the hero's animations just won't move them",
                 extra.len(),
                 shown.join(", "),
                 if extra.len() > 6 { ", ..." } else { "" }
+            ));
+        }
+        if skin_count > 0 && skin_count < mesh_names.len() {
+            out.warnings.push(format!(
+                "{} of {} mesh(es) carry no skin weights (ported physics or collision helpers?) - they won't follow the hero. 'Fix model automatically' binds them to the nearest bone; delete them in Blender if they're not meant to be visible",
+                mesh_names.len() - skin_count,
+                mesh_names.len()
             ));
         }
     }
@@ -3067,6 +3088,291 @@ mod tests {
         }
         assert!(rep.ok, "{:?}", rep.steps);
         assert!(Path::new(&req.artifact_out).exists());
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// What the CS2 compiler ACTUALLY does with an FBX bone that isn't in
+    /// the hero's skeleton (GameBanana report: ported models with physics
+    /// bones "demand removal"): auto-rig a known-good doorman FBX, inject an
+    /// extra bone with ~120 verts weighted 100% to it, then run the real
+    /// build and check whether the bone survives into the vmdl_c skeleton.
+    #[test]
+    #[ignore]
+    fn e2e_extra_bone_fbx_builds_via_cs2() {
+        let helper = r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\tools\vpk-helper\dist\vpk-helper.exe";
+        let pak = r"D:\SteamLibrary\steamapps\common\Deadlock\game\citadel\pak01_dir.vpk";
+        let cs2 = r"D:\SteamLibrary\steamapps\common\Counter-Strike Global Offensive";
+        let blender = Path::new(r"D:\SteamLibrary\steamapps\common\Blender\blender.exe");
+        let glb = Path::new(
+            r"C:\Users\ethob\AppData\Roaming\com.digiphoenix.deadlock-intro-tool\model_gltf\models_heroes_wip_doorman_v2_doorman\doorman.glb",
+        );
+        if !blender.exists() || !glb.exists() || !Path::new(cs2).exists() {
+            eprintln!("blender, the doorman glb or CS2 missing - skipping");
+            return;
+        }
+        let scratch = std::env::temp_dir().join("eim_extrabone_e2e");
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        // 1) A known-good rigged FBX via the shipped auto-rig.
+        let rigged = scratch.join("rigged.fbx");
+        autorig(blender, glb, glb, &rigged, "transfer", None).expect("autorig");
+        // 2) Inject the extra bone + 100%-weighted verts.
+        let injected = scratch.join("extra_bone.fbx");
+        let py = r#"
+import bpy, sys
+from mathutils import Vector
+argv = sys.argv
+argv = argv[argv.index("--") + 1 :]
+src, out = argv[0], argv[1]
+bpy.ops.object.select_all(action="SELECT")
+bpy.ops.object.delete(use_global=False)
+bpy.ops.import_scene.fbx(filepath=src)
+arm = next(o for o in bpy.data.objects if o.type == "ARMATURE")
+meshes = [o for o in bpy.data.objects if o.type == "MESH"]
+bpy.context.view_layer.objects.active = arm
+arm.select_set(True)
+bpy.ops.object.mode_set(mode="EDIT")
+eb = arm.data.edit_bones
+root = next(b for b in eb if b.parent is None)
+nb = eb.new("eim_extra_tail")
+nb.head = root.head + Vector((0.0, -10.0, 20.0))
+nb.tail = nb.head + Vector((0.0, -20.0, 0.0))
+nb.parent = root
+bpy.ops.object.mode_set(mode="OBJECT")
+m = max(meshes, key=lambda o: len(o.data.vertices))
+n = len(m.data.vertices)
+idx = list(range(max(0, n - 120), n))
+for vg in list(m.vertex_groups):
+    vg.remove(idx)
+vg = m.vertex_groups.new(name="eim_extra_tail")
+vg.add(idx, 1.0, "REPLACE")
+bpy.ops.object.select_all(action="SELECT")
+bpy.ops.export_scene.fbx(
+    filepath=out,
+    use_selection=True,
+    object_types={"ARMATURE", "MESH"},
+    add_leaf_bones=False,
+    bake_anim=False,
+    mesh_smooth_type="FACE",
+)
+print("EIM_INJECT_OK verts=%d mesh=%s" % (len(idx), m.name), flush=True)
+"#;
+        let script = scratch.join("inject.py");
+        std::fs::write(&script, py).unwrap();
+        let out = std::process::Command::new(blender)
+            .args(["--background", "--factory-startup", "--python"])
+            .arg(&script)
+            .arg("--")
+            .arg(&rigged)
+            .arg(&injected)
+            .output()
+            .expect("blender");
+        let text = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(text.contains("EIM_INJECT_OK"), "inject failed:\n{text}");
+        // 3) Preflight: today extra bones are a warning, never an error.
+        let ws = workspace(
+            helper,
+            pak,
+            "models/heroes_wip/doorman_v2/doorman.vmdl_c",
+            &scratch.join("ws"),
+            false,
+        )
+        .expect("workspace");
+        let pf = preflight_fbx(&injected, &ws.bones).expect("preflight");
+        for e in &pf.errors {
+            eprintln!("PF ERR  {e}");
+        }
+        for w in &pf.warnings {
+            eprintln!("PF WARN {w}");
+        }
+        for i in &pf.info {
+            eprintln!("PF INFO {i}");
+        }
+        assert!(pf.errors.is_empty(), "extra bones must not block preflight: {:?}", pf.errors);
+        assert!(
+            pf.info.iter().any(|i| i.contains("extra bone(s) beyond")),
+            "the extra bone should be reported as info: {:?}",
+            pf.info
+        );
+        // 4) The real CS2 build.
+        let req = ModelBuildReq {
+            cs2_root: cs2.into(),
+            kind: ModelKind::Hero,
+            workspace_dir: ws.dir.clone(),
+            vmdl_internal: "models/heroes_wip/doorman_v2/doorman.vmdl".into(),
+            mesh_file: injected.to_string_lossy().into_owned(),
+            mesh_files: vec![],
+            material_override: None,
+            import_scale: 0.01,
+            artifact_out: scratch.join("doorman.vmdl_c").to_string_lossy().into_owned(),
+            materials: vec![],
+            tools_root: None,
+            materials_out: None,
+            ffmpeg_path: None,
+            helper_path: None,
+            pak_path: None,
+            use_staged: false,
+            skip_anims: true,
+            camera: vec![],
+        };
+        let rep = build(&req);
+        for s in &rep.steps {
+            eprintln!("STEP {s}");
+        }
+        assert!(rep.ok, "extra-bone fbx must build: {:?}", rep.steps);
+        // 5) The unknown bone joins the compiled skeleton (rides with its
+        //    parent in game) - the behavior the preflight copy promises.
+        let bytes = std::fs::read(&req.artifact_out).unwrap();
+        let needle = b"eim_extra_tail";
+        let found = bytes.windows(needle.len()).any(|w| w == needle);
+        eprintln!("EXTRA BONE IN VMDL_C = {found}");
+        assert!(found, "the extra bone should survive into the compiled skeleton");
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// The "Fix model automatically" path end to end: fabricate the junk a
+    /// ported model ships with (un-applied scale, vertex colors, an unskinned
+    /// physics hull, .001 names) and prove preflight rejects it, the clean
+    /// mode repairs it WITHOUT re-rigging, and the result builds via CS2.
+    #[test]
+    #[ignore]
+    fn e2e_clean_mode_fixes_junk_fbx() {
+        let helper = r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\tools\vpk-helper\dist\vpk-helper.exe";
+        let pak = r"D:\SteamLibrary\steamapps\common\Deadlock\game\citadel\pak01_dir.vpk";
+        let cs2 = r"D:\SteamLibrary\steamapps\common\Counter-Strike Global Offensive";
+        let blender = Path::new(r"D:\SteamLibrary\steamapps\common\Blender\blender.exe");
+        let glb = Path::new(
+            r"C:\Users\ethob\AppData\Roaming\com.digiphoenix.deadlock-intro-tool\model_gltf\models_heroes_wip_doorman_v2_doorman\doorman.glb",
+        );
+        if !blender.exists() || !glb.exists() || !Path::new(cs2).exists() {
+            eprintln!("blender, the doorman glb or CS2 missing - skipping");
+            return;
+        }
+        let scratch = std::env::temp_dir().join("eim_cleanmode_e2e");
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        // A known-good rigged base, then junk it up like a ported model.
+        let rigged = scratch.join("rigged.fbx");
+        autorig(blender, glb, glb, &rigged, "transfer", None).expect("autorig");
+        let junk = scratch.join("junk.fbx");
+        let py = r#"
+import bpy, sys
+argv = sys.argv
+argv = argv[argv.index("--") + 1 :]
+src, out = argv[0], argv[1]
+bpy.ops.object.select_all(action="SELECT")
+bpy.ops.object.delete(use_global=False)
+bpy.ops.import_scene.fbx(filepath=src)
+meshes = [o for o in bpy.data.objects if o.type == "MESH"]
+m = max(meshes, key=lambda o: len(o.data.vertices))
+m.scale = (2.0, 2.0, 2.0)
+m.data.color_attributes.new(name="Col", type="BYTE_COLOR", domain="CORNER")
+bpy.ops.mesh.primitive_cube_add(size=10.0)
+cube = bpy.context.active_object
+cube.name = "PhysHull.001"
+mat = bpy.data.materials.new("Bad Mat.001")
+cube.data.materials.append(mat)
+bpy.ops.object.select_all(action="SELECT")
+bpy.ops.export_scene.fbx(
+    filepath=out,
+    use_selection=True,
+    object_types={"ARMATURE", "MESH"},
+    add_leaf_bones=False,
+    bake_anim=False,
+    mesh_smooth_type="FACE",
+)
+print("EIM_JUNK_OK", flush=True)
+"#;
+        let script = scratch.join("junk.py");
+        std::fs::write(&script, py).unwrap();
+        let out = std::process::Command::new(blender)
+            .args(["--background", "--factory-startup", "--python"])
+            .arg(&script)
+            .arg("--")
+            .arg(&rigged)
+            .arg(&junk)
+            .output()
+            .expect("blender");
+        let text = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(text.contains("EIM_JUNK_OK"), "junk fabrication failed:\n{text}");
+
+        let ws = workspace(
+            helper,
+            pak,
+            "models/heroes_wip/doorman_v2/doorman.vmdl_c",
+            &scratch.join("ws"),
+            false,
+        )
+        .expect("workspace");
+        // The junk must trip preflight the way the ported-model reports do.
+        let pf = preflight_fbx(&junk, &ws.bones).expect("preflight junk");
+        for e in &pf.errors {
+            eprintln!("JUNK ERR  {e}");
+        }
+        for w in &pf.warnings {
+            eprintln!("JUNK WARN {w}");
+        }
+        assert!(
+            pf.errors.iter().any(|e| e.contains("transforms not applied")),
+            "expected the transforms error: {:?}",
+            pf.errors
+        );
+        assert!(pf.warnings.iter().any(|w| w.contains("carry no skin weights")));
+        assert!(pf.warnings.iter().any(|w| w.contains("vertex colors")));
+
+        // One-click fix: rig-preserving cleanup.
+        let fixed = scratch.join("fixed.fbx");
+        let note = autorig(blender, glb, &junk, &fixed, "clean", None).expect("clean");
+        eprintln!("CLEAN {note}");
+        let pf2 = preflight_fbx(&fixed, &ws.bones).expect("preflight fixed");
+        for e in &pf2.errors {
+            eprintln!("FIXED ERR  {e}");
+        }
+        for w in &pf2.warnings {
+            eprintln!("FIXED WARN {w}");
+        }
+        assert!(pf2.errors.is_empty(), "clean must clear the errors: {:?}", pf2.errors);
+        assert!(
+            !pf2.warnings.iter().any(|w| w.contains("carry no skin weights")),
+            "the hull should be bound now: {:?}",
+            pf2.warnings
+        );
+        assert!(!pf2.warnings.iter().any(|w| w.contains("vertex colors")));
+
+        // And the cleaned model must actually build.
+        let req = ModelBuildReq {
+            cs2_root: cs2.into(),
+            kind: ModelKind::Hero,
+            workspace_dir: ws.dir.clone(),
+            vmdl_internal: "models/heroes_wip/doorman_v2/doorman.vmdl".into(),
+            mesh_file: fixed.to_string_lossy().into_owned(),
+            mesh_files: vec![],
+            material_override: None,
+            import_scale: 0.01,
+            artifact_out: scratch.join("doorman.vmdl_c").to_string_lossy().into_owned(),
+            materials: vec![],
+            tools_root: None,
+            materials_out: None,
+            ffmpeg_path: None,
+            helper_path: None,
+            pak_path: None,
+            use_staged: false,
+            skip_anims: true,
+            camera: vec![],
+        };
+        let rep = build(&req);
+        for s in &rep.steps {
+            eprintln!("STEP {s}");
+        }
+        assert!(rep.ok, "cleaned fbx must build: {:?}", rep.steps);
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
