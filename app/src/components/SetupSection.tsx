@@ -395,7 +395,7 @@ export function SetupSection({
               label="Blender path (optional)"
               value={settings.blenderPath}
               onChange={(v) => update({ blenderPath: v })}
-              hint="blender.exe - powers Model Replacement's auto-rig. Blank = found automatically (Steam / Program Files)"
+              hint="blender.exe (the install folder also works) - powers auto-rig and Fix model. Blank = found automatically (Steam / Program Files). The Microsoft Store version can't be used - install from blender.org or Steam"
             />
             <Field
               label="Sound folder (content-relative)"

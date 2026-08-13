@@ -2070,6 +2070,32 @@ pub const AUTORIG_PY: &str = include_str!("../resources_src/eim_autorig.py");
 
 /// Run the auto-rig script through a headless Blender. Returns the script's
 /// success marker line (mesh/bone counts) for the UI toast.
+/// A configured "Blender path" that's really the install FOLDER resolves to
+/// the blender.exe inside it (top level, else the newest version subfolder,
+/// e.g. `Blender Foundation` -> `Blender 4.2\blender.exe`). Spawning a
+/// directory is Windows' cryptic "Access is denied" (os error 5) - the top
+/// real-world auto-rig failure.
+fn resolve_blender_exe(p: &Path) -> std::path::PathBuf {
+    if !p.is_dir() {
+        return p.to_path_buf();
+    }
+    let direct = p.join("blender.exe");
+    if direct.is_file() {
+        return direct;
+    }
+    if let Ok(rd) = std::fs::read_dir(p) {
+        let mut dirs: Vec<_> = rd.flatten().map(|e| e.path()).filter(|d| d.is_dir()).collect();
+        dirs.sort(); // version-named folders - the last sorts newest
+        for d in dirs.into_iter().rev() {
+            let exe = d.join("blender.exe");
+            if exe.is_file() {
+                return exe;
+            }
+        }
+    }
+    p.to_path_buf()
+}
+
 pub fn autorig(
     blender: &Path,
     hero_glb: &Path,
@@ -2078,6 +2104,7 @@ pub fn autorig(
     mode: &str,
     rigid_bone: Option<&str>,
 ) -> Result<String, String> {
+    let blender = &resolve_blender_exe(blender);
     if !blender.exists() {
         return Err(format!("Blender not found at {}", blender.display()));
     }
@@ -2108,7 +2135,16 @@ pub fn autorig(
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
-    let out = cmd.output().map_err(|e| format!("launching Blender: {e}"))?;
+    let out = cmd.output().map_err(|e| {
+        if e.kind() == std::io::ErrorKind::PermissionDenied {
+            format!(
+                "Windows refused to launch Blender at {} (access denied). Point the Blender path in Settings at blender.exe itself. Note: the Microsoft Store version of Blender can't be launched by other apps - install Blender from blender.org or Steam (both free) and use that path instead.",
+                blender.display()
+            )
+        } else {
+            format!("launching Blender: {e}")
+        }
+    })?;
     let text = format!(
         "{}\n{}",
         String::from_utf8_lossy(&out.stdout),
@@ -3374,6 +3410,32 @@ print("EIM_JUNK_OK", flush=True)
         }
         assert!(rep.ok, "cleaned fbx must build: {:?}", rep.steps);
         let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
+    fn resolve_blender_exe_heals_folder_paths() {
+        let root = std::env::temp_dir().join(format!("eim_blender_resolve_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        // Blender Foundation layout: version folders, newest wins.
+        let old = root.join("Blender 3.6");
+        let new = root.join("Blender 4.2");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::create_dir_all(&new).unwrap();
+        std::fs::write(old.join("blender.exe"), b"x").unwrap();
+        std::fs::write(new.join("blender.exe"), b"x").unwrap();
+        // The vendor folder resolves to the newest version's exe.
+        assert_eq!(super::resolve_blender_exe(&root), new.join("blender.exe"));
+        // A version folder resolves to its direct exe.
+        assert_eq!(super::resolve_blender_exe(&old), old.join("blender.exe"));
+        // A real exe path passes through untouched.
+        let exe = new.join("blender.exe");
+        assert_eq!(super::resolve_blender_exe(&exe), exe);
+        // A folder with no blender.exe anywhere returns as-is (the caller's
+        // not-found error then names what the user actually typed).
+        let empty = root.join("Blender 4.2").join("datafiles");
+        std::fs::create_dir_all(&empty).unwrap();
+        assert_eq!(super::resolve_blender_exe(&empty), empty);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

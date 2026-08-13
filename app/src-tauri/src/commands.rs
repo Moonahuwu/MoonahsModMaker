@@ -1210,7 +1210,13 @@ pub async fn model_autorig(
     rigid_bone: Option<String>,
 ) -> Result<serde_json::Value, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let blender = match blender_path.as_deref().filter(|p| !p.trim().is_empty()) {
+        // Explorer's "Copy as path" wraps in quotes - strip them or the
+        // exists() check fails on a perfectly good path.
+        let blender = match blender_path
+            .as_deref()
+            .map(|p| p.trim().trim_matches('"'))
+            .filter(|p| !p.is_empty())
+        {
             Some(p) => std::path::PathBuf::from(p),
             None => find_blender().ok_or(
                 "Blender not found - install it (free, also on Steam) or set its path in Settings",
