@@ -213,6 +213,11 @@ export function CompileBar({
     effectOverrides.length > 0 ||
     posterOverrides.length > 0 ||
     heroTextures.length > 0 ||
+    // Same filters buildCompileConfig ships with - a model-only pack must
+    // be able to compile (GameBanana report: users added a dummy hero image
+    // just to un-grey the button).
+    modelOverrides.some((m) => m.enabled !== false && !!m.artifact) ||
+    modTextureOverrides.length > 0 ||
     (digimod != null &&
       (digimod.scares.length > 0 ||
         digimod.deaths.length > 0 ||
@@ -821,6 +826,12 @@ export function CompileBar({
               )}
               {iconMods.length > 0 && <span>{iconMods.length} image(s)</span>}
               {heroTextures.length > 0 && <span>{heroTextures.length} hero texture(s)</span>}
+              {modelOverrides.filter((m) => m.enabled !== false && !!m.artifact).length > 0 && (
+                <span>
+                  {modelOverrides.filter((m) => m.enabled !== false && !!m.artifact).length} model
+                  swap(s)
+                </span>
+              )}
               {effectOverrides.length > 0 && <span>{effectOverrides.length} effect(s)</span>}
               {modCount > 0 && <span>{modCount} merged mod(s)</span>}
               <span className="ml-auto flex items-center gap-1.5 text-zinc-500">

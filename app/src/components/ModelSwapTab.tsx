@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { appDataDir, join } from "@tauri-apps/api/path";
@@ -138,6 +139,17 @@ export function ModelSwapTab({
 
   const cs2Ok = useMemo(() => settings.cs2Root.trim().length > 0, [settings.cs2Root]);
   const toolsOk = useMemo(() => settings.csdkRoot.trim().length > 0, [settings.csdkRoot]);
+
+  // Live build feed: the backend streams each step as it runs (the final
+  // report replaces the list when the build returns).
+  useEffect(() => {
+    const un = listen<string>("model://progress", (e) => {
+      setBuildSteps((prev) => [...prev.slice(-99), e.payload]);
+    });
+    return () => {
+      void un.then((f) => f());
+    };
+  }, []);
 
   // Browser-preview mock (dev builds only, opt-in via ?mockmats): seeds a
   // fake materials list so the dense fx rows can be styled and checked in a

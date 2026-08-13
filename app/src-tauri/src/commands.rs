@@ -1870,9 +1870,19 @@ pub async fn model_preflight(
 /// Generate the vmdl + compile via CS2 Workshop Tools + cache the artifact.
 #[tauri::command]
 pub async fn model_build(
+    app: tauri::AppHandle,
     req: crate::models::ModelBuildReq,
 ) -> Result<crate::models::ModelBuildReport, String> {
-    tauri::async_runtime::spawn_blocking(move || crate::models::build(&req))
+    // Stream each step to the tab as it happens - a multi-minute CS2 build
+    // behind a bare "Building…" reads as a stuck button.
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        use tauri::Emitter;
+        for step in rx {
+            let _ = app.emit("model://progress", &step);
+        }
+    });
+    tauri::async_runtime::spawn_blocking(move || crate::models::build_with_feed(&req, Some(tx)))
         .await
         .map_err(|e| e.to_string())
 }

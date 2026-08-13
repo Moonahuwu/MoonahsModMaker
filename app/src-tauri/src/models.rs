@@ -1534,7 +1534,7 @@ fn compile_materials(
             let vmat_abs = content.join(&vmat_name);
             std::fs::write(&vmat_abs, spliced).map_err(|e| e.to_string())?;
             inputs.push(vmat_abs.to_string_lossy().into_owned());
-            rep.steps.push(format!("fx '{fx}' spliced into {gv_norm}"));
+            rep.note(format!("fx '{fx}' spliced into {gv_norm}"));
             continue;
         }
         // Any effect with no texture: fall back to the bundled starfield,
@@ -1716,7 +1716,7 @@ fn compile_materials(
     let game_dir = tools_root.join("game/citadel").to_string_lossy().into_owned();
     let out = crate::compile::run_compiler_raw(&rc.to_string_lossy(), &game_dir, &inputs)
         .map_err(|e| format!("material compile: {e}"))?;
-    rep.steps.push(format!("materials compiled: {out}"));
+    rep.note(format!("materials compiled: {out}"));
 
     // Collect EVERYTHING the compile produced - rel path below the game addon
     // root is the VPK-internal path.
@@ -1749,7 +1749,7 @@ fn compile_materials(
         return Err("material compile produced no vmat_c files".into());
     }
     arts.sort_by(|a, b| a.target_rel.cmp(&b.target_rel));
-    rep.steps.push(format!(
+    rep.note(format!(
         "{} material file(s) cached ({} vmats)",
         arts.len(),
         arts.iter().filter(|a| a.target_rel.ends_with(".vmat_c")).count()
@@ -2298,16 +2298,39 @@ pub struct ModelBuildReport {
     /// Compiled custom-material files to ship with the model (empty when no
     /// custom textures were requested).
     pub materials: Vec<MaterialArtifact>,
+    /// Live step stream to the tab's feed - a multi-minute CS2 build behind
+    /// a bare "Building…" reads as a stuck button. Not serialized.
+    #[serde(skip)]
+    pub feed: Option<std::sync::mpsc::Sender<String>>,
+}
+
+impl ModelBuildReport {
+    /// Record a step AND stream it live when a feed is attached.
+    fn note(&mut self, s: impl Into<String>) {
+        let s = s.into();
+        if let Some(f) = &self.feed {
+            let _ = f.send(s.clone());
+        }
+        self.steps.push(s);
+    }
 }
 
 pub fn build(req: &ModelBuildReq) -> ModelBuildReport {
-    let mut rep = ModelBuildReport::default();
+    build_with_feed(req, None)
+}
+
+/// Like [`build`], streaming each step to `feed` as it happens.
+pub fn build_with_feed(
+    req: &ModelBuildReq,
+    feed: Option<std::sync::mpsc::Sender<String>>,
+) -> ModelBuildReport {
+    let mut rep = ModelBuildReport { feed, ..Default::default() };
     match build_inner(req, &mut rep) {
         Ok(artifact) => {
             rep.ok = true;
             rep.artifact = Some(artifact);
         }
-        Err(e) => rep.steps.push(format!("FAILED: {e}")),
+        Err(e) => rep.note(format!("FAILED: {e}")),
     }
     rep
 }
@@ -2616,7 +2639,7 @@ fn build_inner(req: &ModelBuildReq, rep: &mut ModelBuildReport) -> Result<String
                     let cs2_dir = content
                         .join(dir_internal.replace('/', std::path::MAIN_SEPARATOR_STR));
                     copy_tree(&csdk_dir, &cs2_dir)?;
-                    rep.steps.push("pulled your ModelDoc edits from the Deadlock tools".into());
+                    rep.note("pulled your ModelDoc edits from the Deadlock tools");
                     // The editing mirror went WITHOUT the modern anim-graph
                     // nodes (the CSDK's ModelDoc can't load them) - splice
                     // them back from the pristine kit before compiling, or
@@ -2628,14 +2651,14 @@ fn build_inner(req: &ModelBuildReq, rep: &mut ModelBuildReport) -> Result<String
                         let n = restore_modeldoc_unloadables(&mut edited, &pristine_text)?;
                         if n > 0 {
                             std::fs::write(&staged, edited).map_err(|e| e.to_string())?;
-                            rep.steps.push(format!(
+                            rep.note(format!(
                                 "{n} runtime animation hookup(s) restored (set aside while ModelDoc had the file)"
                             ));
                         } else if pristine_text.is_empty()
                             && !edited.contains("_class = \"NmSkeletonList\"")
                         {
-                            rep.steps.push(
-                                "WARNING: couldn't read the model kit to restore its animation hookups - if animations break in-game, re-pick the model and run a normal Build".into(),
+                            rep.note(
+                                "WARNING: couldn't read the model kit to restore its animation hookups - if animations break in-game, re-pick the model and run a normal Build",
                             );
                         }
                     }
@@ -2647,11 +2670,11 @@ fn build_inner(req: &ModelBuildReq, rep: &mut ModelBuildReport) -> Result<String
                 "no staged model to compile - run a normal Build (or Inspect in ModelDoc) first, then edit and rebuild".into(),
             );
         }
-        rep.steps.push("compiling your ModelDoc-edited model as is (no restaging)".into());
+        rep.note("compiling your ModelDoc-edited model as is (no restaging)");
         staged
     } else {
         let (vmdl_abs, notes) = stage_sources(req)?;
-        rep.steps.extend(notes);
+        for n in notes { rep.note(n); }
         vmdl_abs
     };
     let (content, game_dir, addon) = req.kind.layout(&root);
@@ -2662,6 +2685,15 @@ fn build_inner(req: &ModelBuildReq, rep: &mut ModelBuildReport) -> Result<String
     //    trace in the artifact, which records the real paths).
     let mut last_out = String::new();
     for round in 1..=4 {
+        if round == 1 {
+            rep.note(if req.skip_anims {
+                "compiling via the Workshop Tools - fast build usually takes 1-3 minutes…"
+            } else {
+                "compiling via the Workshop Tools - a full build can take 10-20 minutes…"
+            });
+        } else {
+            rep.note(format!("compiling (round {round})…"));
+        }
         let out = run_model_compiler(&game_dir, &compiler, &vmdl_abs)?;
         // Success summary reads "OK: 1 compiled, 0 failed" - or "WARNING: 1
         // compiled, 0 failed" when benign warnings fired (unresolved bare FBX
@@ -2670,7 +2702,7 @@ fn build_inner(req: &ModelBuildReq, rep: &mut ModelBuildReport) -> Result<String
             let l = l.trim();
             (l.starts_with("OK:") || l.starts_with("WARNING:")) && l.contains(" compiled, 0 failed")
         }) {
-            rep.steps.push(format!("compiled (round {round})"));
+            rep.note(format!("compiled (round {round})"));
             last_out.clear();
             break;
         }
@@ -2708,7 +2740,7 @@ fn build_inner(req: &ModelBuildReq, rep: &mut ModelBuildReport) -> Result<String
             }
             let _ = std::fs::write(&dest, "Layer0\n{\n\tshader \"csgo_unlitgeneric.vfx\"\n}\n");
         }
-        rep.steps.push(format!("round {round}: stubbed {} material(s)", missing.len()));
+        rep.note(format!("round {round}: stubbed {} material(s)", missing.len()));
     }
     if !last_out.is_empty() {
         return Err(format!("compile did not converge:\n{}", tail(&last_out, 12)));
@@ -2729,7 +2761,7 @@ fn build_inner(req: &ModelBuildReq, rep: &mut ModelBuildReport) -> Result<String
     }
     std::fs::copy(&compiled, &req.artifact_out).map_err(|e| e.to_string())?;
     let size = std::fs::metadata(&req.artifact_out).map(|m| m.len()).unwrap_or(0);
-    rep.steps.push(format!("artifact cached ({} KB)", size / 1024));
+    rep.note(format!("artifact cached ({} KB)", size / 1024));
 
     // 5. Verify material coverage: which vmats does the artifact actually
     //    reference, and does each have a shipped file (custom vmat), a game
@@ -2761,10 +2793,10 @@ fn build_inner(req: &ModelBuildReq, rep: &mut ModelBuildReport) -> Result<String
                 .collect();
             let covered = bare.len() - missing.len();
             if covered > 0 {
-                rep.steps.push(format!("{covered} of {} model material(s) covered", bare.len()));
+                rep.note(format!("{covered} of {} model material(s) covered", bare.len()));
             }
             if !missing.is_empty() {
-                rep.steps.push(format!(
+                rep.note(format!(
                     "WARNING: no textures assigned for {} - those parts will be invisible or untextured in game",
                     missing.join(", ")
                 ));
@@ -2787,14 +2819,55 @@ fn run_model_compiler(game_dir: &Path, compiler: &Path, vmdl: &Path) -> Result<S
         cmd.current_dir(dir);
     }
     cmd.args(["-i", &input, "-game", &game, "-f", "-danger_mode_ignore_schema_mismatches"]);
-    let out = cmd
-        .output()
-        .map_err(|e| format!("launch CS2 resourcecompiler: {e}"))?;
+    // Watchdog instead of a bare .output(): the compiler can wedge forever on
+    // a hidden dialog (Steam not running, another Workshop Tools instance) -
+    // to the user that's "the Build button is stuck". The longest LEGIT build
+    // (the full baked-anim pass) runs 10-20 min, so 40 is pure-hang territory.
+    use std::io::Read;
+    cmd.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+    let mut child = cmd.spawn().map_err(|e| format!("launch CS2 resourcecompiler: {e}"))?;
+    // Drain the pipes on threads - an unread full pipe would deadlock the child.
+    let mut so = child.stdout.take();
+    let mut se = child.stderr.take();
+    let h_out = std::thread::spawn(move || {
+        let mut b = Vec::new();
+        if let Some(s) = so.as_mut() {
+            let _ = s.read_to_end(&mut b);
+        }
+        b
+    });
+    let h_err = std::thread::spawn(move || {
+        let mut b = Vec::new();
+        if let Some(s) = se.as_mut() {
+            let _ = s.read_to_end(&mut b);
+        }
+        b
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(40 * 60);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(
+                        "the CS2 resourcecompiler produced no result in 40 minutes - it is almost certainly stuck, not working. Make sure Steam is running, close any open CS2 / Workshop Tools windows, then Build again."
+                            .into(),
+                    );
+                }
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+            Err(e) => return Err(format!("waiting for the compiler: {e}")),
+        }
+    }
+    let stdout = h_out.join().unwrap_or_default();
+    let stderr = h_err.join().unwrap_or_default();
     // Full output regardless of exit code - the stub loop parses failures.
     Ok(format!(
         "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
+        String::from_utf8_lossy(&stdout),
+        String::from_utf8_lossy(&stderr)
     ))
 }
 
