@@ -262,6 +262,23 @@ export function PostersTab({
   const hiddenSet = useMemo(() => new Set(hidden), [hidden]);
   const hiddenSheetSet = useMemo(() => new Set(hiddenSheets), [hiddenSheets]);
 
+  // "Reset sheet" two-step confirm; disarms after 4s or on sheet change.
+  const [resetArmed, setResetArmed] = useState(false);
+  useEffect(() => {
+    if (!resetArmed) return;
+    const t = setTimeout(() => setResetArmed(false), 4000);
+    return () => clearTimeout(t);
+  }, [resetArmed]);
+  useEffect(() => setResetArmed(false), [sheet]);
+
+  /** Remove an override and say what happens next - the support question
+   *  this answers is "how do I reset a poster": vanilla returns once the
+   *  pack is compiled and installed again. */
+  function removeAndToast(id: string, what = "Removed") {
+    onRemove(id);
+    push("success", `${what} - the original poster is back after the next Compile + Install`);
+  }
+
   /** Sheets to show for a category, honoring the unused filter. */
   function visibleSheets(cat: string): ManifestSheet[] {
     return SHEETS.filter(
@@ -322,7 +339,7 @@ export function PostersTab({
       (customRegions[sh.id] ?? []).filter((r) => r.id !== posterId),
     );
     const ovId = `${sh.id}::${posterId}`;
-    if (byId.has(ovId)) onRemove(ovId);
+    if (byId.has(ovId)) removeAndToast(ovId, "Region deleted");
     setSelected(null);
   }
 
@@ -759,7 +776,8 @@ export function PostersTab({
                     View
                   </button>
                   <button
-                    onClick={() => onRemove(o.id)}
+                    onClick={() => removeAndToast(o.id)}
+                    title="Remove this replacement - the original poster returns on the next Compile + Install"
                     className="rounded px-2 py-0.5 text-[11px] text-red-400/80 hover:bg-red-500/10 hover:text-red-300"
                   >
                     Remove
@@ -1219,7 +1237,7 @@ export function PostersTab({
                     This decal compiles fully transparent - it won't render on any wall.
                   </p>
                   <button
-                    onClick={() => onRemove(selectedOv.id)}
+                    onClick={() => removeAndToast(selectedOv.id, "Unhidden")}
                     className="rounded-lg bg-zinc-800 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-700"
                   >
                     Unhide (restore original)
@@ -1268,10 +1286,11 @@ export function PostersTab({
                       Replace image…
                     </button>
                     <button
-                      onClick={() => onRemove(selectedOv.id)}
+                      onClick={() => removeAndToast(selectedOv.id)}
+                      title="Remove your art - the original poster returns on the next Compile + Install"
                       className="rounded-lg px-3 py-1.5 text-xs text-red-400/80 hover:bg-red-500/10 hover:text-red-300"
                     >
-                      Remove
+                      Remove (back to original)
                     </button>
                   </div>
                 </>
@@ -1302,9 +1321,36 @@ export function PostersTab({
             </div>
           )}
           {sheetOverrideCount > 0 && (
-            <div className="mt-3 text-[11px] text-zinc-500">
-              {sheetOverrideCount} replacement{sheetOverrideCount === 1 ? "" : "s"} on this sheet -
-              all compile together.
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
+              <span>
+                {sheetOverrideCount} replacement{sheetOverrideCount === 1 ? "" : "s"} on this sheet
+                - all compile together.
+              </span>
+              <button
+                onClick={() => {
+                  if (!resetArmed) {
+                    setResetArmed(true);
+                    return;
+                  }
+                  for (const o of overrides.filter((x) => x.sheetId === sheet.id)) {
+                    onRemove(o.id);
+                  }
+                  setResetArmed(false);
+                  setSelected(null);
+                  push(
+                    "success",
+                    `Sheet reset - ${sheetOverrideCount} replacement(s) removed; the original poster is back after the next Compile + Install`,
+                  );
+                }}
+                title="Remove every replacement and hidden decal on this sheet - the original poster returns on the next Compile + Install"
+                className={`rounded px-2 py-0.5 text-[11px] transition ${
+                  resetArmed
+                    ? "bg-red-500/20 font-semibold text-red-300"
+                    : "text-red-400/80 hover:bg-red-500/10 hover:text-red-300"
+                }`}
+              >
+                {resetArmed ? "sure? resets the whole sheet" : "Reset sheet"}
+              </button>
             </div>
           )}
         </div>
