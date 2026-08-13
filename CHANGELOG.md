@@ -2,6 +2,14 @@
 
 All notable changes since 1.0.4. Download: https://gamebanana.com/tools/23422
 
+## 1.1.1 (2026-08-13)
+
+- Auto-rig / Fix model: a Blender path pointing at the install FOLDER now finds blender.exe inside it automatically - the "Access is denied (os error 5)" error this caused is gone. Quotes from Explorer's "Copy as path" are handled too.
+- If Blender came from the Microsoft Store (which Windows blocks other apps from launching), the error now says exactly that and points at blender.org / Steam instead of "os error 5".
+- The Blender path setting gained a Browse button that picks blender.exe directly.
+- Wall Art: new "Reset sheet" button removes every replacement and hidden decal on a sheet at once (with a confirm step).
+- Wall Art: every removal now tells you the original poster is back after the next Compile + Install - on Remove, Unhide, and deleting a custom region.
+
 ## 1.1 (2026-08-12)
 
 ### Model Replacement
