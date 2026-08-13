@@ -5918,6 +5918,28 @@ pub async fn list_vpk_textures(
     .map_err(|e| e.to_string())?
 }
 
+/// List the compiled models inside a mod vpk - feeds the "use a model from
+/// another mod" picker (convert a downloaded mod's model to another slot,
+/// e.g. a soul-container mod onto the urn).
+#[tauri::command]
+pub async fn list_vpk_models(
+    helper_path: String,
+    vpk_path: String,
+) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let entries = crate::vpk::list(&helper_path, &vpk_path, None)?;
+        let mut out: Vec<String> = entries
+            .into_iter()
+            .map(|e| e.replace('\\', "/"))
+            .filter(|e| e.ends_with(".vmdl_c"))
+            .collect();
+        out.sort();
+        Ok(out)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct DecodedTexture {

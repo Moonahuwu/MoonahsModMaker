@@ -3412,6 +3412,56 @@ print("EIM_JUNK_OK", flush=True)
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
+    /// The "use a model from a mod / pick a glb" path: a helper-exported glb
+    /// (the cached doorman one stands in for a mod's extracted model) must
+    /// convert to FBX via the clean pass with its rig intact and preflight
+    /// clean - texture references from the glb's sibling PNGs ride along.
+    #[test]
+    #[ignore]
+    fn e2e_glb_input_converts_via_clean() {
+        let helper = r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\tools\vpk-helper\dist\vpk-helper.exe";
+        let pak = r"D:\SteamLibrary\steamapps\common\Deadlock\game\citadel\pak01_dir.vpk";
+        let blender = Path::new(r"D:\SteamLibrary\steamapps\common\Blender\blender.exe");
+        let glb = Path::new(
+            r"C:\Users\ethob\AppData\Roaming\com.digiphoenix.deadlock-intro-tool\model_gltf\models_heroes_wip_doorman_v2_doorman\doorman.glb",
+        );
+        if !blender.exists() || !glb.exists() {
+            eprintln!("blender or the cached doorman glb missing - skipping");
+            return;
+        }
+        let scratch = std::env::temp_dir().join("eim_glbconvert_e2e");
+        let _ = std::fs::remove_dir_all(&scratch);
+        let out = scratch.join("converted.fbx");
+        let note = autorig(blender, glb, glb, &out, "clean", None).expect("clean convert");
+        eprintln!("CONVERT {note}");
+        assert!(out.exists());
+
+        let ws = workspace(
+            helper,
+            pak,
+            "models/heroes_wip/doorman_v2/doorman.vmdl_c",
+            &scratch.join("ws"),
+            false,
+        )
+        .expect("workspace");
+        let pf = preflight_fbx(&out, &ws.bones).expect("preflight");
+        for e in &pf.errors {
+            eprintln!("PF ERR  {e}");
+        }
+        for w in &pf.warnings {
+            eprintln!("PF WARN {w}");
+        }
+        // The glb's armature survives the conversion: rigged, no errors.
+        assert!(pf.errors.is_empty(), "converted glb must preflight clean: {:?}", pf.errors);
+        // Texture refs from the glb's sibling PNGs should ride into the FBX
+        // (feeds the auto-texture scan). Informational - glbs without
+        // textures are legitimate.
+        let bytes = std::fs::read(&out).unwrap();
+        let has_png = bytes.windows(4).any(|w| w.eq_ignore_ascii_case(b".png"));
+        eprintln!("TEXTURE REFS IN FBX = {has_png}");
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
     #[test]
     fn resolve_blender_exe_heals_folder_paths() {
         let root = std::env::temp_dir().join(format!("eim_blender_resolve_{}", std::process::id()));

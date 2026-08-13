@@ -7,6 +7,7 @@ import {
   heroModelTarget,
   fbxAutoTextures,
   fileStamp,
+  listVpkModels,
   matchMaterialTextures,
   meshMaterials,
   modelBuild,
@@ -31,7 +32,11 @@ const ModelPreview3D = lazy(() =>
   import("./ModelPreview3D").then((m) => ({ default: m.ModelPreview3D })),
 );
 
-const MESH_FILTERS = [{ name: "Model (Blender export)", extensions: ["fbx", "dmx"] }];
+const MESH_FILTERS = [
+  { name: "Model (fbx / dmx / glb)", extensions: ["fbx", "dmx", "glb", "gltf"] },
+];
+/** glTF picks convert to FBX via Blender before the normal flow. */
+const GLTF_EXT = /\.(glb|gltf)$/i;
 const IMAGE_FILTERS = [{ name: "Texture image", extensions: ["png", "jpg", "jpeg", "tga"] }];
 
 /** The community checklist, shown next to the Blender kit. */
@@ -396,16 +401,109 @@ export function ModelSwapTab({
     }
   }
 
+  const [converting, setConverting] = useState(false);
+
+  /** glTF -> FBX via the rig-preserving Blender "clean" pass. The glb's
+   *  materials keep their texture references, so the FBX auto-texture scan
+   *  picks them up afterwards; an armature in the glb survives too. */
+  async function convertToFbx(src: string): Promise<string> {
+    if (!target) throw new Error("no target");
+    const cacheDir = await join(await appDataDir(), "model_cache");
+    const out = await join(cacheDir, `${target.key}_converted.fbx`);
+    const res = await modelAutorig({
+      blenderPath: settings.blenderPath || null,
+      // Clean mode never reads the hero glb - the source doubles as the
+      // required-to-exist path.
+      heroGlb: src,
+      modelPath: src,
+      outFbx: out,
+      mode: "clean",
+    });
+    return res.outFbx;
+  }
+
   async function pickMesh() {
     if (!ws) return;
     const sel = await openDialog({
       multiple: true,
       filters: MESH_FILTERS,
-      title: "Your exported model - FBX, or every DMX of the export",
+      title: "Your model - FBX, every DMX of the export, or a glb/gltf",
     });
     const list = typeof sel === "string" ? [sel] : Array.isArray(sel) ? sel : [];
     if (list.length === 0) return;
+    if (list.some((f) => GLTF_EXT.test(f))) {
+      if (list.length > 1) {
+        push("error", "Pick one glb/gltf at a time (it converts to FBX first)");
+        return;
+      }
+      setConverting(true);
+      try {
+        push("info", "Converting to FBX via Blender…");
+        const fbx = await convertToFbx(list[0]);
+        await analyzeMesh([fbx], ws);
+        push("success", "Converted - textures and rigging carried over where present");
+      } catch (e) {
+        push("error", `Convert failed: ${e}`);
+      } finally {
+        setConverting(false);
+      }
+      return;
+    }
     await analyzeMesh(list, ws);
+  }
+
+  // ---- Use a model from another mod's vpk ---------------------------------
+  const [modPicker, setModPicker] = useState<{ vpk: string; models: string[] } | null>(null);
+
+  /** Pick a mod's pak, list the models inside, convert the chosen one for
+   *  this slot (helper exports glb + textures, Blender makes the FBX). */
+  async function pickFromMod() {
+    if (!ws) return;
+    const sel = await openDialog({
+      multiple: false,
+      filters: [{ name: "Mod pack (.vpk)", extensions: ["vpk"] }],
+      title: "The mod's pak01_dir.vpk (downloaded or installed)",
+    });
+    if (typeof sel !== "string") return;
+    try {
+      const models = await listVpkModels(settings.vpkHelperPath, sel);
+      if (models.length === 0) {
+        push("error", "No models inside this vpk (it may be a sound or UI mod)");
+        return;
+      }
+      if (models.length === 1) {
+        await useModModel(sel, models[0]);
+      } else {
+        setModPicker({ vpk: sel, models });
+      }
+    } catch (e) {
+      push("error", `Couldn't read the vpk: ${e}`);
+    }
+  }
+
+  async function useModModel(vpk: string, internal: string) {
+    if (!ws) return;
+    setModPicker(null);
+    setConverting(true);
+    try {
+      push("info", "Extracting the model + textures from the mod…");
+      // Own subfolder per mod so two mods' exports can't clobber each other
+      // (the FBX references these textures long-term - must stay on disk).
+      const stem = (vpk.split(/[\\/]/).pop() ?? "mod").replace(/[^a-zA-Z0-9]+/g, "_");
+      const dest = await join(await appDataDir(), "model_cache", "from_mods", stem);
+      const glb = await modelGltf(settings.vpkHelperPath, vpk, internal, dest);
+      push("info", "Converting to FBX via Blender…");
+      const fbx = await convertToFbx(glb);
+      await analyzeMesh([fbx], ws);
+      push(
+        "success",
+        "Model converted for this slot - check the list below, assign or keep its textures, then Build",
+      );
+    } catch (e) {
+      push("error", `Convert failed: ${e}`);
+    } finally {
+      setConverting(false);
+    }
   }
 
   const [rigging, setRigging] = useState(false);
@@ -1223,30 +1321,70 @@ export function ModelSwapTab({
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <button
               onClick={() => void pickMesh()}
-              className="rounded-md border border-rose-400/40 bg-rose-400/10 px-3 py-1.5 text-xs font-medium text-rose-200 transition hover:bg-rose-400/20"
+              disabled={converting}
+              className="rounded-md border border-rose-400/40 bg-rose-400/10 px-3 py-1.5 text-xs font-medium text-rose-200 transition hover:bg-rose-400/20 disabled:opacity-50"
             >
-              {meshFiles.length > 1
-                ? `Change files… (${meshFiles.length} picked)`
-                : meshFile
-                  ? "Change file…"
-                  : "Pick your FBX / DMX files…"}
+              {converting
+                ? "Converting…"
+                : meshFiles.length > 1
+                  ? `Change files… (${meshFiles.length} picked)`
+                  : meshFile
+                    ? "Change file…"
+                    : "Pick your model… (fbx / dmx / glb)"}
             </button>
             {mode === "hero" && (
               <button
                 onClick={() => void autoRig()}
-                disabled={rigging}
+                disabled={rigging || converting}
                 title="Model not rigged to this hero? Pick it and the app binds it to the hero's skeleton for you (via Blender, found automatically). Best on humanoid-ish models standing like the hero."
                 className="rounded-md border border-violet-400/40 bg-violet-400/10 px-3 py-1.5 text-xs font-medium text-violet-200 transition hover:bg-violet-400/20 disabled:opacity-50"
               >
                 {rigging ? "Rigging…" : "Auto-rig a model…"}
               </button>
             )}
+            <button
+              onClick={() => void pickFromMod()}
+              disabled={converting}
+              title="Use a model from a downloaded mod: pick its pak vpk, choose the model inside, and the app converts it for this slot with its textures (via Blender). E.g. put a soul-container mod's model on the urn."
+              className="rounded-md border border-sky-400/40 bg-sky-400/10 px-3 py-1.5 text-xs font-medium text-sky-200 transition hover:bg-sky-400/20 disabled:opacity-50"
+            >
+              From a mod (.vpk)…
+            </button>
             {meshFile && (
               <span className="truncate text-xs text-zinc-400" title={meshFile}>
                 {meshFile.split(/[\\/]/).pop()}
               </span>
             )}
           </div>
+          {modPicker && (
+            <div className="mt-2 rounded-lg border border-sky-400/30 bg-sky-400/5 p-2.5">
+              <div className="mb-1.5 flex items-center gap-2 text-[11px] text-zinc-400">
+                <span className="font-semibold text-sky-200">
+                  {modPicker.models.length} model(s) in this mod - pick the one to use
+                </span>
+                <button
+                  onClick={() => setModPicker(null)}
+                  className="ml-auto rounded p-0.5 text-zinc-500 hover:text-zinc-300"
+                  aria-label="Cancel"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="flex max-h-40 flex-col gap-1 overflow-y-auto">
+                {modPicker.models.map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => void useModModel(modPicker.vpk, m)}
+                    title={m}
+                    className="truncate rounded px-2 py-1 text-left text-[11px] text-zinc-300 transition hover:bg-sky-400/10 hover:text-sky-100"
+                  >
+                    {m.replace(/\.vmdl_c$/, "").split("/").pop()}
+                    <span className="ml-2 text-zinc-600">{m}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           {preflight && (
             <div className="mt-2 flex flex-col gap-1 text-[11px]">
               {preflight.errors.map((e) => (

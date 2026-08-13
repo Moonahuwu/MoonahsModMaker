@@ -864,6 +864,12 @@ export function modelGltf(
   return invoke("model_gltf", { helperPath, pakPath, modelInternal, destDir: destDir ?? null });
 }
 
+/** List the compiled models (.vmdl_c) inside any mod vpk - the "use a model
+ *  from another mod" picker. */
+export function listVpkModels(helperPath: string, vpkPath: string): Promise<string[]> {
+  return invoke("list_vpk_models", { helperPath, vpkPath });
+}
+
 /** Store a rendered picture of a model as its card image (data: URL from
  *  the 3D preview). Returns the cached PNG path. */
 export function savePropRender(modelInternal: string, dataUrl: string): Promise<string> {
