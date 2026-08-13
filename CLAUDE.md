@@ -321,7 +321,12 @@ flags modules shipping the SAME output file (the lower-addon-slot-wins
 clobber): events relpath for merge slots vs stock ref for direct-replace
 slots (shared rule `slotNeedsEventsMerge` + `directReplaceTarget`), poster
 SHEETS not regions, digimod↔UI-Master both claiming base_hud; bundled vpk
-interiors are NOT inspected (noted in UI). Phase 3 (built): "Package for
+interiors are NOT inspected by the CONFLICT banner (noted in UI), but each
+Bundled-mod row has a "contents" expander (`BundledContents`,
+`scanPackContents`-backed, module-level scan cache) listing the vpk's files
+by category with per-file/per-category excludes writing
+`settings.importedModExcludes` - the same store Preview build's Save manages,
+honored by compiles + module exports as-is. Phase 3 (built): "Package for
 release" (on by default) zips each CLEAN module build (vpk + README, via the
 `zip` crate: `packsync::package_release`, cmd `package_module_release`) and
 writes a paste-ready `description.txt` (App.tsx `buildModuleReleaseText`:

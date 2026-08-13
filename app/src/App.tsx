@@ -1380,7 +1380,8 @@ export default function App() {
       out.push({ key: "gameplay", kind: "Gameplay", label: "Gameplay config edits" });
     for (const p of settings.importedMods) {
       const base = p.split(/[\\/]/).pop() ?? p;
-      out.push({ key: bundledModKey(p), kind: "Bundled mod", label: base });
+      // path drives the row's "contents" viewer (see inside the vpk).
+      out.push({ key: bundledModKey(p), kind: "Bundled mod", label: base, path: p });
     }
     return out;
   }, [project, settings.importedMods]);
@@ -5946,6 +5947,17 @@ export default function App() {
             }
             onExportModule={exportModule}
             onRemoveItem={removePackItem}
+            helperPath={settings.vpkHelperPath}
+            pakPath={settings.deadlockPak}
+            modExcludes={settings.importedModExcludes ?? {}}
+            onModExcludes={(vpk, excluded) => {
+              // Same store the Preview build's Save writes - compiles and
+              // module exports honor it with zero extra plumbing.
+              const merged = { ...(settingsRef.current.importedModExcludes ?? {}) };
+              if (excluded.length > 0) merged[vpk] = excluded;
+              else delete merged[vpk];
+              updateSettings({ importedModExcludes: merged });
+            }}
           />
         ) : activeTab === ITEMS ? (
           <ItemsTab

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { scanPackContents, type PackContents } from "../lib/api";
 import type { PackModule } from "../types";
 
 /** One piece of pack content, flattened by App.tsx from every subsystem into a
@@ -13,6 +14,8 @@ export interface PackItem {
   label: string;
   /** Secondary context, e.g. the slot's tab name. */
   detail?: string;
+  /** Bundled mods only: the vpk's full path (drives the contents viewer). */
+  path?: string;
 }
 
 /** Two+ modules shipping the same output file: installed as separate addon
@@ -110,12 +113,150 @@ function removeHint(item: PackItem): string | null {
   }
 }
 
+/** Scan results survive collapse/expand and re-renders; a vpk's contents
+ *  don't change while the app runs. */
+const packScanCache = new Map<string, PackContents>();
+
+const CONTENT_CATEGORIES: { key: keyof PackContents; label: string }[] = [
+  { key: "models", label: "Models" },
+  { key: "particles", label: "Particles" },
+  { key: "overwrites", label: "Replaces game sounds" },
+  { key: "ownSounds", label: "Own sounds" },
+  { key: "materials", label: "Materials" },
+  { key: "panorama", label: "UI / menu files" },
+  { key: "other", label: "Other files" },
+];
+
+/** What's INSIDE a bundled mod's vpk, by category, with per-file and
+ *  per-category exclusion. Writes the same importedModExcludes list the
+ *  Preview build manages, so compiles and module exports honor it as-is. */
+function BundledContents({
+  path,
+  helperPath,
+  pakPath,
+  excluded,
+  onChange,
+}: {
+  path: string;
+  helperPath: string;
+  pakPath: string;
+  excluded: string[];
+  onChange: (excluded: string[]) => void;
+}) {
+  const [scan, setScan] = useState<PackContents | null>(packScanCache.get(path) ?? null);
+  const [err, setErr] = useState<string | null>(null);
+  const [openCat, setOpenCat] = useState<string | null>(null);
+  useEffect(() => {
+    if (scan) return;
+    let live = true;
+    scanPackContents(helperPath, pakPath, path)
+      .then((c) => {
+        packScanCache.set(path, c);
+        if (live) setScan(c);
+      })
+      .catch((e) => live && setErr(String(e)));
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [path]);
+  if (err)
+    return <p className="px-2 pb-1 text-[10px] text-red-300">couldn't read the vpk: {err}</p>;
+  if (!scan) return <p className="px-2 pb-1 text-[10px] text-zinc-600">reading the vpk…</p>;
+  const ex = new Set(excluded);
+  return (
+    <div className="mx-2 mb-1 rounded-md border border-zinc-800/70 bg-zinc-950/60 px-2 py-1.5">
+      {CONTENT_CATEGORIES.filter((c) => scan[c.key].length > 0).map((c) => {
+        const files = scan[c.key];
+        const exN = files.filter((f) => ex.has(f)).length;
+        const open = openCat === c.key;
+        return (
+          <div key={c.key} className="py-0.5">
+            <div className="flex items-center gap-2 text-[11px]">
+              <button
+                onClick={() => setOpenCat(open ? null : c.key)}
+                className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-zinc-300 transition hover:text-zinc-100"
+              >
+                <span className="text-zinc-600">{open ? "▾" : "▸"}</span>
+                <span>{c.label}</span>
+                <span className="text-zinc-600">{files.length}</span>
+                {exN > 0 && (
+                  <span className="rounded bg-red-500/10 px-1 text-[10px] text-red-300">
+                    {exN} excluded
+                  </span>
+                )}
+              </button>
+              {exN < files.length ? (
+                <button
+                  onClick={() => onChange([...new Set([...excluded, ...files])])}
+                  title="Leave every file in this category out of your compiled pack (the mod's vpk on disk is untouched)"
+                  className="shrink-0 rounded px-1.5 py-0.5 text-[10px] text-zinc-600 transition hover:bg-red-500/10 hover:text-red-300"
+                >
+                  exclude all
+                </button>
+              ) : (
+                <button
+                  onClick={() => onChange(excluded.filter((f) => !files.includes(f)))}
+                  className="shrink-0 rounded px-1.5 py-0.5 text-[10px] text-emerald-400/80 transition hover:bg-emerald-500/10"
+                >
+                  restore all
+                </button>
+              )}
+            </div>
+            {open && (
+              <div className="mt-0.5 max-h-40 overflow-y-auto pl-5">
+                {files.map((f) => {
+                  const isEx = ex.has(f);
+                  return (
+                    <div key={f} className="flex items-center gap-2 py-px text-[10px]">
+                      <span
+                        className={`min-w-0 flex-1 truncate font-mono ${
+                          isEx ? "text-zinc-700 line-through" : "text-zinc-400"
+                        }`}
+                        title={f}
+                      >
+                        {f}
+                      </span>
+                      <button
+                        onClick={() =>
+                          onChange(
+                            isEx ? excluded.filter((x) => x !== f) : [...excluded, f],
+                          )
+                        }
+                        className={`shrink-0 rounded px-1 text-[10px] transition ${
+                          isEx
+                            ? "text-emerald-400/80 hover:bg-emerald-500/10"
+                            : "text-zinc-600 hover:bg-red-500/10 hover:text-red-300"
+                        }`}
+                      >
+                        {isEx ? "restore" : "exclude"}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      <p className="mt-1 text-[10px] text-zinc-700">
+        Excluded files stay out of every compile and module export - the mod's vpk on disk is
+        never changed.
+      </p>
+    </div>
+  );
+}
+
 function ItemRow({
   item,
   moduleId,
   modules,
   onAssign,
   onRemove,
+  helperPath,
+  pakPath,
+  modExcludes,
+  onModExcludes,
 }: {
   item: PackItem;
   /** "" = Core. */
@@ -123,7 +264,12 @@ function ItemRow({
   modules: PackModule[];
   onAssign: (key: string, moduleId: string) => void;
   onRemove: (item: PackItem) => void;
+  helperPath: string;
+  pakPath: string;
+  modExcludes: Record<string, string[]>;
+  onModExcludes: (vpk: string, excluded: string[]) => void;
 }) {
+  const [showContents, setShowContents] = useState(false);
   const tint = KIND_TINT[item.kind] ?? "#a1a1aa";
   // Two-step remove: first click arms, second click (within 4s) deletes.
   const [armed, setArmed] = useState(false);
@@ -134,6 +280,7 @@ function ItemRow({
   }, [armed]);
   const hint = removeHint(item);
   return (
+    <div>
     <div className="flex items-center gap-2 rounded-md px-2 py-1 text-xs hover:bg-zinc-900/70">
       <span
         style={{ borderColor: `${tint}55`, color: tint, backgroundColor: `${tint}14` }}
@@ -149,6 +296,19 @@ function ItemRow({
         <span className="hidden shrink-0 text-[10px] text-zinc-600 sm:block" title={item.detail}>
           {item.detail}
         </span>
+      )}
+      {item.path && (
+        <button
+          onClick={() => setShowContents((v) => !v)}
+          title="See what's inside this vpk - models, particles, sounds - and exclude the parts you don't want shipped"
+          className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] transition ${
+            showContents
+              ? "bg-zinc-800 text-zinc-200"
+              : "text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+          }`}
+        >
+          {showContents ? "▾ contents" : "▸ contents"}
+        </button>
       )}
       <select
         value={moduleId}
@@ -192,6 +352,16 @@ function ItemRow({
           tab
         </span>
       )}
+    </div>
+    {showContents && item.path && (
+      <BundledContents
+        path={item.path}
+        helperPath={helperPath}
+        pakPath={pakPath}
+        excluded={modExcludes[item.path] ?? []}
+        onChange={(next) => onModExcludes(item.path!, next)}
+      />
+    )}
     </div>
   );
 }
@@ -283,6 +453,10 @@ export function PackBuilderTab({
   onChange,
   onRemoveItem,
   onExportModule,
+  helperPath,
+  pakPath,
+  modExcludes,
+  onModExcludes,
 }: {
   items: PackItem[];
   modules: PackModule[];
@@ -294,6 +468,11 @@ export function PackBuilderTab({
     baseDir: string,
     packRelease: boolean,
   ) => Promise<ExportModuleResult>;
+  helperPath: string;
+  pakPath: string;
+  /** Per-mod excluded internal paths (settings.importedModExcludes). */
+  modExcludes: Record<string, string[]>;
+  onModExcludes: (vpk: string, excluded: string[]) => void;
 }) {
   const [newName, setNewName] = useState("");
   // null = "every exportable module" (the default until the user picks).
@@ -480,7 +659,7 @@ export function PackBuilderTab({
               </p>
             ) : (
               coreItems.map((i) => (
-                <ItemRow key={i.key} item={i} moduleId="" modules={modules} onAssign={assign} onRemove={onRemoveItem} />
+                <ItemRow key={i.key} item={i} moduleId="" modules={modules} onAssign={assign} onRemove={onRemoveItem} helperPath={helperPath} pakPath={pakPath} modExcludes={modExcludes} onModExcludes={onModExcludes} />
               ))
             )}
           </ModuleCard>
@@ -504,7 +683,7 @@ export function PackBuilderTab({
                   </p>
                 ) : (
                   mine.map((i) => (
-                    <ItemRow key={i.key} item={i} moduleId={m.id} modules={modules} onAssign={assign} onRemove={onRemoveItem} />
+                    <ItemRow key={i.key} item={i} moduleId={m.id} modules={modules} onAssign={assign} onRemove={onRemoveItem} helperPath={helperPath} pakPath={pakPath} modExcludes={modExcludes} onModExcludes={onModExcludes} />
                   ))
                 )}
                 {stale > 0 && (
