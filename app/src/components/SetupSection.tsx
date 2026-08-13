@@ -12,21 +12,36 @@ function Field({
   value,
   onChange,
   hint,
+  onBrowse,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   hint?: string;
+  /** Optional picker - typing paths by hand is where support cases start. */
+  onBrowse?: () => void;
 }) {
   return (
     <label className="flex flex-col gap-1">
       <span className="text-xs font-medium text-zinc-400">{label}</span>
-      <input
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        spellCheck={false}
-        className="w-full rounded-md border border-zinc-700/80 bg-zinc-950 px-3 py-1.5 text-xs text-zinc-200 outline-none transition focus:border-violet-500/70"
-      />
+      <div className="flex gap-1.5">
+        <input
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          spellCheck={false}
+          className="w-full rounded-md border border-zinc-700/80 bg-zinc-950 px-3 py-1.5 text-xs text-zinc-200 outline-none transition focus:border-violet-500/70"
+        />
+        {onBrowse && (
+          <button
+            type="button"
+            onClick={onBrowse}
+            title="Browse…"
+            className="shrink-0 rounded-md border border-zinc-700/80 px-2.5 text-xs text-zinc-300 transition hover:border-zinc-500 hover:text-white"
+          >
+            …
+          </button>
+        )}
+      </div>
       {hint && <span className="text-[10px] text-zinc-600">{hint}</span>}
     </label>
   );
@@ -148,6 +163,14 @@ export function SetupSection({
   async function browsePackDir() {
     const sel = await open({ directory: true, title: "Pick your shared pack folder (the repo clone)" });
     if (typeof sel === "string") update({ sharedPackDir: sel });
+  }
+
+  async function browseBlender() {
+    const sel = await open({
+      title: "Pick blender.exe (the program itself, not its folder)",
+      filters: [{ name: "Blender", extensions: ["exe"] }],
+    });
+    if (typeof sel === "string") update({ blenderPath: sel });
   }
 
   async function run(which: "detect" | "refresh", fn: () => Promise<unknown>) {
@@ -395,6 +418,7 @@ export function SetupSection({
               label="Blender path (optional)"
               value={settings.blenderPath}
               onChange={(v) => update({ blenderPath: v })}
+              onBrowse={() => void browseBlender()}
               hint="blender.exe (the install folder also works) - powers auto-rig and Fix model. Blank = found automatically (Steam / Program Files). The Microsoft Store version can't be used - install from blender.org or Steam"
             />
             <Field
