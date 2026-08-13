@@ -506,6 +506,20 @@ export function PackBuilderTab({
   const coreItems = sortItems(items.filter((i) => !ownerOf.has(i.key)));
   const unassignedCount = coreItems.length;
 
+  // Find-anything search: filters rows across Core and every module (cards
+  // with no hits collapse away); a hit on a MODULE'S NAME keeps the whole
+  // module visible, so "which module holds X" and "what's in module Y" both
+  // answer themselves.
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+  const matches = (i: PackItem) =>
+    !q ||
+    i.label.toLowerCase().includes(q) ||
+    i.kind.toLowerCase().includes(q) ||
+    (i.detail ?? "").toLowerCase().includes(q);
+  const coreShown = q ? coreItems.filter(matches) : coreItems;
+  const matchTotal = q ? items.filter(matches).length : items.length;
+
   function assign(key: string, moduleId: string) {
     const stripped = modules.map((m) => ({ ...m, items: m.items.filter((k) => k !== key) }));
     onChange(
@@ -615,6 +629,29 @@ export function PackBuilderTab({
         >
           Sort Core by content type
         </button>
+        <div className="relative ml-auto">
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search the pack…"
+            title="Find content by name, kind (e.g. Effect, Hero model) or tab - matching rows show inside whichever module holds them"
+            className="w-56 rounded-md border border-zinc-700/80 bg-zinc-950 px-3 py-1.5 pr-7 text-xs text-zinc-200 outline-none transition focus:border-teal-500/70"
+          />
+          {query && (
+            <button
+              onClick={() => setQuery("")}
+              aria-label="Clear search"
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded px-1 text-xs text-zinc-500 hover:text-zinc-200"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+        {q && (
+          <span className="text-[11px] text-zinc-500">
+            {matchTotal} match{matchTotal === 1 ? "" : "es"}
+          </span>
+        )}
       </div>
 
       {conflicts.length > 0 && (
@@ -652,24 +689,32 @@ export function PackBuilderTab({
         </p>
       ) : (
         <>
-          <ModuleCard title="Core" count={unassignedCount} defaultOpen={true}>
-            {coreItems.length === 0 ? (
+          {(!q || coreShown.length > 0) && (
+          // The key remounts cards when a search starts, so collapsed ones
+          // open to show their hits.
+          <ModuleCard key={q ? "core-s" : "core"} title="Core" count={unassignedCount} defaultOpen={true}>
+            {coreShown.length === 0 ? (
               <p className="px-2 py-1 text-[11px] text-zinc-600">
                 Everything is assigned to a module. New content lands here first.
               </p>
             ) : (
-              coreItems.map((i) => (
+              coreShown.map((i) => (
                 <ItemRow key={i.key} item={i} moduleId="" modules={modules} onAssign={assign} onRemove={onRemoveItem} helperPath={helperPath} pakPath={pakPath} modExcludes={modExcludes} onModExcludes={onModExcludes} />
               ))
             )}
           </ModuleCard>
+          )}
 
           {modules.map((m) => {
-            const mine = sortItems(items.filter((i) => ownerOf.get(i.key) === m.id));
+            const all = sortItems(items.filter((i) => ownerOf.get(i.key) === m.id));
+            // A hit on the module's NAME keeps the whole module visible.
+            const nameHit = q !== "" && m.name.toLowerCase().includes(q);
+            const mine = q && !nameHit ? all.filter(matches) : all;
+            if (q && !nameHit && mine.length === 0) return null;
             const stale = m.items.filter((k) => !liveKeys.has(k)).length;
             return (
               <ModuleCard
-                key={m.id}
+                key={q ? `${m.id}:s` : m.id}
                 title={m.name}
                 count={mine.length}
                 onRename={(name) =>
