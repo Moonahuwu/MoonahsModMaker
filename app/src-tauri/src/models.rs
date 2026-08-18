@@ -2315,6 +2315,8 @@ impl ModelBuildReport {
     }
 }
 
+/// Test-only entry: the app streams via [`build_with_feed`].
+#[cfg(test)]
 pub fn build(req: &ModelBuildReq) -> ModelBuildReport {
     build_with_feed(req, None)
 }
