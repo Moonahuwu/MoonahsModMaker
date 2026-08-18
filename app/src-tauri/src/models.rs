@@ -3537,6 +3537,94 @@ print("EIM_JUNK_OK", flush=True)
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
+    /// The clean pass's unit auto-fix: a rigged model authored in METERS
+    /// (Blender's default scene, 1/39 of hero size) must come out at game
+    /// units - armature included, so the bind still matches - and the same
+    /// model at game units must be left alone.
+    #[test]
+    #[ignore]
+    fn e2e_clean_mode_fixes_meter_scale() {
+        let blender = Path::new(r"D:\SteamLibrary\steamapps\common\Blender\blender.exe");
+        let glb = Path::new(
+            r"C:\Users\ethob\AppData\Roaming\com.digiphoenix.deadlock-intro-tool\model_gltf\models_heroes_wip_doorman_v2_doorman\doorman.glb",
+        );
+        if !blender.exists() || !glb.exists() {
+            eprintln!("blender or the cached doorman glb missing - skipping");
+            return;
+        }
+        let scratch = std::env::temp_dir().join("eim_cleanunits_e2e");
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        let rigged = scratch.join("rigged.fbx");
+        autorig(blender, glb, glb, &rigged, "transfer", None).expect("autorig");
+        // Shrink meshes + armature to meters and BAKE it, plus a measure mode.
+        let py = r#"
+import bpy, sys
+from mathutils import Matrix, Vector
+argv = sys.argv; argv = argv[argv.index("--") + 1 :]
+mode, src, out = argv[0], argv[1], argv[2]
+bpy.ops.object.select_all(action="SELECT"); bpy.ops.object.delete(use_global=False)
+bpy.ops.import_scene.fbx(filepath=src)
+objs = [o for o in bpy.data.objects if o.type in ("MESH", "ARMATURE")]
+meshes = [o for o in objs if o.type == "MESH"]
+def height():
+    pts = [o.matrix_world @ Vector(c) for o in meshes for c in o.bound_box]
+    return max(p.z for p in pts) - min(p.z for p in pts)
+if mode == "shrink":
+    S = Matrix.Scale(1.0 / 39.3701, 4)
+    for o in objs:
+        if o.parent is None:
+            o.matrix_world = S @ o.matrix_world
+    bpy.ops.object.select_all(action="DESELECT")
+    for o in objs: o.select_set(True)
+    bpy.context.view_layer.objects.active = objs[0]
+    bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+    bpy.ops.object.select_all(action="SELECT")
+    bpy.ops.export_scene.fbx(filepath=out, use_selection=True, object_types={"ARMATURE","MESH"}, add_leaf_bones=False, bake_anim=False, mesh_smooth_type="FACE")
+    print("EIM_TEST_OK height=%.3f" % height(), flush=True)
+else:
+    print("EIM_TEST_OK height=%.3f" % height(), flush=True)
+"#;
+        let script = scratch.join("units.py");
+        std::fs::write(&script, py).unwrap();
+        let run = |mode: &str, src: &Path, out: &Path| -> f64 {
+            let o = std::process::Command::new(blender)
+                .args(["--background", "--factory-startup", "--python"])
+                .arg(&script)
+                .arg("--")
+                .arg(mode)
+                .arg(src)
+                .arg(out)
+                .output()
+                .expect("blender");
+            let text = String::from_utf8_lossy(&o.stdout).into_owned();
+            let line = text.lines().find(|l| l.starts_with("EIM_TEST_OK")).unwrap_or_else(|| panic!("no marker:\n{text}"));
+            line.trim_start_matches("EIM_TEST_OK height=").trim().parse().unwrap()
+        };
+        let h_game = run("measure", &rigged, &scratch.join("unused.fbx"));
+        let tiny = scratch.join("tiny.fbx");
+        let h_tiny = run("shrink", &rigged, &tiny);
+        eprintln!("HEIGHT rigged={h_game:.2} shrunk={h_tiny:.2} (ratio {:.4})", h_tiny / h_game);
+        assert!(h_tiny < h_game * 0.05, "shrink didn't take");
+
+        // The clean pass with the REAL hero glb as reference must detect meters.
+        let fixed = scratch.join("fixed.fbx");
+        let note = autorig(blender, glb, &tiny, &fixed, "clean", None).expect("clean");
+        eprintln!("CLEAN {note}");
+        assert!(note.contains("units=meters"), "expected the meters unit fix: {note}");
+        let h_fixed = run("measure", &fixed, &scratch.join("unused2.fbx"));
+        eprintln!("HEIGHT fixed={h_fixed:.2}");
+        let r = h_fixed / h_game;
+        assert!((0.9..1.1).contains(&r), "fixed model should be back at game units, ratio {r:.3}");
+
+        // Same model already at game units: left alone.
+        let kept = scratch.join("kept.fbx");
+        let note2 = autorig(blender, glb, &rigged, &kept, "clean", None).expect("clean kept");
+        eprintln!("CLEAN {note2}");
+        assert!(note2.contains("units=kept"), "game-unit model must not be rescaled: {note2}");
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
     #[test]
     fn resolve_blender_exe_heals_folder_paths() {
         let root = std::env::temp_dir().join(format!("eim_blender_resolve_{}", std::process::id()));

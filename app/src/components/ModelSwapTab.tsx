@@ -1,10 +1,11 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { appDataDir, join } from "@tauri-apps/api/path";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import {
+  checkPaths,
   heroModelTarget,
   fbxAutoTextures,
   fileStamp,
@@ -137,7 +138,29 @@ export function ModelSwapTab({
   const [previewMine, setPreviewMine] = useState(false);
   const [downloading, setDownloading] = useState(false);
 
-  const cs2Ok = useMemo(() => settings.cs2Root.trim().length > 0, [settings.cs2Root]);
+  // "CS2 ok" = the Workshop Tools COMPILER actually exists under the folder,
+  // not just "a path is set": a CS2 install without the Workshop Tools DLC
+  // used to pass this check and only fail at Build (GameBanana report).
+  // Re-verified on window focus, so installing the DLC lights it up.
+  const cs2Root = settings.cs2Root.trim();
+  const [cs2Ok, setCs2Ok] = useState(false);
+  useEffect(() => {
+    if (!cs2Root) {
+      setCs2Ok(false);
+      return;
+    }
+    let live = true;
+    const verify = () =>
+      checkPaths([`${cs2Root}/game/bin/win64/resourcecompiler.exe`])
+        .then((r) => live && setCs2Ok(!!r[0]))
+        .catch(() => live && setCs2Ok(false));
+    void verify();
+    window.addEventListener("focus", verify);
+    return () => {
+      live = false;
+      window.removeEventListener("focus", verify);
+    };
+  }, [cs2Root]);
   const toolsOk = useMemo(() => settings.csdkRoot.trim().length > 0, [settings.csdkRoot]);
 
   // Live build feed: the backend streams each step as it runs (the final
@@ -580,9 +603,14 @@ export function ModelSwapTab({
         mode: "clean",
       });
       await analyzeMesh([res.outFbx], ws);
+      // The script reports units=meters|centimeters when it rescaled the
+      // scene to game units - worth saying, it's the "my model is tiny" fix.
+      const units = /units=(\w+)/.exec(res.note)?.[1];
+      const unitNote =
+        units && units !== "kept" ? ` Scene was in ${units} - converted to game units.` : "";
       push(
         "success",
-        "Model cleaned up - transforms baked, names fixed, loose parts bound. Your rigging and meshes were kept; check the list above.",
+        `Model cleaned up - transforms baked, names fixed, loose parts bound.${unitNote} Your rigging and meshes were kept; check the list above and the 3D preview before building.`,
       );
     } catch (e) {
       push("error", `Auto-fix failed: ${e}`);
@@ -1091,24 +1119,43 @@ export function ModelSwapTab({
       {!cs2Ok && mode === "hero" && (
         <div className="rounded-xl border border-amber-500/40 bg-amber-500/5 p-4">
           <p className="text-xs font-bold uppercase tracking-widest text-amber-300">
-            CS2 Workshop Tools needed
+            Before you start: CS2 Workshop Tools needed (free)
           </p>
           <p className="mt-1 text-xs text-amber-200/80">
-            Custom hero models need the modern Source 2 compiler, which only ships with
-            Counter-Strike 2's Workshop Tools (free). In Steam: install CS2, then in its
-            Installation options tick "Counter-Strike 2 Workshop Tools". Then hit detect.
-            Object swaps work without any of this.
+            {cs2Root
+              ? `A CS2 folder is set (${cs2Root}) but the Workshop Tools compiler isn't in it - the "Counter-Strike 2 Workshop Tools" DLC is missing. `
+              : "Custom hero models need the modern Source 2 compiler, which only ships with Counter-Strike 2's Workshop Tools. "}
+            The steps: install Counter-Strike 2 in Steam, then in its Steam library page open
+            Properties, DLC, and tick "Counter-Strike 2 Workshop Tools" (about 6 GB). When it
+            finishes, come back - this box checks again by itself. Object swaps (urn, crates,
+            props) work without any of this.
           </p>
-          <button
-            onClick={() => {
-              setDetecting(true);
-              void onAutodetect().finally(() => setDetecting(false));
-            }}
-            disabled={detecting}
-            className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs font-medium text-amber-200 transition hover:bg-amber-500/20 disabled:opacity-50"
-          >
-            {detecting ? "Detecting…" : "Detect CS2 tools"}
-          </button>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button
+              onClick={() => void openUrl("steam://install/730")}
+              title="Opens Steam on Counter-Strike 2 (installs it if you don't have it)"
+              className="rounded-md border border-sky-500/40 bg-sky-500/10 px-3 py-1.5 text-xs font-medium text-sky-200 transition hover:bg-sky-500/20"
+            >
+              1. Install CS2 (Steam)
+            </button>
+            <button
+              onClick={() => void openUrl("steam://install/2279721")}
+              title="Opens Steam on the Workshop Tools DLC so you can install it in one click"
+              className="rounded-md border border-sky-500/40 bg-sky-500/10 px-3 py-1.5 text-xs font-medium text-sky-200 transition hover:bg-sky-500/20"
+            >
+              2. Get the Workshop Tools (Steam)
+            </button>
+            <button
+              onClick={() => {
+                setDetecting(true);
+                void onAutodetect().finally(() => setDetecting(false));
+              }}
+              disabled={detecting}
+              className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs font-medium text-amber-200 transition hover:bg-amber-500/20 disabled:opacity-50"
+            >
+              {detecting ? "Detecting…" : "3. Detect CS2 tools"}
+            </button>
+          </div>
         </div>
       )}
 
@@ -1344,14 +1391,14 @@ export function ModelSwapTab({
                     ? "Change file…"
                     : "Pick your model… (fbx / dmx / glb)"}
             </button>
-            {mode === "hero" && (
+            {mode === "hero" && settings.experimentalAutoRig && (
               <button
                 onClick={() => void autoRig()}
                 disabled={rigging || converting}
-                title="Model not rigged to this hero? Pick it and the app binds it to the hero's skeleton for you (via Blender, found automatically). Best on humanoid-ish models standing like the hero."
+                title="EXPERIMENTAL. Model not rigged to this hero? Pick it and the app binds it to the hero's skeleton for you (via Blender, found automatically). Only for UNRIGGED models - it replaces any rigging the file has. Best on humanoid-ish models standing like the hero; other shapes and poses deform badly."
                 className="rounded-md border border-violet-400/40 bg-violet-400/10 px-3 py-1.5 text-xs font-medium text-violet-200 transition hover:bg-violet-400/20 disabled:opacity-50"
               >
-                {rigging ? "Rigging…" : "Auto-rig a model…"}
+                {rigging ? "Rigging…" : "Auto-rig a model… (experimental)"}
               </button>
             )}
             <button
@@ -1416,21 +1463,29 @@ export function ModelSwapTab({
               ))}
               {(preflight.errors.length > 0 || preflight.warnings.length > 0) &&
                 meshFiles.length === 1 &&
-                FIXABLE.test(meshFiles[0]) && (
+                FIXABLE.test(meshFiles[0]) &&
+                (settings.experimentalAutoRig ? (
                   <div className="mt-1 flex flex-wrap items-center gap-2">
                     <button
                       onClick={() => void autoFix()}
                       disabled={fixing || rigging}
-                      title="Blender (found automatically) bakes the un-applied transforms, strips vertex colors, renames .001 names and binds weightless meshes to the nearest bone. Your rigging, bones and meshes are all kept - nothing is deleted."
+                      title="EXPERIMENTAL. Blender (found automatically) bakes the un-applied transforms, strips vertex colors, renames .001 names, binds weightless meshes to the nearest bone, and fixes meter/centimeter scenes to game units. Your rigging, bones and meshes are all kept - nothing is deleted. Check the result in the 3D preview before building."
                       className="rounded-md border border-violet-400/40 bg-violet-400/10 px-3 py-1.5 text-xs font-medium text-violet-200 transition hover:bg-violet-400/20 disabled:opacity-50"
                     >
-                      {fixing ? "Fixing…" : "⚙ Fix model automatically"}
+                      {fixing ? "Fixing…" : "⚙ Fix model automatically (experimental)"}
                     </button>
                     <span className="text-zinc-600">
-                      bakes transforms, fixes names, binds loose parts - your rigging is kept
+                      bakes transforms, fixes names and units, binds loose parts - your rigging is
+                      kept
                     </span>
                   </div>
-                )}
+                ) : (
+                  <p className="mt-1 text-zinc-600">
+                    Fix these in Blender (Object &gt; Apply &gt; All Transforms is the usual one) -
+                    or turn on "Auto-rig and Fix model" under Settings &gt; Experimental to let the
+                    app try.
+                  </p>
+                ))}
             </div>
           )}
         </section>

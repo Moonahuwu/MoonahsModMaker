@@ -105,6 +105,18 @@ if opts["mode"] == "clean":
     import re
     from mathutils import Vector
 
+    # Reference height (game units) from the target's own model, for the unit
+    # auto-fix below. Skipped when the "hero glb" IS the model being cleaned
+    # (the glb->FBX conversion path passes the source itself).
+    ref_h = None
+    if os.path.abspath(opts["hero_glb"]) != os.path.abspath(opts["model"]):
+        ref_objs = import_any(opts["hero_glb"])
+        rb = world_bbox([o for o in ref_objs if o.type == "MESH"])
+        if rb:
+            ref_h = (rb[5] - rb[2]) * GAME_UNITS_PER_METER  # glb is in meters
+        for o in ref_objs:
+            bpy.data.objects.remove(o, do_unlink=True)
+
     user_objs = import_any(opts["model"])
     meshes = [o for o in user_objs if o.type == "MESH"]
     if not meshes:
@@ -120,6 +132,28 @@ if opts["mode"] == "clean":
     bpy.context.view_layer.objects.active = meshes[0]
     bpy.ops.object.parent_clear(type="CLEAR_KEEP_TRANSFORM")
     apply_all(meshes + ([arm] if arm else []))
+
+    # Unit auto-fix: a scene authored in meters (Blender default) or centimeters
+    # comes out 1/39 or 2.5x the target's size in game - the classic "my model
+    # is tiny/huge" outcome. When the height ratio sits right on one of those
+    # conversion factors, rescale everything (armature included, so the bind
+    # follows) to game units and bake again. Anything else is left alone.
+    unit_note = ""
+    ub = world_bbox(meshes)
+    if ref_h and ub:
+        user_h = ub[5] - ub[2]
+        ratio = user_h / ref_h if ref_h > 1e-6 else 0.0
+        factor = None
+        if 0.019 < ratio < 0.032:      # ~1/39.37: meters -> game units
+            factor, unit_note = GAME_UNITS_PER_METER, "meters"
+        elif 1.9 < ratio < 3.2:        # ~2.54: centimeters -> game units
+            factor, unit_note = GAME_UNITS_PER_METER / 100.0, "centimeters"
+        if factor:
+            from mathutils import Matrix
+            S = Matrix.Scale(factor, 4)
+            for o in meshes + ([arm] if arm else []):
+                o.matrix_world = S @ o.matrix_world
+            apply_all(meshes + ([arm] if arm else []))
 
     for i, o in enumerate(meshes):
         # Vertex colors can render the model black in game - drop them.
@@ -189,7 +223,7 @@ if opts["mode"] == "clean":
         mesh_smooth_type="FACE",
     )
     print(
-        f"EIM_AUTORIG_OK meshes={len(meshes)} rigged={sum(1 for o in meshes if o.vertex_groups)} bound={bound} out={opts['out']}",
+        f"EIM_AUTORIG_OK meshes={len(meshes)} rigged={sum(1 for o in meshes if o.vertex_groups)} bound={bound} units={unit_note or 'kept'} out={opts['out']}",
         flush=True,
     )
     sys.exit(0)
@@ -233,6 +267,22 @@ user_objs = import_any(opts["model"])
 user_meshes = [o for o in user_objs if o.type == "MESH"]
 if not user_meshes:
     die("no meshes found in the model file")
+# A model that is ALREADY rigged to this hero must not go through auto-rig:
+# it would throw a good rig away and replace it with transferred weights
+# (the "auto-rig broke my model" report). Refuse with the right next step.
+# (Rigging the hero glb onto itself is the tests' way to fabricate a known-good
+# rigged FBX - that self-rig case is exempt.)
+if opts["mode"] == "transfer" and os.path.abspath(opts["model"]) != os.path.abspath(opts["hero_glb"]):
+    for o in user_objs:
+        if o.type == "ARMATURE":
+            theirs = {b.name for b in o.data.bones}
+            shared = len(theirs & bone_names)
+            if theirs and shared >= max(8, len(theirs) // 2):
+                die(
+                    f"this model is already rigged to the hero's skeleton ({shared} matching bones) - "
+                    "just pick it as your model (or use Fix model automatically if the checks complain). "
+                    "Auto-rig is only for UNRIGGED models: it would replace your rigging."
+                )
 # Their own rig (if any) is replaced by the hero's.
 for o in user_objs:
     if o.type == "ARMATURE":

@@ -2,7 +2,10 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the main window and the mod-menu overlay",
-  "windows": ["main", "overlay"],
+  "windows": [
+    "main",
+    "overlay"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-show",
@@ -11,7 +14,20 @@
     "core:window:allow-start-dragging",
     "opener:default",
     "opener:allow-open-path",
-    "opener:allow-open-url",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        {
+          "url": "https://*"
+        },
+        {
+          "url": "http://*"
+        },
+        {
+          "url": "steam://*"
+        }
+      ]
+    },
     "opener:allow-reveal-item-in-dir",
     "dialog:default",
     "dialog:allow-open"

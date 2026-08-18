@@ -306,6 +306,13 @@ export function SetupSection({
               accent="accent-amber-500"
             />
             <Toggle
+              checked={settings.experimentalAutoRig}
+              onChange={(v) => update({ experimentalAutoRig: v })}
+              title="Auto-rig and Fix model (Blender)"
+              desc="Adds the Auto-rig a model and Fix model automatically buttons to Model Replacement. Both drive Blender headlessly. Results depend heavily on the input - pose, scale, existing rigging - so treat them as a starting point, not a guarantee."
+              accent="accent-amber-500"
+            />
+            <Toggle
               checked={settings.experimentalServer}
               onChange={(v) => update({ experimentalServer: v })}
               title="Custom Server (config editor / randomizer / hosting)"

@@ -6414,4 +6414,69 @@ mod tests {
         );
         assert_eq!(events_c_relpath("soundevents/music.vsndevts"), "soundevents/music.vsndevts_c");
     }
+
+    /// A pack that is ONLY a model swap must build (GameBanana report: users
+    /// added a dummy hero image just to un-grey Compile). Runs the real
+    /// pipeline headless (skip_compile, folder output) with a fake artifact:
+    /// the report must be green and the artifact staged at the vanilla path.
+    #[test]
+    fn model_only_pack_builds() {
+        let root = std::env::temp_dir().join(format!("eim_model_only_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let content = root.join("content");
+        let compiled = root.join("compiled");
+        let out = root.join("out");
+        std::fs::create_dir_all(&content).unwrap();
+        std::fs::create_dir_all(&compiled).unwrap();
+        let artifact = root.join("haze.vmdl_c");
+        std::fs::write(&artifact, b"fake-vmdl_c").unwrap();
+        let cfg = CompileConfig {
+            content_root: content.to_string_lossy().into_owned(),
+            compiled_root: compiled.to_string_lossy().into_owned(),
+            game_info_dir: root.join("game").to_string_lossy().into_owned(),
+            sound_folder: "sounds/music/match_intro".into(),
+            resource_compiler: "resourcecompiler.exe".into(),
+            ffmpeg_path: None,
+            vpk_helper_path: None,
+            vanilla_root: root.join("vanilla").to_string_lossy().into_owned(),
+            pak_path: None,
+            output_dir: out.to_string_lossy().into_owned(),
+            output_mode: "folder".into(),
+            vpk_name: "pak01_dir.vpk".into(),
+            zip_output: false,
+            write_encoding_txt: false,
+            skip_compile: true,
+            imported_mods: vec![],
+            imported_mod_excludes: Default::default(),
+            events: vec![],
+            icon_mods: vec![],
+            sound_overrides: vec![],
+            effect_overrides: vec![],
+            vdata_overrides: vec![],
+            global_overrides: vec![],
+            world_overrides: vec![],
+            poster_overrides: vec![],
+            hero_textures: vec![],
+            mod_textures: vec![],
+            model_overrides: vec![ModelOverrideCompile {
+                target_rel: "models/heroes_staging/haze/haze.vmdl_c".into(),
+                artifact: artifact.to_string_lossy().into_owned(),
+                label: "Haze".into(),
+                materials: vec![],
+            }],
+            digimod: None,
+            ui_overrides: vec![],
+            credits_text: None,
+            export_only: false,
+        };
+        let report = run(&cfg);
+        for s in &report.steps {
+            eprintln!("[{}] {} :: {}", if s.ok { "OK" } else { "FAIL" }, s.name, s.detail);
+        }
+        assert!(report.ok, "model-only pack must build: {:?}", report.steps);
+        let staged = out.join("mine").join("_staging").join("models/heroes_staging/haze/haze.vmdl_c");
+        assert!(staged.exists(), "artifact not staged at the vanilla path");
+        assert!(report.output_path.is_some());
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

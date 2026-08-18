@@ -70,6 +70,10 @@ export interface Settings {
   experimentalEffects: boolean;
   /** Material fx dropdown in Model Replacement (space glow etc.). */
   experimentalMaterialFx: boolean;
+  /** Experimental: the Blender-driven "Auto-rig a model" and "Fix model
+   *  automatically" buttons in Model Replacement. Off by default: results
+   *  depend heavily on the input model (pose, scale, existing rig). */
+  experimentalAutoRig: boolean;
   /** Experimental: reveal the Custom Server tab (config editor / randomizer /
    *  hosting). Off by default; the tab stays visible while a project already
    *  carries gameplay edits so they can't get stranded. */
@@ -222,6 +226,7 @@ export const DEFAULT_SETTINGS: Settings = {
   compareByDefault: false,
   experimentalEffects: false,
   experimentalMaterialFx: false,
+  experimentalAutoRig: false,
   experimentalServer: false,
   experimentalUiMaster: false,
   experimentalEasyCompile: false,

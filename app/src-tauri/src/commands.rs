@@ -7717,6 +7717,25 @@ fn hero_images_impl(
             stem_candidates.push(s);
         }
     }
+    // Multi-word display names drop their title word for the background
+    // (Lady Geist -> geist_bg). Try the last word too.
+    if let Some(last) = display_stem.rsplit('_').next() {
+        if last != display_stem && !last.is_empty() && !stem_candidates.iter().any(|s| s == last) {
+            stem_candidates.push(last.to_string());
+        }
+    }
+    // A few backgrounds are authored under a hero's EARLY dev name that
+    // appears nowhere else in the data (proven by elimination against the
+    // backgrounds folder: every other stem is claimed). Keep this list tiny.
+    let alias = match codename.as_str() {
+        "bookworm" => Some("patience"), // Paige
+        _ => None,
+    };
+    if let Some(a) = alias {
+        if !stem_candidates.iter().any(|s| s == a) {
+            stem_candidates.push(a.to_string());
+        }
+    }
     let mut kinds: Vec<(&str, String)> = vec![
         ("card", format!("panorama/images/heroes/{img_stem}_card_psd.vtex_c")),
         ("card_critical", format!("panorama/images/heroes/{img_stem}_card_critical_psd.vtex_c")),
