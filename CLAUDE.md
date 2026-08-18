@@ -50,6 +50,13 @@ cd app && npx tsc --noEmit && npm run build
 Convenience launchers exist: `Run EasyIntroModder (dev).bat` (double-click) and VS Code
 tasks ("▶ Run app (dev, hot reload)" = Ctrl+Shift+B).
 
+**OPS gotcha (WebView2 151+):** dev mode MUST use `127.0.0.1`, not `localhost`, on both
+sides (`vite.config.ts` `server.host` + `tauri.conf.json` `devUrl`). Node binds
+`localhost` to `[::1]` only here, and WebView2 151.0.4129 mis-handles the IPv6/IPv4
+fallback for the dev URL: the window rendered a garbled response (`P<pointer bytes>HTTP/1.1
+200 OK Access-Control-Allow-Origin...`) as plain text instead of the app. Release builds
+(`tauri.localhost` protocol) were never affected. Diagnosed + fixed 2026-08-18.
+
 **OPS gotcha:** `tauri dev` binds Vite port 1420. Killing a dev run can leave a stray
 `node` (Vite) + `app.exe` holding 1420 → next launch fails "Port 1420 already in use".
 Fix: kill the PID from `Get-NetTCPConnection -LocalPort 1420` plus stray `app` processes.

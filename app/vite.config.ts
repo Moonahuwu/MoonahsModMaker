@@ -17,7 +17,12 @@ export default defineConfig(async () => ({
   server: {
     port: 1420,
     strictPort: true,
-    host: host || false,
+    // 127.0.0.1 explicitly, not "localhost": Node binds localhost to [::1]
+    // only on some machines, and WebView2 151 mis-handles the resulting
+    // IPv6/IPv4 fallback race for the dev URL (it rendered a garbled response
+    // as the page). Pinning both sides to IPv4 loopback removes the race;
+    // tauri.conf.json's devUrl matches this.
+    host: host || "127.0.0.1",
     hmr: host
       ? {
           protocol: "ws",
