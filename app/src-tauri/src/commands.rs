@@ -7951,7 +7951,10 @@ fn hero_materials_impl(
 
     // Serve the cached list unless a refresh was requested (or a decoded PNG
     // was cleaned away underneath us).
-    let cache = base.join(format!("mats_v1_{codename}.json"));
+    // v2: material list comes from the vmdl_c's own references (v1 listed
+    // the model dir's children - wrong dir for Infernus, stale siblings for
+    // others), so cached v1 lists are recomputed once.
+    let cache = base.join(format!("mats_v2_{codename}.json"));
     if !refresh {
         if let Ok(text) = std::fs::read_to_string(&cache) {
             if let Ok(cached) = serde_json::from_str::<Vec<HeroMaterial>>(&text) {
@@ -7988,19 +7991,48 @@ fn hero_materials_impl(
     let model_dir = model.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
     let mat_prefix = format!("{model_dir}/materials/");
 
-    // Direct children only: accessory models (abrams_book/...) keep their own
-    // materials dirs and belong to props, not the hero's skin.
-    let vmat_cs: Vec<String> = crate::vpk::list(&helper_path, &pak_path, Some(&mat_prefix))?
-        .into_iter()
-        .filter(|p| {
-            p.starts_with(&mat_prefix)
-                && p.ends_with(".vmat_c")
-                && !p[mat_prefix.len()..].contains('/')
-        })
-        .collect();
-    if vmat_cs.is_empty() {
-        return Err(format!("no materials found under {mat_prefix}"));
+    // Primary source: the materials the compiled model ACTUALLY references
+    // (embedded as ASCII paths in the vmdl_c). The "materials sit next to
+    // the model" convention breaks for some heroes - Infernus's vdata model
+    // is heroes_wip/inferno/ while its materials live under
+    // heroes_staging/inferno_v4/materials/ - and the Textures section
+    // vanished for them.
+    let mut vmat_cs: Vec<String> = Vec::new();
+    {
+        let model_c = if model.ends_with("_c") { model.clone() } else { format!("{model}_c") };
+        let tmp = base.join(".model_scan.vmdl_c");
+        if crate::vpk::extract(&helper_path, &pak_path, &model_c, &tmp.to_string_lossy()).is_ok() {
+            if let Ok(bytes) = std::fs::read(&tmp) {
+                for r in crate::models::scan_vmdl_material_refs(&bytes) {
+                    let r = r.replace('\\', "/");
+                    // Skin materials only: model-tree paths, no vmat outside models/.
+                    if r.starts_with("models/") && r.ends_with(".vmat") {
+                        let c = format!("{r}_c");
+                        if !vmat_cs.contains(&c) {
+                            vmat_cs.push(c);
+                        }
+                    }
+                }
+            }
+            let _ = std::fs::remove_file(&tmp);
+        }
     }
+    // Fallback: direct children of the model's own materials dir. Accessory
+    // models (abrams_book/...) keep their own dirs and belong to props.
+    if vmat_cs.is_empty() {
+        vmat_cs = crate::vpk::list(&helper_path, &pak_path, Some(&mat_prefix))?
+            .into_iter()
+            .filter(|p| {
+                p.starts_with(&mat_prefix)
+                    && p.ends_with(".vmat_c")
+                    && !p[mat_prefix.len()..].contains('/')
+            })
+            .collect();
+    }
+    if vmat_cs.is_empty() {
+        return Err(format!("no materials found for {model} (nor under {mat_prefix})"));
+    }
+    vmat_cs.sort();
 
     let mut out = Vec::new();
     for vmat_c in vmat_cs {
@@ -8389,6 +8421,41 @@ mod tests {
             println!("no local rar sample - skipped the .rar leg");
         }
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Infernus regression (GameBanana: "the Textures tab disappears for
+    /// Infernus"): his vdata model lives in heroes_wip/inferno/ but the
+    /// materials in heroes_staging/inferno_v4/materials/ - the model dir
+    /// listing finds nothing, the vmdl_c's own references find the skins.
+    /// Runs against the real game pak; ignored by default.
+    #[test]
+    #[ignore]
+    fn e2e_infernus_materials_come_from_the_model_refs() {
+        let helper = r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\tools\vpk-helper\dist\vpk-helper.exe";
+        let pak = r"D:\SteamLibrary\steamapps\common\Deadlock\game\citadel\pak01_dir.vpk";
+        if !std::path::Path::new(helper).exists() || !std::path::Path::new(pak).exists() {
+            eprintln!("helper or pak missing - skipping");
+            return;
+        }
+        let tmp = std::env::temp_dir().join("eim_inferno_mats");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let out = tmp.join("inferno.vmdl_c");
+        crate::vpk::extract(helper, pak, "models/heroes_wip/inferno/inferno.vmdl_c", &out.to_string_lossy())
+            .expect("extract");
+        let refs: Vec<String> = crate::models::scan_vmdl_material_refs(&std::fs::read(&out).unwrap())
+            .into_iter()
+            .filter(|r| r.starts_with("models/") && r.ends_with(".vmat"))
+            .collect();
+        eprintln!("inferno refs: {refs:?}");
+        assert!(
+            refs.iter().any(|r| r == "models/heroes_staging/inferno_v4/materials/inferno_body.vmat"),
+            "the body skin must come from the model's references"
+        );
+        // And the naive "next to the model" dir really is empty - the bug.
+        let naive = crate::vpk::list(helper, pak, Some("models/heroes_wip/inferno/materials/")).unwrap();
+        assert!(naive.iter().all(|p| !p.ends_with(".vmat_c")), "if this fires, Valve moved the materials back");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
