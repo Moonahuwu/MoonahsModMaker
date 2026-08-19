@@ -2,6 +2,26 @@
 
 All notable changes since 1.0.4. Download: https://gamebanana.com/tools/23422
 
+## 1.2 (2026-08-18)
+
+### Model Replacement
+- Use models from other mods: pick any mod's pak01_dir.vpk, choose a model inside, and the app extracts it with its textures and converts it for your target - e.g. turn a soul container mod into an urn mod. No fbx/dmx needed. The mesh picker also accepts .glb/.gltf files directly (converted via Blender).
+- The Build button now streams every step live and tells you the expected time (fast build 1 to 3 minutes, full 10 to 20) - it looked stuck before. A genuinely stuck compiler is stopped after 40 minutes with what to check.
+- The CS2 Workshop Tools banner now checks that the Workshop Tools DLC is actually installed, not just that CS2 is (a CS2 install without the DLC used to fail only at Build), and has one-click Steam buttons to install CS2 and the DLC.
+- Auto-rig and Fix model moved behind Settings > Experimental ("Auto-rig and Fix model (Blender)"), off by default. Two fixes for how they broke models: Auto-rig refuses a model that is already rigged to the hero instead of throwing the rigging away, and Fix model converts meter/centimeter scenes to game units so the result isn't tiny or huge.
+- Fixed: a pack containing only a model swap could not compile (the Compile button stayed off until some unrelated content existed).
+
+### Heroes
+- Fixed missing hero backgrounds for Paige and Lady Geist (the game stores them under different names).
+- Fixed the Textures section disappearing for Infernus: his materials live in a different folder than his model. Material lists now come straight from the model, which also makes them more accurate for a few other heroes.
+
+### Pack Builder
+- Bundled mod rows have a "contents" expander: see every model, particle, sound and file inside the vpk, and exclude the parts you don't want shipped (per file or per category). Exclusions apply to compiles and module exports; the vpk on disk is never changed.
+- Search box: find any content by name, kind or tab, shown inside whichever module holds it.
+
+### Compile
+- Model swaps count in the "Your pack" summary.
+
 ## 1.1.1 (2026-08-13)
 
 - Auto-rig / Fix model: a Blender path pointing at the install FOLDER now finds blender.exe inside it automatically - the "Access is denied (os error 5)" error this caused is gone. Quotes from Explorer's "Copy as path" are handled too.
