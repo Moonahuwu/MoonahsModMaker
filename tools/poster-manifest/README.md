@@ -13,7 +13,35 @@ index file in the game — the rectangles below were recovered from the trans
 poster = painting new art over exactly that rectangle in the color texture and
 recompiling the `.vmat` (addon model, same recipe as audio compiles).
 
-## Regenerating after a game patch
+## Regenerating after a game patch (v2: from the maps' UVs)
+
+Manifest v2 regions come from the compiled maps themselves, not from mask
+guessing: every poster quad's UV rect is read out of the world geometry.
+
+```sh
+# 1. mine every map (seconds each; needs the helper built: dotnet build in tools/vpk-helper)
+for m in dl_streets dl_midtown dl_hideout street_test hero_testing 1v1_test new_player_basics; do
+  dotnet tools/vpk-helper/bin/Release/net10.0/vpk-helper.dll worldrects     "<Deadlock>/game/citadel/maps/$m.vpk" "<Deadlock>/game/citadel/pak01_dir.vpk" out/uv/${m}_rects.json
+done
+# 2. curate into the manifest (+ review overlays: green = placed region, grey = unused old one)
+python curate_uv.py out/uv --overlays out/uv_overlays        # add --dry to preview only
+```
+
+`worldrects` walks the world nodes (world geometry + baked static props) and
+entity models, and for every draw call on a `materials/overlays/*` (or
+`models/hideout/materials/*`) material clusters the triangles into UV islands
+with their model-space bounds. `curate_uv.py` then merges the pieces of one
+decal split by wall seams (adjacent in UV AND in the world - the world test is
+what keeps two signs stacked in a gutterless atlas apart), folds clipped
+partial placements into their full region, unions trim bands sampled in
+stretches, drops sub-32px slivers, keeps each region's old id when it overlaps
+the old rect (IoU >= 0.5; users' overrides reference `sheet::id`), assigns
+`item_NN` to the rest, flags old regions no map places as `unused: true`
+(the app hides them by default), and recomputes `alphaCoverage` from the trans
+mask. Regions carry `placements` = how many quads sample them across the maps.
+The old mask pipeline below still exists for sheets no map references.
+
+## Regenerating with the mask detector (v1, legacy)
 
 Requires Python with `numpy` + `Pillow`. The decompiled overlay textures must be
 present (helper `decompileall` / `refresh_vanilla` output) — default location is

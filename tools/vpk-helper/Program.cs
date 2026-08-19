@@ -13,6 +13,7 @@ using ValveResourceFormat;
 using ValveResourceFormat.IO;
 using ValveResourceFormat.ResourceTypes;
 using SkiaSharp;
+using ValveResourceFormat.Serialization.KeyValues;
 
 return args.Length == 0 ? Usage() : Dispatch(args);
 
@@ -43,6 +44,7 @@ static int Dispatch(string[] args)
             "texture" => TextureCmd(args),
             "texturebatch" => TextureBatch(args),
             "heroes" => Heroes(args),
+            "worldrects" => WorldRects(args),
             _ => Unknown(args[0]),
         };
     }
@@ -532,6 +534,277 @@ static int TextureBatch(string[] args)
 // <destDir>/<codename>.png in a single pass (one Package.Read). Prefers the
 // "_card_psd" art, falling back to _vertical/_sm/_mm. Prints "codename\tpath"
 // per hero. Variant tags (_critical/_gloat/hashed) are ignored.
+// worldrects <mapVpk> <mainPak> <out.json> [materialPrefixes]
+// Ground truth for the poster manifest: walk the compiled map's world nodes
+// (world geometry + baked static props) and its entity models, and for every
+// mesh draw call whose material starts with one of the prefixes (default
+// "materials/overlays/,models/hideout/materials/") cluster the triangles into
+// UV islands (each poster quad = one island) and emit each island's UV rect.
+// The rects ARE the regions the map samples from the atlas - no mask guessing.
+static int WorldRects(string[] args)
+{
+    if (args.Length < 4)
+    {
+        Console.Error.WriteLine("usage: worldrects <mapVpk> <mainPak> <out.json> [materialPrefixes,comma,separated]");
+        return 2;
+    }
+    var mapVpk = Path.GetFullPath(args[1]);
+    var mainPak = Path.GetFullPath(args[2]);
+    var outFile = Path.GetFullPath(args[3]);
+    var prefixes = (args.Length > 4 ? args[4] : "materials/overlays/,models/hideout/materials/")
+        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Select(p => p.Replace('\\', '/').ToLowerInvariant()).ToArray();
+
+    using var map = new Package();
+    map.Read(mapVpk);
+    using var main = new Package();
+    main.Read(mainPak);
+
+    byte[] ReadAny(string internalPath)
+    {
+        internalPath = internalPath.Replace('\\', '/').TrimStart('/');
+        foreach (var pkg in new[] { map, main })
+        {
+            var e = pkg.FindEntry(internalPath);
+            if (e != null) { pkg.ReadEntry(e, out var b); return b; }
+        }
+        return null;
+    }
+    Resource LoadRes(string internalPath)
+    {
+        var bytes = ReadAny(internalPath);
+        if (bytes == null) return null;
+        var r = new Resource { FileName = internalPath };
+        r.Read(new MemoryStream(bytes));
+        return r;
+    }
+
+    // 1) The world + its nodes -> every renderable model path.
+    var worldEntry = map.Entries.Values.SelectMany(x => x).FirstOrDefault(e => e.GetFullPath().Replace('\\', '/').EndsWith("/world.vwrld_c"));
+    if (worldEntry == null) { Console.Error.WriteLine("no world.vwrld_c in the map vpk"); return 1; }
+    var worldPath = worldEntry.GetFullPath().Replace('\\', '/');
+    using var worldRes = LoadRes(worldPath);
+    var world = (World)worldRes.DataBlock;
+    var modelPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    var nodeCount = 0;
+    foreach (var nodeName in world.GetWorldNodeNames())
+    {
+        using var nodeRes = LoadRes(nodeName + ".vwnod_c");
+        if (nodeRes == null) { Console.Error.WriteLine($"missing world node {nodeName}"); continue; }
+        nodeCount++;
+        var node = (WorldNode)nodeRes.DataBlock;
+        foreach (var list in new[] { node.SceneObjects, node.AggregateSceneObjects, node.ClutterSceneObjects })
+        {
+            if (list == null) continue;
+            foreach (var so in list)
+            {
+                var m = so.GetStringProperty("m_renderableModel", null);
+                if (!string.IsNullOrEmpty(m)) modelPaths.Add(m.Replace('\\', '/'));
+            }
+        }
+    }
+    // Entity-placed models (prop_dynamic billboards etc.).
+    var entModels = 0;
+    try
+    {
+        foreach (var lumpName in world.GetEntityLumpNames())
+        {
+            using var lumpRes = LoadRes(lumpName + ".vents_c");
+            if (lumpRes == null) continue;
+            var lump = (EntityLump)lumpRes.DataBlock;
+            foreach (var ent in lump.GetEntities())
+            {
+                var m = ent.GetStringProperty("model", null);
+                if (!string.IsNullOrEmpty(m) && m.EndsWith(".vmdl", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (modelPaths.Add(m.Replace('\\', '/'))) entModels++;
+                }
+            }
+        }
+    }
+    catch (Exception ex) { Console.Error.WriteLine("entity scan skipped: " + ex.Message); }
+    Console.Error.WriteLine($"{nodeCount} world node(s), {modelPaths.Count} distinct model(s) ({entModels} from entities)");
+
+    // 2) Every mesh of every model: draw calls on matching materials -> UV islands.
+    var rects = new Dictionary<string, Dictionary<string, (float u0, float v0, float u1, float v1, int quads, HashSet<string> models, float x0, float y0, float z0, float x1, float y1, float z1, bool hasPos)>>(StringComparer.OrdinalIgnoreCase);
+    var meshesScanned = 0; var drawCallsHit = 0; var missingModels = 0;
+
+    void ScanMesh(Mesh mesh, string modelPath)
+    {
+        var vbib = mesh.VBIB;
+        var data = mesh.Data;
+        if (vbib == null || data == null) return;
+        meshesScanned++;
+        var uvCache = new Dictionary<int, System.Numerics.Vector2[]>();
+        var posCache = new Dictionary<int, System.Numerics.Vector3[]>();
+        System.Numerics.Vector2[] UVsFor(int vbIndex)
+        {
+            if (uvCache.TryGetValue(vbIndex, out var cached)) return cached;
+            var vb = vbib.VertexBuffers[vbIndex];
+            var field = vb.InputLayoutFields.FirstOrDefault(f => f.SemanticName == "TEXCOORD" && f.SemanticIndex == 0);
+            System.Numerics.Vector2[] uvs = null;
+            if (field.SemanticName == "TEXCOORD")
+            {
+                try { uvs = ValveResourceFormat.Blocks.VBIB.GetVector2AttributeArray(vb, field); } catch { uvs = null; }
+            }
+            uvCache[vbIndex] = uvs;
+            return uvs;
+        }
+        // Positions (model space) let the curation tell "one decal split by a
+        // wall seam" from "two signs stacked in a gutterless atlas": the
+        // former's pieces are adjacent in the world too, the latter aren't.
+        System.Numerics.Vector3[] PosFor(int vbIndex)
+        {
+            if (posCache.TryGetValue(vbIndex, out var cached)) return cached;
+            var vb = vbib.VertexBuffers[vbIndex];
+            var field = vb.InputLayoutFields.FirstOrDefault(f => f.SemanticName == "POSITION");
+            System.Numerics.Vector3[] pos = null;
+            if (field.SemanticName == "POSITION")
+            {
+                try { pos = ValveResourceFormat.Blocks.VBIB.GetVector3AttributeArray(vb, field); } catch { pos = null; }
+            }
+            posCache[vbIndex] = pos;
+            return pos;
+        }
+        foreach (var so in data.GetArray("m_sceneObjects"))
+        {
+            foreach (var dc in so.GetArray("m_drawCalls"))
+            {
+                var mat = dc.GetStringProperty("m_material", null) ?? dc.GetStringProperty("m_pMaterial", "");
+                var matLower = mat.Replace('\\', '/').ToLowerInvariant();
+                if (!prefixes.Any(p => matLower.StartsWith(p))) continue;
+                var vbInfos = dc.GetArray("m_vertexBuffers");
+                if (vbInfos.Count == 0) continue;
+                var vbIndex = (int)vbInfos[0].GetIntegerProperty("m_hBuffer", 0);
+                var vbBind = (int)vbInfos[0].GetIntegerProperty("m_nBindOffsetBytes", 0);
+                var ibInfo = dc.GetSubCollection("m_indexBuffer");
+                var ibIndex = (int)ibInfo.GetIntegerProperty("m_hBuffer", 0);
+                var ibBind = (int)ibInfo.GetIntegerProperty("m_nBindOffsetBytes", 0);
+                var start = (int)dc.GetIntegerProperty("m_nStartIndex", 0);
+                var count = (int)dc.GetIntegerProperty("m_nIndexCount", 0);
+                var baseVertex = (int)dc.GetIntegerProperty("m_nBaseVertex", 0);
+                if (vbIndex >= vbib.VertexBuffers.Count || ibIndex >= vbib.IndexBuffers.Count) continue;
+                var uvs = UVsFor(vbIndex);
+                if (uvs == null) continue;
+                var vb = vbib.VertexBuffers[vbIndex];
+                var vertexOffset = baseVertex + (vb.ElementSizeInBytes > 0 ? vbBind / (int)vb.ElementSizeInBytes : 0);
+                var ib = vbib.IndexBuffers[ibIndex];
+                var elem = (int)ib.ElementSizeInBytes;
+                var idx = new int[count];
+                for (var i = 0; i < count; i++)
+                {
+                    var at = ibBind + (start + i) * elem;
+                    if (at + elem > ib.Data.Length) { count = i; break; }
+                    idx[i] = elem == 2 ? BitConverter.ToUInt16(ib.Data, at) : (int)BitConverter.ToUInt32(ib.Data, at);
+                }
+                // Union-find over shared vertex indices -> islands (a poster quad).
+                var parent = new Dictionary<int, int>();
+                int Find(int a) { while (parent.TryGetValue(a, out var p) && p != a) { a = p; } return a; }
+                void Union(int a, int b) { var ra = Find(a); var rb = Find(b); if (ra != rb) parent[ra] = rb; }
+                for (var i = 0; i + 2 < count; i += 3)
+                {
+                    foreach (var k in new[] { idx[i], idx[i + 1], idx[i + 2] }) parent.TryAdd(k, k);
+                    Union(idx[i], idx[i + 1]); Union(idx[i + 1], idx[i + 2]);
+                }
+                var pos = PosFor(vbIndex);
+                var islands = new Dictionary<int, (float u0, float v0, float u1, float v1, int tris)>();
+                var bounds = new Dictionary<int, (float x0, float y0, float z0, float x1, float y1, float z1)>();
+                for (var i = 0; i + 2 < count; i += 3)
+                {
+                    var root = Find(idx[i]);
+                    var cur = islands.TryGetValue(root, out var c) ? c : (float.MaxValue, float.MaxValue, float.MinValue, float.MinValue, 0);
+                    var bb = bounds.TryGetValue(root, out var b) ? b : (float.MaxValue, float.MaxValue, float.MaxValue, float.MinValue, float.MinValue, float.MinValue);
+                    foreach (var k in new[] { idx[i], idx[i + 1], idx[i + 2] })
+                    {
+                        var vi = k + vertexOffset;
+                        if (vi < 0 || vi >= uvs.Length) continue;
+                        var uv = uvs[vi];
+                        cur.Item1 = Math.Min(cur.Item1, uv.X); cur.Item2 = Math.Min(cur.Item2, uv.Y);
+                        cur.Item3 = Math.Max(cur.Item3, uv.X); cur.Item4 = Math.Max(cur.Item4, uv.Y);
+                        if (pos != null && vi < pos.Length)
+                        {
+                            var p = pos[vi];
+                            bb.Item1 = Math.Min(bb.Item1, p.X); bb.Item2 = Math.Min(bb.Item2, p.Y); bb.Item3 = Math.Min(bb.Item3, p.Z);
+                            bb.Item4 = Math.Max(bb.Item4, p.X); bb.Item5 = Math.Max(bb.Item5, p.Y); bb.Item6 = Math.Max(bb.Item6, p.Z);
+                        }
+                    }
+                    cur.Item5++;
+                    islands[root] = cur;
+                    bounds[root] = bb;
+                }
+                if (islands.Count == 0) continue;
+                drawCallsHit++;
+                if (!rects.TryGetValue(mat, out var perMat)) { perMat = new(); rects[mat] = perMat; }
+                foreach (var (root, isl) in islands)
+                {
+                    if (isl.u0 == float.MaxValue) continue;
+                    var bb = bounds[root];
+                    var hasPos = bb.x0 != float.MaxValue;
+                    // One entry per (model, island): the curation needs each
+                    // placement's pieces individually, with their world extents.
+                    var key = modelPath + "|" + perMat.Count;
+                    perMat[key] = (isl.u0, isl.v0, isl.u1, isl.v1, 1, new HashSet<string> { modelPath },
+                        hasPos ? bb.x0 : 0, hasPos ? bb.y0 : 0, hasPos ? bb.z0 : 0, hasPos ? bb.x1 : 0, hasPos ? bb.y1 : 0, hasPos ? bb.z1 : 0, hasPos);
+                }
+            }
+        }
+    }
+
+    foreach (var modelPath in modelPaths.OrderBy(x => x))
+    {
+        using var mres = LoadRes(modelPath.EndsWith("_c") ? modelPath : modelPath + "_c");
+        if (mres == null) { missingModels++; continue; }
+        if (mres.DataBlock is not Model model) continue;
+        try
+        {
+            foreach (var (mesh, _, _) in model.GetEmbeddedMeshes()) ScanMesh(mesh, modelPath);
+            foreach (var (_, meshName, _) in model.GetReferenceMeshNamesAndLoD())
+            {
+                using var meshRes = LoadRes(meshName + "_c");
+                if (meshRes?.DataBlock is Mesh m) ScanMesh(m, modelPath);
+            }
+        }
+        catch (Exception ex) { Console.Error.WriteLine($"skip {modelPath}: {ex.Message}"); }
+    }
+    Console.Error.WriteLine($"{meshesScanned} mesh(es) scanned, {drawCallsHit} draw call(s) on matching materials, {missingModels} model(s) not found");
+
+    // 3) JSON out.
+    var outDir = Path.GetDirectoryName(outFile);
+    if (!string.IsNullOrEmpty(outDir)) Directory.CreateDirectory(outDir);
+    using var fs = File.Create(outFile);
+    using var w = new System.Text.Json.Utf8JsonWriter(fs, new System.Text.Json.JsonWriterOptions { Indented = true });
+    w.WriteStartObject();
+    w.WriteString("map", worldPath);
+    w.WriteNumber("models", modelPaths.Count);
+    w.WritePropertyName("materials");
+    w.WriteStartObject();
+    foreach (var (mat, perMat) in rects.OrderBy(k => k.Key))
+    {
+        w.WritePropertyName(mat);
+        w.WriteStartArray();
+        foreach (var r in perMat.Values.OrderBy(r => r.v0).ThenBy(r => r.u0))
+        {
+            w.WriteStartObject();
+            w.WriteNumber("u0", r.u0); w.WriteNumber("v0", r.v0); w.WriteNumber("u1", r.u1); w.WriteNumber("v1", r.v1);
+            w.WriteNumber("quads", r.quads);
+            w.WritePropertyName("models"); w.WriteStartArray(); foreach (var mp in r.models.OrderBy(x => x).Take(8)) w.WriteStringValue(mp); w.WriteEndArray();
+            if (r.hasPos)
+            {
+                w.WritePropertyName("pos"); w.WriteStartArray();
+                foreach (var v in new[] { r.x0, r.y0, r.z0, r.x1, r.y1, r.z1 }) w.WriteNumberValue(Math.Round(v, 2));
+                w.WriteEndArray();
+            }
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+    }
+    w.WriteEndObject();
+    w.WriteEndObject();
+    w.Flush();
+    Console.WriteLine($"wrote {rects.Count} material(s), {rects.Values.Sum(v => v.Count)} rect(s) -> {outFile}");
+    return 0;
+}
+
 static int Heroes(string[] args)
 {
     if (args.Length < 3)

@@ -19,6 +19,11 @@ interface ManifestPoster {
   w: number;
   h: number;
   alphaCoverage?: number;
+  /** No map places this region anywhere (manifest v2, from the maps' UVs):
+   *  painting it changes nothing in game. Hidden unless "show unused". */
+  unused?: boolean;
+  /** How many times the maps place this region (manifest v2). */
+  placements?: number;
 }
 interface ManifestSheet {
   id: string;
@@ -40,6 +45,15 @@ export interface Rect {
 }
 
 const SHEETS = (manifestJson as { sheets: ManifestSheet[] }).sheets;
+
+/** Regions the manifest itself marks unused (no map samples them) - hidden
+ *  by default like user-marked ones, and whole sheets with nothing placed. */
+const MANIFEST_UNUSED = new Set(
+  SHEETS.flatMap((s) => s.posters.filter((p) => p.unused).map((p) => `${s.id}::${p.id}`)),
+);
+const MANIFEST_UNUSED_SHEETS = new Set(
+  SHEETS.filter((s) => s.posters.length > 0 && s.posters.every((p) => p.unused)).map((s) => s.id),
+);
 
 const CATEGORIES: { key: string; label: string; hint: string; icon: string }[] = [
   { key: "posters", label: "Posters", hint: "Street posters, newspapers, stickers", icon: "▦" },
@@ -259,8 +273,11 @@ export function PostersTab({
   editModeRef.current = editMode;
 
   const byId = useMemo(() => new Map(overrides.map((o) => [o.id, o])), [overrides]);
-  const hiddenSet = useMemo(() => new Set(hidden), [hidden]);
-  const hiddenSheetSet = useMemo(() => new Set(hiddenSheets), [hiddenSheets]);
+  const hiddenSet = useMemo(() => new Set([...hidden, ...MANIFEST_UNUSED]), [hidden]);
+  const hiddenSheetSet = useMemo(
+    () => new Set([...hiddenSheets, ...MANIFEST_UNUSED_SHEETS]),
+    [hiddenSheets],
+  );
 
   // "Reset sheet" two-step confirm; disarms after 4s or on sheet change.
   const [resetArmed, setResetArmed] = useState(false);
@@ -1164,13 +1181,25 @@ export function PostersTab({
                   </span>
                 )}
                 {selectedHidden && (
-                  <span className="rounded bg-amber-400/90 px-1.5 text-[10px] font-bold text-zinc-900">
-                    unused
+                  <span
+                    className="rounded bg-amber-400/90 px-1.5 text-[10px] font-bold text-zinc-900"
+                    title={
+                      MANIFEST_UNUSED.has(selected!)
+                        ? "No map places this region anywhere - painting it changes nothing in game"
+                        : "You marked this region unused"
+                    }
+                  >
+                    {MANIFEST_UNUSED.has(selected!) ? "not placed in any map" : "unused"}
                   </span>
                 )}
               </div>
               <div className="mb-3 text-[11px] text-zinc-500">
                 {selectedRect.w}×{selectedRect.h} at ({selectedRect.x},{selectedRect.y})
+                {selectedDef.placements ? (
+                  <span className="ml-1 text-zinc-600">
+                    · placed {selectedDef.placements} time{selectedDef.placements === 1 ? "" : "s"} across the maps
+                  </span>
+                ) : null}
                 {(selectedDef.alphaCoverage ?? 1) < 0.98 && (
                   <span className="ml-1 text-amber-400">
                     · shape-cut in vanilla - a PNG with transparency keeps its shape in-game;
@@ -1206,16 +1235,25 @@ export function PostersTab({
                       </button>
                     ) : (
                       <>
-                        <button
-                          onClick={() => onToggleHidden(selected!)}
-                          className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${
-                            selectedHidden
-                              ? "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
-                              : "bg-amber-400 text-zinc-900 hover:bg-amber-300"
-                          }`}
-                        >
-                          {selectedHidden ? "Mark as used" : "Mark unused"}
-                        </button>
+                        {MANIFEST_UNUSED.has(selected!) ? (
+                          <span
+                            className="rounded-lg bg-zinc-800/60 px-3 py-1.5 text-xs text-zinc-500"
+                            title="Read from the game's maps: no wall, sign or prop samples this region, so painting it can't show up anywhere. Draw a custom region if you need this art somewhere else."
+                          >
+                            not placed in any map
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => onToggleHidden(selected!)}
+                            className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${
+                              selectedHidden
+                                ? "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+                                : "bg-amber-400 text-zinc-900 hover:bg-amber-300"
+                            }`}
+                          >
+                            {selectedHidden ? "Mark as used" : "Mark unused"}
+                          </button>
+                        )}
                         {selectedEdited && (
                           <button
                             onClick={() => commitRect(selected!, null)}
