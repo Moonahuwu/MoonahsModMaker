@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { checkPaths } from "../lib/api";
+import { validateSetup } from "../lib/api";
+import type { SetupCheck } from "../lib/api";
 import type { Settings } from "../lib/settings";
 
 /** The tool's GameBanana page — the credits chip links here. */
@@ -13,6 +14,7 @@ function Field({
   onChange,
   hint,
   onBrowse,
+  error,
 }: {
   label: string;
   value: string;
@@ -20,6 +22,8 @@ function Field({
   hint?: string;
   /** Optional picker - typing paths by hand is where support cases start. */
   onBrowse?: () => void;
+  /** Validation verdict for this field (why it's wrong) - shown in red. */
+  error?: string;
 }) {
   return (
     <label className="flex flex-col gap-1">
@@ -29,7 +33,9 @@ function Field({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           spellCheck={false}
-          className="w-full rounded-md border border-zinc-700/80 bg-zinc-950 px-3 py-1.5 text-xs text-zinc-200 outline-none transition focus:border-violet-500/70"
+          className={`w-full rounded-md border bg-zinc-950 px-3 py-1.5 text-xs text-zinc-200 outline-none transition focus:border-violet-500/70 ${
+            error ? "border-red-500/60" : "border-zinc-700/80"
+          }`}
         />
         {onBrowse && (
           <button
@@ -42,7 +48,11 @@ function Field({
           </button>
         )}
       </div>
-      {hint && <span className="text-[10px] text-zinc-600">{hint}</span>}
+      {error ? (
+        <span className="text-[10px] text-red-300/90">✗ {error}</span>
+      ) : (
+        hint && <span className="text-[10px] text-zinc-600">{hint}</span>
+      )}
     </label>
   );
 }
@@ -182,25 +192,37 @@ export function SetupSection({
     }
   }
 
-  const compiler = `${settings.csdkRoot}/game/bin_tools/win64/resourcecompiler.exe`;
-  const gameinfo = `${settings.csdkRoot}/game/citadel/gameinfo.gi`;
-  const musicEvents = `${settings.vanillaRoot}/soundevents/music.vsndevts`;
+  // Setup verdicts by KIND (a folder in the Game pak box "exists" but breaks
+  // every helper call) - each failing field carries a reason and, where the
+  // app can derive the right value, a one-click fix.
+  const [verdicts, setVerdicts] = useState<SetupCheck | null>(null);
   const probe = [
-    ["Compiler", compiler],
-    ["Game", gameinfo],
-    ["VPK helper", settings.vpkHelperPath],
-    ["Events", musicEvents],
-    ["Game pak", settings.deadlockPak],
-    ["Addons", settings.addonsDir],
+    ["Compiler", "compiler"],
+    ["Game", "game"],
+    ["VPK helper", "vpkHelper"],
+    ["Game data", "events"],
+    ["Game pak", "deadlockPak"],
+    ["Addons", "addonsDir"],
+    ["Addon name", "addonName"],
+    ["Sound folder", "soundFolder"],
   ] as const;
 
   useEffect(() => {
     let cancelled = false;
-    checkPaths(probe.map(([, p]) => p))
+    validateSetup({
+      csdkRoot: settings.csdkRoot,
+      addonName: settings.addonName,
+      vpkHelperPath: settings.vpkHelperPath,
+      deadlockPak: settings.deadlockPak,
+      addonsDir: settings.addonsDir,
+      soundFolder: settings.soundFolder,
+      vanillaRoot: settings.vanillaRoot,
+    })
       .then((res) => {
-        if (cancelled) return;
+        if (cancelled || !res) return;
+        setVerdicts(res);
         const map: Record<string, boolean | null> = {};
-        probe.forEach(([label], i) => (map[label] = res[i] ?? null));
+        probe.forEach(([label, key]) => (map[label] = res[key]?.ok ?? null));
         setChecks(map);
       })
       .catch(() => {});
@@ -208,7 +230,32 @@ export function SetupSection({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [compiler, gameinfo, settings.vpkHelperPath, musicEvents, settings.deadlockPak, settings.addonsDir]);
+  }, [
+    settings.csdkRoot,
+    settings.addonName,
+    settings.vpkHelperPath,
+    settings.deadlockPak,
+    settings.addonsDir,
+    settings.soundFolder,
+    settings.vanillaRoot,
+  ]);
+  const reasonFor = (key: keyof SetupCheck): string | undefined => {
+    const v = verdicts?.[key];
+    return v && !v.ok ? (v.reason ?? "check this path") : undefined;
+  };
+  const fixFor = (key: keyof SetupCheck): string | undefined => {
+    const v = verdicts?.[key];
+    return v && !v.ok && v.fix ? v.fix : undefined;
+  };
+  const applyFix = (key: keyof SetupCheck) => {
+    const fix = fixFor(key);
+    if (!fix) return;
+    if (key === "vpkHelper") update({ vpkHelperPath: fix });
+    else if (key === "deadlockPak") update({ deadlockPak: fix });
+    else if (key === "addonsDir") update({ addonsDir: fix });
+    else if (key === "addonName") update({ addonName: fix });
+    else if (key === "soundFolder") update({ soundFolder: fix });
+  };
 
   return (
     <div className="flex max-h-[88vh] w-full max-w-2xl flex-col rounded-2xl border border-zinc-800 bg-zinc-900 shadow-2xl">
@@ -357,12 +404,42 @@ export function SetupSection({
           </div>
         </Section>
 
-        <Section title="Paths & Tools" hint="Green chips = the file/folder exists where you pointed.">
+        <Section
+          title="Paths & Tools"
+          hint="Green = the path is the right kind of thing and exists. Red = what's wrong, with a Fix button when the app can tell where it should point."
+        >
           <div className="flex flex-wrap items-center gap-1.5">
-            {probe.map(([label]) => (
-              <Chip key={label} label={label} ok={checks[label] ?? null} />
-            ))}
+            {probe.map(([label, key]) =>
+              (key === "addonName" || key === "soundFolder") && checks[label] !== false ? null : (
+                <Chip key={label} label={label} ok={checks[label] ?? null} />
+              ),
+            )}
           </div>
+          {verdicts && probe.some(([, key]) => !verdicts[key].ok) && (
+            <ul className="mt-2 flex flex-col gap-1">
+              {probe
+                .filter(([, key]) => !verdicts[key].ok)
+                .map(([label, key]) => (
+                  <li
+                    key={key}
+                    className="flex flex-wrap items-center gap-2 text-[11px] text-red-300/90"
+                  >
+                    <span>
+                      <span className="font-semibold">{label}:</span> {verdicts[key].reason}
+                    </span>
+                    {fixFor(key) && (
+                      <button
+                        onClick={() => applyFix(key)}
+                        title={"Set it to " + fixFor(key)}
+                        className="rounded border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-200 transition hover:bg-emerald-500/20"
+                      >
+                        Fix it
+                      </button>
+                    )}
+                  </li>
+                ))}
+            </ul>
+          )}
           <div className="mt-3 flex flex-wrap gap-2">
             <button
               onClick={() => void run("detect", onAutodetect)}
@@ -385,18 +462,21 @@ export function SetupSection({
               label="CSDK root"
               value={settings.csdkRoot}
               onChange={(v) => update({ csdkRoot: v })}
-              hint="Reduced_CSDK_12 folder"
+              hint="the compile tools folder (the one holding game/bin_tools) - the first-run setup downloads it"
+              error={reasonFor("compiler") ?? reasonFor("game")}
             />
             <Field
               label="Addon name"
               value={settings.addonName}
               onChange={(v) => update({ addonName: v })}
-              hint="content/game citadel_addons/<addon>"
+              hint="just a name, e.g. eim_intro_music - the work folder the app creates under the CSDK (citadel_addons/<name>)"
+              error={reasonFor("addonName")}
             />
             <Field
               label="VPK helper (.dll/.exe)"
               value={settings.vpkHelperPath}
               onChange={(v) => update({ vpkHelperPath: v })}
+              error={reasonFor("vpkHelper")}
             />
             <Field
               label="CS2 install (Workshop Tools)"
@@ -408,7 +488,8 @@ export function SetupSection({
               label="Game pak (pak01_dir.vpk)"
               value={settings.deadlockPak}
               onChange={(v) => update({ deadlockPak: v })}
-              hint="Deadlock install - used to decode stock tracks for comparison"
+              hint="the pak01_dir.vpk FILE in Deadlock/game/citadel - all game data (sounds, heroes, textures) is read from it"
+              error={reasonFor("deadlockPak")}
             />
             <Field
               label="ffmpeg path (blank = PATH)"
@@ -432,12 +513,15 @@ export function SetupSection({
               label="Sound folder (content-relative)"
               value={settings.soundFolder}
               onChange={(v) => update({ soundFolder: v })}
+              hint="where your tracks live INSIDE the mod, e.g. sounds/music/match_intro - not a folder on your disk"
+              error={reasonFor("soundFolder")}
             />
             <Field
               label="Vanilla soundevents root"
               value={settings.vanillaRoot}
               onChange={(v) => update({ vanillaRoot: v })}
-              hint="dir with soundevents/ (your community files with other mods' entries)"
+              hint="dir with soundevents/ - filled by Refresh game data (or your community files with other mods' entries)"
+              error={reasonFor("events")}
             />
             <Field
               label="Output dir"
@@ -448,7 +532,8 @@ export function SetupSection({
               label="Deadlock addons folder"
               value={settings.addonsDir}
               onChange={(v) => update({ addonsDir: v })}
-              hint="game/citadel/addons - where 'Install to game' copies the .vpk"
+              hint="game/citadel/addons - where 'Install to game' copies the .vpk (created on first install if missing)"
+              error={reasonFor("addonsDir")}
             />
           </div>
         </Section>

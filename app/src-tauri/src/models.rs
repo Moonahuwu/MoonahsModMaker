@@ -98,6 +98,15 @@ pub fn workspace(
             }
         }
     }
+    // The ragdoll JOINTS only exist in the compiled model's PHYS block (the
+    // decompile reconstructs the bodies, never the joints) - cache the block
+    // so staging can regenerate a PhysicsJointList from it. Same fill-in
+    // for kits decompiled before this existed.
+    if !dir.join(PHYS_CACHE).exists() {
+        if let Ok(phys) = crate::vpk::model_block_from_vpk(helper, pak, &internal_c, "PHYS") {
+            let _ = std::fs::write(dir.join(PHYS_CACHE), phys);
+        }
+    }
 
     let text = std::fs::read_to_string(&vmdl_abs).map_err(|e| e.to_string())?;
     let bones = parse_bone_names(&text);
@@ -871,6 +880,54 @@ fn children_span(text: &str, class_name: &str, from: usize) -> Option<(usize, us
         }
     }
     None
+}
+
+/// The tools UI (ModelDoc, the particle editor) needs the game content the
+/// engine mounts at start: `game/core` and the `citadel` pak. The one-click
+/// tools bundle is a compile-only trim (bin_tools + citadel/{bin,cfg,
+/// gameinfo,fgds}) and has neither, so launching the tools from it dies on
+/// "can't open <some citadel file>" - say so up front instead.
+pub(crate) fn require_tools_content(tools_root: &Path, what: &str) -> Result<(), String> {
+    let core = tools_root.join("game/core");
+    let pak = tools_root.join("game/citadel/pak01_dir.vpk");
+    if core.is_dir() && pak.is_file() {
+        return Ok(());
+    }
+    Err(format!(
+        "{what} needs the FULL Deadlock SDK (Reduced_CSDK_12: game/core + game/citadel/pak01_dir.vpk), \
+         but the compile tools at {} are the trimmed compile-only bundle. Compiling works with it; \
+         to use {what}, install the full Reduced CSDK and point Settings > CSDK root at it.",
+        tools_root.display()
+    ))
+}
+
+/// A compiler-safe staged filename for a user mesh: the stem keeps ASCII
+/// letters, digits, `_` and `-` (everything else - spaces, dots, unicode -
+/// becomes one `_`) and the extension is lowercased. The stem doubles as the
+/// vmdl's RenderMeshFile node name, so it has to be a plain identifier.
+pub(crate) fn safe_mesh_name(name: &str) -> String {
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() => (s, e.to_lowercase()),
+        _ => (name, String::new()),
+    };
+    let mut out = String::with_capacity(stem.len());
+    let mut last_us = false;
+    for c in stem.chars() {
+        if c.is_ascii_alphanumeric() || c == '-' {
+            out.push(c);
+            last_us = false;
+        } else if !last_us {
+            out.push('_');
+            last_us = true;
+        }
+    }
+    let out = out.trim_matches('_').to_string();
+    let out = if out.is_empty() { "mesh".to_string() } else { out };
+    if ext.is_empty() {
+        out
+    } else {
+        format!("{out}.{ext}")
+    }
 }
 
 /// Rewrite a decompiled hero vmdl so its render meshes are the user's file:
@@ -1761,13 +1818,19 @@ fn compile_materials(
 /// material names the artifact actually asks for (root-level bare names for
 /// kept Blender materials, `models/...` paths for game materials).
 pub fn scan_vmdl_material_refs(bytes: &[u8]) -> Vec<String> {
-    let needle = b".vmat";
+    scan_resource_refs(bytes, b".vmat")
+}
+
+/// Byte-scan a compiled resource for referenced resource paths ending in
+/// `needle` (b".vmat" for a vmdl_c's materials, b".vtex" for a vmat_c's
+/// textures - the RERL block stores them as plain strings).
+pub fn scan_resource_refs(bytes: &[u8], needle: &[u8]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut i = 0;
     while let Some(j) = bytes[i..].windows(needle.len()).position(|w| w == needle) {
         let end = i + j + needle.len();
         // A real reference is followed by a non-path byte (usually NUL) - a
-        // `.vmat_c` run or a longer word means this wasn't the string's end.
+        // `_c` run or a longer word means this wasn't the string's end.
         let tail_ok = bytes.get(end).map_or(true, |c| !c.is_ascii_alphanumeric() && *c != b'_');
         let mut start = i + j;
         while start > 0 {
@@ -1781,7 +1844,7 @@ pub fn scan_vmdl_material_refs(bytes: &[u8]) -> Vec<String> {
         if tail_ok {
             if let Ok(s) = std::str::from_utf8(&bytes[start..end]) {
                 let s = s.trim_start().replace('\\', "/");
-                if s.len() > ".vmat".len() && !out.iter().any(|o| *o == s) {
+                if s.len() > needle.len() && !out.iter().any(|o| *o == s) {
                     out.push(s);
                 }
             }
@@ -2417,20 +2480,44 @@ fn stage_sources(req: &ModelBuildReq) -> Result<(std::path::PathBuf, Vec<String>
         req.mesh_files.iter().map(|s| s.as_str()).collect()
     };
     let mut mesh_rels: Vec<String> = Vec::new();
+    let mut renamed: Vec<(String, String)> = Vec::new();
     for mf in &mesh_files {
         let mesh_name = Path::new(mf)
             .file_name()
             .map(|f| f.to_string_lossy().into_owned())
             .ok_or("mesh file has no name")?;
-        std::fs::copy(mf, stage_dir.join(&mesh_name))
+        // Stage under a compiler-safe name: the stem becomes the vmdl's
+        // RenderMeshFile node name and the filename its reference, and a
+        // name with spaces does not resolve ("Node 'Harlem Ivy after
+        // rigging' resolve failure" - a real report). Textures already get
+        // this treatment; meshes were the one input staged verbatim.
+        let base = safe_mesh_name(&mesh_name);
+        let mut safe = base.clone();
+        let mut n = 2;
+        while mesh_rels.iter().any(|r| r.rsplit('/').next() == Some(safe.as_str())) {
+            safe = match base.rsplit_once('.') {
+                Some((s, e)) => format!("{s}_{n}.{e}"),
+                None => format!("{base}_{n}"),
+            };
+            n += 1;
+        }
+        std::fs::copy(mf, stage_dir.join(&safe))
             .map_err(|e| format!("copy mesh into the addon: {e}"))?;
-        mesh_rels.push(format!("{vmdl_dir_internal}/{mesh_name}"));
+        if safe != mesh_name {
+            renamed.push((mesh_name.clone(), safe.clone()));
+        }
+        mesh_rels.push(format!("{vmdl_dir_internal}/{safe}"));
     }
-    notes.push(if mesh_rels.len() == 1 {
-        format!("mesh: {}", mesh_rels[0].rsplit('/').next().unwrap_or(""))
+    notes.push(if mesh_files.len() == 1 {
+        format!("mesh: {}", mesh_files[0].rsplit(['/', '\\']).next().unwrap_or(""))
     } else {
         format!("{} mesh files staged", mesh_rels.len())
     });
+    for (from, to) in &renamed {
+        notes.push(format!(
+            "staged \"{from}\" as {to} (the compiler needs a plain file name: letters, digits, _)"
+        ));
+    }
 
     // Generate the vmdl over the staged copy. Materials mapped to game
     // vmats become DefaultMaterialGroup remaps (bare mesh name -> path).
@@ -2452,6 +2539,35 @@ fn stage_sources(req: &ModelBuildReq) -> Result<(std::path::PathBuf, Vec<String>
         if stripped > 0 {
             notes.push("fast build: baked animation list skipped (the hero animates via its animation graphs)".into());
         }
+    }
+    // Ragdoll: regenerate the PhysicsJointList the decompile never writes
+    // (bodies without joints = no ragdoll, a GameBanana rejection reason).
+    match std::fs::read_to_string(Path::new(&req.workspace_dir).join(PHYS_CACHE)) {
+        Ok(phys_text) => {
+            let phys = parse_phys(&phys_text);
+            if !phys.joints.is_empty() {
+                let (nodes, skipped) = ragdoll_joint_nodes(&phys);
+                let restored = phys.joints.len() - skipped;
+                if restored > 0 {
+                    match insert_joint_list(&mut generated, &nodes) {
+                        Ok(true) => notes.push(format!(
+                            "{restored} ragdoll joint(s) restored from the vanilla model (decompiles drop them){}",
+                            if skipped > 0 {
+                                format!(", {skipped} of an unsupported type skipped")
+                            } else {
+                                String::new()
+                            }
+                        )),
+                        Ok(false) => {}
+                        Err(e) => notes.push(format!("ragdoll joints not restored: {e}")),
+                    }
+                }
+            }
+        }
+        Err(_) => notes.push(
+            "ragdoll joints: this kit predates the physics cache - re-pick the model once to refresh it"
+                .into(),
+        ),
     }
     // Restore the EXACT vanilla attachment transforms (decompiled ones are
     // lossy - the cause of the classic centered-camera-after-swap bug).
@@ -2493,6 +2609,9 @@ fn stage_sources(req: &ModelBuildReq) -> Result<(std::path::PathBuf, Vec<String>
 pub fn open_in_modeldoc(req: &ModelBuildReq) -> Result<String, String> {
     let vmdl_internal = req.vmdl_internal.replace('\\', "/");
     let vmdl_dir_internal = vmdl_internal.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+    if let Some(t) = req.tools_root.as_deref().filter(|t| !t.trim().is_empty()) {
+        require_tools_content(Path::new(t), "ModelDoc")?;
+    }
     let (_, _notes) = stage_sources(req)?;
 
     // ModelDoc runs in the DEADLOCK CSDK for BOTH kinds - it is the stable
@@ -4800,5 +4919,611 @@ else:
             rep.errors.iter().any(|e| e.contains("isn't rigged") || e.contains("armature")),
             "{rep:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod mesh_name_tests {
+    use super::*;
+    use std::path::Path;
+
+    /// GameBanana report: "RenderMeshFile: Harlem Ivy after rigging : Node
+    /// 'Harlem Ivy after rigging' resolve failure" - a mesh file whose NAME
+    /// carries spaces. The user's mesh must build whatever the file is called.
+    /// Ignored: needs this machine's game + CS2 installs. Run with:
+    ///   cargo test -p app --lib -- --ignored e2e_model_build_mesh_name --nocapture
+    #[test]
+    #[ignore]
+    fn e2e_model_build_mesh_name_with_spaces() {
+        let helper = r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\tools\vpk-helper\dist\vpk-helper.exe";
+        let pak = r"D:\SteamLibrary\steamapps\common\Deadlock\game\citadel\pak01_dir.vpk";
+        let cs2 = r"D:\SteamLibrary\steamapps\common\Counter-Strike Global Offensive";
+        let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/eim_testcube.fbx");
+        let scratch = std::env::temp_dir().join("eim_model_spaces_e2e");
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        let fbx = scratch.join("Harlem Ivy after rigging.fbx");
+        std::fs::copy(fixture, &fbx).unwrap();
+
+        let ws = workspace(
+            helper,
+            pak,
+            "models/heroes_staging/haze/haze.vmdl_c",
+            &scratch.join("ws"),
+            false,
+        )
+        .expect("workspace");
+        let game_vmat = ws.materials.first().cloned().expect("haze has materials");
+        let req = ModelBuildReq {
+            cs2_root: cs2.into(),
+            kind: ModelKind::Hero,
+            workspace_dir: ws.dir.clone(),
+            vmdl_internal: "models/heroes_staging/haze/haze.vmdl".into(),
+            mesh_file: fbx.to_string_lossy().into_owned(),
+            mesh_files: vec![],
+            material_override: None,
+            import_scale: 0.01,
+            artifact_out: scratch.join("haze.vmdl_c").to_string_lossy().into_owned(),
+            materials: vec![MaterialSpec {
+                name: "eim_test".into(),
+                color: None,
+                normal: None,
+                roughness: None,
+                metalness: None,
+                effect: None,
+                fx_period: None,
+                fx_intensity: None,
+                fx_speed: None,
+                fx_variant: None,
+                fx_hue: None,
+                game_vmat: Some(game_vmat),
+            }],
+            tools_root: None,
+            materials_out: None,
+            ffmpeg_path: None,
+            helper_path: None,
+            pak_path: None,
+            use_staged: false,
+            skip_anims: true,
+            camera: vec![],
+        };
+        let rep = build(&req);
+        for s in &rep.steps {
+            eprintln!("STEP {s}");
+        }
+        assert!(rep.ok, "{:?}", rep.steps);
+        assert!(Path::new(&req.artifact_out).exists());
+    }
+}
+
+#[cfg(test)]
+mod safe_mesh_name_tests {
+    use super::safe_mesh_name;
+
+    #[test]
+    fn mesh_names_become_plain_identifiers() {
+        assert_eq!(safe_mesh_name("Harlem Ivy after rigging.fbx"), "Harlem_Ivy_after_rigging.fbx");
+        assert_eq!(safe_mesh_name("mesh.001.FBX"), "mesh_001.fbx");
+        assert_eq!(safe_mesh_name("  weird  (copy) .dmx"), "weird_copy.dmx");
+        assert_eq!(safe_mesh_name("body-v2.fbx"), "body-v2.fbx");
+        assert_eq!(safe_mesh_name("   .fbx"), "mesh.fbx");
+        assert_eq!(safe_mesh_name("noext"), "noext");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Ragdoll joints
+// ---------------------------------------------------------------------------
+//
+// VRF's decompile reconstructs the ragdoll BODIES (PhysicsShapeList: hulls +
+// per-bone capsules) but never the JOINTS between them - its vmdl writer has
+// no joint export at all - so every model rebuilt from a decompiled kit used
+// to compile with `m_joints = [ ]`: bodies with nothing holding them together,
+// i.e. no working ragdoll (GameBanana reviewers reject those). The compiled
+// model's PHYS block still carries the joints, so the kit caches that block
+// (`PHYS_CACHE`) and staging regenerates a PhysicsJointList from it. Node
+// class + property names come from physicsbuilder.dll's schema strings
+// (CModelDocPhysicsJoint_Conical: enable_swing_limit / swing_limit /
+// swing_offset_angle / enable_twist_limit / min_twist_angle /
+// max_twist_angle); anchor_origin / anchor_angles are the joint frame in
+// the PARENT body's space - exactly the compiled m_Frame1 - proven by the
+// CS2 round trip (the compiler derives m_Frame2 from the bind poses).
+
+pub const PHYS_CACHE: &str = "eim_phys.kv3";
+
+/// Rubikon joint type of a ragdoll cone joint (`m_nType`): the only kind
+/// Valve's heroes use, swing cone + twist range.
+const JOINT_TYPE_CONICAL: i64 = 4;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PhysJoint {
+    pub kind: i64,
+    pub body1: usize,
+    pub body2: usize,
+    /// Anchor in body 1's space: [x, y, z] + [qx, qy, qz, qw].
+    pub frame1: ([f64; 3], [f64; 4]),
+    /// Anchor in body 2's space.
+    pub frame2: ([f64; 3], [f64; 4]),
+    pub enable_collision: bool,
+    /// Swing cone (min, max) in radians when the limit is enabled.
+    pub swing: Option<(f64, f64)>,
+    /// Twist range (min, max) in radians when the limit is enabled.
+    pub twist: Option<(f64, f64)>,
+    pub friction: f64,
+    pub linear_frequency: f64,
+    pub linear_damping_ratio: f64,
+    pub angular_frequency: f64,
+    pub angular_damping_ratio: f64,
+    pub elasticity: f64,
+    pub elastic_damping: f64,
+    pub plasticity: f64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PhysData {
+    /// One entry per physics body: the bone it hangs off.
+    pub bone_names: Vec<String>,
+    /// Row-major 3x4 model-space bind pose per body.
+    pub bind_pose: Vec<[f64; 12]>,
+    pub joints: Vec<PhysJoint>,
+}
+
+/// The balanced `open ... close` block that follows `key = `, inner text.
+fn kv_block<'a>(text: &'a str, key: &str, open: char, close: char) -> Option<&'a str> {
+    let at = text.find(&format!("{key} ="))?;
+    let a = at + text[at..].find(open)? + 1;
+    let mut depth = 1i32;
+    for (i, c) in text[a..].char_indices() {
+        if c == open {
+            depth += 1;
+        } else if c == close {
+            depth -= 1;
+            if depth == 0 {
+                return Some(&text[a..a + i]);
+            }
+        }
+    }
+    None
+}
+
+fn kv_num(text: &str, key: &str) -> Option<f64> {
+    let pat = format!("{key} =");
+    let at = text.find(&pat)?;
+    let rest = text[at + pat.len()..].trim_start();
+    let end = rest
+        .find(|c: char| !(c.is_ascii_digit() || matches!(c, '-' | '+' | '.' | 'e' | 'E')))
+        .unwrap_or(rest.len());
+    rest[..end].parse().ok()
+}
+
+fn kv_bool(text: &str, key: &str) -> Option<bool> {
+    let pat = format!("{key} =");
+    let at = text.find(&pat)?;
+    let rest = text[at + pat.len()..].trim_start();
+    if rest.starts_with("true") {
+        Some(true)
+    } else if rest.starts_with("false") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+fn kv_nums(text: &str) -> Vec<f64> {
+    text.split(|c: char| c == ',' || c.is_whitespace())
+        .filter_map(|t| t.parse().ok())
+        .collect()
+}
+
+/// Top-level `open ... close` entries of a list body.
+fn list_entries(body: &str, open: char, close: char) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0usize;
+    for (i, c) in body.char_indices() {
+        if c == open {
+            if depth == 0 {
+                start = i + 1;
+            }
+            depth += 1;
+        } else if c == close {
+            depth -= 1;
+            if depth == 0 {
+                out.push(&body[start..i]);
+            }
+        }
+    }
+    out
+}
+
+/// Parse a model's PHYS block text (the helper's `modelblock ... PHYS`, KV3
+/// text) into the bodies, bind poses and joints staging needs. Tolerant:
+/// anything malformed just yields fewer entries.
+pub fn parse_phys(text: &str) -> PhysData {
+    let mut out = PhysData::default();
+    if let Some(names) = kv_block(text, "m_boneNames", '[', ']') {
+        out.bone_names = names
+            .split('"')
+            .enumerate()
+            .filter(|(i, _)| i % 2 == 1)
+            .map(|(_, s)| s.to_string())
+            .collect();
+    }
+    if let Some(poses) = kv_block(text, "m_bindPose", '[', ']') {
+        for entry in list_entries(poses, '[', ']') {
+            let v = kv_nums(entry);
+            if v.len() == 12 {
+                let mut m = [0.0; 12];
+                m.copy_from_slice(&v);
+                out.bind_pose.push(m);
+            }
+        }
+    }
+    if let Some(joints) = kv_block(text, "m_joints", '[', ']') {
+        for j in list_entries(joints, '{', '}') {
+            let frame = |key: &str| -> Option<([f64; 3], [f64; 4])> {
+                let v = kv_nums(kv_block(j, key, '[', ']')?);
+                (v.len() == 8).then(|| ([v[0], v[1], v[2]], [v[4], v[5], v[6], v[7]]))
+            };
+            let limit = |flag: &str, key: &str| -> Option<(f64, f64)> {
+                if !kv_bool(j, flag).unwrap_or(false) {
+                    return None;
+                }
+                let b = kv_block(j, key, '{', '}')?;
+                Some((kv_num(b, "m_flMin")?, kv_num(b, "m_flMax")?))
+            };
+            let (Some(kind), Some(b1), Some(b2), Some(frame1), Some(frame2)) = (
+                kv_num(j, "m_nType"),
+                kv_num(j, "m_nBody1"),
+                kv_num(j, "m_nBody2"),
+                frame("m_Frame1"),
+                frame("m_Frame2"),
+            ) else {
+                continue;
+            };
+            let f = |key: &str, default: f64| kv_num(j, key).unwrap_or(default);
+            out.joints.push(PhysJoint {
+                kind: kind as i64,
+                body1: b1 as usize,
+                body2: b2 as usize,
+                frame1,
+                frame2,
+                enable_collision: kv_bool(j, "m_bEnableCollision").unwrap_or(false),
+                swing: limit("m_bEnableSwingLimit", "m_SwingLimit"),
+                twist: limit("m_bEnableTwistLimit", "m_TwistLimit"),
+                friction: f("m_flFriction", 0.0),
+                linear_frequency: f("m_flLinearFrequency", 0.0),
+                linear_damping_ratio: f("m_flLinearDampingRatio", 0.0),
+                angular_frequency: f("m_flAngularFrequency", 0.0),
+                angular_damping_ratio: f("m_flAngularDampingRatio", 0.0),
+                elasticity: f("m_flElasticity", 0.0),
+                elastic_damping: f("m_flElasticDamping", 1.0),
+                plasticity: f("m_flPlasticity", 0.0),
+            });
+        }
+    }
+    out
+}
+
+/// The joint's anchor as ModelDoc wants it: origin + QAngle in the PARENT
+/// body's space, i.e. the compiled m_Frame1 verbatim (the compiler derives
+/// m_Frame2 from the two bind poses - CS2 round trip proven).
+pub fn joint_anchor(j: &PhysJoint) -> ([f64; 3], [f64; 3]) {
+    let [x, y, z, w] = j.frame1.1;
+    (j.frame1.0, quat_to_qangle(x, y, z, w))
+}
+
+/// The PhysicsJointList child nodes for every ragdoll (conical) joint, plus
+/// how many joints were skipped (unsupported type or a body we can't name).
+pub fn ragdoll_joint_nodes(phys: &PhysData) -> (String, usize) {
+    let deg = 180.0 / std::f64::consts::PI;
+    let mut out = String::new();
+    let mut skipped = 0usize;
+    for j in &phys.joints {
+        let (Some(parent), Some(child)) = (
+            (j.kind == JOINT_TYPE_CONICAL).then(|| phys.bone_names.get(j.body1)).flatten(),
+            phys.bone_names.get(j.body2),
+        ) else {
+            skipped += 1;
+            continue;
+        };
+        let (origin, angles) = joint_anchor(j);
+        let (swing_on, swing) = j.swing.map(|(_, max)| (true, max * deg)).unwrap_or((false, 0.0));
+        let (twist_on, tmin, tmax) = j
+            .twist
+            .map(|(a, b)| (true, a * deg, b * deg))
+            .unwrap_or((false, 0.0, 0.0));
+        out.push_str(&format!(
+            "\n\t\t\t\t\t{{\n\t\t\t\t\t\t_class = \"PhysicsJointConical\"\n\t\t\t\t\t\tname = \"{parent}_{child}\"\n\t\t\t\t\t\tparent_body = \"{parent}\"\n\t\t\t\t\t\tchild_body = \"{child}\"\n\t\t\t\t\t\tanchor_origin = [ {:.6}, {:.6}, {:.6} ]\n\t\t\t\t\t\tanchor_angles = [ {:.6}, {:.6}, {:.6} ]\n\t\t\t\t\t\tenable_collision = {}\n\t\t\t\t\t\tenable_swing_limit = {swing_on}\n\t\t\t\t\t\tswing_limit = {swing:.6}\n\t\t\t\t\t\tswing_offset_angle = 0.0\n\t\t\t\t\t\tenable_twist_limit = {twist_on}\n\t\t\t\t\t\tmin_twist_angle = {tmin:.6}\n\t\t\t\t\t\tmax_twist_angle = {tmax:.6}\n\t\t\t\t\t\tfriction = {:.6}\n\t\t\t\t\t\tlinear_frequency = {:.6}\n\t\t\t\t\t\tlinear_damping_ratio = {:.6}\n\t\t\t\t\t\tangular_frequency = {:.6}\n\t\t\t\t\t\tangular_damping_ratio = {:.6}\n\t\t\t\t\t\telasticity = {:.6}\n\t\t\t\t\t\telastic_damping = {:.6}\n\t\t\t\t\t\tplasticity = {:.6}\n\t\t\t\t\t}},",
+            origin[0], origin[1], origin[2],
+            angles[0], angles[1], angles[2],
+            j.enable_collision,
+            j.friction,
+            j.linear_frequency,
+            j.linear_damping_ratio,
+            j.angular_frequency,
+            j.angular_damping_ratio,
+            j.elasticity,
+            j.elastic_damping,
+            j.plasticity,
+        ));
+    }
+    (out, skipped)
+}
+
+/// Splice a PhysicsJointList holding `nodes` right after the vmdl's
+/// PhysicsShapeList node (the bodies the joints connect). No-op when the
+/// vmdl already carries a joint list.
+pub fn insert_joint_list(text: &mut String, nodes: &str) -> Result<bool, String> {
+    if text.contains("_class = \"PhysicsJointList\"") {
+        return Ok(false);
+    }
+    let (_, end) = find_node_block(text, "PhysicsShapeList")
+        .ok_or("vmdl has no PhysicsShapeList - nothing to attach ragdoll joints to")?;
+    // Land after the shape list's trailing list comma when it has one.
+    let at = match text[end..].find(|c: char| !c.is_whitespace()) {
+        Some(i) if text[end + i..].starts_with(',') => end + i + 1,
+        _ => end,
+    };
+    let block = format!(
+        "\n\t\t\t{{\n\t\t\t\t_class = \"PhysicsJointList\"\n\t\t\t\tchildren = \n\t\t\t\t[{nodes}\n\t\t\t\t]\n\t\t\t}},"
+    );
+    text.insert_str(at, &block);
+    Ok(true)
+}
+
+#[cfg(test)]
+mod ragdoll_tests {
+    use super::*;
+
+    /// Vanilla Haze: bodies 0/1 (pelvis, spine_0) and their first joint,
+    /// verbatim from the compiled PHYS block.
+    const PHYS_SNIPPET: &str = r#"
+	m_boneNames =
+	[
+		"pelvis",
+		"spine_0",
+	]
+	m_bindPose =
+	[
+		[
+			0.0, 1.0, 0.0, -0.48198,
+			0.0, 0.0, 1.0, 0.0,
+			1.0, 0.0, 0.0, 53.909405,
+		],
+		[
+			-0.077999, 0.996953, 0.0, -0.24099,
+			0.0, -0.0, 1.0, 0.0,
+			0.996954, 0.077999, -0.0, 55.469627,
+		],
+	]
+	m_parts =
+	[
+		{
+			m_nFlags = 0
+		},
+	]
+	m_joints =
+	[
+		{
+			m_nType = 4
+			m_nBody1 = 0
+			m_nBody2 = 1
+			m_nFlags = 0
+			m_Frame1 =
+			[
+				1.560196, 0.240997, 0.000023, 1.0,
+				-0.480105, 0.519134, -0.519134, 0.480105,
+			]
+			m_Frame2 =
+			[
+				-0.000029, 0.000008, 0.000023, 1.0,
+				-0.5, 0.5, -0.5, 0.5,
+			]
+			m_bEnableCollision = false
+			m_bEnableLinearLimit = false
+			m_LinearLimit =
+			{
+				m_flMin = 0.0
+				m_flMax = 0.0
+			}
+			m_bEnableSwingLimit = true
+			m_SwingLimit =
+			{
+				m_flMin = 0.0
+				m_flMax = 0.523599
+			}
+			m_bEnableTwistLimit = true
+			m_TwistLimit =
+			{
+				m_flMin = -0.261799
+				m_flMax = 0.261799
+			}
+			m_flFriction = 0.2
+			m_flElasticDamping = 1.0
+			m_Tag = ""
+		},
+	]
+"#;
+
+    #[test]
+    fn parse_phys_reads_bodies_and_joints() {
+        let p = parse_phys(PHYS_SNIPPET);
+        assert_eq!(p.bone_names, vec!["pelvis", "spine_0"]);
+        assert_eq!(p.bind_pose.len(), 2);
+        assert!((p.bind_pose[0][3] - -0.48198).abs() < 1e-9);
+        assert_eq!(p.joints.len(), 1);
+        let j = &p.joints[0];
+        assert_eq!((j.kind, j.body1, j.body2), (4, 0, 1));
+        assert_eq!(j.swing, Some((0.0, 0.523599)));
+        assert_eq!(j.twist, Some((-0.261799, 0.261799)));
+        assert!((j.friction - 0.2).abs() < 1e-9);
+        assert!(!j.enable_collision);
+        assert!((j.frame2.1[3] - 0.5).abs() < 1e-9);
+        // Empty list parses to no joints, not garbage.
+        assert!(parse_phys("m_joints = [  ]\n").joints.is_empty());
+    }
+
+    /// The anchor ModelDoc wants is the parent-body-space joint frame - the
+    /// compiled m_Frame1 verbatim (proven by the CS2 round-trip e2e).
+    #[test]
+    fn ragdoll_anchor_is_parent_local() {
+        let p = parse_phys(PHYS_SNIPPET);
+        let j = &p.joints[0];
+        let (origin, angles) = joint_anchor(j);
+        assert_eq!(origin, [1.560196, 0.240997, 0.000023]);
+        assert!(angles.iter().all(|a| a.is_finite()));
+        let (nodes, skipped) = ragdoll_joint_nodes(&p);
+        assert!(nodes.contains("anchor_origin = [ 1.560196, 0.240997, 0.000023 ]"), "{nodes}");
+        assert_eq!(skipped, 0);
+        for needle in [
+            "_class = \"PhysicsJointConical\"",
+            "parent_body = \"pelvis\"",
+            "child_body = \"spine_0\"",
+            "enable_swing_limit = true",
+            "enable_twist_limit = true",
+        ] {
+            assert!(nodes.contains(needle), "missing {needle} in:\n{nodes}");
+        }
+        // Leading tab: `swing_limit =` is also a suffix of `enable_swing_limit =`.
+        for (key, want) in [
+            ("\tswing_limit", 30.0),
+            ("min_twist_angle", -15.0),
+            ("max_twist_angle", 15.0),
+            ("friction", 0.2),
+        ] {
+            let got = kv_num(&nodes, key).unwrap_or(f64::NAN);
+            assert!((got - want).abs() < 1e-3, "{key} = {got}, want {want}");
+        }
+    }
+
+    #[test]
+    fn joint_list_lands_after_shape_list_once() {
+        let mut vmdl = String::from(
+            "{\n\t_class = \"RootNode\"\n\tchildren = \n\t[\n\t\t{\n\t\t\t_class = \"PhysicsShapeList\"\n\t\t\tchildren = [  ]\n\t\t},\n\t\t{\n\t\t\t_class = \"AnimationList\"\n\t\t},\n\t]\n}\n",
+        );
+        assert!(insert_joint_list(&mut vmdl, "\n{ x = 1 },").unwrap());
+        let shapes = vmdl.find("PhysicsShapeList").unwrap();
+        let joints = vmdl.find("PhysicsJointList").unwrap();
+        let anims = vmdl.find("AnimationList").unwrap();
+        assert!(shapes < joints && joints < anims, "{vmdl}");
+        assert!(!insert_joint_list(&mut vmdl, "").unwrap(), "must not double-insert");
+        assert!(insert_joint_list(&mut String::from("no physics here"), "").is_err());
+    }
+
+    /// Real round trip vs CS2: build Haze with the fixture cube, dump the
+    /// artifact's PHYS block (S2V CLI, machine-local like the other model
+    /// e2es) and compare every joint - bodies, limits, friction, frames - to
+    /// the vanilla model. Ignored: needs this machine's installs. Run with:
+    ///   cargo test -p app --lib -- --ignored e2e_model_ragdoll --nocapture
+    #[test]
+    #[ignore]
+    fn e2e_model_ragdoll_joints_round_trip() {
+        let helper = r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\tools\vpk-helper\dist\vpk-helper.exe";
+        let pak = r"D:\SteamLibrary\steamapps\common\Deadlock\game\citadel\pak01_dir.vpk";
+        let cs2 = r"D:\SteamLibrary\steamapps\common\Counter-Strike Global Offensive";
+        let fbx = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/eim_testcube.fbx");
+        let s2v = Path::new(r"C:\Users\ethob\Desktop\DeadlockModding\_s2vcli\Source2Viewer-CLI.exe");
+        assert!(s2v.exists(), "this e2e needs the S2V CLI to read the artifact's PHYS block");
+        let scratch = std::env::temp_dir().join("eim_model_ragdoll_e2e");
+        let _ = std::fs::remove_dir_all(&scratch);
+
+        let ws = workspace(helper, pak, "models/heroes_staging/haze/haze.vmdl_c", &scratch.join("ws"), false)
+            .expect("workspace");
+        let cache = Path::new(&ws.dir).join(PHYS_CACHE);
+        assert!(cache.exists(), "kit must cache the PHYS block");
+        let vanilla = parse_phys(&std::fs::read_to_string(&cache).unwrap());
+        assert_eq!(vanilla.joints.len(), 18, "haze ships 18 ragdoll joints");
+
+        let game_vmat = ws.materials.first().cloned().expect("haze has materials");
+        let req = ModelBuildReq {
+            cs2_root: cs2.into(),
+            kind: ModelKind::Hero,
+            workspace_dir: ws.dir.clone(),
+            vmdl_internal: "models/heroes_staging/haze/haze.vmdl".into(),
+            mesh_file: fbx.into(),
+            mesh_files: vec![],
+            material_override: None,
+            import_scale: 0.01,
+            artifact_out: scratch.join("haze.vmdl_c").to_string_lossy().into_owned(),
+            materials: vec![MaterialSpec {
+                name: "eim_test".into(),
+                color: None,
+                normal: None,
+                roughness: None,
+                metalness: None,
+                effect: None,
+                fx_period: None,
+                fx_intensity: None,
+                fx_speed: None,
+                fx_variant: None,
+                fx_hue: None,
+                game_vmat: Some(game_vmat),
+            }],
+            tools_root: None,
+            materials_out: None,
+            ffmpeg_path: None,
+            helper_path: None,
+            pak_path: None,
+            use_staged: false,
+            skip_anims: true,
+            camera: vec![],
+        };
+        let rep = build(&req);
+        for s in &rep.steps {
+            eprintln!("STEP {s}");
+        }
+        assert!(rep.ok, "{:?}", rep.steps);
+        assert!(
+            rep.steps.iter().any(|s| s.contains("ragdoll joint(s) restored")),
+            "staging must report the restored joints: {:?}",
+            rep.steps
+        );
+
+        let out = std::process::Command::new(s2v)
+            .args(["-i", &req.artifact_out, "-b", "PHYS"])
+            .output()
+            .expect("run S2V");
+        let ours = parse_phys(&String::from_utf8_lossy(&out.stdout));
+        eprintln!("ours: {} bodies, {} joints", ours.bone_names.len(), ours.joints.len());
+        assert_eq!(ours.joints.len(), vanilla.joints.len(), "joint count must match vanilla");
+
+        let name = |p: &PhysData, i: usize| p.bone_names.get(i).cloned().unwrap_or_default();
+        let mut worst_pos: f64 = 0.0;
+        let mut worst_quat: f64 = 0.0;
+        for vj in &vanilla.joints {
+            let key = (name(&vanilla, vj.body1), name(&vanilla, vj.body2));
+            let oj = ours
+                .joints
+                .iter()
+                .find(|o| (name(&ours, o.body1), name(&ours, o.body2)) == key)
+                .unwrap_or_else(|| panic!("joint {key:?} missing from the rebuilt model"));
+            assert_eq!(oj.kind, vj.kind, "{key:?} type");
+            let close = |a: f64, b: f64| (a - b).abs() < 2e-3;
+            match (vj.swing, oj.swing) {
+                (Some((a1, b1)), Some((a2, b2))) => assert!(close(a1, a2) && close(b1, b2), "{key:?} swing {:?} vs {:?}", vj.swing, oj.swing),
+                (None, None) => {}
+                _ => panic!("{key:?} swing limit presence differs: {:?} vs {:?}", vj.swing, oj.swing),
+            }
+            match (vj.twist, oj.twist) {
+                (Some((a1, b1)), Some((a2, b2))) => assert!(close(a1, a2) && close(b1, b2), "{key:?} twist {:?} vs {:?}", vj.twist, oj.twist),
+                (None, None) => {}
+                _ => panic!("{key:?} twist limit presence differs: {:?} vs {:?}", vj.twist, oj.twist),
+            }
+            assert!(close(vj.friction, oj.friction), "{key:?} friction {} vs {}", vj.friction, oj.friction);
+            for (vf, of) in [(&vj.frame1, &oj.frame1), (&vj.frame2, &oj.frame2)] {
+                for k in 0..3 {
+                    worst_pos = worst_pos.max((vf.0[k] - of.0[k]).abs());
+                }
+                // q and -q are the same rotation.
+                let d1: f64 = (0..4).map(|k| (vf.1[k] - of.1[k]).abs()).fold(0.0, f64::max);
+                let d2: f64 = (0..4).map(|k| (vf.1[k] + of.1[k]).abs()).fold(0.0, f64::max);
+                worst_quat = worst_quat.max(d1.min(d2));
+            }
+        }
+        eprintln!("worst frame position delta {worst_pos:.4}, worst quaternion delta {worst_quat:.4}");
+        assert!(worst_pos < 0.05, "joint frame positions drift from vanilla: {worst_pos}");
+        assert!(worst_quat < 0.02, "joint frame rotations drift from vanilla: {worst_quat}");
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 }

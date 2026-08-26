@@ -33,9 +33,22 @@ export function songHash(song: Song): string {
           layers
             .map(
               (l) =>
-                `${l.sourceAudio}@${l.gainDb}@${l.offset ?? 0}@${l.trimStart ?? 0}@${l.trimEnd ?? 0}`,
+                `${l.sourceAudio}@${l.gainDb}@${l.offset ?? 0}@${l.trimStart ?? 0}@${l.trimEnd ?? 0}` +
+                // Layer fades / duck / mute / fx: appended only when set, so
+                // every pre-feature hash stays byte-identical.
+                (l.fadeIn || l.fadeOut || l.duckDb || l.muted || (l.fx && Object.keys(l.fx).length)
+                  ? `@${l.fadeIn ?? 0}@${l.fadeOut ?? 0}@${l.duckDb ?? 0}@${l.muted ? 1 : 0}@${JSON.stringify(l.fx ?? {})}`
+                  : ""),
             )
             .join(","),
+        ]
+      : []),
+    // Bite length + fx + start delay, same rule: only when non-default.
+    ...((song.biteMode && song.biteMode !== "base") || (song.fx && Object.keys(song.fx).length) || song.startOffset
+      ? [
+          `bite:${song.biteMode ?? "base"}:${song.biteSeconds ?? 0}`,
+          `fx:${JSON.stringify(song.fx ?? {})}`,
+          `start:${song.startOffset ?? 0}`,
         ]
       : []),
   ].join("|");

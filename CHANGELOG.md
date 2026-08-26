@@ -2,6 +2,49 @@
 
 All notable changes since 1.0.4. Download: https://gamebanana.com/tools/23422
 
+## 1.3 (2026-08-25)
+
+### Model Replacement: ragdolls work again
+- Models built through the tool had no ragdoll: the decompile that produces the editing kit reconstructs the physics BODIES (hulls and per-bone capsules) but never the JOINTS between them, so the rebuilt model compiled with an empty joint list and reviewers rejected submissions for it. The tool now reads the joints straight from the original compiled model and regenerates them into the build (cone and twist limits, friction, collision flags, exact anchors). Verified against the real compiler: the rebuilt model has the same 18 joints as vanilla Haze to within 0.0002 units. Existing kits pick this up automatically - re-pick the hero once if the build log says the kit predates the physics cache.
+- "Open in ModelDoc" (and the particle editor) now tell you up front when the compile tools are the downloaded compile-only bundle: those editors need the full Deadlock SDK with the game content (game/core and the citadel pak), which the bundle does not include - before, the tools opened and died on "can't open a citadel file".
+
+### Model Replacement: mesh files with spaces in the name
+- A mesh file named with spaces or other odd characters ("Harlem Ivy after rigging.fbx") failed every build with "RenderMeshFile: ... Node ... resolve failure". The mesh is now staged under a plain name (Harlem_Ivy_after_rigging.fbx) and the build log says so - rename nothing, just build again. Reproduced and verified against the real CS2 compiler.
+
+### Settings: paths are checked properly, and fixed for you
+- Pasting a folder where the pak01_dir.vpk file belongs (or a chunk like pak01_000.vpk, a disk path in Addon name, an absolute Sound folder) used to show a green check and then fail everywhere with baffling errors ("Access to the path ... is denied", "not in cache" for every sound file). Settings now checks each path for what it needs to BE, says what is wrong right under the field, and offers a one-click Fix when it can tell where the path should point - the Game pak is found from any folder inside your Deadlock install. Auto-detect (and every start of the app) applies those fixes automatically.
+- Auto-detect also finds Steam libraries on other drives (D:\SteamLibrary, F:\Games\Steam, ...) that the registry lookup misses, e.g. when the app was started as a different admin account.
+- Refresh game data tells you when the Game pak is not the pak file (and where it found the real one) instead of listing every file as "not in cache". The Events chip is now "Game data" and says how to fill it.
+- Installing into a fresh Deadlock that has no addons folder yet creates it instead of failing.
+
+### Hero textures: Ivy's hollow black eyes fixed
+- Recoloring or reskinning some heroes (reported on Ivy) could turn parts of them solid black - most visibly her eyes. The recompile sometimes creates small helper textures with new names, and the build left them out of the vpk; when the game couldn't find one anywhere the whole material broke. Every texture a recompiled material actually uses now ships in the vpk (verified against the real compiler on all four of Ivy's materials). Heroes like Paige only worked by luck - their helper textures happened to match files the game already has. Just recompile, nothing else to change.
+
+### Mod combiner: import a folder, live
+- Import a FOLDER of loose mod files (game layout: sounds/, particles/, materials/, ...), not just a .vpk - new "Import a folder…" button, or paste the folder path. The folder stays linked live: it is re-read on every compile, so edits you make in it land in the next build automatically - perfect for a mod you are still working on. Its card shows a "live folder" tag.
+- Works with the existing "Decompile a .vpk" button as a full edit loop: decompile any mod into a folder, import that folder, then open and tweak its files freely - great for merging mods and adjusting what they override.
+- Housekeeping files a working folder can carry (.git, .vscode, __MACOSX) never ship in the built vpk and stay out of the review list.
+
+### Track editor: layers, effects, live preview
+- Layers got a proper mixer: a "Length" choice per track (your clip / longest layer / custom seconds) so a long original can ring out under a short hit (anything past the end shows red-hatched), per-layer fade in/out and "duck" (lower your track while the layer plays), mute, a label column with the game's original marked as "Original", and a "Yours starts at" delay so your track can come in after the original.
+- Effects on any track or layer: Reverse, Pitch (semitones and speed independently), EQ presets (radio, telephone, muffled, bass, bright, or custom), Crush, Chorus/Flanger/Tremolo, Compress, Reverb (room, hall, cave, slapback), plus Limiter and "Match loudness" (measures the game's original and matches your bite to it - works on very short clips too). Effects apply live while the preview plays; the compiled sound is rendered by ffmpeg with the same settings.
+- Editor feel: typed start/end fields, Space to play, [ and ] to set the trim at the playhead, arrow-key nudging, Ctrl+Z undo, loop tracks preview looped, a level meter with a clip warning, and "Match length" to trim exactly to the original.
+
+### Sounds: every sound event, Most used vs All
+- Every sound tab now has a "Most used | All" switch. Most used is the curated set plus anything you pinned or changed; All lists every sound event the tab covers (grouped by game file, searchable, with a preview button) and turns any of them into a normal slot the moment you open it. Layered and per-track sounds (the hideout ambience close/mid/far layers, the 8-track events) are listed as their own rows.
+- Pin any sound (the flag on a row or a slot) to put it in Most used. "Reset pins to shipped" goes back to the set the app ships with. The shipped set now includes the stat-box and crate breaks, the stat / soul pickups, souls gained, hit / kill / death feedback, parry, shield break, stun, zipline, trooper and guardian sounds, and two ambience loops.
+- New Combat tab: the hit, hurt, status-effect and player feedback sounds (damage, status_effects and player files) live there now; the crit slots moved over with their tracks. Gameplay keeps last hit, deny, souls and the rest of gameplay.vsndevts. Map SFX, Ambience and NPCs are always visible too.
+- Misc / Search: one "Find a sound" box over every sound event in the game (event name, file, or a plain word like crate or gold), grouped by tab, with a Go-to-tab jump that opens the sound right where it lives.
+
+### Sounds: Rift
+- The four "In the rift" loop slots (main, contested, blocked, approaching/FX) are real random pools now: add several tracks to a layer and the game picks one at random each time it starts, like every other slot. Before, only the first track of a layer ever played. Your existing rift tracks carry over untouched - just recompile. (Loop tracks still want Looping turned on.)
+
+### Heroes
+- Billy: the tracks you had on "Blasted (E)" from the old flat Heroes tab now show up on Billy's Blasted card (Ambient Looping) - they were compiling but invisible in the drill-in, with an empty twin slot next to them. Pack Builder module membership follows.
+- Ability cards no longer pull a hero's regular gun, reload, zoom and landing sounds onto an ability just because the ability also fires the gun (Grey Talon's Rain of Arrows listed his whole rifle; Werewolf's Slamfire listed the regular rifle shots). Those live in "More sounds" under Gunfire / Movement.
+- Sounds whose Valve original is a file borrowed from somewhere else (Billy's Blasted healing plays Rescue Beam's heal clip; Slork's invisibility uses Haze's smoke bomb; Ivy's air drop uses Stasis Bomb / Silence Wave) now say so under the slot instead of looking mis-filed. They are the real game data: replacing one only changes that hero event.
+- Three ability sounds that showed with an empty title (Grey Talon / Shiv / Slork impact rows) are named now.
+
 ## 1.2 (2026-08-18)
 
 ### Model Replacement

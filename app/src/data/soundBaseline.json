@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "entries": [
+    { "key": "soundevents/gameplay.vsndevts::CurrencyChanged::vsnd_files", "group": "gameplay", "label": "Souls gained" },
+    { "key": "soundevents/gameplay.vsndevts::Player.GetGold::vsnd_files", "group": "gameplay", "label": "Get souls (player)" },
+    { "key": "soundevents/gameplay.vsndevts::Player.ClaimOrb::vsnd_files", "group": "gameplay", "label": "Soul orb claimed" },
+    { "key": "soundevents/gameplay.vsndevts::Player.AcquireAp::vsnd_files", "group": "gameplay", "label": "Ability point" },
+    { "key": "soundevents/damage.vsndevts::Damage.Send::vsnd_files", "group": "combat", "label": "Hit (you deal)" },
+    { "key": "soundevents/damage.vsndevts::Damage.Send.Lethal::vsnd_files", "group": "combat", "label": "Kill hit (you deal)" },
+    { "key": "soundevents/damage.vsndevts::Damage.Receive.Lethal::vsnd_files", "group": "combat", "label": "Your death hit" },
+    { "key": "soundevents/player.vsndevts::PlayerAlert.LowHealth::vsnd_files", "group": "combat", "label": "Low health alert" },
+    { "key": "soundevents/player.vsndevts::Player.Melee.Parry.Success.Shared::vsnd_files", "group": "combat", "label": "Parry success" },
+    { "key": "soundevents/status_effects.vsndevts::StatusEffects.ShieldBreak::vsnd_files", "group": "combat", "label": "Shield break" },
+    { "key": "soundevents/status_effects.vsndevts::Status.Stunned::vsnd_files", "group": "combat", "label": "Stunned" },
+    { "key": "soundevents/breakables.vsndevts::Glass.Break::vsnd_files", "group": "mapsfx", "label": "Stat box break (glass)" },
+    { "key": "soundevents/breakables.vsndevts::Wood.Crate.Break::vsnd_files", "group": "mapsfx", "label": "Wooden crate break" },
+    { "key": "soundevents/breakables.vsndevts::Pottery.Break::vsnd_files", "group": "mapsfx", "label": "Pottery break" },
+    { "key": "soundevents/ziplines.vsndevts::Ability.ZipLine.Start::vsnd_files", "group": "mapsfx", "label": "Zipline start" },
+    { "key": "soundevents/powerups.vsndevts::Powerup.Spawn.Generic::vsnd_files", "group": "powerups", "label": "Stat box drop spawn" },
+    { "key": "soundevents/powerups.vsndevts::Powerup.Pickup.Spirit::vsnd_files", "group": "powerups", "label": "Stat pickup (spirit)" },
+    { "key": "soundevents/powerups.vsndevts::Powerup.Pickup.Weapon::vsnd_files", "group": "powerups", "label": "Stat pickup (weapon)" },
+    { "key": "soundevents/powerups.vsndevts::Powerup.Pickup.Ammo::vsnd_files", "group": "powerups", "label": "Stat pickup (ammo)" },
+    { "key": "soundevents/powerups.vsndevts::Powerup.Pickup.Health::vsnd_files", "group": "powerups", "label": "Stat pickup (health)" },
+    { "key": "soundevents/powerups.vsndevts::Powerup.Pickup.Souls::vsnd_files", "group": "powerups", "label": "Soul pickup" },
+    { "key": "soundevents/npc/troopers.vsndevts::Trooper.Death::vsnd_files", "group": "npcs", "label": "Trooper death" },
+    { "key": "soundevents/npc/troopers.vsndevts::TrooperRifle.Fire::vsnd_files", "group": "npcs", "label": "Trooper rifle fire" },
+    { "key": "soundevents/npc/guardians.vsndevts::Guardian.Tier1.Death.Initial::vsnd_files", "group": "npcs", "label": "Guardian death" },
+    { "key": "soundevents/world_ambient_emitters.vsndevts::World.Ambient.Emitter.Waterfall.Lp::vsnd_files", "group": "ambience", "label": "Waterfall loop" },
+    { "key": "soundevents/ambience/ambience_hideout.vsndevts::Amb.Hideout.Fireplace::vsnd_files_close", "group": "ambience", "label": "Hideout fireplace (close)" }
+  ]
+}

@@ -1,11 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import type { CompileConfig, EffectCompile, EventCompile, GbModInfo, GlobalCompile, HeroTexCompile, IconCompile, ModTextureCompile, PosterCompile, ProfileCompilePrefs, SoundOverrideCompile, VdataCompile, WorldCompile } from "./api";
-import { loadSettings, saveSettings } from "./api";
+import { loadSettings, saveSettings, renderSpecOf } from "./api";
 import type { DigimodConfig, EffectOverride, EventProject, HeroTextureOverride, LibraryItem, ModelOverride, ModTextureOverride, PosterOverride, SoundOverride, UiFileOverride } from "../types";
 import { songHash, overrideHash, effectHash, posterHash, heroTexHash, modTexHash } from "./songHash";
 
 // User-facing settings. We derive the verbose CompileConfig paths from a CSDK
 // root + addon name so the user only manages a few friendly fields.
+/** One "Most used" pin: the tab it shows in and an optional friendly label
+ *  (default = the event's auto label). */
+export interface SoundPin {
+  group: string;
+  label?: string;
+}
+
 export interface Settings {
   csdkRoot: string;
   addonName: string;
@@ -145,6 +152,12 @@ export interface Settings {
    *  load after the includeUiSounds gate shipped, projects that already carry
    *  UI content get the gate enabled so existing mods keep building. */
   uiSoundsMigrated: boolean;
+  /** Personal "Most used" pins on top of the shipped sound baseline, keyed
+   *  `relpath::eventName::arrayKey`. A value pins (or re-homes/relabels) a
+   *  sound; `null` hides a shipped baseline entry. Personal: not part of
+   *  Shared Pack sync. In dev builds "Save as shipped baseline" folds these
+   *  into app/src/data/soundBaseline.json. */
+  soundPins: Record<string, SoundPin | null>;
   /** Posters tab: user corrections to manifest region rects (keyed
    *  `sheetId::posterId`). Applied over posterManifest.json everywhere a rect
    *  is used, and copied into existing overrides when edited. */
@@ -247,6 +260,7 @@ export const DEFAULT_SETTINGS: Settings = {
   knownSoundEvents: [],
   knownSweepFiles: [],
   uiSoundsMigrated: false,
+  soundPins: {},
   posterRectEdits: {},
   posterHidden: [],
   posterHiddenSheets: [],
@@ -545,15 +559,7 @@ export function buildCompileConfig(
       fadeIn: song.fadeIn,
       fadeOut: song.fadeOut,
       looping: song.looping,
-      layers: (song.layers ?? [])
-        .filter((l) => l.sourceAudio)
-        .map((l) => ({
-          sourceAudio: l.sourceAudio,
-          gainDb: l.gainDb,
-          offset: l.offset ?? 0,
-          trimStart: l.trimStart ?? 0,
-          trimEnd: l.trimEnd ?? 0,
-        })),
+      ...renderSpecOf(song),
       // The app stamps songs with songHash after a good compile, so the
       // up-to-date check must speak the same fingerprint.
       currentHash: songHash(song),
@@ -652,6 +658,7 @@ export function buildCompileConfig(
       .filter((a) => !ev.removedEntries.includes(a.reference))
       .map((a) => ({ reference: a.reference, sourceVpk: a.sourceVpk })),
     attributes: (ev.attributeOverrides ?? []).map((a) => ({ key: a.key, value: a.value })),
+    createArray: !!ev.stackDefault,
     songs: ev.songs.map((song) => ({
       soundName: song.soundName,
       sourceAudio: song.sourceMp3,
@@ -661,15 +668,7 @@ export function buildCompileConfig(
       fadeIn: song.fadeIn,
       fadeOut: song.fadeOut,
       looping: song.looping,
-      layers: (song.layers ?? [])
-        .filter((l) => l.sourceAudio)
-        .map((l) => ({
-          sourceAudio: l.sourceAudio,
-          gainDb: l.gainDb,
-          offset: l.offset ?? 0,
-          trimStart: l.trimStart ?? 0,
-          trimEnd: l.trimEnd ?? 0,
-        })),
+      ...renderSpecOf(song),
       currentHash: songHash(song),
       lastCompiledHash: song.lastCompiledHash,
     })),

@@ -43,6 +43,32 @@ export interface LibraryItem {
  *  own clip window within the source, placed `offset` seconds into the bite,
  *  at its own volume - cut to the bite's length. The sound event and its
  *  pool are untouched - layers are baked into the one rendered audio file. */
+/** How long a finished bite is: the base clip (layers cut to it), whoever
+ *  ends last, or an exact length (padded/cut). */
+export type BiteMode = "base" | "longest" | "custom";
+
+/** A track's or layer's effect chain. Unset = off. Rendered in a fixed order
+ *  (reverse, pitch, eq, crush, modulation, compressor, reverb, then volume);
+ *  `limiter` and `loudness` apply to the finished bite (song level only). */
+export interface SoundFx {
+  reverse?: boolean;
+  pitch?: { semitones: number; tempo: number };
+  eq?: { preset: EqPreset; bass?: number; treble?: number; lowpass?: number; highpass?: number };
+  compress?: { amount: number };
+  reverb?: { preset: ReverbPreset; wet: number; decay?: number };
+  crush?: { bits: number; mix: number };
+  modulation?: { kind: ModKind; depth: number; rate: number };
+  limiter?: boolean;
+  /** Target loudness - "match the original" (measured, then matched by gain). */
+  loudness?: number;
+  /** How `loudness` was measured: EBU LUFS, or the mean level for clips too
+   *  short for the LUFS meter. The render measures itself the same way. */
+  loudnessMethod?: "lufs" | "rms";
+}
+export type EqPreset = "radio" | "telephone" | "muffled" | "bass" | "bright" | "custom";
+export type ReverbPreset = "room" | "hall" | "cave" | "slap";
+export type ModKind = "chorus" | "flanger" | "tremolo";
+
 export interface SongLayer {
   id: string;
   sourceAudio: string;
@@ -52,6 +78,18 @@ export interface SongLayer {
   /** Clip window within the source; end <= start means "to the file's end". */
   trimStart?: number;
   trimEnd?: number;
+  /** The layer's own fades (seconds), on its clip window. */
+  fadeIn?: number;
+  fadeOut?: number;
+  /** Lower the BASE track by this many dB while this layer plays. */
+  duckDb?: number;
+  /** Left out of the mix (and the preview). */
+  muted?: boolean;
+  fx?: SoundFx;
+  /** Display name (the game's original is labelled as such). */
+  label?: string;
+  /** True for the slot's own game sound added via "+ Original". */
+  original?: boolean;
 }
 
 export interface Song {
@@ -67,6 +105,14 @@ export interface Song {
   looping: boolean;
   /** Extra tracks mixed into this one (absent/empty = plain single track). */
   layers?: SongLayer[];
+  /** Bite length (default "base"). */
+  biteMode?: BiteMode;
+  biteSeconds?: number;
+  /** Seconds of silence before YOUR track (so it can start after a layer,
+   *  e.g. the original plays first). Layer offsets stay bite-relative. */
+  startOffset?: number;
+  /** The track's effect chain (absent = none). */
+  fx?: SoundFx;
   order: number;
   lastCompiledHash: string | null;
   /** When converted from a mod pack (absorb / edit-adopted): the original
@@ -83,8 +129,14 @@ export interface EventProject {
   stockEntry: string;
   /** Direct-replace slot: the event has no vsnd refs to merge (soundstack
    *  driven), so the track compiles AT stockEntry's path instead (loose-file
-   *  override). Merge machinery skips these. */
+   *  override). Merge machinery skips these. Legacy: no default slot uses it
+   *  any more (saved profiles may still carry it; reconcile clears it). */
   directOnly?: boolean;
+  /** Soundstack-default slot: the vanilla event has NO `arrayKey` array - the
+   *  soundstack's own default (`stockEntry`) plays unless the event overrides
+   *  it. The compile CREATES the array (stock first, then your pool), so the
+   *  slot gets a real random pool like any other. The Rift loop layers. */
+  stackDefault?: boolean;
   vsndDurationMode: DurationMode;
   vsndDurationManual: number | null;
   songs: Song[];

@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import type { BiteMode, SoundFx } from "../types";
 
 /**
  * App-wide "sound clipboard": copy a configured track once, paste it into any
@@ -15,6 +16,11 @@ export interface CopiedSound {
   fadeIn: number;
   fadeOut: number;
   looping: boolean;
+  /** Effects + bite length ride along (layers don't: they're per slot). */
+  fx?: SoundFx;
+  biteMode?: BiteMode;
+  biteSeconds?: number;
+  startOffset?: number;
 }
 
 let current: CopiedSound | null = null;

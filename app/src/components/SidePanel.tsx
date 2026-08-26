@@ -126,7 +126,8 @@ function EntryRow({
       }`}
     >
       <span
-        className={`flex items-center gap-2 truncate font-medium ${included ? "" : "line-through"}`}
+        className={`block min-w-0 flex-1 truncate pr-2 font-medium ${included ? "" : "line-through"}`}
+        title={name}
       >
         {name}
       </span>
@@ -426,6 +427,8 @@ export function SidePanel({
   onDownloadSong,
   moveTargets,
   onMoveToTab,
+  pinned,
+  onTogglePin,
   missingRefs,
   onPasteSong,
   onAddFiles,
@@ -464,6 +467,9 @@ export function SidePanel({
   /** When set, a "move to tab" selector shows in the header (auto/import slots). */
   moveTargets?: { value: string; label: string }[];
   onMoveToTab?: (slotId: string, group: string) => void;
+  /** "Most used" pin (sound tabs): shown only when `onTogglePin` is given. */
+  pinned?: boolean;
+  onTogglePin?: () => void;
   /** Refs known to NOT exist as real files in the game pak (checked upstream). */
   missingRefs?: Set<string>;
   /** Paste the sound-clipboard track into this slot. */
@@ -644,6 +650,19 @@ export function SidePanel({
               </span>
             ) : null;
           })()}
+          {onTogglePin && (
+            <button
+              onClick={onTogglePin}
+              title={pinned ? "Pinned - shows in Most used. Click to unpin" : "Pin to Most used"}
+              className={`rounded-md border px-1.5 py-0.5 text-[11px] transition ${
+                pinned
+                  ? "border-amber-400/60 text-amber-300"
+                  : "border-zinc-700/70 text-zinc-500 hover:border-zinc-500 hover:text-zinc-300"
+              }`}
+            >
+              {pinned ? "⚑" : "⚐"}
+            </button>
+          )}
           {moveTargets && onMoveToTab && (
             <select
               value={ev.group}
@@ -778,6 +797,10 @@ export function SidePanel({
                       fadeIn: s.fadeIn,
                       fadeOut: s.fadeOut,
                       looping: s.looping,
+                      fx: s.fx,
+                      biteMode: s.biteMode,
+                      biteSeconds: s.biteSeconds,
+                      startOffset: s.startOffset,
                     })
                   }
                   accent={accent}

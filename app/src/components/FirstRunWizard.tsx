@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion } from "motion/react";
-import { checkPaths } from "../lib/api";
+import { validateSetup } from "../lib/api";
 import type { Settings } from "../lib/settings";
 
 /**
@@ -26,21 +26,30 @@ export function FirstRunWizard({
   const [checks, setChecks] = useState<Record<string, boolean | null>>({});
 
   const probe = [
-    ["Compiler", `${settings.csdkRoot}/game/bin_tools/win64/resourcecompiler.exe`],
-    ["VPK helper", settings.vpkHelperPath],
-    ["Game pak", settings.deadlockPak],
-    ["Addons folder", settings.addonsDir],
-    ["Game data", `${settings.vanillaRoot}/soundevents/music.vsndevts`],
+    ["Compiler", "compiler"],
+    ["VPK helper", "vpkHelper"],
+    ["Game pak", "deadlockPak"],
+    ["Addons folder", "addonsDir"],
+    ["Game data", "events"],
   ] as const;
 
   // Re-check the resulting paths whenever they change (i.e. after setup runs).
+  // Verdicts are by KIND - a folder in the Game pak box is not a pak.
   useEffect(() => {
     let cancelled = false;
-    checkPaths(probe.map(([, p]) => p))
+    validateSetup({
+      csdkRoot: settings.csdkRoot,
+      addonName: settings.addonName,
+      vpkHelperPath: settings.vpkHelperPath,
+      deadlockPak: settings.deadlockPak,
+      addonsDir: settings.addonsDir,
+      soundFolder: settings.soundFolder,
+      vanillaRoot: settings.vanillaRoot,
+    })
       .then((res) => {
-        if (cancelled) return;
+        if (cancelled || !res) return;
         const m: Record<string, boolean | null> = {};
-        probe.forEach(([label], i) => (m[label] = res[i] ?? null));
+        probe.forEach(([label, key]) => (m[label] = res[key]?.ok ?? null));
         setChecks(m);
       })
       .catch(() => {});

@@ -78,6 +78,16 @@ pub struct EventMerge {
     /// (the safe MERGE-NEVER-REPLACE behavior). Opt-in per entry from the UI.
     #[serde(default)]
     pub excluded: Vec<String>,
+    /// Create `array_key` inside the event when the event exists but carries
+    /// no such array. Off by default: a missing array normally means the game
+    /// drifted (renamed/removed) and the caller should skip the slot. Opt in
+    /// for soundstack-driven events whose arrays are OPTIONAL overrides of the
+    /// stack's built-in defaults (the Rift capture loop's `vsnd_files_*`
+    /// layers): vanilla ships the event without them, so the only way to add
+    /// a pool is to write the array fresh. `stock_entry` should then be the
+    /// stack's default file so the rebuilt array keeps playing it first.
+    #[serde(default)]
+    pub create_array: bool,
 }
 
 fn default_array_key() -> String {
@@ -159,7 +169,36 @@ pub fn read_event_array(text: &str, event_name: &str, array_key: &str) -> Result
 /// what another mod added (for combining). Both the array form and the scalar
 /// `vsnd_files = "x"` form are returned (the scalar as a single-entry list), so
 /// importers union one-sound events consistently with multi-sound ones.
+///
+/// Only keys that START with `vsnd_files` are found - the dotted per-track
+/// keys (`track_2.track_vsnd_files`) are invisible here on purpose: this is
+/// what the Mod-combiner union and the importers consume, and widening it
+/// would change what they merge. See [`list_sound_arrays`] for the full set.
 pub fn list_arrays(text: &str) -> Result<Vec<ArrayInfo>> {
+    scan_sound_arrays(text, false)
+}
+
+/// Every sound array in the document, one `ArrayInfo` per (event, key):
+/// `vsnd_files`, every `vsnd_files_<layer>` sibling (close/mid/far, contest,
+/// opponent_control...) AND the per-track `track_N.track_vsnd_files` arrays
+/// the 8-track events use. Feeds the app's "show every sound" inventory; the
+/// merge/read paths (`read_event_array`, `apply_merge`) already handle any of
+/// these keys, this just makes them discoverable.
+pub fn list_sound_arrays(text: &str) -> Result<Vec<ArrayInfo>> {
+    scan_sound_arrays(text, true)
+}
+
+/// Whether a full key name is one of the game's sound-array keys.
+fn is_sound_array_key(key: &str) -> bool {
+    key == "vsnd_files"
+        || key.starts_with("vsnd_files_")
+        || key == "track_vsnd_files"
+        || (key.starts_with("track_") && key.contains(".track_vsnd_files"))
+}
+
+/// Shared scanner: `extended` = also accept dotted `track_N.track_vsnd_files`
+/// keys (the `vsnd_files` match sits mid-key there, after `track_`).
+fn scan_sound_arrays(text: &str, extended: bool) -> Result<Vec<ArrayInfo>> {
     validate_header(text)?;
     let b = text.as_bytes();
     // The header comment contains `{` (e.g. `version{...}`), so start after it.
@@ -170,26 +209,36 @@ pub fn list_arrays(text: &str) -> Result<Vec<ArrayInfo>> {
         .ok_or(Kv3Error::Unterminated("document"))?;
     let obj_close =
         matching_close(text, obj_open, b'{', b'}').ok_or(Kv3Error::Unterminated("document"))?;
+    let is_key_char = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || (extended && c == b'.');
 
     let mut out = Vec::new();
     for (name, bo, bc) in top_level_entries(text, obj_open, obj_close) {
         let mut from = bo;
         while let Some(rel) = text[from..bc].find("vsnd_files") {
-            let kpos = from + rel;
+            let mpos = from + rel;
+            // Key start: the match itself, or (extended) the start of the
+            // dotted key the match sits inside.
+            let mut kpos = mpos;
+            if extended {
+                while kpos > bo && is_key_char(b[kpos - 1]) {
+                    kpos -= 1;
+                }
+            }
             let before_ok =
                 kpos == 0 || matches!(b[kpos - 1], b' ' | b'\t' | b'\n' | b'\r' | b'{');
-            // Read the full key name (vsnd_files[_suffix]).
-            let mut j = kpos;
-            while j < bc && (b[j].is_ascii_alphanumeric() || b[j] == b'_') {
+            // Read the full key name (vsnd_files[_suffix] / track_N.track_vsnd_files).
+            let mut j = mpos;
+            while j < bc && is_key_char(b[j]) {
                 j += 1;
             }
             let key = &text[kpos..j];
+            let key_ok = !extended || is_sound_array_key(key);
             // After the key: optional spaces, then '='.
             let mut k = j;
             while k < bc && matches!(b[k], b' ' | b'\t') {
                 k += 1;
             }
-            if before_ok && k < bc && b[k] == b'=' && !in_line_comment(text, kpos) {
+            if before_ok && key_ok && k < bc && b[k] == b'=' && !in_line_comment(text, kpos) {
                 // After '=': optional spaces, then the value must be '[' (array).
                 let mut v = k + 1;
                 while v < bc && matches!(b[v], b' ' | b'\t' | b'\n' | b'\r') {
@@ -251,11 +300,28 @@ pub fn add_entries(
     // scalar is promoted to an array only if there's actually something new to
     // add, so a no-op union stays byte-identical (MERGE, NEVER REPLACE).
     let (existing, rstart, rend, indent) =
-        match find_value(text, block, array_key, event_name)? {
-            ValueSpan::Array(lb, rb) => {
+        match find_value(text, block, array_key, event_name) {
+            Ok(ValueSpan::Array(lb, rb)) => {
                 (parse_array_entries(text, lb, rb), lb, rb, line_indent(text, lb).to_string())
             }
-            ValueSpan::Scalar(qs, qe, v) => (vec![v], qs, qe, line_indent(text, qs).to_string()),
+            Ok(ValueSpan::Scalar(qs, qe, v)) => (vec![v], qs, qe, line_indent(text, qs).to_string()),
+            // The event exists but has no such array: the source document
+            // defines one, so the union writes it fresh (a soundstack-driven
+            // event's optional `vsnd_files_*` override) instead of silently
+            // dropping the pack's entries.
+            Err(Kv3Error::ArrayNotFound(_)) => {
+                let mut deduped: Vec<String> = Vec::new();
+                for e in new_entries {
+                    if !deduped.contains(e) {
+                        deduped.push(e.clone());
+                    }
+                }
+                if deduped.is_empty() {
+                    return Ok(text.to_string());
+                }
+                return Ok(insert_array(text, block, array_key, &deduped));
+            }
+            Err(e) => return Err(e),
         };
 
     let mut result = existing.clone();
@@ -285,8 +351,8 @@ pub fn apply_merge(text: &str, edit: &EventMerge) -> Result<String> {
     // The value may be an array (splice in place) or a scalar string (promote to
     // an array). `(existing entries, replace start, replace end-exclusive)`.
     let (existing, rstart, rend, indent) =
-        match find_value(text, block, &edit.array_key, &edit.event_name)? {
-            ValueSpan::Array(lb, rb) => (
+        match find_value(text, block, &edit.array_key, &edit.event_name) {
+            Ok(ValueSpan::Array(lb, rb)) => (
                 parse_array_entries(text, lb, rb),
                 lb,
                 rb + 1,
@@ -295,9 +361,26 @@ pub fn apply_merge(text: &str, edit: &EventMerge) -> Result<String> {
             // Scalar -> array: the lone value becomes the existing single entry,
             // and we replace just the `"..."` span with a full array. Indent comes
             // from the key's line (the `[` lands inline after `= `).
-            ValueSpan::Scalar(qs, qe, v) => {
+            Ok(ValueSpan::Scalar(qs, qe, v)) => {
                 (vec![v], qs, qe + 1, line_indent(text, qs).to_string())
             }
+            // No array in the event: only an opted-in merge may write one. The
+            // rebuilt array starts from an empty pool, so the stock entry (the
+            // stack's default file) leads it unless the user disabled it.
+            Err(Kv3Error::ArrayNotFound(_)) if edit.create_array => {
+                let rebuilt = rebuild_entries(&[], edit);
+                let mut out = insert_array(text, block, &edit.array_key, &rebuilt);
+                if let Some(d) = edit.new_duration {
+                    // Re-locate: the insertion shifted offsets.
+                    if let Ok(block) = event_block(&out, &edit.event_name) {
+                        if let Some((vs, ve)) = duration_value_span(&out, block) {
+                            out.replace_range(vs..ve, &format_duration(d));
+                        }
+                    }
+                }
+                return Ok(out);
+            }
+            Err(e) => return Err(e),
         };
 
     let rebuilt = rebuild_entries(&existing, edit);
@@ -503,6 +586,31 @@ fn rebuild_entries(existing: &[String], edit: &EventMerge) -> Vec<String> {
 // ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
+
+/// Write a brand-new `key = [ ... ]` pair into an event block that has no
+/// such key: a new line above the closing brace, indented like its siblings
+/// (one level deeper than the brace), in the file's own line-ending style.
+/// Every other byte is preserved. Inline `{ ... }` blocks get the pair
+/// spliced right after the opening brace (KV3 separates pairs by whitespace).
+fn insert_array(text: &str, block: (usize, usize), key: &str, entries: &[String]) -> String {
+    let (bopen, bclose) = block;
+    let le = detect_line_ending(text);
+    let mut out = text.to_string();
+    let line_start = out[..bclose].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    if line_start > bopen {
+        let brace_indent: String = out[line_start..bclose]
+            .chars()
+            .take_while(|c| *c == '\t' || *c == ' ')
+            .collect();
+        let indent = format!("{brace_indent}\t");
+        let arr = render_array(entries, &indent, le);
+        out.insert_str(line_start, &format!("{indent}{key} = {le}{indent}{arr}{le}"));
+    } else {
+        let arr = render_array(entries, "", le);
+        out.insert_str(bopen + 1, &format!(" {key} = {arr}"));
+    }
+    out
+}
 
 /// Render `[ ... ]` matching the file's style: bracket on its own line, one
 /// entry per line indented one tab deeper, each with a trailing comma.
@@ -887,6 +995,7 @@ mod unit {
             previous_owned: prev.iter().map(|s| s.to_string()).collect(),
             new_duration: dur,
             excluded: vec![],
+            create_array: false,
         }
     }
 
@@ -1023,6 +1132,7 @@ mod unit {
             previous_owned: vec![],
             new_duration: None,
             excluded: vec![],
+            create_array: false,
         };
         let out = apply_merge(SYNTH2, &e).unwrap();
         let opp = read_event_array(&out, "T", "vsnd_files_opponent_control").unwrap();
@@ -1181,8 +1291,208 @@ mod unit {
         assert_eq!(out.matches("vsnd_files").count(), 1);
     }
 
+    // An 8-track style event (Powerup.Punchable.Souls) + a layered ambience
+    // event (close/mid/far only) + decoys: a commented-out key and a
+    // `vsnd_track_vol_offset_db` scalar that contains no `vsnd_files` at all.
+    const TRACKS: &str = "<!-- kv3 encoding:text:version{x} format:generic:version{y} -->\n{\n\tPowerup.Punchable.Souls = \n\t{\n\t\tbase = \"Base.Ability\"\n\t\tvsnd_files = \"sounds/gameplay/powerups/generic.vsnd\"\n\t\t// vsnd_files = \"sounds/old/commented.vsnd\"\n\t\ttrack_2.track_vsnd_files = \n\t\t[\n\t\t\t\"sounds/gameplay/orbs/xp_orb_vaccum_collect_01.vsnd\",\n\t\t\t\"sounds/gameplay/orbs/xp_orb_vaccum_collect_02.vsnd\",\n\t\t]\n\t\ttrack_2.vsnd_track_vol_offset_db = -3.0\n\t\ttrack_3.track_vsnd_files = \"sounds/gameplay/orbs/one.vsnd\"\n\t\tvsnd_duration = 2.0\n\t}\n\tAmb.Hideout.Fireplace = \n\t{\n\t\tvsnd_files_close = \n\t\t[\n\t\t\t\"sounds/ambient/fire_close.vsnd\",\n\t\t]\n\t\tvsnd_files_far = \"sounds/ambient/fire_far.vsnd\"\n\t}\n}\n";
+
+    #[test]
+    fn list_sound_arrays_finds_track_and_secondary_arrays() {
+        let all = list_sound_arrays(TRACKS).unwrap();
+        let keys: Vec<(String, String, usize)> = all
+            .iter()
+            .map(|a| (a.event_name.clone(), a.array_key.clone(), a.entries.len()))
+            .collect();
+        assert_eq!(
+            keys,
+            vec![
+                ("Powerup.Punchable.Souls".into(), "vsnd_files".into(), 1),
+                ("Powerup.Punchable.Souls".into(), "track_2.track_vsnd_files".into(), 2),
+                ("Powerup.Punchable.Souls".into(), "track_3.track_vsnd_files".into(), 1),
+                ("Amb.Hideout.Fireplace".into(), "vsnd_files_close".into(), 1),
+                ("Amb.Hideout.Fireplace".into(), "vsnd_files_far".into(), 1),
+            ]
+        );
+        assert_eq!(all[1].entries[0], "sounds/gameplay/orbs/xp_orb_vaccum_collect_01.vsnd");
+        assert_eq!(all[2].entries, vec!["sounds/gameplay/orbs/one.vsnd"]);
+    }
+
+    #[test]
+    fn list_arrays_still_ignores_track_arrays() {
+        // The combiner/importer listing must not grow new keys behind their back.
+        let plain = list_arrays(TRACKS).unwrap();
+        let keys: Vec<&str> = plain.iter().map(|a| a.array_key.as_str()).collect();
+        assert_eq!(keys, vec!["vsnd_files", "vsnd_files_close", "vsnd_files_far"]);
+        // And the two scanners agree on everything that isn't a track key.
+        let ext: Vec<ArrayInfo> = list_sound_arrays(TRACKS)
+            .unwrap()
+            .into_iter()
+            .filter(|a| !a.array_key.contains(".track_"))
+            .collect();
+        assert_eq!(ext.len(), plain.len());
+        for (a, b) in ext.iter().zip(plain.iter()) {
+            assert_eq!(a.array_key, b.array_key);
+            assert_eq!(a.entries, b.entries);
+        }
+    }
+
+    #[test]
+    fn track_array_reads_and_merges_like_any_other_key() {
+        let v = read_event_array(TRACKS, "Powerup.Punchable.Souls", "track_2.track_vsnd_files").unwrap();
+        assert_eq!(v.entries.len(), 2);
+        let e = EventMerge {
+            event_name: "Powerup.Punchable.Souls".into(),
+            array_key: "track_2.track_vsnd_files".into(),
+            stock_entry: "sounds/gameplay/orbs/xp_orb_vaccum_collect_01.vsnd".into(),
+            owned_in_order: vec!["sounds/gameplay/mine/orb.vsnd".into()],
+            previous_owned: vec![],
+            new_duration: None,
+            excluded: vec![],
+            create_array: false,
+        };
+        let out = apply_merge(TRACKS, &e).unwrap();
+        let v2 = read_event_array(&out, "Powerup.Punchable.Souls", "track_2.track_vsnd_files").unwrap();
+        assert_eq!(v2.entries.len(), 3);
+        assert_eq!(v2.entries[2], "sounds/gameplay/mine/orb.vsnd");
+        // The primary array and the scalar track_3 are untouched.
+        assert_eq!(read_event_array(&out, "Powerup.Punchable.Souls", "vsnd_files").unwrap().entries.len(), 1);
+        assert_eq!(read_event_array(&out, "Powerup.Punchable.Souls", "track_3.track_vsnd_files").unwrap().entries.len(), 1);
+        // Removing it again restores the exact original bytes.
+        let undo = EventMerge { owned_in_order: vec![], previous_owned: vec!["sounds/gameplay/mine/orb.vsnd".into()], ..e };
+        assert_eq!(apply_merge(&out, &undo).unwrap(), TRACKS);
+    }
+
     #[test]
     fn missing_header_rejected() {
         assert_eq!(validate_header("{ }"), Err(Kv3Error::MissingHeader));
+    }
+
+    // A soundstack-driven event (the Rift capture loop): no arrays at all, no
+    // vsnd_duration - the stack's public opvars hold the default files.
+    const STACK: &str = "<!-- kv3 encoding:text:version{x} format:generic:version{y} -->
+{
+	Music.Koth.Capture.Lp = 
+	{
+		type = \"citadel_music_koth_capture\"
+		volume = 0.0
+		volume_fade_in = 0.5
+	}
+	Other = 
+	{
+		vsnd_files = 
+		[
+			\"o/stock.vsnd\",
+		]
+	}
+}
+";
+
+    fn stack_edit(key: &str, owned: &[&str], excluded: &[&str], create: bool) -> EventMerge {
+        EventMerge {
+            event_name: "Music.Koth.Capture.Lp".into(),
+            array_key: key.into(),
+            stock_entry: "sounds/music/music_koth_capture_block_160bpm.vsnd".into(),
+            owned_in_order: owned.iter().map(|s| s.to_string()).collect(),
+            previous_owned: vec![],
+            new_duration: Some(30.0),
+            excluded: excluded.iter().map(|s| s.to_string()).collect(),
+            create_array: create,
+        }
+    }
+
+    #[test]
+    fn missing_array_is_skipped_unless_opted_in() {
+        let e = stack_edit("vsnd_files_blocked", &["sounds/music/rift/mine.vsnd"], &[], false);
+        assert!(matches!(apply_merge(STACK, &e), Err(Kv3Error::ArrayNotFound(_))));
+        // Read-side stays an error too (the UI shows no pool for it).
+        assert!(read_event_array(STACK, "Music.Koth.Capture.Lp", "vsnd_files_blocked").is_err());
+    }
+
+    #[test]
+    fn create_array_writes_stock_first_then_ours_and_keeps_every_other_byte() {
+        let e = stack_edit("vsnd_files_blocked", &["sounds/music/rift/mine.vsnd"], &[], true);
+        let out = apply_merge(STACK, &e).unwrap();
+        let v = read_event_array(&out, "Music.Koth.Capture.Lp", "vsnd_files_blocked").unwrap();
+        assert_eq!(
+            v.entries,
+            vec!["sounds/music/music_koth_capture_block_160bpm.vsnd", "sounds/music/rift/mine.vsnd"]
+        );
+        // No vsnd_duration existed, none is invented.
+        assert_eq!(v.vsnd_duration, None);
+        // The file's CRLF style + sibling indentation are matched, the new
+        // pair sits right above the closing brace, and nothing else moved.
+        let expected_block = "		volume_fade_in = 0.5
+		vsnd_files_blocked = 
+		[
+			\"sounds/music/music_koth_capture_block_160bpm.vsnd\",
+			\"sounds/music/rift/mine.vsnd\",
+		]
+	}
+	Other = ";
+        assert!(out.contains(expected_block), "{out}");
+        assert_eq!(out.len(), STACK.len() + (out.len() - STACK.len()));
+        assert!(out.starts_with(&STACK[..STACK.find("volume_fade_in = 0.5").unwrap() + 20]));
+        assert!(out.ends_with(&STACK[STACK.find("	}
+	Other").unwrap()..]));
+        // A second merge finds the array and edits it in place (no duplicate key).
+        let e2 = stack_edit("vsnd_files_blocked", &["sounds/music/rift/two.vsnd"], &[], true);
+        let out2 = apply_merge(&out, &e2).unwrap();
+        assert_eq!(out2.matches("vsnd_files_blocked").count(), 1);
+        let v2 = read_event_array(&out2, "Music.Koth.Capture.Lp", "vsnd_files_blocked").unwrap();
+        assert_eq!(
+            v2.entries,
+            vec![
+                "sounds/music/music_koth_capture_block_160bpm.vsnd",
+                "sounds/music/rift/mine.vsnd",
+                "sounds/music/rift/two.vsnd"
+            ]
+        );
+    }
+
+    #[test]
+    fn create_array_honors_excluded_stock_and_a_second_layer_key() {
+        // "replace" = the stack default disabled: only ours in the new array.
+        let e = stack_edit(
+            "vsnd_files_contest",
+            &["sounds/music/rift/mine.vsnd"],
+            &["sounds/music/music_koth_capture_block_160bpm.vsnd"],
+            true,
+        );
+        let out = apply_merge(STACK, &e).unwrap();
+        let v = read_event_array(&out, "Music.Koth.Capture.Lp", "vsnd_files_contest").unwrap();
+        assert_eq!(v.entries, vec!["sounds/music/rift/mine.vsnd"]);
+        // Two different layer arrays coexist on the same event.
+        let e2 = stack_edit("vsnd_files", &["sounds/music/rift/main.vsnd"], &[], true);
+        let out2 = apply_merge(&out, &e2).unwrap();
+        assert_eq!(
+            read_event_array(&out2, "Music.Koth.Capture.Lp", "vsnd_files").unwrap().entries,
+            vec!["sounds/music/music_koth_capture_block_160bpm.vsnd", "sounds/music/rift/main.vsnd"]
+        );
+        assert_eq!(
+            read_event_array(&out2, "Music.Koth.Capture.Lp", "vsnd_files_contest").unwrap().entries,
+            vec!["sounds/music/rift/mine.vsnd"]
+        );
+        // `vsnd_files` must not have matched the longer `vsnd_files_contest` key.
+        assert_eq!(out2.matches("vsnd_files_contest").count(), 1);
+    }
+
+    #[test]
+    fn add_entries_creates_a_missing_array_for_the_union() {
+        let out = add_entries(
+            STACK,
+            "Music.Koth.Capture.Lp",
+            "vsnd_files_approach",
+            &["sounds/music/pack/a.vsnd".to_string(), "sounds/music/pack/a.vsnd".to_string()],
+        )
+        .unwrap();
+        let v = read_event_array(&out, "Music.Koth.Capture.Lp", "vsnd_files_approach").unwrap();
+        assert_eq!(v.entries, vec!["sounds/music/pack/a.vsnd"]);
+        // Nothing to add -> byte-identical input, no empty array written.
+        assert_eq!(add_entries(STACK, "Music.Koth.Capture.Lp", "vsnd_files_approach", &[]).unwrap(), STACK);
+        // A missing EVENT is still an error (the caller copies the block instead).
+        assert!(matches!(
+            add_entries(STACK, "Nope", "vsnd_files", &["x.vsnd".to_string()]),
+            Err(Kv3Error::EventNotFound(_))
+        ));
     }
 }

@@ -1,5 +1,6 @@
 // Typed wrappers around the Tauri backend commands.
 import { invoke } from "@tauri-apps/api/core";
+import type { BiteMode, SongLayer, SoundFx } from "../types";
 import type { AudioInfo, DerivedPaths, EventView, Project } from "../types";
 
 export function probeAudio(
@@ -18,6 +19,11 @@ export interface ProcessReq {
   fadeOut: number;
   /** Extra tracks mixed under the clip - preview matches the compile exactly. */
   layers?: LayerCompile[];
+  /** Bite length + effects (flattened into the request). */
+  biteMode?: BiteMode;
+  biteSeconds?: number;
+  fx?: SoundFx | null;
+  startOffset?: number;
   ffmpegPath?: string;
 }
 
@@ -30,6 +36,57 @@ export interface LayerCompile {
   /** Clip window within the source; end <= start = to the file's end. */
   trimStart: number;
   trimEnd: number;
+  fadeIn?: number;
+  fadeOut?: number;
+  duckDb?: number;
+  muted?: boolean;
+  fx?: SoundFx | null;
+}
+
+/** The render-relevant song fields beyond trim/gain/fades, in compile shape. */
+export function renderSpecOf(song: {
+  layers?: SongLayer[];
+  biteMode?: BiteMode;
+  biteSeconds?: number;
+  fx?: SoundFx;
+  startOffset?: number;
+}): {
+  layers: LayerCompile[];
+  biteMode: BiteMode;
+  biteSeconds: number;
+  fx: SoundFx | null;
+  startOffset: number;
+} {
+  return {
+    layers: (song.layers ?? [])
+      .filter((l) => l.sourceAudio)
+      .map((l) => ({
+        sourceAudio: l.sourceAudio,
+        gainDb: l.gainDb,
+        offset: l.offset ?? 0,
+        trimStart: l.trimStart ?? 0,
+        trimEnd: l.trimEnd ?? 0,
+        fadeIn: l.fadeIn ?? 0,
+        fadeOut: l.fadeOut ?? 0,
+        duckDb: l.duckDb ?? 0,
+        muted: !!l.muted,
+        fx: l.fx && Object.keys(l.fx).length ? l.fx : null,
+      })),
+    biteMode: song.biteMode ?? "base",
+    biteSeconds: song.biteSeconds ?? 0,
+    fx: song.fx && Object.keys(song.fx).length ? song.fx : null,
+    startOffset: Math.max(0, song.startOffset ?? 0),
+  };
+}
+
+/** A clip's loudness: EBU integrated LUFS (null when the clip is too short
+ *  for the meter) and its mean level in dB (always available). */
+export interface Loudness {
+  lufs: number | null;
+  rms: number;
+}
+export function measureLoudness(path: string, ffmpegPath?: string): Promise<Loudness> {
+  return invoke("measure_loudness", { path, ffmpegPath });
 }
 
 // (looping is carried on Song/SongCompile, not preview ProcessReq)
@@ -83,6 +140,10 @@ export interface SongCompile {
   looping: boolean;
   /** Extra tracks mixed under this one at render (events never see layers). */
   layers?: LayerCompile[];
+  biteMode?: BiteMode;
+  biteSeconds?: number;
+  fx?: SoundFx | null;
+  startOffset?: number;
   /** Fingerprint of the current params; matches the skip check in the backend. */
   currentHash: string;
   /** Hash recorded after the last successful compile (null = never compiled). */
@@ -105,6 +166,9 @@ export interface EventCompile {
   songs: SongCompile[];
   /** Scalar event attributes to splice after the array merge. */
   attributes: { key: string; value: number | boolean | string }[];
+  /** Write the array fresh when the vanilla event lacks it (soundstack-default
+   *  slots) instead of skipping the slot as drifted. */
+  createArray?: boolean;
 }
 
 export interface CompileConfig {
@@ -374,6 +438,10 @@ export interface SoundOverrideCompile {
   /** Extra tracks mixed under this one (the direct-replace path carries a
    *  slot track's layers through; Replace-tab overrides leave it empty). */
   layers?: LayerCompile[];
+  biteMode?: BiteMode;
+  biteSeconds?: number;
+  fx?: SoundFx | null;
+  startOffset?: number;
   trimStart: number;
   trimEnd: number;
   gainDb: number;
@@ -413,6 +481,41 @@ export function newProject(): Promise<Project> {
 /** Check existence of each path; returns a bool per path, in order. */
 export function checkPaths(paths: string[]): Promise<boolean[]> {
   return invoke("check_paths", { paths });
+}
+
+/** One Setup field's verdict: ok, else why, plus a corrected value when the
+ *  app can derive one (the frontend applies it). */
+export interface PathCheck {
+  ok: boolean;
+  reason: string | null;
+  fix: string | null;
+}
+
+export interface SetupCheck {
+  compiler: PathCheck;
+  game: PathCheck;
+  vpkHelper: PathCheck;
+  events: PathCheck;
+  deadlockPak: PathCheck;
+  addonsDir: PathCheck;
+  addonName: PathCheck;
+  soundFolder: PathCheck;
+}
+
+export interface SetupPathsInput {
+  csdkRoot: string;
+  addonName: string;
+  vpkHelperPath: string;
+  deadlockPak: string;
+  addonsDir: string;
+  soundFolder: string;
+  vanillaRoot: string;
+}
+
+/** Validate the Setup paths by KIND (a folder in the Game pak box exists but
+ *  breaks every helper call): a reason + fix per failing field. */
+export function validateSetup(paths: SetupPathsInput): Promise<SetupCheck> {
+  return invoke("validate_setup", { paths });
 }
 
 /** Decode a stock track's .vsnd_c from the game pak; returns the audio path. */
@@ -511,6 +614,41 @@ export function listEditableEvents(
   relpaths: string[],
 ): Promise<DiscoveredEvent[]> {
   return invoke("list_editable_events", { vanillaRoot, relpaths });
+}
+
+/** One sound array of one event in the refreshed vanilla tree: the unit the
+ *  "All sounds" lists work on. Every array counts - the primary `vsnd_files`,
+ *  the `vsnd_files_<layer>` siblings and the per-track `track_N.track_vsnd_files`
+ *  arrays (a slot is an (event, array) pair). */
+export interface SoundInventoryEvent {
+  eventsRelpath: string;
+  eventName: string;
+  arrayKey: string;
+  /** First clip of the array (the stock sound, for previews). */
+  stockEntry: string;
+  /** How many clips the array carries. */
+  entryCount: number;
+}
+
+export interface SoundInventory {
+  events: SoundInventoryEvent[];
+  /** Relpaths not decompiled under `vanillaRoot` yet (refresh them and re-list). */
+  missing: string[];
+}
+
+/** The full sound-event inventory of the given files under `vanillaRoot`. */
+export function listSoundEvents(
+  vanillaRoot: string,
+  relpaths: string[],
+): Promise<SoundInventory> {
+  return invoke("list_sound_events", { vanillaRoot, relpaths });
+}
+
+/** DEV BUILDS ONLY: write the shipped "Most used" baseline JSON into the
+ *  repo (`app/src/data/soundBaseline.json`). Resolves to the written path;
+ *  a release build rejects. */
+export function writeSoundBaseline(json: string): Promise<string> {
+  return invoke("write_sound_baseline", { json });
 }
 
 /** Enumerate every `.vsndevts` file in the game pak (relpaths, `_c` stripped),
@@ -975,6 +1113,10 @@ export interface HeroAbilitySound {
   arrayKey: string;
   eventsRelpath: string;
   label: string;
+  /** Present when the event's stock file is borrowed from an item, a shared
+   *  status effect or another hero's kit (Valve reuse) - explains the foreign
+   *  file name shown as the slot's "Valve original". */
+  sharedNote?: string;
 }
 
 export interface HeroAbility {
@@ -1651,6 +1793,9 @@ export interface PackScan {
   /** Same-file overlaps with other bundled packs (real clobbers: the
    *  later-staged pack wins; merged soundevents are excluded). */
   overlaps: { other: string; count: number }[];
+  /** True for a live folder import (a user-managed dir, not an app cache):
+   *  re-read on every compile, edits inside land in the next build. */
+  live: boolean;
 }
 
 /** Scan bundled packs: content kinds, mtimes, and pack-vs-pack overlaps. */

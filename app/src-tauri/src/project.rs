@@ -405,9 +405,18 @@ pub struct EventProject {
     /// Direct-replace slot: the event carries NO vsnd refs to merge (a
     /// soundstack drives it), so the user's track compiles AT `stock_entry`'s
     /// path instead - a loose-file override wearing slot clothing. The merge
-    /// machinery skips these entirely.
+    /// machinery skips these entirely. (Legacy: no default slot uses it any
+    /// more - the Rift loop layers became `stack_default` merge slots - but
+    /// saved profiles may still carry it.)
     #[serde(default)]
     pub direct_only: bool,
+    /// Soundstack-default slot: the vanilla event has NO `array_key` - the
+    /// soundstack's public opvar holds `stock_entry` as a built-in default
+    /// the event may optionally override (`soundevent_data = true`). The merge
+    /// CREATES the array (stock first, then ours) instead of skipping the slot
+    /// as drifted, so these get real random pools like every other slot.
+    #[serde(default)]
+    pub stack_default: bool,
     /// Reference strings (full `.vsnd` refs) we owned last compile, so renames /
     /// removals clean up correctly.
     #[serde(default)]
@@ -521,22 +530,31 @@ fn slot(
         events_relpath: events_relpath.into(),
         attribute_overrides: vec![],
         direct_only: false,
+        stack_default: false,
     }
 }
 
-/// A slot whose event can't be merged (soundstack-driven, no vsnd refs): the
-/// user's audio replaces the `stock_entry` FILE directly on compile.
-fn direct_slot(
+/// A slot on a soundstack-driven event whose array is an OPTIONAL override of
+/// the stack's built-in default file (`stock_entry`): vanilla ships the event
+/// without the array, so the merge creates it. Proven on the Rift capture
+/// loop: `soundstack_citadel_music_koth_capture` exposes `vsnd_files`,
+/// `vsnd_files_blocked`, `vsnd_files_contest` and `vsnd_files_approach` as
+/// `soundevent_data = true` opvars, and each track reads its array through
+/// `opvar_get_vsnd` with `random_exclusive` selection - a multi-entry array
+/// is a random pool per layer, exactly like the urn's
+/// `vsnd_files_opponent_control`.
+fn stack_slot(
     id: &str,
     group: &str,
     label: &str,
     event_name: &str,
+    array_key: &str,
     stock_entry: &str,
     events_relpath: &str,
 ) -> EventProject {
     EventProject {
-        direct_only: true,
-        ..slot(id, group, label, event_name, "vsnd_files", stock_entry, events_relpath)
+        stack_default: true,
+        ..slot(id, group, label, event_name, array_key, stock_entry, events_relpath)
     }
 }
 
@@ -647,39 +665,50 @@ impl Project {
                 //     game names these events "Koth"). Stingers merge normally
                 //     from music.vsndevts. The capture LOOP music
                 //     (Music.Koth.Capture.Lp) is driven by a soundstack
-                //     (soundstack_citadel_music_koth_capture) with no vsnd_files
-                //     array, so its four layered loop files are direct-replace
-                //     slots instead: the user's track compiles AT the stock
-                //     path (loose-file override), no event merge involved. ---
-                direct_slot(
+                //     (soundstack_citadel_music_koth_capture): vanilla ships
+                //     the event with NO arrays and the stack's own defaults
+                //     play, but the stack declares each layer's array as a
+                //     soundevent-overridable opvar, so these are
+                //     `stack_slot`s: the merge creates the layer's array
+                //     (stock default first, then the user's pool, picked
+                //     random_exclusive per play). Layers, from the stack's
+                //     volume logic: main = inside the rift (or contested while
+                //     outside) and not blocked; contest = contested and not
+                //     blocked; blocked = the capture is blocked; approach =
+                //     outside the rift, uncontested, unblocked (positional). ---
+                stack_slot(
                     "rift_capture_loop",
                     "rift",
                     "In the rift (main loop)",
                     "Music.Koth.Capture.Lp",
+                    "vsnd_files",
                     "sounds/music/music_koth_capture_160bpm.vsnd",
                     "soundevents/music.vsndevts",
                 ),
-                direct_slot(
+                stack_slot(
                     "rift_capture_contest",
                     "rift",
                     "In the rift (contested layer)",
                     "Music.Koth.Capture.Lp",
+                    "vsnd_files_contest",
                     "sounds/music/music_koth_capture_contest_160bpm.vsnd",
                     "soundevents/music.vsndevts",
                 ),
-                direct_slot(
+                stack_slot(
                     "rift_capture_block",
                     "rift",
                     "In the rift (blocked layer)",
                     "Music.Koth.Capture.Lp",
+                    "vsnd_files_blocked",
                     "sounds/music/music_koth_capture_block_160bpm.vsnd",
                     "soundevents/music.vsndevts",
                 ),
-                direct_slot(
+                stack_slot(
                     "rift_capture_fx",
                     "rift",
-                    "In the rift (FX layer)",
+                    "Approaching the rift (FX layer)",
                     "Music.Koth.Capture.Lp",
+                    "vsnd_files_approach",
                     "sounds/music/music_koth_capture_fx_160bpm.vsnd",
                     "soundevents/music.vsndevts",
                 ),
@@ -1085,16 +1114,11 @@ impl Project {
                     "sounds/npc/neutrals/vaults/vault_hit_stinger_04b.vsnd",
                     "soundevents/npc/neut_vaults.vsndevts",
                 ),
-                // --- Tab: Heroes (Billy = "PunkGoat") ---
-                slot(
-                    "hero_billy_blasted",
-                    "heroes",
-                    "Billy - Blasted (E)",
-                    "Punkgoat.Blasted.Lp",
-                    "vsnd_files",
-                    "sounds/abilities/punkgoat/a3/punkgoat_blasted_lp.vsnd",
-                    "soundevents/hero/punkgoat.vsndevts",
-                ),
+                // NOTE: no curated per-hero slots here. Hero ability sounds are
+                // dynamic `heroabil_<codename>_<event>` slots created by the
+                // Heroes drill-in; the old "hero_billy_blasted" default is
+                // migrated into its drill-in twin by the frontend
+                // (LEGACY_HERO_SLOTS in App.tsx).
                 // --- Tab: Shop Music (the in-game "Curio"/shop ambience) ---
                 slot(
                     "shop_main",
@@ -1554,10 +1578,14 @@ impl Project {
                     "sounds/music/brawl/music_brawl_overtime_95bpm.vsnd",
                     "soundevents/music.vsndevts",
                 ),
-                // --- Tab (Game SFX): Gameplay (hit feedback: crits, last hits) ---
+                // --- Tab (Game SFX): Combat (damage / status / player files: the
+                //     crit hit feedback) + Gameplay (gameplay.vsndevts: last hits,
+                //     denies). Everything else in those files is reachable via the
+                //     tabs' "All" lists; the shipped Most-used baseline lives in
+                //     app/src/data/soundBaseline.json, not here. ---
                 slot(
                     "gameplay_crit_send",
-                    "gameplay",
+                    "combat",
                     "Crit (you deal)",
                     "Damage.Send.Crit",
                     "vsnd_files",
@@ -1566,7 +1594,7 @@ impl Project {
                 ),
                 slot(
                     "gameplay_crit_receive",
-                    "gameplay",
+                    "combat",
                     "Crit (you receive)",
                     "Damage.Receive.Crit",
                     "vsnd_files",
@@ -1631,17 +1659,38 @@ impl Project {
 mod tests {
     use super::*;
 
+    /// EIM_DUMP_DEFAULTS=<path>: write the default project JSON (camelCase,
+    /// exactly what `default_project` serves the frontend) for offline checks.
+    #[test]
+    fn dump_default_project_json_when_asked() {
+        if let Some(path) = std::env::var_os("EIM_DUMP_DEFAULTS") {
+            let p = Project::default_for_match_intro();
+            std::fs::write(path, serde_json::to_string_pretty(&p).unwrap()).unwrap();
+        }
+    }
+
     #[test]
     fn default_project_roundtrips_through_json() {
         let p = Project::default_for_match_intro();
         let json = serde_json::to_string_pretty(&p).unwrap();
         let back: Project = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.events.len(), 111);
-        // The in-rift capture loop layers are direct-replace slots (their
-        // soundstack event has no arrays to merge).
+        assert_eq!(back.events.len(), 110);
+        // The in-rift capture loop layers are stack-default merge slots: one
+        // per soundstack layer array, each a real random pool.
         let cap = back.events.iter().find(|e| e.id == "rift_capture_loop").unwrap();
-        assert!(cap.direct_only && cap.group == "rift");
+        assert!(cap.stack_default && !cap.direct_only && cap.group == "rift");
+        assert_eq!(cap.array_key, "vsnd_files");
         assert_eq!(cap.stock_entry, "sounds/music/music_koth_capture_160bpm.vsnd");
+        for (id, key) in [
+            ("rift_capture_contest", "vsnd_files_contest"),
+            ("rift_capture_block", "vsnd_files_blocked"),
+            ("rift_capture_fx", "vsnd_files_approach"),
+        ] {
+            let e = back.events.iter().find(|e| e.id == id).unwrap();
+            assert!(e.stack_default && e.event_name == "Music.Koth.Capture.Lp");
+            assert_eq!(e.array_key, key);
+        }
+        assert!(!back.events.iter().any(|e| e.direct_only));
         assert_eq!(back.events[0].id, "intro_king");
         // The Sinner's Sacrifice vault tab: normal arrays and the track_2
         // scalar jingle slots both present.
@@ -1669,9 +1718,9 @@ mod tests {
         // The enemy-contest slot targets the opponent-control array.
         let enemy = back.events.iter().find(|e| e.id == "urn_contest_enemy").unwrap();
         assert_eq!(enemy.array_key, "vsnd_files_opponent_control");
-        // Billy lives in a different events file.
-        let billy = back.events.iter().find(|e| e.id == "hero_billy_blasted").unwrap();
-        assert_eq!(billy.events_relpath, "soundevents/hero/punkgoat.vsndevts");
+        // No curated per-hero slots: the Heroes drill-in owns those (the old
+        // hero_billy_blasted default is migrated by the frontend).
+        assert!(!back.events.iter().any(|e| e.group == "heroes"));
         assert!(matches!(back.output.mode, OutputMode::Folder));
     }
 }

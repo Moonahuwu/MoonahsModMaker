@@ -215,7 +215,7 @@ pub fn decompile_from_vpk(
         }
         let compiled = src.join(internal_path);
         if !compiled.exists() {
-            return Err(format!("not in cache: {internal_path}"));
+            return Err(format!("{internal_path} is not in the folder {}", src.display()));
         }
         let mut cmd = helper_command(helper_path);
         cmd.args(["decompile", &compiled.to_string_lossy(), out_file]);
@@ -315,7 +315,7 @@ pub fn decode(
     if src.is_dir() {
         let file = src.join(internal_path);
         if !file.exists() {
-            return Err(format!("not in cache: {internal_path}"));
+            return Err(format!("{internal_path} is not in the folder {}", src.display()));
         }
         let mut cmd = helper_command(helper_path);
         cmd.args(["decode", &file.to_string_lossy(), out_base_no_ext]);
@@ -382,7 +382,7 @@ pub fn extract(
     if src.is_dir() {
         let file = src.join(internal_path);
         if !file.exists() {
-            return Err(format!("not in cache: {internal_path}"));
+            return Err(format!("{internal_path} is not in the folder {}", src.display()));
         }
         if let Some(parent) = Path::new(out_file).parent() {
             let _ = std::fs::create_dir_all(parent);

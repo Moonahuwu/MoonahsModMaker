@@ -408,8 +408,9 @@ export function HeroDetail({
             <>
               <p className="mt-2 text-[11px] text-zinc-500">
                 Template opens the vanilla map in Explorer - paint over a copy (keep the
-                layout, it must line up with the model's UVs), then Replace. Hue tints
-                the whole map, custom art included.
+                layout, it must line up with the model's UVs; some heroes keep their face
+                and eyes in this one map, so unpainted spots go dark in game), then
+                Replace. Hue tints the whole map, custom art included.
               </p>
               {/* Master hue: one drag recolors every material below. */}
               <div className="mt-3 flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2">
@@ -520,7 +521,17 @@ export function HeroDetail({
             ) : (
               <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
                 {activeSounds.map((s) => (
-                  <div key={s.eventName}>{renderSound(s)}</div>
+                  <div key={s.eventName}>
+                    {renderSound(s)}
+                    {s.sharedNote && (
+                      <p
+                        className="mt-1.5 px-1 text-[11px] leading-snug text-zinc-500"
+                        title={s.eventName}
+                      >
+                        <span className="text-amber-300/80">Shared file:</span> {s.sharedNote}
+                      </p>
+                    )}
+                  </div>
                 ))}
               </div>
             )}

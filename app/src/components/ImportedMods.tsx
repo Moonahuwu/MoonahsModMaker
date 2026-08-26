@@ -703,6 +703,16 @@ export function ImportedMods({
     onImportPack(sel);
   }
 
+  async function browseImportFolder() {
+    const sel = await open({
+      directory: true,
+      multiple: true,
+      title: "Import a mod folder (game layout: sounds/, particles/, materials/, ...)",
+    });
+    if (!sel || sel.length === 0) return;
+    onImportPack(sel);
+  }
+
   return (
     <section className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-5">
       <h3 className="text-sm font-semibold text-zinc-200">Import a mod</h3>
@@ -712,7 +722,10 @@ export function ImportedMods({
         <span className="font-mono">.7z</span> with one inside (or{" "}
         <span className="text-zinc-400">drag them onto the window</span>). Each opens a
         review: choose which sounds become editable tracks in your tabs and what rides
-        along in your build. Nothing of yours is ever removed.
+        along in your build. Nothing of yours is ever removed. You can also import a{" "}
+        <span className="text-zinc-400">folder</span> of loose files in game layout
+        (sounds/, particles/, materials/, ...): it stays linked live, so edits you make
+        in the folder land in the next compile automatically.
       </p>
 
       <div className="mt-3 flex gap-2">
@@ -722,11 +735,18 @@ export function ImportedMods({
         >
           Import a mod…
         </button>
+        <button
+          onClick={() => void browseImportFolder()}
+          title="Import a folder of loose mod files (game layout: sounds/, particles/, ...). It stays linked live - edits inside it are picked up on every compile."
+          className="rounded-md border border-zinc-700 px-4 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-emerald-500/70 hover:text-emerald-300"
+        >
+          Import a folder…
+        </button>
         <input
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && addPath()}
-          placeholder="…or paste a .vpk path and press Enter"
+          placeholder="…or paste a .vpk or folder path and press Enter"
           spellCheck={false}
           className="flex-1 rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-xs text-zinc-200 outline-none focus:border-emerald-500/70"
         />
@@ -927,6 +947,14 @@ export function ImportedMods({
                     </button>
                   ) : (
                     <span className="truncate text-xs font-semibold text-zinc-200">{display}</span>
+                  )}
+                  {scanMap[m]?.live && (
+                    <span
+                      title="Live folder - re-read on every compile, so edits you make inside it are picked up automatically"
+                      className="w-fit rounded bg-teal-500/15 px-1.5 py-0.5 text-[10px] font-medium text-teal-300"
+                    >
+                      live folder
+                    </span>
                   )}
                   {(overlapsOf(m).length > 0 || updates[m]) && (
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px]">

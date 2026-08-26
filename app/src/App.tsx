@@ -8,6 +8,7 @@ import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   autodetectPaths,
   checkPaths,
+  validateSetup,
   checkSoundRefs,
   copyToDownloads,
   decodeStock as decodeStockApi,
@@ -34,6 +35,7 @@ import {
   readEventPools,
   refreshVanilla as refreshVanillaApi,
   listEditableEvents,
+  writeSoundBaseline,
   importPackEvents,
   scanPackContents,
   eventsForRefs,
@@ -65,6 +67,7 @@ import {
   compileProject,
   packageModuleRelease,
 } from "./lib/api";
+import type { PathCheck, SetupCheck } from "./lib/api";
 import {
   cHeroDetail as heroDetailApi,
   cHeroImages,
@@ -79,6 +82,18 @@ import {
   type PreloadProgress,
 } from "./lib/dataCache";
 import { SidePanel } from "./components/SidePanel";
+import { SoundEventRows, type SoundRowView } from "./components/SoundEventRows";
+import { SoundFinder, type FinderRow } from "./components/SoundFinder";
+import {
+  useSoundInventory,
+  sweepableSoundeventFiles,
+  isItemSoundFile,
+  eventLabel,
+  soundRowLabel,
+  slotKey,
+  parseSoundKey,
+} from "./lib/soundInventory";
+import { effectivePins, togglePinPatch, movePinPatch, baselineDocument } from "./lib/soundPins";
 import { Backdrop } from "./components/Backdrop";
 import { ImportReview, type PackReview, type ReviewEvent, type ReviewGroup } from "./components/ImportReview";
 import { SlotSoundPicker, type PickClip, type PickGroup } from "./components/SlotSoundPicker";
@@ -104,7 +119,7 @@ import { getCopiedSound } from "./lib/soundClipboard";
 import { CustomServer } from "./components/CustomServer";
 import { ProfileSwitcher } from "./components/ProfileSwitcher";
 import { useToast } from "./components/Toaster";
-import { useSettings, slotSoundFolder, sheetSiblingsKey, compilePrefsOf, buildCompileConfig, buildCreditsText, directReplaceTarget, slotNeedsEventsMerge, worldOverrideCategory, FFMPEG_BUNDLE_URL, TOOLS_BUNDLE_URL, type Settings } from "./lib/settings";
+import { useSettings, slotSoundFolder, sheetSiblingsKey, compilePrefsOf, buildCompileConfig, buildCreditsText, directReplaceTarget, slotNeedsEventsMerge, worldOverrideCategory, FFMPEG_BUNDLE_URL, TOOLS_BUNDLE_URL, type Settings, type SoundPin } from "./lib/settings";
 import { songHash, overrideHash, effectHash, posterHash, heroTexHash, modTexHash } from "./lib/songHash";
 import type { AttributeOverride, EffectOverride, EventProject, EventView, HeroTextureOverride, LibraryItem, PackModule, PosterOverride, Project, Song, SongLayer, SoundOverride } from "./types";
 import { GameBananaBrowser } from "./components/GameBananaBrowser";
@@ -225,7 +240,7 @@ const TAB_LABELS: Record<string, string> = {
   mapsfx: "Map SFX",
   ambience: "Ambience",
   npcs: "NPCs",
-  [UNSORTED]: "Misc / Unsorted",
+  [UNSORTED]: "Misc / Search",
   [ITEMS]: "Items",
   [REPLACE_SOUNDS]: "All Sounds",
   [EFFECTS]: "Effects",
@@ -257,8 +272,8 @@ const SIDEBAR_ORDER = [
 const TAB_CATEGORIES: { label: string; tabs: string[] }[] = [
   { label: "In-game", tabs: ["urn", "rift", "midboss", "powerups", "teamobj", "sinners", "shop"] },
   { label: "Match", tabs: ["hideout", "intro", "match", "stingers", "brawl"] },
-  // Gameplay has curated slots; the rest appear once discovery/import routes
-  // slots into them.
+  // Gameplay/Combat carry curated slots; every tab also lists the rest of its
+  // files' events under "All" (see routeGroupFor for which files feed which).
   { label: "Game SFX", tabs: ["gameplay", "combat", "mapsfx", "ambience", "npcs"] },
 ];
 
@@ -334,9 +349,32 @@ function itemSndSlotId(itemName: string, eventName: string): string {
     .toLowerCase()}`;
 }
 
-/** A dynamically-created (hero or item) slot that should persist only with content. */
+/** Lazily materialized sound slots: a row of a tab's "All" list the user
+ *  opened, or a "Most used" pin (shipped baseline + personal pins). Keyed by
+ *  the sound's full key (`relpath::event::arrayKey`), never by tab, so a pin
+ *  that moves tabs keeps its slot. Persist only with content - while pinned
+ *  they are re-injected as defaults on every load instead. */
+const SOUND_SLOT_PREFIX = "snd_";
+
+function soundSlotId(relpath: string, eventName: string, arrayKey: string): string {
+  return `${SOUND_SLOT_PREFIX}${`${relpath}_${eventName}_${arrayKey}`
+    .replace(/[^a-z0-9]+/gi, "_")
+    .toLowerCase()}`;
+}
+
+function isSoundSlot(id: string): boolean {
+  return id.startsWith(SOUND_SLOT_PREFIX);
+}
+
+/** A dynamically-created (hero, item or sound-list) slot that should persist only with content. */
 function isDynamicSlot(id: string): boolean {
-  return id.startsWith(HERO_SLOT_PREFIX) || id.startsWith(ITEM_SLOT_PREFIX);
+  return id.startsWith(HERO_SLOT_PREFIX) || id.startsWith(ITEM_SLOT_PREFIX) || isSoundSlot(id);
+}
+
+/** A curated default slot from the shipped schema (project.rs): always part
+ *  of "Most used", never pinnable. */
+function isCuratedSlot(id: string): boolean {
+  return !isAutoSlot(id) && !isDynamicSlot(id);
 }
 
 /** Auto-discovered slots (events a new patch added, surfaced into the
@@ -361,6 +399,7 @@ function isImportArtifact(e: EventProject): boolean {
     (isImportSlot(e.id) ||
       e.id.startsWith(HERO_SLOT_PREFIX) ||
       e.id.startsWith(ITEM_SLOT_PREFIX) ||
+      isSoundSlot(e.id) ||
       isAutoSlot(e.id))
   );
 }
@@ -391,11 +430,6 @@ function importSlotId(relpath: string, eventName: string, arrayKey: string): str
     .toLowerCase()}`;
 }
 
-/** Human label for a discovered event: the last 2–3 dotted segments, spaced. */
-function eventLabel(eventName: string): string {
-  return eventName.split(".").slice(-3).join(" ").replace(/_/g, " ");
-}
-
 /** Best-effort home tab for a discovered/imported event with no curated slot:
  *  ui.vsndevts → UI, and well-known event-name families in the main music/world
  *  files → their curated tab. Anything unrecognized lands in Unsorted (the
@@ -415,9 +449,13 @@ function routeGroupFor(relpath: string, eventName: string): string {
   // whole file there (new-patch events included), not to the NPCs catch-all.
   if (relpath === "soundevents/npc/neut_vaults.vsndevts") return "sinners";
   if (relpath.startsWith("soundevents/npc/")) return "npcs";
-  if (/soundevents\/(player|gameplay|damage|status_effects)\.vsndevts$/.test(relpath))
-    // The midboss's own SFX (horn/low-health/death) live in gameplay.vsndevts
-    // but belong with the Midboss tab, not general hit feedback.
+  // Combat = the hit/hurt/status feedback files; Gameplay = gameplay.vsndevts
+  // (last hits, denies, souls, match flow). The midboss's own SFX
+  // (horn/low-health/death) live in gameplay.vsndevts but belong with the
+  // Midboss tab, not general feedback.
+  if (/soundevents\/(player|damage|status_effects)\.vsndevts$/.test(relpath))
+    return n.includes("midboss") ? "midboss" : "combat";
+  if (relpath === "soundevents/gameplay.vsndevts")
     return n.includes("midboss") ? "midboss" : "gameplay";
   if (/soundevents\/(ziplines|breakables)\.vsndevts$/.test(relpath)) return "mapsfx";
   // Chat-wheel pings and hero-poster cosmetics are menu-feedback sounds; they
@@ -634,16 +672,36 @@ function buildModuleReleaseText(
  *  dropping saved slots no longer in the schema, and adding any new default slots.
  *  Dynamic hero ability slots are kept only when they hold content (empty ones,
  *  created just by browsing a hero, are pruned). */
-function reconcileProject(saved: Project, def: Project): Project {
+function reconcileProject(savedIn: Project, defIn: Project, pins: Map<string, SoundPin>): Project {
+  const saved = { ...savedIn, events: migrateLegacyHeroSlots(savedIn.events) };
+  // "Most used" pins (shipped baseline + personal) are default slots too: an
+  // empty `snd_` slot per pin whose sound no curated/auto/import slot already
+  // covers. Deterministic ids mean a previously materialized row with content
+  // merges by id below and keeps everything.
+  const def = withPinnedDefaults(defIn, saved, pins);
   const savedById = new Map(saved.events.map((e) => [e.id, e]));
   const defIds = new Set(def.events.map((e) => e.id));
-  // Saved content wins, but a curated slot's tab home + label follow the
-  // CURRENT defaults - so a new app version can re-home slots (e.g. the
-  // queue/loading music moving from UI into the Hideout tab) without
-  // stranding users' saved tracks in the old tab.
+  // Saved content wins, but a curated slot's tab home, label and TARGET
+  // (event, array, file, merge mode) follow the CURRENT defaults - so a new
+  // app version can re-home slots (e.g. the queue/loading music moving from
+  // UI into the Hideout tab) or re-target them (the Rift loop layers moving
+  // from single-file direct replacement to per-layer merge pools) without
+  // stranding users' saved tracks. Only `stockEntry` stays saved: the
+  // "Fix for new patch" refresh re-pins it to the live game.
   const merged = def.events.map((d) => {
     const s = savedById.get(d.id);
-    return s ? { ...s, group: d.group, side: d.side } : d;
+    return s
+      ? {
+          ...s,
+          group: d.group,
+          side: d.side,
+          eventName: d.eventName,
+          arrayKey: d.arrayKey,
+          eventsRelpath: d.eventsRelpath,
+          directOnly: d.directOnly,
+          stackDefault: d.stackDefault,
+        }
+      : d;
   });
   const extras = saved.events.filter(
     (e) =>
@@ -660,18 +718,91 @@ function reconcileProject(saved: Project, def: Project): Project {
         e.songs.every((s) => !!s.importedRef)
       ),
   );
-  // Re-home previously-Unsorted auto/import slots whose event family the router
-  // now recognizes. Ids are group-independent, so this moves the slot (with all
-  // its content) to its proper tab instead of duplicating it.
-  const events = [...merged, ...extras].map((e) =>
-    (isAutoSlot(e.id) || isImportSlot(e.id)) && e.group === UNSORTED
-      ? { ...e, group: routeGroupFor(e.eventsRelpath, e.eventName) }
-      : e,
-  );
+  // Re-home previously-Unsorted auto/import/sound slots whose event family the
+  // router now recognizes. Ids are group-independent, so this moves the slot
+  // (with all its content) to its proper tab instead of duplicating it. The
+  // Combat split (damage/status/player files used to route to Gameplay) is a
+  // one-time re-home of the same kind: only group "gameplay" is touched, so a
+  // slot the user moved elsewhere by hand stays put.
+  const combatFile = /soundevents\/(player|damage|status_effects)\.vsndevts$/;
+  const events = [...merged, ...extras].map((e) => {
+    if (!(isAutoSlot(e.id) || isImportSlot(e.id) || isSoundSlot(e.id))) return e;
+    if (e.group === UNSORTED) return { ...e, group: routeGroupFor(e.eventsRelpath, e.eventName) };
+    if (e.group === "gameplay" && combatFile.test(e.eventsRelpath))
+      return { ...e, group: routeGroupFor(e.eventsRelpath, e.eventName) };
+    return e;
+  });
+  const finalEvents = enforceSoundNames(dedupeReimportedSongs(migrateVoicelineSlots(events)));
   return {
     ...saved,
-    events: enforceSoundNames(dedupeReimportedSongs(migrateVoicelineSlots(events))),
+    events: finalEvents,
+    modules: migrateLegacyModuleKeys(saved.modules),
   };
+}
+
+/** An empty sound slot for one inventory entry / pin. */
+function makeSoundSlot(
+  sound: { eventsRelpath: string; eventName: string; arrayKey: string },
+  group: string,
+  side: string,
+  stockEntry: string,
+): EventProject {
+  return {
+    id: soundSlotId(sound.eventsRelpath, sound.eventName, sound.arrayKey),
+    group,
+    side,
+    eventName: sound.eventName,
+    arrayKey: sound.arrayKey,
+    stockEntry,
+    vsndDurationMode: "auto",
+    vsndDurationManual: null,
+    songs: [],
+    previousOwnedNames: [],
+    excludedEntries: [],
+    removedEntries: [],
+    adopted: [],
+    eventsRelpath: sound.eventsRelpath,
+  };
+}
+
+/** The default schema plus one empty `snd_` slot per "Most used" pin whose
+ *  sound isn't covered by a curated default or a saved auto/import slot. */
+function withPinnedDefaults(def: Project, saved: Project, pins: Map<string, SoundPin>): Project {
+  if (pins.size === 0) return def;
+  const covered = new Set<string>([
+    ...def.events.map(slotKey),
+    ...saved.events.filter((e) => !isSoundSlot(e.id)).map(slotKey),
+  ]);
+  const extra: EventProject[] = [];
+  for (const [key, pin] of pins) {
+    if (covered.has(key)) continue;
+    const parsed = parseSoundKey(key);
+    if (!parsed) continue;
+    extra.push(
+      makeSoundSlot(parsed, pin.group, pin.label ?? soundRowLabel(parsed.eventName, parsed.arrayKey), ""),
+    );
+  }
+  return extra.length ? { ...def, events: [...def.events, ...extra] } : def;
+}
+
+/** Fold other slots' content into `target` (same event): songs, adopted
+ *  entries, exclusions and removals union in; a song/adoption already carried
+ *  (same pack ref) is not doubled. Hand-added songs are never deduped. */
+function foldSlots(target: EventProject, extras: EventProject[]): EventProject {
+  return extras.reduce((t, e) => {
+    const have = new Set([
+      ...t.adopted.map((a) => a.reference),
+      ...t.songs.map((s) => s.importedRef).filter((r): r is string => !!r),
+    ]);
+    return {
+      ...t,
+      songs: [...t.songs, ...e.songs.filter((s) => !s.importedRef || !have.has(s.importedRef))],
+      adopted: [...t.adopted, ...e.adopted.filter((a) => !have.has(a.reference))],
+      excludedEntries: [...new Set([...t.excludedEntries, ...e.excludedEntries])],
+      removedEntries: [...new Set([...t.removedEntries, ...e.removedEntries])],
+      previousOwnedNames: [...new Set([...t.previousOwnedNames, ...e.previousOwnedNames])],
+    };
+  }, target);
 }
 
 /** One-time cleanup: older imports parked hero voiceline events in Misc under
@@ -689,27 +820,75 @@ function migrateVoicelineSlots(events: EventProject[]): EventProject[] {
     } else rest.push(e);
   }
   if (!moved.size) return events;
-  const fold = (target: EventProject, extras: EventProject[]): EventProject =>
-    extras.reduce((t, e) => {
-      const have = new Set([
-        ...t.adopted.map((a) => a.reference),
-        ...t.songs.map((s) => s.importedRef).filter((r): r is string => !!r),
-      ]);
-      return {
-        ...t,
-        songs: [...t.songs, ...e.songs.filter((s) => !s.importedRef || !have.has(s.importedRef))],
-        adopted: [...t.adopted, ...e.adopted.filter((a) => !have.has(a.reference))],
-        excludedEntries: [...new Set([...t.excludedEntries, ...e.excludedEntries])],
-        removedEntries: [...new Set([...t.removedEntries, ...e.removedEntries])],
-      };
-    }, target);
-  const out = rest.map((e) => (moved.has(e.id) ? fold(e, moved.get(e.id)!) : e));
+  const out = rest.map((e) => (moved.has(e.id) ? foldSlots(e, moved.get(e.id)!) : e));
   for (const [id, list] of moved) {
     if (rest.some((e) => e.id === id)) continue;
     const [first, ...more] = list;
-    out.push(fold({ ...first, id, group: "heroes" }, more));
+    out.push(foldSlots({ ...first, id, group: "heroes" }, more));
   }
   return out;
+}
+
+/** Curated hero slots that predate the Heroes drill-in (they lived in the
+ *  old flat Heroes tab). The drill-in looks slots up by heroAbilSlotId, so a
+ *  legacy slot's tracks were invisible there - and a second, empty slot for
+ *  the same event got created next to it. id -> the hero's codename + the
+ *  drill-in's label for that event. */
+const LEGACY_HERO_SLOTS: Record<string, { codename: string; eventName: string; side: string }> = {
+  // "Billy - Blasted (E)" = Punkgoat.Blasted.Lp, the Blasted ambient loop.
+  hero_billy_blasted: {
+    codename: "punkgoat",
+    eventName: "Punkgoat.Blasted.Lp",
+    side: "Ambient Looping",
+  },
+};
+
+/** The drill-in slot id a legacy curated hero slot maps to. */
+function legacyHeroSlotTarget(id: string): string | null {
+  const legacy = LEGACY_HERO_SLOTS[id];
+  return legacy ? heroAbilSlotId(legacy.codename, legacy.eventName) : null;
+}
+
+/** One-time migration: re-id legacy curated hero slots to their drill-in id,
+ *  folding into the drill-in slot when both exist (the user may have added
+ *  tracks in both places), so the Heroes tab shows every track. */
+function migrateLegacyHeroSlots(events: EventProject[]): EventProject[] {
+  if (!events.some((e) => LEGACY_HERO_SLOTS[e.id])) return events;
+  const moved = new Map<string, EventProject[]>();
+  const rest: EventProject[] = [];
+  for (const e of events) {
+    const legacy = LEGACY_HERO_SLOTS[e.id];
+    const id = legacyHeroSlotTarget(e.id);
+    if (legacy && id) {
+      moved.set(id, [
+        ...(moved.get(id) ?? []),
+        { ...e, id, group: "heroes", side: legacy.side, eventName: legacy.eventName },
+      ]);
+    } else rest.push(e);
+  }
+  const out = rest.map((e) => (moved.has(e.id) ? foldSlots(e, moved.get(e.id)!) : e));
+  for (const [id, list] of moved) {
+    if (rest.some((e) => e.id === id)) continue;
+    const [first, ...more] = list;
+    out.push(foldSlots(first, more));
+  }
+  return out;
+}
+
+/** Pack Builder membership keys follow a migrated slot id. */
+function migrateLegacyModuleKeys(modules: PackModule[] | undefined): PackModule[] | undefined {
+  if (!modules?.length) return modules;
+  let changed = false;
+  const out = modules.map((m) => {
+    const items = m.items.map((k) => {
+      const target = k.startsWith("slot:") ? legacyHeroSlotTarget(k.slice(5)) : null;
+      if (!target) return k;
+      changed = true;
+      return `slot:${target}`;
+    });
+    return { ...m, items: [...new Set(items)] };
+  });
+  return changed ? out : modules;
 }
 
 /** One-time cleanup: re-importing a pack used to re-convert already-absorbed
@@ -1132,6 +1311,85 @@ export default function App() {
   const { settings, update: updateSettings, ready: settingsReady } = useSettings();
   const { push } = useToast();
 
+  // ---- "Most used" vs "All" sound lists --------------------------------
+  // Per-tab "All" toggle (a UI preference, kept in localStorage like the
+  // voicelines select mode), the rows currently expanded into editors, the
+  // tab bar's search, a pending jump from Find-a-sound, and row elements for
+  // scrolling a jump into view.
+  const [showAll, setShowAll] = useState<Record<string, boolean>>(() => {
+    try {
+      const raw = localStorage.getItem("eim.soundShowAll");
+      return raw ? (JSON.parse(raw) as Record<string, boolean>) : {};
+    } catch {
+      return {};
+    }
+  });
+  const setShowAllFor = (tab: string, on: boolean) =>
+    setShowAll((prev) => {
+      const next = { ...prev, [tab]: on };
+      try {
+        localStorage.setItem("eim.soundShowAll", JSON.stringify(next));
+      } catch {
+        /* preference only */
+      }
+      return next;
+    });
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+  const [rowQuery, setRowQuery] = useState("");
+  const [soundFocus, setSoundFocus] = useState<{ group: string; key: string } | null>(null);
+  const rowEls = useRef<Record<string, HTMLElement | null>>({});
+  // Bumped after "Fix for new patch" so the inventory re-lists the fresh tree.
+  const [inventoryTick, setInventoryTick] = useState(0);
+  // Files the load() heal already tried this session (never loop on a file
+  // the game doesn't ship).
+  const healedFiles = useRef<Set<string>>(new Set());
+  // The game's sound inventory (every array of every non-hero event), loaded
+  // once a sound tab is open and the app is set up; `ensureVanillaFiles` is
+  // hoisted (function declaration below).
+  const soundTabOpen = SIDEBAR_ORDER.includes(activeTab) && activeTab !== "heroes" && activeTab !== ITEMS;
+  const inventory = useSoundInventory({
+    enabled: settingsReady && settings.firstRunDone && soundTabOpen,
+    helperPath: settings.vpkHelperPath,
+    pakPath: settings.deadlockPak,
+    vanillaRoot: settings.vanillaRoot,
+    knownSweepFiles: settings.knownSweepFiles ?? [],
+    refreshTick: inventoryTick,
+    ensureFiles: (files) => ensureVanillaFiles(files),
+  });
+  const pins = useMemo(() => effectivePins(settings.soundPins), [settings.soundPins]);
+  // Every inventory entry the tabs can show, with its home tab - item sounds
+  // (soundevents/mods/*) belong to the Items tab and are left out.
+  const inventoryRows = useMemo(() => {
+    const out: Omit<SoundRowView, "slotId" | "modded" | "pinned">[] = [];
+    for (const e of inventory.events ?? []) {
+      if (isItemSoundFile(e.eventsRelpath)) continue;
+      out.push({
+        key: slotKey(e),
+        eventsRelpath: e.eventsRelpath,
+        eventName: e.eventName,
+        arrayKey: e.arrayKey,
+        label: soundRowLabel(e.eventName, e.arrayKey),
+        stockEntry: e.stockEntry,
+        entryCount: e.entryCount,
+      });
+    }
+    return out;
+  }, [inventory.events]);
+  const rowGroups = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const r of inventoryRows) m.set(r.key, routeGroupFor(r.eventsRelpath, r.eventName));
+    return m;
+  }, [inventoryRows]);
+  const slotByKey = useMemo(() => {
+    const m = new Map<string, EventProject>();
+    for (const e of project?.events ?? []) {
+      const k = slotKey(e);
+      // A curated/auto/import slot wins over a lazily materialized twin.
+      if (!m.has(k) || isSoundSlot(m.get(k)!.id)) m.set(k, e);
+    }
+    return m;
+  }, [project?.events]);
+
   // Profiles = named build configs (project + imported mods). The active one is
   // tracked in settings.activeProfile; this is just the list for the picker.
   const [profiles, setProfiles] = useState<string[]>([]);
@@ -1236,8 +1494,9 @@ export default function App() {
       if (!seen.includes(e.group)) seen.push(e.group);
     }
     const out = [
-      // Heroes + Items always show; the rest only once slots exist in them.
-      ...SIDEBAR_ORDER.filter((g) => g === "heroes" || g === ITEMS || seen.includes(g)),
+      // Every sound tab always shows: each lists the rest of its files'
+      // events under "All", so none is ever truly empty.
+      ...SIDEBAR_ORDER,
       // Anything discovery/import routed into a group we don't know yet.
       ...seen.filter((g) => !SIDEBAR_ORDER.includes(g)),
     ];
@@ -1614,7 +1873,8 @@ export default function App() {
         }
 
         const blob = await loadProfile(active);
-        const proj = blob?.project ? reconcileProject(blob.project, def) : def;
+        const pins = effectivePins(settingsRef.current.soundPins);
+        const proj = reconcileProject(blob?.project ?? def, def, pins);
         setProfiles(list);
         setProject(proj);
         updateSettings({
@@ -1862,7 +2122,11 @@ export default function App() {
   // Load a profile blob into the editor (resets transient hero UI), and point
   // settings at it. The autosave effect persists from here on.
   function applyProfile(name: string, blob: ProfileBlob | null, def: Project) {
-    const proj = blob?.project ? reconcileProject(blob.project, def) : def;
+    const proj = reconcileProject(
+      blob?.project ?? def,
+      def,
+      effectivePins(settingsRef.current.soundPins),
+    );
     setSelectedHero(null);
     setSelectedHeroInfo(null);
     setHeroAbilities(null);
@@ -2323,6 +2587,17 @@ export default function App() {
         if (v) map[e.id] = v;
       });
       setPools(map);
+      // Pinned / sound-list slots can point at a file the vanilla tree doesn't
+      // hold yet (a tree from before the full-pak sweep only has the main
+      // files): decompile those once and pool just them.
+      const unpooled = p.events.filter((e, i) => isSoundSlot(e.id) && !views[i]);
+      const needFiles = Array.from(new Set(unpooled.map((e) => e.eventsRelpath))).filter(
+        (f) => !healedFiles.current.has(f),
+      );
+      if (needFiles.length) {
+        needFiles.forEach((f) => healedFiles.current.add(f));
+        void ensureVanillaFiles(needFiles).then(() => poolSlots(unpooled));
+      }
       // Flag pool/stock refs the pak doesn't actually ship (placeholder/legacy
       // refs) so their rows show "no sound" instead of a beeping preview.
       void (async () => {
@@ -2461,6 +2736,9 @@ export default function App() {
       fadeIn: c.fadeIn,
       fadeOut: c.fadeOut,
       looping: c.looping,
+      ...(c.fx ? { fx: c.fx } : {}),
+      ...(c.biteMode ? { biteMode: c.biteMode, biteSeconds: c.biteSeconds } : {}),
+      ...(c.startOffset ? { startOffset: c.startOffset } : {}),
     });
   }
 
@@ -2741,6 +3019,35 @@ export default function App() {
         scanPackContents(s.vpkHelperPath, s.deadlockPak, vpk),
         buildItemIndex(),
       ]);
+      // Folder imports: quick sanity before the review opens. An empty scan
+      // means the pick isn't a mod tree; a .vpk inside means they grabbed the
+      // parent folder of a packed mod instead of the pack itself.
+      if (!/\.vpk$/i.test(vpk)) {
+        const total =
+          events.length +
+          contents.overwrites.length +
+          contents.ownSounds.length +
+          contents.models.length +
+          contents.particles.length +
+          contents.materials.length +
+          contents.panorama.length +
+          contents.other.length;
+        const inner = contents.other.find((f) => /\.vpk$/i.test(f));
+        if (inner) {
+          push(
+            "info",
+            `This folder contains "${baseName(inner)}" - if that's the mod, import the .vpk itself instead of the folder.`,
+          );
+        }
+        if (total === 0) {
+          push(
+            "error",
+            "That folder doesn't look like a mod - expected game-layout folders like sounds/, particles/, materials/.",
+          );
+          reviewClosed();
+          return;
+        }
+      }
       // Stock-path replacement files are the mod's own audio parked at an
       // original's path. Find the event(s) that reference each one and offer
       // them as importable events too — on import the audio becomes YOUR
@@ -2911,12 +3218,16 @@ export default function App() {
       // One-off import: extract the pack into the app-managed cache and use
       // THAT as the source from here on — the original .vpk is never needed
       // again (move it, delete it, whatever). Skipped when nothing will
-      // reference the pack later (pure absorb, no bundle).
+      // reference the pack later (pure absorb, no bundle). Folder imports
+      // pass through untouched (cachePack returns a dir as-is): they stay
+      // LIVE on purpose, re-read from the user's folder on every compile.
       let source = vpk;
       const needsCache = bundle || mode === "linked";
       if (needsCache) {
         try {
-          push("info", "Caching pack files (one-time - the .vpk won't be needed again)…");
+          if (/\.vpk$/i.test(vpk)) {
+            push("info", "Caching pack files (one-time - the .vpk won't be needed again)…");
+          }
           source = await cachePack(s.vpkHelperPath, vpk);
         } catch (e) {
           push("error", `Couldn't cache the pack - keeping the original .vpk as the source: ${e}`);
@@ -3841,33 +4152,13 @@ export default function App() {
     const helper = opts?.helper ?? s.vpkHelperPath;
     const pak = opts?.pak ?? s.deadlockPak;
     try {
-      // Always pull the three main soundevent files, plus whatever else our slots
-      // reference, so "fix" sweeps every sound event we could own.
-      const MAIN_FILES = [
-        "soundevents/music.vsndevts",
-        "soundevents/world.vsndevts",
-        "soundevents/ui.vsndevts",
-      ];
       // Sweep EVERY soundevents file in the pak so all sound events are
-      // accounted for — excluding hero files (the Heroes tab browses those
-      // live) and voiceline files (the voicelines panel's domain). Falls back
-      // to the main files if the pak listing fails.
-      let sweepFiles = MAIN_FILES;
+      // accounted for (the same file set the tabs' "All" lists show - see
+      // sweepableSoundeventFiles for what's excluded and why). Falls back to
+      // the main three files if the pak listing fails.
+      let sweepFiles = sweepableSoundeventFiles([]);
       try {
-        const all = await listSoundeventFiles(helper, pak);
-        const swept = all.filter(
-          (f) =>
-            !f.startsWith("soundevents/hero/") &&
-            !f.startsWith("soundevents/vo/") &&
-            // base/* are inheritance templates (editing them cascades into
-            // everything that derives from them) and from_tools is dev-only.
-            !f.startsWith("soundevents/base/") &&
-            !f.includes("soundevents_from_tools") &&
-            !f.includes("generated_vo") &&
-            !f.includes("new_player_vo") &&
-            !f.includes("voip"),
-        );
-        if (swept.length) sweepFiles = Array.from(new Set([...MAIN_FILES, ...swept]));
+        sweepFiles = sweepableSoundeventFiles(await listSoundeventFiles(helper, pak));
       } catch {
         /* pak listing is best-effort; the main files still sweep */
       }
@@ -3904,7 +4195,9 @@ export default function App() {
         // A null view means the event/array isn't in the file. Trust that as a
         // "removed by patch" signal ONLY when the file itself refreshed — a file
         // that failed to decompile also yields null, which is NOT a removal.
-        if (!view && refreshedFiles.has(e.eventsRelpath)) {
+        // Soundstack-default slots have no array in vanilla BY DESIGN (the
+        // compile creates it), so a missing array there means nothing.
+        if (!view && refreshedFiles.has(e.eventsRelpath) && !e.stackDefault) {
           if (slotHasContent(e)) {
             removedKept++;
             removedNames.push(e.eventName);
@@ -4070,6 +4363,8 @@ export default function App() {
           `Heads up: ${removedKept} event(s) you've modded were removed in this patch (${shown}${removedNames.length > 4 ? "…" : ""}). Your tracks are kept, not deleted - they just won't apply until the event returns.`,
         );
       }
+      // The tabs' "All" lists re-read the refreshed tree.
+      setInventoryTick((t) => t + 1);
       return { events: finalEvents, vanillaRoot: root };
     } catch (e) {
       push("error", `Refresh failed: ${e}`);
@@ -4096,15 +4391,64 @@ export default function App() {
         patch.ffmpegPath = d.ffmpeg;
       if (d.cs2Root && !(onlyEmpty && s.cs2Root)) patch.cs2Root = d.cs2Root;
       const found = Object.keys(patch).length;
+      // Then repair what's wrong by KIND - a folder pasted where the
+      // pak01_dir.vpk file belongs, a disk path in the addon-name box. The
+      // corrected values are unambiguous, so they're applied, not just shown.
+      const fixes = await setupFixes({ ...s, ...patch });
+      Object.assign(patch, fixes.patch);
+      if (Object.keys(patch).length > 0) updateSettings(patch);
+      for (const note of fixes.notes) push("info", note);
       if (found > 0) {
-        updateSettings(patch);
         if (!silent) push("success", `Auto-detected ${found} path(s)`);
-      } else if (!silent) {
+      } else if (!silent && fixes.notes.length === 0) {
         push("info", "Couldn't auto-detect any paths - set them manually");
       }
     } catch (e) {
       if (!silent) push("error", `Auto-detect failed: ${e}`);
     }
+  }
+
+  /** Validate the setup paths by kind (validate_setup) and collect the
+   *  unambiguous corrections: the settings patch to apply plus a note per
+   *  fix. Never touches a field the check accepts. Wrong-KIND paths are the
+   *  top support case (a folder in the Game pak box makes every helper call
+   *  fail with ".NET Access to the path is denied" and Refresh report
+   *  "not in cache" for every file). */
+  async function setupFixes(
+    v: typeof settings,
+  ): Promise<{ patch: Partial<typeof settings>; notes: string[] }> {
+    const patch: Partial<typeof settings> = {};
+    const notes: string[] = [];
+    let res: SetupCheck | undefined;
+    try {
+      res = await validateSetup({
+        csdkRoot: v.csdkRoot,
+        addonName: v.addonName,
+        vpkHelperPath: v.vpkHelperPath,
+        deadlockPak: v.deadlockPak,
+        addonsDir: v.addonsDir,
+        soundFolder: v.soundFolder,
+        vanillaRoot: v.vanillaRoot,
+      });
+    } catch {
+      return { patch, notes };
+    }
+    if (!res) return { patch, notes };
+    const take = (
+      check: PathCheck | undefined,
+      key: "vpkHelperPath" | "deadlockPak" | "addonsDir" | "addonName" | "soundFolder",
+      label: string,
+    ) => {
+      if (!check || check.ok || !check.fix || check.fix === v[key]) return;
+      patch[key] = check.fix;
+      notes.push(`Fixed ${label}: ${check.reason ?? "wrong value"} → now ${check.fix}`);
+    };
+    take(res.vpkHelper, "vpkHelperPath", "VPK helper");
+    take(res.deadlockPak, "deadlockPak", "Game pak");
+    take(res.addonsDir, "addonsDir", "Addons folder");
+    take(res.addonName, "addonName", "Addon name");
+    take(res.soundFolder, "soundFolder", "Sound folder");
+    return { patch, notes };
   }
 
   // First-run / one-click setup: detect tool+game paths, download the compile
@@ -4125,6 +4469,15 @@ export default function App() {
       if (d.vpkHelper) (patch.vpkHelperPath = d.vpkHelper), (helper = d.vpkHelper);
       if (d.ffmpeg && d.ffmpeg !== "ffmpeg") patch.ffmpegPath = d.ffmpeg;
       if (Object.keys(patch).length) updateSettings(patch);
+      // Repair wrong-kind paths too (see setupFixes) - and use the repaired
+      // pak/helper for the refresh below.
+      const fixes = await setupFixes({ ...settingsRef.current, ...patch });
+      if (Object.keys(fixes.patch).length) {
+        updateSettings(fixes.patch);
+        if (fixes.patch.deadlockPak) pak = fixes.patch.deadlockPak;
+        if (fixes.patch.vpkHelperPath) helper = fixes.patch.vpkHelperPath;
+      }
+      for (const note of fixes.notes) push("info", note);
     } catch (e) {
       push("error", `Auto-detect failed: ${e}`);
     }
@@ -4140,6 +4493,46 @@ export default function App() {
     // Pull live game music data in as the merge base (fixes the need for a local
     // ModFiles snapshot + drifted stock refs). Uses the just-detected paths.
     await refreshVanilla({ helper, pak });
+  }
+
+  /** Read the live pools for just these slots (not the whole project) and
+   *  merge them in; dynamic slots take the pool's first entry as their stock
+   *  ref, like load() does for everything. */
+  async function poolSlots(slots: EventProject[]) {
+    if (!slots.length) return;
+    const root = settingsRef.current.vanillaRoot.replace(/[/\\]+$/, "");
+    const views = await readEventPools(
+      slots.map((e) => ({
+        eventsPath: `${root}/${e.eventsRelpath}`,
+        eventName: e.eventName,
+        arrayKey: e.arrayKey,
+      })),
+    );
+    setPools((prev) => {
+      const next = { ...prev };
+      slots.forEach((e, i) => {
+        const v = views[i];
+        if (v) next[e.id] = v;
+      });
+      return next;
+    });
+    const stock = new Map<string, string>();
+    slots.forEach((e, i) => {
+      const first = views[i]?.entries?.[0];
+      if (isDynamicSlot(e.id) && first && first !== e.stockEntry) stock.set(e.id, first);
+    });
+    if (stock.size) {
+      setProject((prev) =>
+        prev
+          ? {
+              ...prev,
+              events: prev.events.map((e) =>
+                stock.has(e.id) ? { ...e, stockEntry: stock.get(e.id)! } : e,
+              ),
+            }
+          : prev,
+      );
+    }
   }
 
   // Decompile the given soundevents files into the vanilla merge base (once each),
@@ -4159,7 +4552,7 @@ export default function App() {
       }
       return res.vanillaRoot || s.vanillaRoot;
     } catch (e) {
-      push("error", `Couldn't load hero sound data: ${e}`);
+      push("error", `Couldn't load game sound data: ${e}`);
       return s.vanillaRoot;
     }
   }
@@ -4174,9 +4567,16 @@ export default function App() {
     if (!prev) return null;
     const have = new Set(prev.events.map((e) => e.id));
     const add: EventProject[] = [];
+    // Existing slots keep their content but take the card's CURRENT label
+    // (a migrated legacy slot, or a vdata label Valve renamed).
+    const relabel = new Map<string, string>();
     for (const snd of ability.sounds) {
       const id = heroAbilSlotId(codename, snd.eventName);
-      if (have.has(id)) continue;
+      if (have.has(id)) {
+        const cur = prev.events.find((e) => e.id === id);
+        if (cur && snd.label && cur.side !== snd.label) relabel.set(id, snd.label);
+        continue;
+      }
       add.push({
         id,
         group: "heroes",
@@ -4194,8 +4594,14 @@ export default function App() {
         eventsRelpath: snd.eventsRelpath,
       });
     }
-    if (!add.length) return prev;
-    const next = { ...prev, events: [...prev.events, ...add] };
+    if (!add.length && !relabel.size) return prev;
+    const next = {
+      ...prev,
+      events: [
+        ...prev.events.map((e) => (relabel.has(e.id) ? { ...e, side: relabel.get(e.id)! } : e)),
+        ...add,
+      ],
+    };
     setProject(next);
     return next;
   }
@@ -4331,6 +4737,105 @@ export default function App() {
     await ensureVanillaFiles([vl.eventsRelpath]);
     const next = ensureVoicelineSlot(selectedHero, vl);
     void load(next ?? undefined);
+  }
+
+  // ---- "All sounds" rows + "Most used" pins ------------------------------
+
+  /** The slot for one inventory row: an existing slot keyed by the same sound
+   *  (curated / auto / import / earlier row) or a fresh `snd_` slot in the
+   *  row's home tab. Returns the slot and whether it was just created. */
+  function ensureSoundSlot(
+    row: Omit<SoundRowView, "slotId" | "modded" | "pinned">,
+    group: string,
+  ): { slot: EventProject; created: boolean } | null {
+    const prev = projectRef.current;
+    if (!prev) return null;
+    const existing = slotByKey.get(row.key) ?? prev.events.find((e) => slotKey(e) === row.key);
+    if (existing) return { slot: existing, created: false };
+    const pin = pins.get(row.key);
+    const slot = makeSoundSlot(row, pin?.group ?? group, pin?.label ?? row.label, row.stockEntry);
+    const next = { ...prev, events: [...prev.events, slot] };
+    projectRef.current = next;
+    setProject(next);
+    return { slot, created: true };
+  }
+
+  /** Expand a row into its editor (materializing + pooling its slot). */
+  async function openSoundRow(row: SoundRowView, group: string) {
+    await ensureVanillaFiles([row.eventsRelpath]);
+    const res = ensureSoundSlot(row, group);
+    if (!res) return;
+    setExpandedRows((prev) => new Set(prev).add(row.key));
+    if (res.created || !pools[res.slot.id]) void poolSlots([res.slot]);
+  }
+
+  function closeSoundRow(key: string) {
+    setExpandedRows((prev) => {
+      const next = new Set(prev);
+      next.delete(key);
+      return next;
+    });
+  }
+
+  /** Pin/unpin a sound in "Most used". Pinning a bare row also materializes
+   *  its slot so it shows up in Most used right away. */
+  function toggleSoundPin(
+    key: string,
+    group: string,
+    label: string,
+    row?: Omit<SoundRowView, "slotId" | "modded" | "pinned">,
+  ) {
+    const wasPinned = pins.has(key);
+    updateSettings((prev) => togglePinPatch(prev.soundPins, key, group, label));
+    if (!wasPinned && row && !slotByKey.has(key)) {
+      const res = ensureSoundSlot(row, group);
+      if (res?.created) void poolSlots([res.slot]);
+    }
+    push("success", wasPinned ? "Unpinned" : "Pinned to Most used");
+  }
+
+  /** Find-a-sound jump: open the sound's tab (All mode when it's a bare row)
+   *  and scroll to it once the tab has rendered. */
+  function jumpToSound(r: FinderRow) {
+    const slot = slotByKey.get(r.key);
+    const isPanel = !!slot && (!isSoundSlot(slot.id) || pins.has(r.key) || slotHasContent(slot));
+    if (!isPanel) setShowAllFor(r.group, true);
+    setRowQuery("");
+    setActiveTab(r.group);
+    setSoundFocus({ group: r.group, key: r.key });
+  }
+  useEffect(() => {
+    if (!soundFocus || activeTab !== soundFocus.group) return;
+    const slot = slotByKey.get(soundFocus.key);
+    const isPanel = !!slot && (!isSoundSlot(slot.id) || pins.has(soundFocus.key) || slotHasContent(slot));
+    if (!isPanel) {
+      const row = inventoryRows.find((x) => x.key === soundFocus.key);
+      if (!row) return; // inventory still loading - the effect re-runs when it lands
+      if (!expandedRows.has(row.key))
+        void openSoundRow({ ...row, slotId: slot?.id ?? null, modded: false, pinned: false }, soundFocus.group);
+    }
+    // Land after the tab's motion mount + the scroll-reset effect.
+    const t = setTimeout(() => {
+      const el = isPanel && slot ? panelEls.current[slot.id] : rowEls.current[soundFocus.key];
+      el?.scrollIntoView({ behavior: "smooth", block: "center" });
+      setSoundFocus(null);
+    }, 120);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [soundFocus, activeTab, inventoryRows, slotByKey]);
+
+  /** DEV BUILDS: fold the current pin set into the repo's shipped baseline. */
+  async function saveShippedBaseline() {
+    const doc = baselineDocument(pins, SIDEBAR_ORDER);
+    try {
+      const path = await writeSoundBaseline(JSON.stringify(doc, null, 2));
+      // The shipped file now IS the effective set: local pins would only
+      // double it. Vite reloads the JSON import on its own.
+      updateSettings({ soundPins: {} });
+      push("success", `Saved ${doc.entries.length} pinned sounds to soundBaseline.json - they ship as everyone's Most used (${path})`);
+    } catch (e) {
+      push("error", `Couldn't save the baseline: ${e}`);
+    }
   }
 
   /** Bulk replace: ONE audio file into MANY voicelines at once. Each selected
@@ -5084,9 +5589,76 @@ export default function App() {
       return next;
     });
 
-  const visibleSlots = (project?.events ?? []).filter(
-    (e) => e.group === activeTab && (!modifiedOnly || slotHasContent(e)),
+  // Most used = every slot in the tab except lazily materialized `snd_` ones
+  // that are neither pinned nor carry content. All = those panels plus one
+  // compact row per remaining inventory sound the tab covers (an expanded row
+  // stays a row until closed, then joins the grid).
+  const tabSlots = (project?.events ?? []).filter((e) => e.group === activeTab);
+  const mostUsedSlot = (e: EventProject) =>
+    !isSoundSlot(e.id) || pins.has(slotKey(e)) || slotHasContent(e);
+  const tabShowAll = !!showAll[activeTab] && !modifiedOnly;
+  const panelSlots = tabSlots.filter(
+    (e) =>
+      (!modifiedOnly || slotHasContent(e)) &&
+      mostUsedSlot(e) &&
+      !(tabShowAll && expandedRows.has(slotKey(e))),
   );
+  const panelKeys = new Set(panelSlots.map(slotKey));
+  const extraRows = inventoryRows.filter((r) => {
+    if (rowGroups.get(r.key) !== activeTab || panelKeys.has(r.key)) return false;
+    const slot = slotByKey.get(r.key);
+    // A slot that lives in ANOTHER tab (moved, or pinned elsewhere) is that
+    // tab's; a Most-used slot here is already a panel.
+    return !slot || (slot.group === activeTab && !mostUsedSlot(slot)) || expandedRows.has(r.key);
+  });
+  const rowMatches = (r: { label: string; eventName: string; eventsRelpath: string; stockEntry: string }) => {
+    const q = rowQuery.trim().toLowerCase();
+    if (!q) return true;
+    const hay = `${r.label} ${r.eventName} ${r.eventsRelpath} ${r.stockEntry.split("/").pop() ?? ""}`.toLowerCase();
+    return q.split(/\s+/).every((t) => hay.includes(t));
+  };
+  const tabRows: SoundRowView[] = tabShowAll
+    ? extraRows.filter(rowMatches).map((r) => {
+        const slot = slotByKey.get(r.key);
+        return {
+          ...r,
+          slotId: slot?.id ?? null,
+          modded: !!slot && slotHasContent(slot),
+          pinned: pins.has(r.key),
+        };
+      })
+    : [];
+  const showSoundToggle =
+    soundTabOpen && !modifiedOnly && (extraRows.length > 0 || tabShowAll || inventory.loading);
+  // Find-a-sound searches every inventory row plus every slot that isn't a
+  // hero/item drill-in (curated names included).
+  const finderRows: FinderRow[] = useMemo(() => {
+    if (activeTab !== UNSORTED) return [];
+    const seen = new Set<string>();
+    const out: FinderRow[] = [];
+    for (const e of project?.events ?? []) {
+      if (e.group === "heroes" || e.group === ITEMS) continue;
+      const key = slotKey(e);
+      seen.add(key);
+      out.push({
+        key,
+        group: e.group,
+        label: soundRowLabel(e.eventName, e.arrayKey || "vsnd_files"),
+        slotLabel: e.side,
+        eventName: e.eventName,
+        eventsRelpath: e.eventsRelpath,
+        arrayKey: e.arrayKey || "vsnd_files",
+        stockEntry: e.stockEntry,
+        modded: slotHasContent(e),
+      });
+    }
+    for (const r of inventoryRows) {
+      if (seen.has(r.key)) continue;
+      out.push({ ...r, group: rowGroups.get(r.key) ?? UNSORTED, modded: false });
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, project?.events, inventoryRows, rowGroups]);
   const songCount = (project?.events ?? []).reduce((n, e) => n + e.songs.length, 0);
 
   /** Whether a tab carries any of the user's changes (drives "modified only"). */
@@ -5125,11 +5697,18 @@ export default function App() {
   // different tab. Slot ids never encode the group, so everything (songs,
   // adopted entries, exclusions) moves with it.
   function moveSlotToTab(slotId: string, group: string) {
+    const slot = projectRef.current?.events.find((e) => e.id === slotId);
     setProject((prev) =>
       prev
         ? { ...prev, events: prev.events.map((e) => (e.id === slotId ? { ...e, group } : e)) }
         : prev,
     );
+    // A pinned sound's pin records its tab: keep it in step so the next load
+    // re-injects the slot where the user put it.
+    if (slot) {
+      const patch = movePinPatch(settingsRef.current.soundPins, slotKey(slot), group);
+      if (patch) updateSettings(patch);
+    }
     push("success", `Moved to ${TAB_LABELS[group] ?? group}`);
   }
 
@@ -5379,8 +5958,14 @@ export default function App() {
       onToggleSelect={toggleSlotSel}
       onPasteSong={pasteSong}
       view={pools[ev.id]}
-      moveTargets={isAutoSlot(ev.id) || isImportSlot(ev.id) ? MOVE_TARGETS : undefined}
+      moveTargets={isAutoSlot(ev.id) || isImportSlot(ev.id) || isSoundSlot(ev.id) ? MOVE_TARGETS : undefined}
       onMoveToTab={moveSlotToTab}
+      pinned={pins.has(slotKey(ev))}
+      onTogglePin={
+        ev.group !== "heroes" && ev.group !== ITEMS && !isCuratedSlot(ev.id)
+          ? () => toggleSoundPin(slotKey(ev), ev.group, ev.side)
+          : undefined
+      }
       soundFolder={slotSoundFolder(ev, settings.soundFolder)}
       ffmpegPath={settings.ffmpegPath || undefined}
       accent={accentFor(ev)}
@@ -5845,7 +6430,11 @@ export default function App() {
                               ? "Organize the pack into named modules - the future split points for standalone releases. Compiling still builds everything together."
                               : activeTab === MODEL_SWAP
                                 ? "Put your own model on a hero or on the game's objects - the urn, crates, soul containers, map props. The original's animations, physics and setup stay; your build ships with the normal compile."
-                                : null;
+                                : activeTab === UNSORTED
+                                  ? "Everything that doesn't have a home tab yet, plus one search box over every sound event in the game."
+                                  : showSoundToggle
+                                    ? "Most used shows the curated and pinned sounds. Switch to All to browse every sound event this tab covers and pin the ones you reach for."
+                                    : null;
               return sub ? <p className="mt-1 text-sm text-zinc-500">{sub}</p> : null;
             })()}
           </div>
@@ -6266,6 +6855,16 @@ export default function App() {
           )
         ) : (
           <>
+            {activeTab === UNSORTED && (
+              <SoundFinder
+                rows={finderRows}
+                loading={inventory.loading}
+                onJump={jumpToSound}
+                onPreview={(ref) => decodeStock(ref)}
+                tabLabels={TAB_LABELS}
+                tabOrder={SIDEBAR_ORDER}
+              />
+            )}
             {activeTab === UNSORTED && settings.importedMods.length > 0 && (
               <BundledExtrasCard
                 mods={settings.importedMods}
@@ -6298,7 +6897,63 @@ export default function App() {
                 </span>
               </label>
             )}
-            {visibleSlots.length > 1 && (
+            {showSoundToggle && (
+              <div className="mb-3 flex flex-wrap items-center gap-2">
+                {/* Most used / All: the tab's curated + pinned + edited slots,
+                    or every sound event it covers. */}
+                <div
+                  className="flex overflow-hidden rounded-md border border-zinc-700 text-xs"
+                  title="Most used = curated + pinned + anything you changed. All = every sound event this tab covers."
+                >
+                  <button
+                    onClick={() => setShowAllFor(activeTab, false)}
+                    className={`px-2.5 py-1 transition ${
+                      !tabShowAll ? "bg-zinc-700/70 text-zinc-100" : "text-zinc-400 hover:text-zinc-200"
+                    }`}
+                  >
+                    Most used <span className="ml-1 text-[10px] text-zinc-500">{panelSlots.length + (tabShowAll ? expandedRows.size : 0)}</span>
+                  </button>
+                  <button
+                    onClick={() => setShowAllFor(activeTab, true)}
+                    className={`border-l border-zinc-700 px-2.5 py-1 transition ${
+                      tabShowAll ? "bg-zinc-700/70 text-zinc-100" : "text-zinc-400 hover:text-zinc-200"
+                    }`}
+                  >
+                    All <span className="ml-1 text-[10px] text-zinc-500">{panelSlots.length + extraRows.length}</span>
+                  </button>
+                </div>
+                {tabShowAll && (
+                  <input
+                    value={rowQuery}
+                    onChange={(e) => setRowQuery(e.target.value)}
+                    placeholder={`Search sounds in ${TAB_LABELS[activeTab] ?? activeTab}...`}
+                    className="w-56 rounded-md border border-zinc-700 bg-zinc-900/70 px-2.5 py-1 text-xs text-zinc-200 placeholder-zinc-600 outline-none focus:border-zinc-500"
+                  />
+                )}
+                {Object.keys(settings.soundPins ?? {}).length > 0 && (
+                  <button
+                    onClick={() => {
+                      updateSettings({ soundPins: {} });
+                      push("success", "Pins reset to the shipped set");
+                    }}
+                    title="Forget your own pins and unpins; back to the Most used set the app ships with"
+                    className="rounded-md border border-zinc-800 px-2 py-0.5 text-[11px] text-zinc-500 transition hover:border-zinc-600 hover:text-zinc-300"
+                  >
+                    Reset pins to shipped
+                  </button>
+                )}
+                {import.meta.env.DEV && (
+                  <button
+                    onClick={() => void saveShippedBaseline()}
+                    title="Dev build: write the current pin set into app/src/data/soundBaseline.json so it ships as everyone's Most used"
+                    className="ml-auto rounded-md border border-amber-500/40 px-2 py-0.5 text-[11px] text-amber-300/90 transition hover:border-amber-400"
+                  >
+                    Save as shipped baseline
+                  </button>
+                )}
+              </div>
+            )}
+            {panelSlots.length > 1 && (
               <div className="mb-3 flex flex-wrap items-center gap-2">
                 <button
                   onClick={() => {
@@ -6321,11 +6976,11 @@ export default function App() {
                     </span>
                     <button
                       onClick={() =>
-                        setSlotSel(new Set(visibleSlots.map((e) => e.id)))
+                        setSlotSel(new Set(panelSlots.map((e) => e.id)))
                       }
                       className="rounded-md border border-zinc-700 px-2 py-0.5 text-xs text-zinc-400 transition hover:border-zinc-500 hover:text-zinc-200"
                     >
-                      Select all {visibleSlots.length}
+                      Select all {panelSlots.length}
                     </button>
                     <button
                       onClick={() => setSlotSel(new Set())}
@@ -6353,8 +7008,33 @@ export default function App() {
               </div>
             )}
             <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-              {visibleSlots.map(renderPanel)}
+              {panelSlots.map(renderPanel)}
             </div>
+            {tabShowAll && (
+              <SoundEventRows
+                rows={tabRows}
+                loading={inventory.loading}
+                error={inventory.error}
+                expanded={expandedRows}
+                onOpen={(row) => void openSoundRow(row, activeTab)}
+                onClose={closeSoundRow}
+                onPreview={(ref) => decodeStock(ref)}
+                onTogglePin={(row) => toggleSoundPin(row.key, activeTab, row.label, row)}
+                renderSlot={(slotId, row) => {
+                  const slot = slotId
+                    ? project?.events.find((e) => e.id === slotId)
+                    : slotByKey.get(row.key);
+                  return slot ? (
+                    renderPanel(slot)
+                  ) : (
+                    <div className="text-xs text-zinc-600">preparing {row.label}…</div>
+                  );
+                }}
+                registerRowEl={(key, el) => (rowEls.current[key] = el)}
+                accent={accentFor({ group: activeTab, side: "" })}
+                query={rowQuery}
+              />
+            )}
           </>
         )}
         </motion.div>

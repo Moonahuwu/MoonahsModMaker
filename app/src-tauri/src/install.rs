@@ -135,7 +135,15 @@ pub fn install(
         return Err(format!("source vpk not found: {}", src_vpk.display()));
     }
     if !addons_dir.is_dir() {
-        return Err(format!("addons folder not found: {}", addons_dir.display()));
+        // A fresh Deadlock install has no addons folder yet - create it when
+        // the path is the real game/citadel/addons (its parent holds
+        // gameinfo.gi); anything else is a wrong path, not a missing one.
+        let parent_ok = addons_dir.parent().map_or(false, |p| p.join("gameinfo.gi").is_file());
+        if !parent_ok {
+            return Err(format!("addons folder not found: {}", addons_dir.display()));
+        }
+        std::fs::create_dir_all(addons_dir)
+            .map_err(|e| format!("creating addons folder {}: {e}", addons_dir.display()))?;
     }
 
     let used = used_slots(addons_dir);

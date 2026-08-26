@@ -23,6 +23,15 @@ pub fn process_audio(req: ProcessReq) -> Result<String, String> {
     audio::process(&req)
 }
 
+/// Integrated loudness (LUFS) of an audio file - "match the original's
+/// loudness" measures the stock clip with this.
+#[tauri::command]
+pub async fn measure_loudness(path: String, ffmpeg_path: Option<String>) -> Result<audio::Loudness, String> {
+    tauri::async_runtime::spawn_blocking(move || audio::measure_loudness(ffmpeg_path.as_deref(), &path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// Pack a folder into a single `pak01_dir.vpk` via the bundled ValvePak helper.
 #[tauri::command]
 pub fn pack_vpk(helper_path: String, folder: String, out_vpk: String) -> Result<String, String> {
@@ -380,8 +389,14 @@ fn scan_pack_contents_blocking(
         other: vec![],
     };
     for f in files {
-        // Cache bookkeeping files are ours, not the pack's contents.
-        if f == "eim_source.txt" || f == ".eim_cache_v" {
+        // Cache bookkeeping files are ours, not the pack's contents. A live
+        // folder import can also carry housekeeping trees (.git, .vscode,
+        // __MACOSX) - the combiner never stages those, keep them out of the
+        // review list too.
+        if f == "eim_source.txt"
+            || f == ".eim_cache_v"
+            || f.split('/').any(|s| s.starts_with('.') || s.starts_with("__"))
+        {
             continue;
         }
         if f.starts_with("sounds/") && f.ends_with(".vsnd_c") {
@@ -938,6 +953,26 @@ pub fn refresh_vanilla(
     relpaths: Vec<String>,
 ) -> Result<RefreshResult, String> {
     use tauri::Manager;
+    // The #1 support case: a FOLDER pasted into the Game pak box. Every helper
+    // call then fails with a baffling ".NET Access to the path is denied" and
+    // the dir-transparent vpk layer reports "not in cache" per file - say
+    // what is actually wrong, and where the pak really is when we can tell.
+    {
+        let pk = std::path::Path::new(pak_path.trim().trim_matches('"'));
+        if pak_path.trim().is_empty() {
+            return Err("Game pak is not set - open Settings and run Auto-detect, or pick Deadlock/game/citadel/pak01_dir.vpk".into());
+        }
+        if !pk.is_file() {
+            let hint = resolve_pak_file(pk)
+                .map(|r| format!(" - it looks like you meant {}", slash(&r)))
+                .unwrap_or_default();
+            return Err(format!(
+                "Game pak must be the pak01_dir.vpk FILE, but Settings points at {}{}{hint}",
+                pak_path,
+                if pk.is_dir() { " (a folder)" } else { " (not found)" }
+            ));
+        }
+    }
     let dest_root = app
         .path()
         .app_data_dir()
@@ -1540,7 +1575,7 @@ pub fn host_connect_id(deadlock_root: String) -> Option<String> {
     crate::host::connect_id(std::path::Path::new(&deadlock_root))
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct DetectedPaths {
     pub csdk_root: Option<String>,
@@ -1601,6 +1636,31 @@ fn steam_libraries() -> Vec<std::path::PathBuf> {
                         libs.push(std::path::PathBuf::from(raw.replace("\\\\", "\\")));
                     }
                 }
+            }
+        }
+    }
+    // Fallback sweep: Steam libraries the registry/vdf lookup missed (Steam
+    // installed by another account, the app elevated under a different user
+    // hive, a hand-made library folder). The common conventions on every
+    // drive letter - cheap existence probes, and only roots that hold a
+    // steamapps/ tree count.
+    for letter in b'C'..=b'Z' {
+        let drive = format!("{}:\\", letter as char);
+        if !std::path::Path::new(&drive).is_dir() {
+            continue; // one probe per absent letter, not seven
+        }
+        for rel in [
+            "SteamLibrary",
+            "Steam",
+            "SteamGames",
+            "Games\\Steam",
+            "Games\\SteamLibrary",
+            "Program Files (x86)\\Steam",
+            "Program Files\\Steam",
+        ] {
+            let root = std::path::PathBuf::from(&drive).join(rel);
+            if root.join("steamapps").is_dir() && !libs.iter().any(|l| same_path(l, &root)) {
+                libs.push(root);
             }
         }
     }
@@ -1720,7 +1780,15 @@ fn ffmpeg_on_path() -> bool {
 /// Best-effort auto-detection of the tool/game paths the user would otherwise
 /// type into Setup. Everything is optional — missing items come back as `null`.
 #[tauri::command]
-pub fn autodetect_paths(app: tauri::AppHandle) -> DetectedPaths {
+pub async fn autodetect_paths(app: tauri::AppHandle) -> DetectedPaths {
+    // Directory walks (CSDK search, Steam library sweep) on the UI thread
+    // would freeze the window - sync commands run there.
+    tauri::async_runtime::spawn_blocking(move || autodetect_paths_blocking(app))
+        .await
+        .unwrap_or_default()
+}
+
+fn autodetect_paths_blocking(app: tauri::AppHandle) -> DetectedPaths {
     use tauri::Manager;
     let exe = std::env::current_exe().ok();
     let exe_dir = exe.as_deref().and_then(|p| p.parent()).map(|p| p.to_path_buf());
@@ -2434,6 +2502,12 @@ pub struct HeroAbilitySound {
     pub events_relpath: String,
     /// Friendly label from the ability field, e.g. "Cast", "Impact".
     pub label: String,
+    /// Set when the event's stock file is NOT one of this hero's own sounds -
+    /// Valve reuses an item's, a status effect's or another hero's file (e.g.
+    /// Billy's Blasted healing plays Rescue Beam's heal clip). Shown under the
+    /// slot so the foreign file name doesn't read as a mis-filed event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared_note: Option<String>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
@@ -3844,6 +3918,62 @@ fn hero_event_index(
     idx
 }
 
+/// The kit folder a sound ref lives in: `sounds/abilities/<x>` or
+/// `sounds/weapons/<x>` (None for everything else).
+fn kit_folder(r: &str) -> Option<String> {
+    for root in ["sounds/abilities/", "sounds/weapons/"] {
+        if let Some(rest) = r.strip_prefix(root) {
+            let x = rest.split('/').next().unwrap_or("");
+            if !x.is_empty() && rest.contains('/') {
+                return Some(format!("{root}{x}"));
+            }
+        }
+    }
+    None
+}
+
+/// "Shared file" explanation for a stock ref outside the hero's own kit
+/// folders, or None when the file is the hero's own.
+fn shared_file_note(r: &str, own: &std::collections::HashSet<String>) -> Option<String> {
+    let pretty = |seg: &str| -> String {
+        seg.split('_')
+            .filter(|w| !w.is_empty())
+            .map(|w| {
+                let mut c = w.chars();
+                match c.next() {
+                    Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                    None => String::new(),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    if let Some(rest) = r.strip_prefix("sounds/mods/") {
+        // sounds/mods/<category>/<item>/<file>
+        let parts: Vec<&str> = rest.split('/').collect();
+        if parts.len() >= 3 {
+            return Some(format!(
+                "Valve reuses the {} item's sound file here - replacing it in this slot only changes this event, the item keeps its own.",
+                pretty(parts[1])
+            ));
+        }
+    }
+    if r.starts_with("sounds/gameplay/status_effects/") {
+        return Some(
+            "Valve reuses a shared status-effect sound file here - replacing it in this slot only changes this event."
+                .to_string(),
+        );
+    }
+    if let Some(folder) = kit_folder(r) {
+        if !own.contains(&folder) {
+            return Some(format!(
+                "Valve reuses another kit's sound file here ({folder}) - replacing it in this slot only changes this event."
+            ));
+        }
+    }
+    None
+}
+
 /// A hero's 4 abilities with icons + the distinct sounds each triggers, parsed
 /// from `heroes.vdata` + `abilities.vdata`. The result (abilities + icon paths +
 /// which sound events exist) is **static** game data, so it's cached per-hero to
@@ -3862,12 +3992,30 @@ fn hero_detail_impl(
         .app_data_dir()
         .map_err(|e| e.to_string())?
         .join("hero_portraits");
+    hero_detail_at(&base, &helper_path, &pak_path, &codename, refresh)
+}
+
+/// `hero_detail` against an explicit cache dir (the app-data `hero_portraits`
+/// folder) - split out so the folding rules can be exercised against the
+/// real game data without a Tauri app handle.
+pub(crate) fn hero_detail_at(
+    base: &std::path::Path,
+    helper_path: &str,
+    pak_path: &str,
+    codename: &str,
+    refresh: Option<bool>,
+) -> Result<Vec<HeroAbility>, String> {
+    let base = base.to_path_buf();
+    let helper_path = helper_path.to_string();
+    let pak_path = pak_path.to_string();
+    let codename = codename.to_string();
     std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
 
-    // Serve the cached per-hero detail unless a refresh was requested. The `v6`
-    // marker invalidates caches built before ability folding + own-file
-    // ownership filtering.
-    let detail_cache = base.join(format!("detail_v7_{codename}.json"));
+    // Serve the cached per-hero detail unless a refresh was requested. The
+    // version marker invalidates caches built by older folding rules (v8: gun
+    // and foley events no longer fold onto ability cards via the weak family /
+    // name signals, empty vdata labels get a name, shared-file notes).
+    let detail_cache = base.join(format!("detail_v8_{codename}.json"));
     if !refresh.unwrap_or(false) {
         if let Ok(text) = std::fs::read_to_string(&detail_cache) {
             if let Ok(cached) = serde_json::from_str::<Vec<HeroAbility>>(&text) {
@@ -3950,8 +4098,16 @@ fn hero_detail_impl(
                 let Some(stem) = event_index.get(event) else { continue };
                 if seen.insert(event.clone()) {
                     *stem_freq.entry(stem.clone()).or_insert(0) += 1;
+                    // A bare `m_strSound` field cleans to an empty label -
+                    // name the row after the event instead of leaving a blank
+                    // title (Grey Talon's charged-shot projectile impact).
+                    let label = if label.trim().is_empty() {
+                        prettify_hero_sound(event, &codename)
+                    } else {
+                        label.clone()
+                    };
                     sounds.push(RawSound {
-                        label: label.clone(),
+                        label,
                         event: event.clone(),
                         stem: stem.clone(),
                     });
@@ -3984,6 +4140,7 @@ fn hero_detail_impl(
                 array_key: "vsnd_files".to_string(),
                 events_relpath: format!("soundevents/hero/{}.vsndevts", s.stem),
                 label: s.label,
+                shared_note: None,
             })
             .collect();
         out.push(HeroAbility { slot, ability, icon_path, icon_target, sounds });
@@ -4010,7 +4167,11 @@ fn hero_detail_impl(
     let stems = own_stems.clone();
     // Per-ability normalized name candidates (full core + core minus its
     // leading dev-name segment), longest first so specific abilities win.
-    let mut keys: Vec<(usize, String)> = Vec::new();
+    // (ability index, normalized key, strong): strong = the ability's whole
+    // name (with or without the codename), weak = the name minus its first
+    // segment - enough on its own for ordinary ability events, not for gun /
+    // foley ones (see Signal 4 below).
+    let mut keys: Vec<(usize, String, bool)> = Vec::new();
     for (i, ha) in out.iter().enumerate() {
         let mut k = ha.ability.to_ascii_lowercase();
         for p in ["citadel_ability_", "ability_"] {
@@ -4020,11 +4181,11 @@ fn hero_detail_impl(
         }
         let full = norm(&k);
         if full.len() >= 4 {
-            keys.push((i, full.clone()));
+            keys.push((i, full.clone(), true));
         }
         if let Some(stripped) = full.strip_prefix(code_n.as_str()) {
             if stripped.len() >= 4 {
-                keys.push((i, stripped.to_string()));
+                keys.push((i, stripped.to_string(), true));
             }
         }
         // Drop the first underscore segment (usually the hero's dev name,
@@ -4032,21 +4193,28 @@ fn hero_detail_impl(
         if let Some((_, rest)) = k.split_once('_') {
             let r = norm(rest);
             if r.len() >= 4 {
-                keys.push((i, r));
+                keys.push((i, r, false));
             }
         }
     }
-    keys.sort_by_key(|(_, k)| std::cmp::Reverse(k.len()));
+    keys.sort_by_key(|(_, k, _)| std::cmp::Reverse(k.len()));
     // Event-name FAMILIES from the vdata-known events: an ability whose cast
     // sound is `Necro.Skull.Cast` owns every other `Necro.Skull.*` event —
     // this bridges vocabulary gaps the name heuristic can't (gravestone ↔
     // Gravedigging). Requires ≥2 segments so a bare hero prefix never claims.
+    // A family that is itself the hero's GUN or FOLEY namespace never claims:
+    // an ability that references the regular weapon shot (Grey Talon's Rain
+    // of Arrows lists `Greytalon.Wpn.Fire`) must not drag every `*.Wpn.*`
+    // reload/zoom/whizby event onto its card - those belong to the Gunfire
+    // section below the abilities.
     let mut fams: Vec<(usize, String)> = Vec::new();
     for (i, ha) in out.iter().enumerate() {
         for s in &ha.sounds {
             if let Some(pos) = s.event_name.rfind('.') {
                 let fam = &s.event_name[..pos];
-                if fam.contains('.') && !fams.iter().any(|(fi, f)| *fi == i && f == fam) {
+                let generic = matches!(hero_sound_category(fam), "gunfire" | "movement");
+                if fam.contains('.') && !generic && !fams.iter().any(|(fi, f)| *fi == i && f == fam)
+                {
                     fams.push((i, fam.to_string()));
                 }
             }
@@ -4059,6 +4227,9 @@ fn hero_detail_impl(
         .collect();
     let snd_dir = base.join("heroevents");
     let _ = std::fs::create_dir_all(&snd_dir);
+    // Every `vsnd_files` array of the hero's own file(s), kept around after
+    // the fold for the shared-file notes (event -> its stock refs).
+    let mut own_arrays: Vec<(String, String, kv3_core::ArrayInfo)> = Vec::new();
     for stem in &stems {
         let snd_file = snd_dir.join(format!("{stem}.vsndevts"));
         if !snd_file.exists() {
@@ -4074,7 +4245,16 @@ fn hero_detail_impl(
         let relpath = format!("soundevents/hero/{stem}.vsndevts");
         let slot_prefix = format!("sounds/abilities/{stem}/a");
         for a in arrays {
-            if a.array_key != "vsnd_files" || claimed.contains(&a.event_name) {
+            if a.array_key != "vsnd_files" {
+                continue;
+            }
+            own_arrays.push((relpath.clone(), slot_prefix.clone(), a));
+        }
+    }
+    // Fold: walk every unclaimed array with the four signals below.
+    for (relpath, slot_prefix, a) in own_arrays.iter().cloned() {
+        {
+            if claimed.contains(&a.event_name) {
                 continue;
             }
             // Signal 1: any entry under the hero's aN / aN_name ability folder.
@@ -4124,15 +4304,21 @@ fn hero_detail_impl(
                 }
             }
             // Signal 4: an ability name prefixes the event (hero dev-name
-            // first segment + generic "Ability" segments dropped).
+            // first segment + generic "Ability" segments dropped). Gun and
+            // foley events need the STRONG key (the whole ability name:
+            // `Inferno.FlameDash.Step` is Flame Dash's footstep) - a weak
+            // overlap ("jump" vs `GreyTalon.JumpLand`) is not evidence that a
+            // landing thud is an ability sound; those stay in Gunfire /
+            // Movement below.
+            let generic = matches!(hero_sound_category(&a.event_name), "gunfire" | "movement");
             if target.is_none() && segments.len() >= 2 {
                 let mut idx = 1; // segment 0 is the hero/dev name
                 while idx < segments.len() && segments[idx].eq_ignore_ascii_case("ability") {
                     idx += 1;
                 }
                 let ev_core = norm(&segments[idx..].join(""));
-                for (i, core) in &keys {
-                    if ev_core.starts_with(core.as_str()) {
+                for (i, core, strong) in &keys {
+                    if (*strong || !generic) && ev_core.starts_with(core.as_str()) {
                         target = Some(*i);
                         break;
                     }
@@ -4145,7 +4331,61 @@ fn hero_detail_impl(
                 event_name: a.event_name,
                 array_key: "vsnd_files".to_string(),
                 events_relpath: relpath.clone(),
+                shared_note: None,
             });
+        }
+    }
+
+    // Shared-file notes: Valve sometimes points a hero's event at a file that
+    // lives in an ITEM's folder (Billy's Blasted healing = Rescue Beam's heal
+    // clip), the shared status-effect folder, or another hero's kit. The
+    // slot then shows a foreign file name as its "Valve original", which
+    // reads like a mis-filed event - say what it is instead. The hero's own
+    // folders are the `sounds/abilities/<x>/` and `sounds/weapons/<x>/`
+    // roots most of its file's refs use (dev folder names differ from
+    // codenames: orion -> archer, slork -> fathom).
+    {
+        let mut folder_freq: std::collections::HashMap<String, usize> = Default::default();
+        let mut refs_by_event: std::collections::HashMap<&str, &Vec<String>> = Default::default();
+        for (_, _, a) in &own_arrays {
+            refs_by_event.insert(a.event_name.as_str(), &a.entries);
+            for r in &a.entries {
+                if let Some(f) = kit_folder(r) {
+                    *folder_freq.entry(f).or_insert(0) += 1;
+                }
+            }
+        }
+        // Own = the busiest abilities folder + the busiest weapons folder,
+        // any folder named after the codename or the file stem (Grey Talon
+        // spans archer/ + orion/), and any folder carrying at least a fifth
+        // of the kit's refs - never a folder only borrowed for a clip or two.
+        let total: usize = folder_freq.values().sum();
+        let top = |root: &str| -> Option<String> {
+            folder_freq
+                .iter()
+                .filter(|(f, _)| f.starts_with(root))
+                .max_by_key(|(_, n)| **n)
+                .map(|(f, _)| f.clone())
+        };
+        let mut own: std::collections::HashSet<String> = folder_freq
+            .iter()
+            .filter(|(f, n)| {
+                **n * 5 >= total.max(1)
+                    || f.contains(&code_n)
+                    || stems.iter().any(|st| f.ends_with(&format!("/{st}")))
+            })
+            .map(|(f, _)| f.clone())
+            .collect();
+        own.extend(top("sounds/abilities/"));
+        own.extend(top("sounds/weapons/"));
+        for ha in out.iter_mut() {
+            for s in ha.sounds.iter_mut() {
+                let Some(refs) = refs_by_event.get(s.event_name.as_str()) else {
+                    continue;
+                };
+                let Some(first) = refs.first() else { continue };
+                s.shared_note = shared_file_note(first, &own);
+            }
         }
     }
 
@@ -4812,11 +5052,22 @@ fn item_detail_impl(
                 None => continue,
             };
             if seen.insert(event.clone()) {
+                // Same empty-label guard as the hero cards (`m_strSound`).
+                let label = if label.trim().is_empty() {
+                    event.split('.').skip(1).collect::<Vec<_>>().join(" ")
+                } else {
+                    label.clone()
+                };
                 sounds.push(HeroAbilitySound {
                     event_name: event.clone(),
                     array_key: "vsnd_files".to_string(),
                     events_relpath: relpath.clone(),
-                    label: label.clone(),
+                    label: if label.is_empty() {
+                        event.clone()
+                    } else {
+                        label
+                    },
+                    shared_note: None,
                 });
             }
         }
@@ -4978,6 +5229,140 @@ pub fn list_editable_events(
     Ok(out)
 }
 
+// ---- Sound inventory ("show every sound") ---------------------------------
+
+/// One sound array of one event in the refreshed vanilla tree - the unit the
+/// "All sounds" lists and the Find-a-sound search work on. Unlike
+/// `DiscoveredEvent` this covers EVERY array of an event: the primary
+/// `vsnd_files`, the layered `vsnd_files_<layer>` siblings and the per-track
+/// `track_N.track_vsnd_files` arrays (a slot is an (event, array) pair).
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct InventoryEvent {
+    pub events_relpath: String,
+    pub event_name: String,
+    pub array_key: String,
+    /// First entry of the array (the game's stock clip for previews).
+    pub stock_entry: String,
+    /// How many clips the array carries (a pool of alternates, or one).
+    pub entry_count: usize,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SoundInventory {
+    pub events: Vec<InventoryEvent>,
+    /// Relpaths that aren't under `vanilla_root` yet (the caller refreshes
+    /// them and re-lists) - a missing file never fails the whole sweep.
+    pub missing: Vec<String>,
+}
+
+/// Walk the given soundevents files under `root` and list every sound array.
+/// Empty arrays are skipped (nothing to preview or replace). Document order
+/// is preserved per file; files come back in the order asked for.
+pub(crate) fn sound_inventory_at(root: &std::path::Path, relpaths: &[String]) -> SoundInventory {
+    let mut inv = SoundInventory::default();
+    for rel in relpaths {
+        let rel_trim = rel.trim_matches('/');
+        let path = root.join(rel_trim);
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(_) => {
+                inv.missing.push(rel.clone());
+                continue;
+            }
+        };
+        let Ok(arrays) = kv3_core::list_sound_arrays(&text) else { continue };
+        for a in arrays {
+            if a.entries.is_empty() {
+                continue;
+            }
+            inv.events.push(InventoryEvent {
+                events_relpath: rel.clone(),
+                event_name: a.event_name,
+                array_key: a.array_key,
+                entry_count: a.entries.len(),
+                stock_entry: a.entries.into_iter().next().unwrap_or_default(),
+            });
+        }
+    }
+    inv
+}
+
+/// The full sound-event inventory of the refreshed vanilla tree (every array
+/// of every event in the given files). Cheap (fs + parse) but wrapped in
+/// `spawn_blocking` so a 30-file sweep never stalls the window.
+#[tauri::command]
+pub async fn list_sound_events(
+    vanilla_root: String,
+    relpaths: Vec<String>,
+) -> Result<SoundInventory, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        sound_inventory_at(std::path::Path::new(&vanilla_root), &relpaths)
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Validate + pretty-print a shipped sound baseline document and write it to
+/// `path`. Shape: `{ "version": <number>, "entries": [ { "key", "group",
+/// "label"? } ] }`. Path-parameterized so the writer is testable; the command
+/// below pins the path to the repo's data file.
+pub(crate) fn write_baseline_file(path: &std::path::Path, json: &str) -> Result<usize, String> {
+    let doc: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| format!("baseline is not valid JSON: {e}"))?;
+    let obj = doc.as_object().ok_or("baseline must be a JSON object")?;
+    if !obj.get("version").map(|v| v.is_number()).unwrap_or(false) {
+        return Err("baseline needs a numeric \"version\"".into());
+    }
+    let entries = obj
+        .get("entries")
+        .and_then(|v| v.as_array())
+        .ok_or("baseline needs an \"entries\" array")?;
+    for (i, e) in entries.iter().enumerate() {
+        let ok = e
+            .as_object()
+            .map(|o| {
+                o.get("key").map(|k| k.is_string()).unwrap_or(false)
+                    && o.get("group").map(|g| g.is_string()).unwrap_or(false)
+            })
+            .unwrap_or(false);
+        if !ok {
+            return Err(format!("entry {i} needs string \"key\" and \"group\" fields"));
+        }
+    }
+    let mut pretty = serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())?;
+    pretty.push('\n');
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(path, pretty).map_err(|e| format!("write {}: {e}", path.display()))?;
+    Ok(entries.len())
+}
+
+/// Dev-build only: write the author's current "Most used" pins into the
+/// repo's shipped baseline (`app/src/data/soundBaseline.json`) so they ship
+/// with the next release. The path is relative to this crate's manifest at
+/// compile time, which only means anything when running from source.
+#[cfg(debug_assertions)]
+#[tauri::command]
+pub fn write_sound_baseline(json: String) -> Result<String, String> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("src")
+        .join("data")
+        .join("soundBaseline.json");
+    write_baseline_file(&path, &json)?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+/// Release builds have no repo to write into.
+#[cfg(not(debug_assertions))]
+#[tauri::command]
+pub fn write_sound_baseline(_json: String) -> Result<String, String> {
+    Err("Saving the shipped baseline only works in a dev build (npm run tauri dev)".into())
+}
+
 /// Derive all paths for a song name (the single source of truth).
 #[tauri::command]
 pub fn derive_paths(
@@ -5008,6 +5393,272 @@ pub fn check_paths(paths: Vec<String>) -> Vec<bool> {
         .iter()
         .map(|p| !p.is_empty() && std::path::Path::new(p).exists())
         .collect()
+}
+
+/// Forward-slash string form of a path (the settings convention).
+fn slash(p: &std::path::Path) -> String {
+    p.to_string_lossy().replace('\\', "/")
+}
+
+/// Case-insensitive, separator-insensitive path equality for the checks.
+fn same_path(a: &std::path::Path, b: &std::path::Path) -> bool {
+    let norm = |p: &std::path::Path| slash(p).trim_end_matches('/').to_lowercase();
+    norm(a) == norm(b)
+}
+
+/// The game pak a user-supplied path really means: the `pak01_dir.vpk` file
+/// itself, or - for a folder anywhere inside the install (the Deadlock root,
+/// game/, game/citadel, even game/bin/win64), a chunk file, or a typo next to
+/// the real thing - the pak found by walking up to `game/citadel/pak01_dir.vpk`.
+/// Pasting a FOLDER into the Game pak box is the #1 support case: the helper
+/// then opens a directory as a file (".NET: Access to the path is denied") and
+/// every decompile reports "not in cache".
+pub(crate) fn resolve_pak_file(p: &std::path::Path) -> Option<std::path::PathBuf> {
+    if p.is_file() {
+        let name = p.file_name()?.to_string_lossy().to_lowercase();
+        if name.ends_with("_dir.vpk") {
+            return Some(p.to_path_buf());
+        }
+        let sib = p.with_file_name("pak01_dir.vpk");
+        return sib.is_file().then_some(sib);
+    }
+    let mut dir = if p.is_dir() { Some(p.to_path_buf()) } else { p.parent().map(|d| d.to_path_buf()) };
+    let mut hops = 0;
+    while let Some(d) = dir {
+        for rel in ["pak01_dir.vpk", "citadel/pak01_dir.vpk", "game/citadel/pak01_dir.vpk"] {
+            let c = d.join(rel);
+            if c.is_file() {
+                return Some(c);
+            }
+        }
+        hops += 1;
+        if hops > 6 {
+            break;
+        }
+        dir = d.parent().map(|x| x.to_path_buf());
+    }
+    None
+}
+
+/// The `game/citadel/addons` folder a path really means: derived from any
+/// folder inside the install (walking up to the dir holding `gameinfo.gi`),
+/// else from the pak's own folder. The folder itself may not exist yet on a
+/// fresh install - `install()` creates it.
+pub(crate) fn resolve_addons_dir(
+    p: &std::path::Path,
+    pak: Option<&std::path::Path>,
+) -> Option<std::path::PathBuf> {
+    let citadel_of = |d: &std::path::Path| -> Option<std::path::PathBuf> {
+        let is_citadel = |c: &std::path::Path| {
+            c.join("gameinfo.gi").is_file()
+                && c.file_name().map_or(false, |n| n.eq_ignore_ascii_case("citadel"))
+        };
+        if is_citadel(d) {
+            return Some(d.to_path_buf());
+        }
+        for rel in ["citadel", "game/citadel"] {
+            let c = d.join(rel);
+            if is_citadel(&c) {
+                return Some(c);
+            }
+        }
+        None
+    };
+    let mut dir = if p.as_os_str().is_empty() {
+        None
+    } else if p.is_dir() {
+        Some(p.to_path_buf())
+    } else {
+        p.parent().map(|d| d.to_path_buf())
+    };
+    let mut hops = 0;
+    while let Some(d) = dir {
+        if let Some(c) = citadel_of(&d) {
+            return Some(c.join("addons"));
+        }
+        hops += 1;
+        if hops > 6 {
+            break;
+        }
+        dir = d.parent().map(|x| x.to_path_buf());
+    }
+    pak.and_then(|k| k.parent()).and_then(citadel_of).map(|c| c.join("addons"))
+}
+
+/// One setup field's verdict: `ok`, else why - plus an unambiguous corrected
+/// value when the app can derive one, which the frontend applies (a folder
+/// pasted where the pak01_dir.vpk file belongs, a disk path in the addon-name
+/// box, a chunk vpk instead of the _dir one, ...).
+#[derive(serde::Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PathCheck {
+    pub ok: bool,
+    pub reason: Option<String>,
+    pub fix: Option<String>,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SetupPaths {
+    pub csdk_root: String,
+    pub addon_name: String,
+    pub vpk_helper_path: String,
+    pub deadlock_pak: String,
+    pub addons_dir: String,
+    pub sound_folder: String,
+    pub vanilla_root: String,
+}
+
+#[derive(serde::Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupCheck {
+    pub compiler: PathCheck,
+    pub game: PathCheck,
+    pub vpk_helper: PathCheck,
+    pub events: PathCheck,
+    pub deadlock_pak: PathCheck,
+    pub addons_dir: PathCheck,
+    pub addon_name: PathCheck,
+    pub sound_folder: PathCheck,
+}
+
+pub(crate) const DEFAULT_ADDON_NAME: &str = "eim_intro_music";
+pub(crate) const DEFAULT_SOUND_FOLDER: &str = "sounds/music/match_intro";
+
+/// Validate the Setup paths by KIND, not just existence: a folder in the Game
+/// pak box "exists" but breaks every helper call; a disk path in Addon name
+/// nests the CSDK addon under an impossible folder; a compiled-chunk vpk
+/// isn't the directory pak. Each failing field carries a reason and, where
+/// derivable, the corrected value (see `PathCheck`).
+#[tauri::command]
+pub fn validate_setup(paths: SetupPaths) -> SetupCheck {
+    use std::path::Path;
+    let ok = || PathCheck { ok: true, reason: None, fix: None };
+    let bad = |reason: String, fix: Option<String>| PathCheck { ok: false, reason: Some(reason), fix };
+
+    let csdk = paths.csdk_root.trim();
+    let compiler = if csdk.is_empty() {
+        bad("not set - run Auto-detect, or the first-run setup downloads the tools".into(), None)
+    } else if Path::new(csdk).join("game/bin_tools/win64/resourcecompiler.exe").is_file() {
+        ok()
+    } else {
+        bad(
+            "resourcecompiler.exe not found under the CSDK root (expected game/bin_tools/win64/)".into(),
+            None,
+        )
+    };
+    let game = if csdk.is_empty() {
+        bad("needs the CSDK root".into(), None)
+    } else if Path::new(csdk).join("game/citadel/gameinfo.gi").is_file() {
+        ok()
+    } else {
+        bad("game/citadel/gameinfo.gi not found under the CSDK root".into(), None)
+    };
+
+    let helper = paths.vpk_helper_path.trim().trim_matches('"');
+    let hp = Path::new(helper);
+    let vpk_helper = if helper.is_empty() {
+        bad("not set - run Auto-detect".into(), None)
+    } else if hp.is_dir() {
+        let exe = hp.join("vpk-helper.exe");
+        bad("this is a folder - point at vpk-helper.exe".into(), exe.is_file().then(|| slash(&exe)))
+    } else if !hp.is_file() {
+        bad("file not found".into(), None)
+    } else {
+        let n = hp.file_name().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default();
+        if n.ends_with(".exe") || n.ends_with(".dll") {
+            ok()
+        } else {
+            bad("expected vpk-helper.exe (or .dll)".into(), None)
+        }
+    };
+
+    let vroot = paths.vanilla_root.trim();
+    let events = if !vroot.is_empty() && Path::new(vroot).join("soundevents/music.vsndevts").is_file() {
+        ok()
+    } else {
+        bad("game data not loaded yet - click Refresh game data (needs a valid Game pak)".into(), None)
+    };
+
+    let pak_raw = paths.deadlock_pak.trim();
+    let pak_s = pak_raw.trim_matches('"');
+    let pak_p = Path::new(pak_s);
+    let resolved_pak = if pak_s.is_empty() { None } else { resolve_pak_file(pak_p) };
+    let pak_fix = resolved_pak.as_ref().map(|r| slash(r));
+    let is_dir_pak = pak_p.is_file()
+        && pak_p
+            .file_name()
+            .map_or(false, |n| n.to_string_lossy().to_lowercase().ends_with("_dir.vpk"));
+    let deadlock_pak = if pak_s.is_empty() {
+        bad("not set - run Auto-detect, or pick Deadlock/game/citadel/pak01_dir.vpk".into(), None)
+    } else if is_dir_pak && pak_raw == pak_s {
+        ok()
+    } else if is_dir_pak {
+        bad("remove the quotes around the path".into(), pak_fix)
+    } else if pak_p.is_dir() {
+        bad(
+            format!(
+                "this is a folder - the Game pak must be the pak01_dir.vpk FILE{}",
+                pak_fix.as_ref().map(|f| format!(" (found it: {f})")).unwrap_or_default()
+            ),
+            pak_fix,
+        )
+    } else if pak_p.is_file() {
+        bad("pick pak01_dir.vpk (the _dir one), not a chunk or another file".into(), pak_fix)
+    } else {
+        bad("file not found".into(), pak_fix)
+    };
+
+    let addons_raw = paths.addons_dir.trim().trim_matches('"');
+    let addons_p = Path::new(addons_raw);
+    let resolved_addons = resolve_addons_dir(addons_p, resolved_pak.as_deref());
+    let addons_fix = resolved_addons.as_ref().map(|r| slash(r));
+    let addons_dir = if addons_raw.is_empty() {
+        bad("not set - run Auto-detect, or pick Deadlock/game/citadel/addons".into(), addons_fix)
+    } else if resolved_addons.as_deref().map_or(false, |r| same_path(r, addons_p)) {
+        // The canonical folder (it may not exist yet - install creates it).
+        ok()
+    } else if addons_p.is_dir() {
+        bad("this isn't the addons folder - Deadlock mounts game/citadel/addons".into(), addons_fix)
+    } else {
+        bad("folder not found".into(), addons_fix)
+    };
+
+    let name = paths.addon_name.trim();
+    let addon_name = if name.is_empty() {
+        bad("not set".into(), Some(DEFAULT_ADDON_NAME.into()))
+    } else if name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.')) {
+        ok()
+    } else {
+        bad(
+            format!(
+                "just a name like {DEFAULT_ADDON_NAME} (letters, digits, _), not a path - it's a work folder the app creates under the CSDK"
+            ),
+            Some(DEFAULT_ADDON_NAME.into()),
+        )
+    };
+
+    let sf = paths.sound_folder.trim();
+    let sound_folder = if sf.is_empty() {
+        bad("not set".into(), Some(DEFAULT_SOUND_FOLDER.into()))
+    } else if sf.contains(':')
+        || sf.starts_with('/')
+        || sf.starts_with('\\')
+        || sf.split(['/', '\\']).any(|s| s == "..")
+    {
+        bad(
+            format!(
+                "must be a folder INSIDE the content tree, like {DEFAULT_SOUND_FOLDER} - not a path on disk"
+            ),
+            Some(DEFAULT_SOUND_FOLDER.into()),
+        )
+    } else if sf.contains('\\') {
+        bad("use forward slashes".into(), Some(sf.replace('\\', "/")))
+    } else {
+        ok()
+    };
+
+    SetupCheck { compiler, game, vpk_helper, events, deadlock_pak, addons_dir, addon_name, sound_folder }
 }
 
 #[tauri::command]
@@ -5742,6 +6393,7 @@ fn open_in_particle_editor_blocking(
 ) -> Result<String, String> {
     use std::collections::HashSet;
     let root = std::path::Path::new(&csdk_root);
+    crate::models::require_tools_content(root, "the particle editor")?;
     let content_root = root.join("content").join("citadel_addons").join("eim_inspect");
     // The inspect addon is ephemeral staging - wipe both sides so it never
     // accumulates stale trees across inspections.
@@ -5976,6 +6628,9 @@ pub struct PackScan {
     /// stages count: soundevents trees merge (never clobber) so they're
     /// excluded - anything listed here is a real last-pack-wins clobber.
     pub overlaps: Vec<PackOverlap>,
+    /// True for a LIVE folder import (a user-managed dir, not an app cache):
+    /// re-read on every compile, so edits inside it land in the next build.
+    pub live: bool,
 }
 
 /// Scan bundled mod packs: classify content, record mtimes, and detect
@@ -6002,7 +6657,11 @@ pub async fn pack_scan(
                     let lower = f.to_ascii_lowercase();
                     let Some(i) = lower.find('/') else { continue };
                     let top = lower[..i].to_string();
-                    if !top.contains("soundevents") {
+                    // Match what the combiner actually stages: soundevents
+                    // merge (never clobber), and housekeeping trees a live
+                    // folder can carry (.git, __MACOSX) are never staged.
+                    if !top.contains("soundevents") && !top.starts_with('.') && !top.starts_with("__")
+                    {
                         set.insert(lower);
                     }
                     tops.insert(top);
@@ -6055,7 +6714,9 @@ pub async fn pack_scan(
                 }
             }
             overlaps.sort_by(|a, b| b.count.cmp(&a.count));
-            out.insert(p.clone(), PackScan { kinds, mtime: mtimes[i], overlaps });
+            let pp = std::path::Path::new(p);
+            let live = pp.is_dir() && !pp.join(".eim_cache_v").exists();
+            out.insert(p.clone(), PackScan { kinds, mtime: mtimes[i], overlaps, live });
         }
         Ok(out)
     })
@@ -8162,6 +8823,319 @@ pub async fn hero_images(app: tauri::AppHandle, helper_path: String, pak_path: S
 mod tests {
     use super::*;
 
+    /// Real-data check of the ability-card folding rules. Needs the helper +
+    /// live pak (Setup paths); works in a scratch copy of the app-data
+    /// `hero_portraits` cache so the user's cache is untouched.
+    ///   cargo test -p app --lib -- --ignored e2e_hero_cards --nocapture
+    #[test]
+    #[ignore]
+    fn e2e_hero_cards_fold_rules() {
+        let helper = r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\tools\vpk-helper\dist\vpk-helper.exe";
+        let pak = r"D:\SteamLibrary\steamapps\common\Deadlock\game\citadel\pak01_dir.vpk";
+        if !std::path::Path::new(helper).exists() || !std::path::Path::new(pak).exists() {
+            eprintln!("skipping: helper/pak not present");
+            return;
+        }
+        let base = std::env::temp_dir()
+            .join("eim_hero_cards_test")
+            .join("hero_portraits");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        // Reuse the decompiled vdata/events if the user's cache has them
+        // (decompiling heroes.vdata from the pak takes a while).
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            let src = std::path::PathBuf::from(appdata)
+                .join("com.digiphoenix.deadlock-intro-tool")
+                .join("hero_portraits");
+            for f in [
+                "heroes.vdata",
+                "abilities.vdata",
+                "hero_sound_files.txt",
+                "event_index.json",
+            ] {
+                let _ = std::fs::copy(src.join(f), base.join(f));
+            }
+            if src.join("heroevents").is_dir() {
+                std::fs::create_dir_all(base.join("heroevents")).unwrap();
+                for e in std::fs::read_dir(src.join("heroevents")).unwrap().flatten() {
+                    let _ = std::fs::copy(e.path(), base.join("heroevents").join(e.file_name()));
+                }
+            }
+        }
+        let card = |code: &str| hero_detail_at(&base, helper, pak, code, Some(true)).unwrap();
+        let names = |a: &HeroAbility| {
+            a.sounds
+                .iter()
+                .map(|s| s.event_name.clone())
+                .collect::<Vec<_>>()
+        };
+
+        // Grey Talon: the gun (Greytalon.Wpn.*) and the landing thud must not
+        // ride the Power Jump card just because its vdata lists the regular
+        // weapon shot - only that directly-referenced shot stays.
+        let orion = card("orion");
+        let jump = orion
+            .iter()
+            .find(|a| a.ability == "ability_power_jump")
+            .expect("power jump card");
+        let jump_names = names(jump);
+        assert!(
+            jump_names.contains(&"Orion.Power.Jump.Cast".to_string()),
+            "{jump_names:?}"
+        );
+        assert!(
+            jump_names.contains(&"Greytalon.Wpn.Fire".to_string()),
+            "{jump_names:?}"
+        );
+        for bad in [
+            "Greytalon.Wpn.Whizby",
+            "Greytalon.Wpn.Reload.Start",
+            "Greytalon.Wpn.Zoom.In",
+            "GreyTalon.JumpLand",
+            "Greytalon.Wpn.Impact",
+        ] {
+            assert!(
+                !jump_names.contains(&bad.to_string()),
+                "{bad} leaked onto Power Jump: {jump_names:?}"
+            );
+        }
+        // Charged shot keeps its projectile family (incl. the whizby) and the
+        // bare `m_strSound` row has a real label now.
+        let shot = orion
+            .iter()
+            .find(|a| a.ability == "ability_charged_shot")
+            .unwrap();
+        assert!(names(shot).contains(&"Orion.Charged.Shot.Whizby".to_string()));
+        for a in &orion {
+            for s in &a.sounds {
+                assert!(
+                    !s.label.trim().is_empty(),
+                    "empty label on {}",
+                    s.event_name
+                );
+            }
+        }
+
+        // Billy: the Blasted healing events really do play Rescue Beam's
+        // files in the game data - they stay on the card, flagged as shared.
+        let billy = card("punkgoat");
+        let blasted = billy
+            .iter()
+            .find(|a| a.ability == "ability_punkgoat_blasted")
+            .unwrap();
+        let heal = blasted
+            .sounds
+            .iter()
+            .find(|s| s.event_name == "Punkgoat.Blasted.Healing.Active")
+            .expect("healing event");
+        let note = heal.shared_note.clone().unwrap_or_default();
+        assert!(note.contains("Rescue Beam"), "{note}");
+        let lp = blasted
+            .sounds
+            .iter()
+            .find(|s| s.event_name == "Punkgoat.Blasted.Lp")
+            .unwrap();
+        assert!(lp.shared_note.is_none());
+        assert_eq!(lp.label, "Ambient Looping");
+
+        // Slork borrows Haze's smoke-bomb files for its invisibility - noted,
+        // while its own fathom/ folder (dev name != codename) is not.
+        let slork = card("slork");
+        let ambush = slork.iter().find(|a| a.slot == 4).unwrap();
+        let invis = ambush
+            .sounds
+            .iter()
+            .find(|s| s.event_name == "Slork.Invis.Modifier.Lp")
+            .expect("invis lp");
+        assert!(
+            invis
+                .shared_note
+                .as_deref()
+                .unwrap_or("")
+                .contains("sounds/abilities/haze"),
+            "{:?}",
+            invis.shared_note
+        );
+        let own = ambush
+            .sounds
+            .iter()
+            .find(|s| s.event_name == "Slork.A4.Ambush.Fire")
+            .unwrap();
+        assert!(own.shared_note.is_none(), "{:?}", own.shared_note);
+
+        // Infernus: Flame Dash's own footstep (`.Step` reads as foley) stays
+        // on the card through the STRONG ability-name key; Werewolf's regular
+        // rifle shots leave the Slamfire card (only the ability's own
+        // `.Slamfire` shot is vdata-referenced).
+        let inferno = card("inferno");
+        let dash = inferno.iter().find(|a| a.slot == 2).unwrap();
+        assert!(
+            names(dash).contains(&"Inferno.FlameDash.Step".to_string()),
+            "{:?}",
+            names(dash)
+        );
+        let werewolf = card("werewolf");
+        let slam = werewolf
+            .iter()
+            .find(|a| a.ability == "ability_werewolf_unloadgun")
+            .unwrap();
+        let slam_names = names(slam);
+        assert!(slam_names.contains(&"Werewolf.Wpn.Rifle.Fire.Slamfire".to_string()));
+        assert!(
+            !slam_names.contains(&"Werewolf.Wpn.Rifle.Fire.Main".to_string()),
+            "{slam_names:?}"
+        );
+
+        // Nano's cat form keeps its movement foley (claimed by the Calico.Ava
+        // family, not the weak name signal).
+        let nano = card("nano");
+        let cat = nano
+            .iter()
+            .find(|a| a.ability == "ability_nano_catform")
+            .unwrap();
+        assert!(names(cat).contains(&"Calico.Ava.Footstep".to_string()));
+        eprintln!("hero cards OK (orion/punkgoat/slork/nano)");
+        // EIM_ALL_HEROES=1: rebuild every hero's card set into the scratch
+        // cache (detail_v8_<code>.json) for an offline diff against the old
+        // rules - a review aid, nothing is asserted.
+        if std::env::var_os("EIM_ALL_HEROES").is_some() {
+            let heroes = std::fs::read_to_string(base.join("heroes.vdata")).unwrap_or_default();
+            let mut codes: Vec<String> = heroes
+                .lines()
+                .filter_map(|l| {
+                    let t = l.trim();
+                    let k = t.strip_suffix('=')?.trim();
+                    let c = k.strip_prefix("hero_")?;
+                    (l.starts_with('\t')
+                        && !l.starts_with("\t\t")
+                        && c.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_'))
+                    .then(|| c.to_string())
+                })
+                .collect();
+            codes.sort();
+            codes.dedup();
+            let mut n = 0;
+            for c in &codes {
+                if hero_detail_at(&base, helper, pak, c, Some(true))
+                    .map(|v| !v.is_empty())
+                    .unwrap_or(false)
+                {
+                    n += 1;
+                }
+            }
+            eprintln!(
+                "dumped {n}/{} hero card sets into {}",
+                codes.len(),
+                base.display()
+            );
+        }
+    }
+
+    #[test]
+    fn sound_inventory_reads_every_array_and_reports_missing() {
+        let root = std::env::temp_dir().join("eim_sound_inventory_test");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("soundevents/ambience")).unwrap();
+        let hdr = "<!-- kv3 encoding:text:version{x} format:generic:version{y} -->\n";
+        std::fs::write(
+            root.join("soundevents/powerups.vsndevts"),
+            format!("{hdr}{{\n\tPowerup.Punchable.Souls = \n\t{{\n\t\tvsnd_files = \"a.vsnd\"\n\t\ttrack_2.track_vsnd_files = \n\t\t[\n\t\t\t\"b.vsnd\",\n\t\t\t\"c.vsnd\",\n\t\t]\n\t}}\n\tEmpty.Pool = \n\t{{\n\t\tvsnd_files = \n\t\t[\n\t\t]\n\t}}\n}}\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("soundevents/ambience/ambience_hideout.vsndevts"),
+            format!("{hdr}{{\n\tAmb.Hideout.Fireplace = \n\t{{\n\t\tvsnd_files_close = \"close.vsnd\"\n\t\tvsnd_files_far = \"far.vsnd\"\n\t}}\n}}\n"),
+        )
+        .unwrap();
+        let inv = sound_inventory_at(
+            &root,
+            &[
+                "soundevents/powerups.vsndevts".to_string(),
+                "soundevents/ambience/ambience_hideout.vsndevts".to_string(),
+                "soundevents/not_there.vsndevts".to_string(),
+            ],
+        );
+        let keys: Vec<String> = inv
+            .events
+            .iter()
+            .map(|e| format!("{}::{}::{}={}/{}", e.events_relpath, e.event_name, e.array_key, e.stock_entry, e.entry_count))
+            .collect();
+        assert_eq!(
+            keys,
+            vec![
+                "soundevents/powerups.vsndevts::Powerup.Punchable.Souls::vsnd_files=a.vsnd/1",
+                "soundevents/powerups.vsndevts::Powerup.Punchable.Souls::track_2.track_vsnd_files=b.vsnd/2",
+                "soundevents/ambience/ambience_hideout.vsndevts::Amb.Hideout.Fireplace::vsnd_files_close=close.vsnd/1",
+                "soundevents/ambience/ambience_hideout.vsndevts::Amb.Hideout.Fireplace::vsnd_files_far=far.vsnd/1",
+            ]
+        );
+        assert_eq!(inv.missing, vec!["soundevents/not_there.vsndevts"]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn write_baseline_file_validates_and_pretty_prints() {
+        let dir = std::env::temp_dir().join("eim_baseline_writer_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("nested").join("soundBaseline.json");
+        assert!(write_baseline_file(&path, "not json").is_err());
+        assert!(write_baseline_file(&path, "{\"version\":1}").is_err());
+        assert!(write_baseline_file(&path, "{\"version\":1,\"entries\":[{\"key\":\"x\"}]}").is_err());
+        assert!(write_baseline_file(&path, "{\"entries\":[]}").is_err());
+        let n = write_baseline_file(
+            &path,
+            "{\"version\":1,\"entries\":[{\"key\":\"soundevents/a.vsndevts::E::vsnd_files\",\"group\":\"mapsfx\",\"label\":\"Box\"}]}",
+        )
+        .unwrap();
+        assert_eq!(n, 1);
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(written.ends_with("\n"));
+        assert!(written.contains("\n  \"entries\": [\n"), "{written}");
+        let back: serde_json::Value = serde_json::from_str(&written).unwrap();
+        assert_eq!(back["entries"][0]["label"], "Box");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Real-data inventory of the app's vanilla cache (needs a prior "Fix for
+    /// new patch" / refresh so the files exist).
+    ///   cargo test -p app --lib -- --ignored e2e_sound_inventory --nocapture
+    #[test]
+    #[ignore]
+    fn e2e_sound_inventory_real_vanilla() {
+        let Some(appdata) = std::env::var_os("APPDATA") else { return };
+        let root = std::path::PathBuf::from(appdata)
+            .join("com.digiphoenix.deadlock-intro-tool")
+            .join("vanilla");
+        if !root.join("soundevents/powerups.vsndevts").exists() {
+            eprintln!("skipping: vanilla cache not present");
+            return;
+        }
+        let mut files = Vec::new();
+        fn walk(dir: &std::path::Path, base: &std::path::Path, out: &mut Vec<String>) {
+            for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, base, out);
+                } else if p.extension().map(|x| x == "vsndevts").unwrap_or(false) {
+                    let rel = p.strip_prefix(base).unwrap().to_string_lossy().replace('\\', "/");
+                    if !rel.starts_with("soundevents/hero/") && !rel.starts_with("soundevents/vo/") {
+                        out.push(rel);
+                    }
+                }
+            }
+        }
+        walk(&root.join("soundevents"), &root, &mut files);
+        files.sort();
+        let inv = sound_inventory_at(&root, &files);
+        eprintln!("{} files -> {} sound arrays ({} missing)", files.len(), inv.events.len(), inv.missing.len());
+        assert!(inv.events.len() >= 900, "{}", inv.events.len());
+        let has = |ev: &str, key: &str| inv.events.iter().any(|e| e.event_name == ev && e.array_key == key);
+        assert!(has("Powerup.Punchable.Souls", "track_2.track_vsnd_files"));
+        assert!(has("Amb.Hideout.Fireplace", "vsnd_files_close"));
+        assert!(has("Glass.Break", "vsnd_files"));
+        assert!(has("Powerup.Pickup.Spirit", "vsnd_files"));
+    }
+
     #[test]
     fn hero_image_stem_comes_from_card_code() {
         // Grey Talon: vdata codename `orion`, image assets `archer_*`. The
@@ -8474,5 +9448,117 @@ mod tests {
         assert!(found[0].ends_with("pak01_dir.vpk"));
         assert!(found[1].ends_with("loose.vpk"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod setup_validation_tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+
+    /// A fake Deadlock install with the layout the resolvers walk.
+    fn fake_install(tag: &str) -> PathBuf {
+        let base = std::env::temp_dir().join(format!("eim_setup_{tag}"));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("SteamLibrary/steamapps/common/Deadlock");
+        std::fs::create_dir_all(root.join("game/citadel")).unwrap();
+        std::fs::create_dir_all(root.join("game/bin/win64")).unwrap();
+        std::fs::write(root.join("game/citadel/gameinfo.gi"), "x").unwrap();
+        std::fs::write(root.join("game/citadel/pak01_dir.vpk"), "x").unwrap();
+        std::fs::write(root.join("game/citadel/pak01_000.vpk"), "x").unwrap();
+        std::fs::write(root.join("game/bin/win64/deadlock.exe"), "x").unwrap();
+        root
+    }
+
+    /// The reporter's case: a folder (even game/bin/win64) pasted into the
+    /// Game pak box must resolve to the real pak01_dir.vpk; so must a chunk
+    /// file, the pak itself, and a typo'd name next to it.
+    #[test]
+    fn pak_resolves_from_anywhere_inside_the_install() {
+        let root = fake_install("pak");
+        let pak = root.join("game/citadel/pak01_dir.vpk");
+        for input in [
+            root.clone(),
+            root.join("game"),
+            root.join("game/citadel"),
+            root.join("game/bin/win64"),
+            root.join("game/citadel/pak01_000.vpk"),
+            root.join("game/citadel/pak01_dir.vpk"),
+            root.join("game/citadel/pak01_dir.vpk.typo"),
+        ] {
+            assert_eq!(
+                resolve_pak_file(&input).as_deref(),
+                Some(pak.as_path()),
+                "input {}",
+                input.display()
+            );
+        }
+        assert_eq!(resolve_pak_file(&std::env::temp_dir().join("eim_nope_xyz")), None);
+        let _ = std::fs::remove_dir_all(std::env::temp_dir().join("eim_setup_pak"));
+    }
+
+    #[test]
+    fn addons_resolves_from_install_or_pak() {
+        let root = fake_install("addons");
+        let addons = root.join("game/citadel/addons");
+        let pak = root.join("game/citadel/pak01_dir.vpk");
+        assert_eq!(resolve_addons_dir(&root, None).as_deref(), Some(addons.as_path()));
+        assert_eq!(
+            resolve_addons_dir(&root.join("game/bin/win64"), None).as_deref(),
+            Some(addons.as_path())
+        );
+        // Not created yet on a fresh install - still the canonical answer.
+        assert_eq!(resolve_addons_dir(&addons, None).as_deref(), Some(addons.as_path()));
+        // Nothing typed: derive it from the pak.
+        assert_eq!(resolve_addons_dir(Path::new(""), Some(&pak)).as_deref(), Some(addons.as_path()));
+        let _ = std::fs::remove_dir_all(std::env::temp_dir().join("eim_setup_addons"));
+    }
+
+    /// The exact shape of the support case: a folder in Game pak, disk paths
+    /// in Addon name and Sound folder, addons empty. Every one must come back
+    /// with a reason AND the corrected value the frontend applies.
+    #[test]
+    fn validate_setup_repairs_the_reporter_config() {
+        let root = fake_install("validate");
+        let pak = root.join("game/citadel/pak01_dir.vpk");
+        let addons = root.join("game/citadel/addons");
+        let win64 = root.join("game/bin/win64");
+        let res = validate_setup(SetupPaths {
+            csdk_root: String::new(),
+            addon_name: win64.to_string_lossy().into_owned(),
+            vpk_helper_path: String::new(),
+            deadlock_pak: win64.to_string_lossy().into_owned(),
+            addons_dir: String::new(),
+            sound_folder: win64.to_string_lossy().into_owned(),
+            vanilla_root: String::new(),
+        });
+        assert!(!res.deadlock_pak.ok);
+        assert!(res.deadlock_pak.reason.as_deref().unwrap_or("").contains("folder"), "{res:?}");
+        assert_eq!(res.deadlock_pak.fix.as_deref(), Some(slash(&pak).as_str()));
+        assert_eq!(res.addons_dir.fix.as_deref(), Some(slash(&addons).as_str()));
+        assert_eq!(res.addon_name.fix.as_deref(), Some(DEFAULT_ADDON_NAME));
+        assert_eq!(res.sound_folder.fix.as_deref(), Some(DEFAULT_SOUND_FOLDER));
+        assert!(!res.events.ok && res.events.reason.as_deref().unwrap_or("").contains("Refresh"));
+
+        // Quoted pak path (pasted from Explorer's "Copy as path") - fixable.
+        let quoted = validate_setup(SetupPaths {
+            deadlock_pak: format!("\"{}\"", pak.display()),
+            ..Default::default()
+        });
+        assert!(!quoted.deadlock_pak.ok);
+        assert_eq!(quoted.deadlock_pak.fix.as_deref(), Some(slash(&pak).as_str()));
+
+        // A correct setup passes, including the not-yet-created addons dir.
+        let good = validate_setup(SetupPaths {
+            addon_name: DEFAULT_ADDON_NAME.into(),
+            deadlock_pak: slash(&pak),
+            addons_dir: slash(&addons),
+            sound_folder: DEFAULT_SOUND_FOLDER.into(),
+            ..Default::default()
+        });
+        assert!(good.deadlock_pak.ok, "{good:?}");
+        assert!(good.addons_dir.ok, "{good:?}");
+        assert!(good.addon_name.ok && good.sound_folder.ok);
+        let _ = std::fs::remove_dir_all(std::env::temp_dir().join("eim_setup_validate"));
     }
 }

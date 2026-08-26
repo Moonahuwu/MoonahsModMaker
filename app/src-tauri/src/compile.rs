@@ -34,6 +34,9 @@ pub struct SongCompile {
     /// events file never sees them - the output is still one audio file.
     #[serde(default)]
     pub layers: Vec<crate::audio::Layer>,
+    /// Bite length + effect chain (flattened: biteMode/biteSeconds/fx).
+    #[serde(default, flatten)]
+    pub spec: crate::audio::RenderSpec,
     /// Hash of the current {source,trim,gain,fades,looping,name}. When this equals
     /// `last_compiled_hash` and the `.vsnd_c` already exists, render+compile are
     /// skipped. `None` disables the skip (always (re)compile).
@@ -77,6 +80,11 @@ pub struct EventCompile {
     /// keys). Spliced into the event right after the array merge.
     #[serde(default)]
     pub attributes: Vec<AttrCompile>,
+    /// The vanilla event may lack `array_key` entirely (a soundstack default
+    /// the event can optionally override): write the array fresh instead of
+    /// skipping the slot as "not in game". See `EventMerge::create_array`.
+    #[serde(default)]
+    pub create_array: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -271,6 +279,9 @@ pub struct SoundOverrideCompile {
     /// carries a slot track's layers through).
     #[serde(default)]
     pub layers: Vec<crate::audio::Layer>,
+    /// Bite length + effect chain (flattened), same as SongCompile.
+    #[serde(default, flatten)]
+    pub spec: crate::audio::RenderSpec,
     #[serde(default)]
     pub trim_start: f64,
     #[serde(default)]
@@ -870,6 +881,7 @@ fn event_merge(ev: &EventCompile, sound_folder: &str, current_duration: Option<f
         previous_owned: ev.previous_owned.clone(),
         new_duration,
         excluded,
+        create_array: ev.create_array,
     }
 }
 
@@ -949,6 +961,41 @@ pub(crate) fn fingerprint(text: &str) -> String {
         h = h.wrapping_mul(0x100000001b3);
     }
     format!("{h:016x}")
+}
+
+/// Content identity of a LIVE imported folder (a user-managed mod dir, not an
+/// app cache): every file's relpath + len + mtime, deterministically ordered.
+/// Cache dirs are covered by their `.eim_cache_v` marker probe instead - this
+/// walk exists so edits anywhere inside a linked folder dirty the build stamp
+/// (the whole point of a live import is that a recompile picks them up).
+pub(crate) fn live_dir_ident(root: &Path) -> String {
+    fn walk(dir: &Path, root: &Path, acc: &mut Vec<String>) {
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        let mut entries: Vec<_> = rd.flatten().collect();
+        entries.sort_by_key(|e| e.file_name());
+        for e in entries {
+            let p = e.path();
+            if p.is_dir() {
+                walk(&p, root, acc);
+            } else if let Ok(meta) = e.metadata() {
+                let rel = p
+                    .strip_prefix(root)
+                    .unwrap_or(&p)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let mtime = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                acc.push(format!("{rel}|{}|{mtime}", meta.len()));
+            }
+        }
+    }
+    let mut acc = Vec::new();
+    walk(root, root, &mut acc);
+    fingerprint(&acc.join(";"))
 }
 
 /// Identity of the live game pak (path + size + mtime): folded into the
@@ -1706,10 +1753,23 @@ fn composite_trans_alpha(
 /// Compiled-root-relative `_c` files produced for one poster material: the
 /// `.vmat_c` plus, for every source texture the vmat references, the
 /// `<stem>_<ext>_<hash>.vtex_c` files the compiler emitted next to it.
+/// Source refs alone are NOT enough: resourcecompiler also SYNTHESIZES
+/// textures for constant-valued params (`<mat>_vmat_g_<param>_<hash>.vtex_c`)
+/// that no source ref names. When the synthesized name happens to match a
+/// file vanilla ships, a missing one resolves from the pak by luck - but when
+/// vanilla wired the param to a SHARED default texture instead (Ivy's gear:
+/// vanilla's g_tNprTransmissiveColor is default_black_mask, our recompile
+/// generates ivy_gearv3_vmat_g_tnprtransmissivecolor_<hash>), the shipped
+/// vmat_c references a texture that exists nowhere and the material breaks in
+/// game - Ivy's hollow-black-eyes bug (her eye whites live in the gear
+/// material). So ALSO byte-scan the compiled vmat_c for every `.vtex` it
+/// actually references and stage whichever the compiler emitted.
+/// Proven end-to-end vs the CSDK: `e2e_hero_texture_ivy_no_dangling_refs`.
 fn poster_staged_rels(compiled_root: &Path, vmat_rel: &str, texture_refs: &[(String, String)]) -> Vec<String> {
     let mut rels = Vec::new();
     let vmat_c = format!("{vmat_rel}_c");
-    if compiled_root.join(&vmat_c).exists() {
+    let vmat_c_abs = compiled_root.join(&vmat_c);
+    if vmat_c_abs.exists() {
         rels.push(vmat_c);
     }
     for (_, tex_rel) in texture_refs {
@@ -1731,6 +1791,18 @@ fn poster_staged_rels(compiled_root: &Path, vmat_rel: &str, texture_refs: &[(Str
                 if !rels.contains(&rel) {
                     rels.push(rel);
                 }
+            }
+        }
+    }
+    // Generated textures: whatever the compiled material actually references
+    // that the compiler emitted this run. Refs absent from compiled_root came
+    // from the pak and resolve there; same-named duplicates of vanilla files
+    // are harmless (the hash names identical content).
+    if let Ok(bytes) = std::fs::read(&vmat_c_abs) {
+        for tex in crate::models::scan_resource_refs(&bytes, b".vtex") {
+            let rel = format!("{}_c", tex.trim_start_matches('/'));
+            if compiled_root.join(&rel).exists() && !rels.contains(&rel) {
+                rels.push(rel);
             }
         }
     }
@@ -3300,6 +3372,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
         fade_in: f64,
         fade_out: f64,
         layers: Vec<crate::audio::Layer>,
+        spec: crate::audio::RenderSpec,
         wav: PathBuf,
         compiled: PathBuf,
     }
@@ -3325,6 +3398,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                 fade_in: song.fade_in,
                 fade_out: song.fade_out,
                 layers: song.layers.clone(),
+                spec: song.spec.clone(),
                 wav: content_root
                     .join(folder.trim_matches('/'))
                     .join(format!("{}.wav", song.sound_name)),
@@ -3391,6 +3465,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                 fade_in: ov.fade_in,
                 fade_out: ov.fade_out,
                 layers: ov.layers.clone(),
+                spec: ov.spec.clone(),
                 wav: content_root
                     .join(folder.trim_matches('/'))
                     .join(format!("{stem}.wav")),
@@ -3428,7 +3503,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                         break;
                     }
                     let j = &jobs[i];
-                    let r = crate::audio::render_to(
+                    let r = crate::audio::render_spec_to(
                         ffmpeg,
                         &j.source,
                         j.trim_start,
@@ -3437,6 +3512,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                         j.fade_in,
                         j.fade_out,
                         &j.layers,
+                        &j.spec,
                         &j.wav.to_string_lossy(),
                     );
                     if let Some(tx) = &live {
@@ -3994,7 +4070,12 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
             .map(|m| {
                 let p = Path::new(m);
                 // A cache dir's marker files are rewritten on every refresh;
-                // a raw vpk carries its own len+mtime.
+                // a raw vpk carries its own len+mtime. A LIVE folder (user
+                // import, no marker) has neither - fingerprint its whole tree
+                // so edits anywhere inside dirty the stamp.
+                if p.is_dir() && !p.join(".eim_cache_v").exists() {
+                    return format!("{m}|live|{};", live_dir_ident(p));
+                }
                 let probe = if p.is_dir() { p.join(".eim_cache_v") } else { p.to_path_buf() };
                 let meta = std::fs::metadata(&probe).ok();
                 format!(
@@ -4548,6 +4629,10 @@ pub(crate) fn import_asset_dirs_listed(helper: &str, mod_vpk: &str) -> (Vec<Stri
                     || t.ends_with("_old")
                     || t == "cfg"
                     || t == "bin"
+                    // Housekeeping trees a LIVE folder import can carry
+                    // (.git, .vscode, __MACOSX) must never ship in the vpk.
+                    || t.starts_with('.')
+                    || t.starts_with("__")
                 {
                     continue;
                 }
@@ -5514,6 +5599,7 @@ mod tests {
             events_relpath: "soundevents/music.vsndevts".into(),
             adopted: vec![],
             attributes: vec![],
+            create_array: false,
             songs: vec![SongCompile {
                 sound_name: "x".into(),
                 source_audio: "x.mp3".into(),
@@ -5524,6 +5610,7 @@ mod tests {
                 fade_out: 0.0,
                 looping: false,
                 layers: vec![],
+                spec: Default::default(),
                 current_hash: None,
                 last_compiled_hash: None,
             }],
@@ -5578,6 +5665,7 @@ mod tests {
                 source_vpk: "pack".into(),
             }],
             attributes: vec![],
+            create_array: false,
             songs: vec![SongCompile {
                 sound_name: "rake_01".into(),
                 source_audio: "x.mp3".into(),
@@ -5588,6 +5676,7 @@ mod tests {
                 fade_out: 0.0,
                 looping: false,
                 layers: vec![],
+                spec: Default::default(),
                 current_hash: None,
                 last_compiled_hash: None,
             }],
@@ -5625,6 +5714,7 @@ mod tests {
             events_relpath: "soundevents/music.vsndevts".into(),
             adopted: vec![],
             attributes: vec![],
+            create_array: false,
             songs: vec![],
         };
         let m = event_merge(&ev, "sounds/music/match_intro", Some(27.0));
@@ -5765,6 +5855,7 @@ mod tests {
                 events_relpath: "soundevents/music.vsndevts".into(),
                 adopted: vec![],
                 attributes: vec![],
+                create_array: false,
                 songs: vec![SongCompile {
                     sound_name: "eim_e2e".into(),
                     source_audio: format!(r"{csdk}\content\citadel\wunderwaffe\wunderwaffeshoot1.mp3"),
@@ -5775,6 +5866,7 @@ mod tests {
                     fade_out: 1.0,
                     looping: true,
                     layers: vec![],
+                    spec: Default::default(),
                     current_hash: None,
                     last_compiled_hash: None,
                 }],
@@ -5822,6 +5914,192 @@ mod tests {
 
     fn compiled_root_path(cfg: &CompileConfig) -> std::path::PathBuf {
         std::path::PathBuf::from(&cfg.compiled_root)
+    }
+
+    /// Real-toolchain check of a soundstack-default slot: the Rift capture
+    /// loop's `vsnd_files_blocked` layer gets a two-track pool merged into an
+    /// event that has NO arrays in vanilla (the merge creates it), the CSDK
+    /// compiles the events file, and the array survives into the compiled
+    /// `.vsndevts_c` (decompiled back out of the packed vpk). Needs the CSDK,
+    /// ffmpeg, the helper and the app's live vanilla cache.
+    ///   cargo test -p app --lib -- --ignored e2e_rift_layer_pool --nocapture
+    #[test]
+    #[ignore]
+    fn e2e_rift_layer_pool_compiles() {
+        let csdk = r"C:\Users\ethob\Desktop\DeadlockModding\Reduced_CSDK_12";
+        let helper = r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\tools\vpk-helper\dist\vpk-helper.exe";
+        let Some(appdata) = std::env::var_os("APPDATA") else {
+            return;
+        };
+        let vanilla = std::path::PathBuf::from(appdata)
+            .join("com.digiphoenix.deadlock-intro-tool")
+            .join("vanilla");
+        let music = vanilla.join("soundevents").join("music.vsndevts");
+        let compiler = format!(r"{csdk}\game\bin_tools\win64\resourcecompiler.exe");
+        if !Path::new(&compiler).exists() || !Path::new(helper).exists() || !music.exists() {
+            eprintln!("skipping: CSDK / helper / vanilla cache missing");
+            return;
+        }
+        let base_text = std::fs::read_to_string(&music).unwrap();
+        assert!(
+            kv3_core::read_event_array(&base_text, "Music.Koth.Capture.Lp", "vsnd_files_blocked")
+                .is_err(),
+            "vanilla unexpectedly carries the layer array - the test premise changed"
+        );
+
+        let addon = "eim_rift_e2e_addon";
+        let content_root = format!(r"{csdk}\content\citadel_addons\{addon}");
+        let compiled_root = format!(r"{csdk}\game\citadel_addons\{addon}");
+        let out = std::env::temp_dir().join("eim_rift_e2e_out");
+        let _ = std::fs::remove_dir_all(&out);
+        let _ = std::fs::remove_dir_all(&content_root);
+        let _ = std::fs::remove_dir_all(&compiled_root);
+
+        let song = |name: &str| SongCompile {
+            sound_name: name.into(),
+            source_audio: format!(r"{csdk}\content\citadel\wunderwaffe\wunderwaffeshoot1.mp3"),
+            trim_start: 0.0,
+            trim_end: 1.5,
+            gain_db: 0.0,
+            fade_in: 0.0,
+            fade_out: 0.2,
+            looping: true,
+            layers: vec![],
+            spec: Default::default(),
+            current_hash: None,
+            last_compiled_hash: None,
+        };
+        let cfg = CompileConfig {
+            content_root: content_root.clone(),
+            compiled_root: compiled_root.clone(),
+            game_info_dir: format!(r"{csdk}\game\citadel"),
+            sound_folder: "sounds/music/rift".into(),
+            resource_compiler: compiler,
+            ffmpeg_path: None,
+            vpk_helper_path: Some(helper.into()),
+            vanilla_root: vanilla.to_string_lossy().into_owned(),
+            pak_path: None,
+            output_dir: out.to_string_lossy().into_owned(),
+            output_mode: "vpk".into(),
+            vpk_name: "pak01_dir.vpk".into(),
+            zip_output: false,
+            write_encoding_txt: true,
+            skip_compile: false,
+            imported_mods: vec![],
+            imported_mod_excludes: Default::default(),
+            events: vec![EventCompile {
+                event_name: "Music.Koth.Capture.Lp".into(),
+                array_key: "vsnd_files_blocked".into(),
+                stock_entry: "sounds/music/music_koth_capture_block_160bpm.vsnd".into(),
+                sound_folder: None,
+                duration_mode: "auto".into(),
+                duration_manual: None,
+                previous_owned: vec![],
+                excluded: vec![],
+                events_relpath: "soundevents/music.vsndevts".into(),
+                adopted: vec![],
+                attributes: vec![],
+                create_array: true,
+                songs: vec![song("eim_rift_a"), song("eim_rift_b")],
+            }],
+            icon_mods: vec![],
+            sound_overrides: vec![],
+            effect_overrides: vec![],
+            vdata_overrides: vec![],
+            global_overrides: vec![],
+            world_overrides: vec![],
+            poster_overrides: vec![],
+            hero_textures: vec![],
+            mod_textures: vec![],
+            model_overrides: vec![],
+            digimod: None,
+            ui_overrides: vec![],
+            credits_text: None,
+            export_only: false,
+        };
+
+        let report = run(&cfg);
+        for s in &report.steps {
+            println!(
+                "[{}] {} :: {}",
+                if s.ok { "OK" } else { "FAIL" },
+                s.name,
+                s.detail
+            );
+        }
+        assert!(report.ok, "pipeline failed");
+        // The merge step must report the slot applied, not "skipped ... not in game".
+        assert!(
+            report
+                .steps
+                .iter()
+                .any(|s| s.name.contains("merge soundevents/music.vsndevts")
+                    && s.detail.starts_with("1 slot(s)")
+                    && !s.detail.contains("skipped")),
+            "merge step did not apply the stack-default slot"
+        );
+        for n in ["eim_rift_a", "eim_rift_b"] {
+            assert!(
+                compiled_root_path(&cfg)
+                    .join(format!("sounds/music/rift/{n}.vsnd_c"))
+                    .exists(),
+                "{n}.vsnd_c"
+            );
+        }
+        // Source text: array created with the stack default first.
+        let merged = std::fs::read_to_string(
+            Path::new(&cfg.content_root).join("soundevents/music.vsndevts"),
+        )
+        .unwrap();
+        let v = kv3_core::read_event_array(&merged, "Music.Koth.Capture.Lp", "vsnd_files_blocked")
+            .unwrap();
+        assert_eq!(
+            v.entries,
+            vec![
+                "sounds/music/music_koth_capture_block_160bpm.vsnd",
+                "sounds/music/rift/eim_rift_a.vsnd",
+                "sounds/music/rift/eim_rift_b.vsnd"
+            ]
+        );
+        // Everything outside the event is vanilla: the file only grew by the array.
+        let tail = base_text.find("	Stinger.Koth.Announce").unwrap();
+        assert!(
+            merged.ends_with(&base_text[tail..]),
+            "bytes after the event changed"
+        );
+        assert!(merged.contains("type = \"citadel_music_koth_capture\""));
+        // Compiled: decompile the events file back out of the packed vpk and
+        // make sure resourcecompiler kept the new array intact.
+        let vpk = out.join("mine").join("pak01_dir.vpk");
+        assert!(vpk.exists(), "vpk not produced");
+        let back = out.join("music_back.vsndevts");
+        crate::vpk::decompile_from_vpk(
+            helper,
+            &vpk.to_string_lossy(),
+            "soundevents/music.vsndevts_c",
+            &back.to_string_lossy(),
+        )
+        .expect("decompile compiled events");
+        let back_text = std::fs::read_to_string(&back).unwrap();
+        let vb =
+            kv3_core::read_event_array(&back_text, "Music.Koth.Capture.Lp", "vsnd_files_blocked")
+                .unwrap();
+        assert_eq!(
+            vb.entries, v.entries,
+            "compiled events lost the layer array"
+        );
+        // The sibling layers are untouched (no arrays invented for them).
+        assert!(kv3_core::read_event_array(
+            &back_text,
+            "Music.Koth.Capture.Lp",
+            "vsnd_files_contest"
+        )
+        .is_err());
+        eprintln!("rift layer pool OK: {:?}", vb.entries);
+
+        let _ = std::fs::remove_dir_all(&content_root);
+        let _ = std::fs::remove_dir_all(&compiled_root);
+        let _ = std::fs::remove_dir_all(&out);
     }
 
     /// Real VFX-recolor pipeline: decompile Curse's particle from the pak,
@@ -6305,6 +6583,124 @@ mod tests {
         let _ = std::fs::remove_dir_all(&out);
     }
 
+    /// Ivy regression (GameBanana report: "compile ivy = hollow black eyes").
+    /// Her tint/rim mask round-trips through VRF as two split source PNGs, so
+    /// the recompile SYNTHESIZES a `*_vmat_g_ttintmaskrimlightmask_*` texture
+    /// whose content-hashed name vanilla does not ship - it must ride in the
+    /// vpk, and no texture the produced vmat_c references may be absent from
+    /// both the vpk and the game pak. Run with:
+    ///   cargo test -p app --lib -- --ignored e2e_hero_texture_ivy --nocapture
+    #[test]
+    #[ignore]
+    fn e2e_hero_texture_ivy_no_dangling_refs() {
+        let csdk = r"C:\Users\ethob\Desktop\DeadlockModding\Reduced_CSDK_12";
+        let addon = "eim_herotex_ivy_e2e_addon";
+        let content_root = format!(r"{csdk}\content\citadel_addons\{addon}");
+        let compiled_root = format!(r"{csdk}\game\citadel_addons\{addon}");
+        let out = std::env::temp_dir().join("eim_herotex_ivy_e2e_out");
+        let _ = std::fs::remove_dir_all(&out);
+        let _ = std::fs::remove_dir_all(&content_root);
+        let _ = std::fs::remove_dir_all(&compiled_root);
+
+        let cfg = CompileConfig {
+            content_root: content_root.clone(),
+            compiled_root: compiled_root.clone(),
+            game_info_dir: format!(r"{csdk}\game\citadel"),
+            sound_folder: "sounds/music/match_intro".into(),
+            resource_compiler: format!(r"{csdk}\game\bin_tools\win64\resourcecompiler.exe"),
+            ffmpeg_path: None,
+            vpk_helper_path: Some(
+                r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\tools\vpk-helper\bin\Release\net10.0\vpk-helper.dll".into(),
+            ),
+            vanilla_root: r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\ModFiles".into(),
+            pak_path: Some(
+                r"D:\SteamLibrary\steamapps\common\Deadlock\game\citadel\pak01_dir.vpk".into(),
+            ),
+            output_dir: out.to_string_lossy().into_owned(),
+            output_mode: "vpk".into(),
+            vpk_name: "pak01_dir.vpk".into(),
+            zip_output: false,
+            write_encoding_txt: true,
+            skip_compile: false,
+            imported_mods: vec![],
+            imported_mod_excludes: Default::default(),
+            events: vec![],
+            icon_mods: vec![],
+            sound_overrides: vec![],
+            effect_overrides: vec![],
+            vdata_overrides: vec![],
+            global_overrides: vec![],
+            world_overrides: vec![],
+            digimod: None,
+            ui_overrides: vec![],
+            credits_text: None,
+            export_only: false,
+            poster_overrides: vec![],
+            mod_textures: vec![],
+            model_overrides: vec![],
+            hero_textures: ["ivy_bodyv3", "ivy_gearv3", "ivy_wingsv3", "ivyv2_gun"]
+                .iter()
+                .map(|m| HeroTexCompile {
+                    vmat: format!(
+                        "models/heroes_staging/tengu/tengu_v2/materials/{m}.vmat"
+                    ),
+                    label: format!("Ivy - {m} (e2e)"),
+                    source_image: None,
+                    hue: 120.0,
+                    current_hash: Some("h1".into()),
+                    last_compiled_hash: None,
+                })
+                .collect(),
+        };
+
+        let report = run(&cfg);
+        for s in &report.steps {
+            println!("[{}] {} :: {}", if s.ok { "OK" } else { "FAIL" }, s.name, s.detail);
+        }
+        assert!(report.ok, "hero texture pipeline failed");
+
+        let helper = cfg.vpk_helper_path.clone().unwrap();
+        let vpk = out.join("mine").join("pak01_dir.vpk");
+        assert!(vpk.exists(), "vpk not produced");
+        let shipped: std::collections::HashSet<String> =
+            crate::vpk::list(&helper, &vpk.to_string_lossy(), None)
+                .unwrap()
+                .into_iter()
+                .collect();
+        // The staging-fix marker: compiler-SYNTHESIZED textures ship now.
+        assert!(
+            shipped.iter().any(|f| f.contains("_vmat_g_")),
+            "generated textures must ship in the vpk; shipped: {shipped:?}"
+        );
+
+        // No dangling refs: every texture each shipped vmat_c points at must
+        // be in our vpk or already in the game pak.
+        let pak = cfg.pak_path.clone().unwrap();
+        for ht in &cfg.hero_textures {
+            let vmat_c_bytes =
+                std::fs::read(Path::new(&compiled_root).join(format!("{}_c", ht.vmat))).unwrap();
+            for tex in crate::models::scan_resource_refs(&vmat_c_bytes, b".vtex") {
+                // The KV3 block is LZ4-compressed, so the byte-scan also
+                // yields truncated fragments - only full paths are real refs.
+                if !tex.starts_with("models/") && !tex.starts_with("materials/") {
+                    continue;
+                }
+                let rel_c = format!("{tex}_c");
+                if shipped.contains(&rel_c) {
+                    continue;
+                }
+                let in_pak = crate::vpk::list(&helper, &pak, Some(&rel_c))
+                    .map(|v| v.iter().any(|f| f == &rel_c))
+                    .unwrap_or(false);
+                assert!(in_pak, "dangling texture ref in shipped {}: {rel_c}", ht.vmat);
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&content_root);
+        let _ = std::fs::remove_dir_all(&compiled_root);
+        let _ = std::fs::remove_dir_all(&out);
+    }
+
     /// Custom pack dirs (enderpearl/) must ride into the combined build;
     /// soundevents trees (incl. working copies) and backup junk must not.
     #[test]
@@ -6323,6 +6719,11 @@ mod tests {
             // bundled pack's cfg/bin must never ride into combined.
             "cfg/user_keys_default.vcfg",
             "bin/whatever.dll",
+            // Housekeeping trees a LIVE folder import can carry must never
+            // ship in the vpk.
+            ".git/objects/ab/cdef",
+            ".vscode/settings.json",
+            "__MACOSX/junk.bin",
         ] {
             let p = root.join(f);
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
@@ -6333,6 +6734,71 @@ mod tests {
         let (dirs, listed) = import_asset_dirs_listed("unused", &root.to_string_lossy());
         assert!(listed, "a real dir listing must not report the fallback");
         assert_eq!(dirs, vec!["enderpearl/", "particles/", "sounds/"]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A live folder's stamp identity must move when anything inside the tree
+    /// changes (edit, add) - that's what makes "recompile picks up my edits"
+    /// true - and must be stable when nothing changed.
+    #[test]
+    fn live_dir_ident_tracks_tree_edits() {
+        let root = std::env::temp_dir().join("eim_live_dir_ident_test");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("sounds/music")).unwrap();
+        std::fs::write(root.join("sounds/music/a.vsnd_c"), "aaaa").unwrap();
+        let base = live_dir_ident(&root);
+        assert_eq!(base, live_dir_ident(&root), "unchanged tree must be stable");
+        // Edit that changes size but could keep a same-second mtime.
+        std::fs::write(root.join("sounds/music/a.vsnd_c"), "bbbbbb").unwrap();
+        let edited = live_dir_ident(&root);
+        assert_ne!(base, edited, "an edited file must change the identity");
+        // A new file deeper in the tree.
+        std::fs::create_dir_all(root.join("particles")).unwrap();
+        std::fs::write(root.join("particles/x.vpcf_c"), "x").unwrap();
+        assert_ne!(edited, live_dir_ident(&root), "a new file must change the identity");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The staged set for a recompiled material must include the textures the
+    /// compiler SYNTHESIZED (`*_vmat_g_*`), not just ones derived from the
+    /// source refs - a generated tint/rim mask left out of the vpk dangles
+    /// and the shader drops the map (Ivy's hollow-black-eyes bug).
+    #[test]
+    fn poster_staged_rels_ships_generated_textures() {
+        let root = std::env::temp_dir().join("eim_staged_rels_test");
+        let _ = std::fs::remove_dir_all(&root);
+        let dir = root.join("models/x/materials");
+        std::fs::create_dir_all(&dir).unwrap();
+        // Source-ref-derived texture (the historical path).
+        std::fs::write(dir.join("skin_color_png_11111111.vtex_c"), "t").unwrap();
+        // Compiler-generated texture, referenced only by the compiled vmat.
+        std::fs::write(dir.join("skin_vmat_g_ttintmaskrimlightmask_22222222.vtex_c"), "t")
+            .unwrap();
+        // The compiled material, with RERL-style NUL-separated ref strings:
+        // the generated texture plus one that resolves from the pak (absent
+        // from compiled_root, must NOT be staged).
+        let mut vmat_c: Vec<u8> = Vec::new();
+        vmat_c.extend_from_slice(
+            b"models/x/materials/skin_vmat_g_ttintmaskrimlightmask_22222222.vtex\0",
+        );
+        vmat_c.extend_from_slice(b"materials/default/default_mask_png_33333333.vtex\0");
+        std::fs::write(dir.join("skin.vmat_c"), &vmat_c).unwrap();
+        let refs =
+            vec![("TextureColor1".to_string(), "models/x/materials/skin_color.png".to_string())];
+        let rels = poster_staged_rels(&root, "models/x/materials/skin.vmat", &refs);
+        assert!(rels.contains(&"models/x/materials/skin.vmat_c".to_string()));
+        assert!(rels.contains(&"models/x/materials/skin_color_png_11111111.vtex_c".to_string()));
+        assert!(
+            rels.contains(
+                &"models/x/materials/skin_vmat_g_ttintmaskrimlightmask_22222222.vtex_c"
+                    .to_string()
+            ),
+            "generated textures must ship: {rels:?}"
+        );
+        assert!(
+            !rels.iter().any(|r| r.contains("default_mask")),
+            "pak-resolvable refs must not be staged: {rels:?}"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -6347,6 +6813,7 @@ mod tests {
             fade_out: 0.0,
             looping: false,
             layers: vec![],
+            spec: Default::default(),
             current_hash: current.map(String::from),
             last_compiled_hash: last.map(String::from),
         }
@@ -6377,6 +6844,7 @@ mod tests {
             target_ref: "sounds/music/match_intro/stock.vsnd".into(),
             source_audio: "x.mp3".into(),
             layers: vec![],
+            spec: Default::default(),
             trim_start: 0.0,
             trim_end: 1.0,
             gain_db: 0.0,

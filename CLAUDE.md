@@ -99,6 +99,10 @@ preserved (proven byte-identical against the real game file). Decoupled from pat
 callers pass full reference strings (`sounds/music/match_intro/x.vsnd`); set membership is
 plain string comparison. Key types: `EventMerge` (one array edit), `EventView` (read-only
 pool view for the UI). Also `list_arrays` / `add_entries` for unioning other mods in.
+A missing array is `ArrayNotFound` (the compile skips the slot as "drifted") UNLESS
+`EventMerge.create_array` opts in - then `insert_array` writes a fresh `key = [ ... ]`
+above the event's closing brace (sibling indentation, file line endings); `add_entries`
+always creates a missing array when the pack defines one (faithful union).
 When brace-scanning, scan must start **after** the `<!-- kv3 ... -->` header (the header
 contains `{` braces).
 
@@ -111,12 +115,38 @@ contains `{` braces).
   on-disk events file is the source of truth for everyone else's). Events are generalized
   into **slots** = `(eventName, arrayKey, eventsRelpath)` grouped into **tabs/groups**;
   `Project::default_for_match_intro()` builds the default slot set (intro, urn, rift,
-  midboss, powerups, teamobj, heroes, shop, ui). Slots may be `direct_only`
-  (soundstack-driven events with NO vsnd refs to merge - e.g. the Rift in-capture
-  loop `Music.Koth.Capture.Lp`, whose four layered `music_koth_capture_*_160bpm`
-  files are Rift-tab slots): the track always compiles AT `stock_entry`'s path as a
-  loose-file override; `buildCompileConfig` routes them into `soundOverrides`, the
-  merge machinery skips them, and users should toggle Looping on loop tracks.
+  midboss, powerups, teamobj, shop, ui; NO curated per-hero slots - hero sounds are
+  dynamic `heroabil_<codename>_<event>` slots owned by the Heroes drill-in, and the
+  old `hero_billy_blasted` default is migrated into its drill-in twin by
+  `LEGACY_HERO_SLOTS` in App.tsx). Slots may be `stack_default` (`stack_slot(...)`):
+  a soundstack-driven event whose array is an OPTIONAL override of the stack's
+  built-in default file - the Rift in-capture loop `Music.Koth.Capture.Lp`, whose
+  `soundstack_citadel_music_koth_capture` declares `vsnd_files` / `vsnd_files_blocked`
+  / `vsnd_files_contest` / `vsnd_files_approach` as `soundevent_data = true` opvars
+  read with `random_exclusive` selection. Vanilla ships the event with no arrays, so
+  the merge CREATES the layer's array (`EventMerge.create_array`, `stock_entry` =
+  the stack's default file, kept first) and each layer is a real random pool. Proven
+  end-to-end vs the CSDK (`e2e_rift_layer_pool_compiles`). `direct_only` (track
+  compiles AT the stock path as a loose-file override) is legacy: no default uses it
+  any more, reconcile clears it. Loop tracks still need Looping toggled on.
+  **Most used vs All (every sound event):** beyond the curated defaults, every sound
+  tab lists the rest of its files' events under an "All" toggle (per-tab, localStorage
+  `eim.soundShowAll`), as lazy rows (`SoundEventRows`, the hero "More sounds" pattern)
+  that materialize `snd_<key>` slots on expand (`SOUND_SLOT_PREFIX`, keyed by
+  `relpath::event::arrayKey`, persist only with content = `isDynamicSlot`). "Most
+  used" = curated + pinned + anything with content. Pins: shipped baseline
+  `app/src/data/soundBaseline.json` (authored IN-APP: pin sounds, then the dev-build-only
+  "Save as shipped baseline" button calls `write_sound_baseline`, which writes the repo
+  file via `CARGO_MANIFEST_DIR` and errors in release) + personal `settings.soundPins`
+  (`null` = hide a shipped entry); `effectivePins()` (`lib/soundPins.ts`) is injected as
+  default `snd_` slots before `reconcileProject` (`withPinnedDefaults`). The inventory
+  (`list_sound_events` -> `kv3_core::list_sound_arrays`, which unlike `list_arrays` also
+  sees `track_N.track_vsnd_files`; one row per (event, array)) loads once per session via
+  `useSoundInventory` (`lib/soundInventory.ts`, shares the sweep-file filter with "Fix
+  for new patch"); `soundevents/mods/*` (item sounds) are excluded. Misc tab = "Find a
+  sound" (`SoundFinder`, every event across tabs, jump-to). Tab routing lives in
+  `routeGroupFor`: Combat = damage/status_effects/player files, Gameplay =
+  gameplay.vsndevts; every `SIDEBAR_ORDER` sound tab is always listed.
   Beyond slots, the project also carries
   override subsystems: `icon_mods` (also hero images + ability icons + SVG name logos:
   `.vsvg_c` targets wrap the PNG in an `<image>` svg), `sound_overrides` (loose-file
@@ -140,7 +170,22 @@ contains `{` braces).
   Every recorded step carries a `pct` (0..=99) computed from `estimate_steps()`'s step
   budget (drives the UI progress bar); per-item failures `soft_fail` and the run continues
   with a failure roll-up at the end.
-- `audio.rs` — ffmpeg probe + render (trim/gain/fade-in/fade-out via `build_af`).
+- `audio.rs` — ffmpeg probe + render. Plain tracks keep the historical `-af` chain
+  (`build_af`: trim/gain/fades, byte-identical renders); anything richer goes through
+  `mix_graph` (`-filter_complex`): base + layers (each with its own window, fades,
+  volume, fx, and a CONCATENATED leading silence for its timeline position - `adelay`
+  silently loses the delay after whole-buffer filters like `areverse`/`afir`), a duck
+  envelope (`volume=...:eval=frame`) on the base, `amix duration=longest` then an
+  explicit `apad`/`atrim` to the bite (`RenderSpec.bite_mode` base|longest|custom,
+  `start_offset` = silence before the base), the SONG fx chain on the finished bite
+  (`fx_chain`: reverse, rubberband pitch (asetrate fallback), EQ presets, acrusher,
+  chorus/flanger/tremolo, acompressor, reverb = `afir` with a synthetic pink-noise IR or
+  `aecho` slapback; availability probed via `ffmpeg -filters`), fades, limiter.
+  "Match loudness" is a second pass: render, `measure_loudness` (LUFS via loudnorm, or
+  mean level when the clip is too short - `-inf`), then a gain pass. Unit tests in
+  `fx_tests` + the real-ffmpeg `e2e_fx_render_real_ffmpeg`. Frontend preview: the
+  song fx run LIVE through WebAudio (`lib/liveFx.ts`, same order/parameters) while
+  Reverse/Match-loudness stay baked into the preview render; the compile is always ffmpeg.
 - `digimod.rs` — the Jumpscares/Deaths (MoonahMasterUI, formerly DigiMaster; the
   `digimod` code names + serialized `digimod` project field keep the old name for
   compat) generator: proven HUD engine
@@ -170,7 +215,7 @@ contains `{` braces).
   mesh DMX) → `preflight_fbx` (name/props-level binary-FBX scan, no vertex
   arrays: unknown/unrigged bones, un-applied transforms with Blender's
   unit/axis stamps whitelisted, `.001` names, spaces, vertex colors) →
-  `generate_vmdl` (bracket-balanced splice: user mesh into RenderMeshList,
+  the kit caches the compiled PHYS block (`PHYS_CACHE` = eim_phys.kv3, via helper `modelblock`) because VRF's decompile reconstructs physics BODIES but never JOINTS (its vmdl writer has no joint export) - `stage_sources` regenerates a `PhysicsJointList` from it (`parse_phys` → `ragdoll_joint_nodes` → `insert_joint_list` after PhysicsShapeList; node schema mined from physicsbuilder.dll: PhysicsJointConical with enable_swing_limit/swing_limit/swing_offset_angle/enable_twist_limit/min_twist_angle/max_twist_angle; anchor_origin/anchor_angles = the joint frame in the PARENT body's space = compiled m_Frame1 verbatim, CS2 round-trip proven by `e2e_model_ragdoll_joints_round_trip`: 18/18 Haze joints, frames within 0.0002); `require_tools_content` gates ModelDoc + the particle editor on a FULL CSDK (game/core + citadel pak - the download bundle is compile-only); `stage_sources` copies the mesh under `safe_mesh_name` (plain identifier stem - the stem doubles as the RenderMeshFile node name and a name with SPACES fails to resolve in CS2, reproduced by `e2e_model_build_mesh_name_with_spaces`) → `generate_vmdl` (bracket-balanced splice: user mesh into RenderMeshList,
   single-LOD rewrite, bodygroups emptied, optional DefaultMaterialGroup;
   skeleton/attachments/cameras/Nm+AG2 refs untouched) → compile in the
   `eim_models` csgo_addon with auto-stubbed hard-error materials (bare FBX
@@ -201,7 +246,7 @@ contains `{` braces).
   the F8 in-game mod-menu overlay. Commands: `rcon_exec`, `rcon_ready`.
 - `commands.rs` + `lib.rs` — Tauri command surface (registered in `lib.rs`
   `invoke_handler!`). **All backend types serialize camelCase** to match the TS side.
-  `autodetect_paths` also returns the addons dir; `save_settings`/`load_settings` persist
+  `autodetect_paths` also returns the addons dir; `validate_setup` checks the Setup paths by KIND (`resolve_pak_file`/`resolve_addons_dir` walk up from any folder inside the install; addon name must be a bare name, sound folder content-relative) and returns reason+fix per field - `setupFixes` in App.tsx (run by `autodetect` on every boot and by the Settings "Fix it" buttons) applies the fixes; `steam_libraries` falls back to a fixed-drive sweep of common library folders; `refresh_vanilla` refuses a non-file pak with the resolved suggestion (a pasted FOLDER was the #1 support case: the helper opens a dir as a file = ".NET Access to the path is denied"); `save_settings`/`load_settings` persist
   the (frontend-shaped) settings blob as `settings.json` in app-data. Notable command
   groups beyond the modules above: profiles (`list/save/load/delete/rename_profile`),
   custom-server config (`hero_roster`, `hero_detail`, `hero_config`, `item_config`,
@@ -280,7 +325,14 @@ browser over ~79k game sounds, `SoundBrowser` + `OverrideEditor`), `unsorted`
 mods are already bundled so nothing ships invisibly; bundled mods keep compiling
 either way; each bundled mod card has a "retex" button opening `ModRetexture`:
 pick any texture inside the vpk via `list_vpk_textures`, preview via
-`decode_pak_texture`, drop art or hue-shift → `mod_texture_overrides`),
+`decode_pak_texture`, drop art or hue-shift → `mod_texture_overrides`; imports
+also accept a FOLDER of loose files in game layout — the whole vpk layer is
+dir-transparent and `cache_pack` returns dirs as-is, so the folder is a LIVE
+source re-read every compile; a dir without the `.eim_cache_v` marker is a
+"live folder": `pack_scan` flags it, the build stamp fingerprints its whole
+tree via `live_dir_ident` so in-folder edits dirty the stamp, and
+`import_asset_dirs_listed`/`scan_pack_contents`/`pack_scan` drop `.`/`__`
+housekeeping trees so `.git` never ships),
 `posters` (replace in-world posters/signs/graffiti: `PostersTab` +
 `src/data/posterManifest.json`, the atlas-rect index generated by
 `tools/poster-manifest/` — v2 regions are GROUND TRUTH from the maps' UVs (helper
@@ -293,7 +345,11 @@ are HAND-ADDED, a manifest regen must keep them, and `poster_sheet` accepts
 `materials/overlays` material from the pak via the helper's `material` cmd, ffmpeg-
 composites the art into the rect (+ white-fills the trans rect for cut-out posters),
 strips VRF's "Compiled Textures" block, recompiles the `.vmat`, and stages the
-`.vmat_c`+`.vtex_c` at vanilla paths), `jumpscares` (`DigimodTab` — appears when
+`.vmat_c`+`.vtex_c` at vanilla paths - `poster_staged_rels` (shared with hero
+textures) must ship the compiler-SYNTHESIZED `_vmat_g_*` textures too, found by
+byte-scanning the compiled vmat_c's `.vtex` refs: a generated name vanilla
+doesn't ship dangles and breaks the material in game, Ivy's black-eyes bug,
+e2e `e2e_hero_texture_ivy_no_dangling_refs`), `jumpscares` (`DigimodTab` — appears when
 `digimod_detected` finds the engine in installed paks, the project configures it, or
 the plain `enableJumpscares` Preferences toggle opts in (build your own from the blank
 `DEFAULT_DIGIMOD` template, no installed mod needed);
@@ -359,7 +415,17 @@ every effect source is header-normalized to vpcf63 before compiling
 (`normalize_vpcf_header`: the CSDK hard-fails on vpcf64+ and silently strips
 newer ops from vpcf61). The Heroes tab drills portrait grid (`HeroGrid`)
 → per-hero abilities/sounds/voicelines (`HeroDetail`, `HeroSoundsSection`,
-`VoicelinesPanel`). `ModMenuOverlay` is a separate always-on-top window (F8 in-game mod
+`VoicelinesPanel`). `hero_detail` (cache `detail_v8_<code>.json`, core =
+`hero_detail_at`, real-data test `e2e_hero_cards_fold_rules`) puts the vdata-referenced
+events on each ability card, then FOLDS the rest of the hero's file in by four signals
+(ref folder `a<N>`, `A<N>` name segment, event-name family of a vdata event, ability-name
+prefix). Gun/foley events (`hero_sound_category` gunfire/movement) never fold via a
+gun/foley-named family or a weak (first-segment-dropped) name key - they belong to the
+"More sounds" Gunfire/Movement sections (Grey Talon's `Greytalon.Wpn.*` used to ride
+Power Jump). Valve reuses other kits' files on some hero events (Billy's Blasted healing
+= Rescue Beam's heal clip, Slork's invis = Haze smoke bomb): those rows carry a
+`sharedNote` rendered under the slot instead of being hidden - they ARE the game data.
+`ModMenuOverlay` is a separate always-on-top window (F8 in-game mod
 menu / RCON admin).
 
 **Chrome.** A ⚙ cog opens `SetupSection` as a modal (paths + toggles like

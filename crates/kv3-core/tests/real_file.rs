@@ -47,6 +47,7 @@ fn noop_merge_roundtrips_byte_for_byte() {
         previous_owned: vec![],
         new_duration: None,
         excluded: vec![],
+        create_array: false,
     };
     let out = apply_merge(&text, &noop).unwrap();
     assert_eq!(out, text, "no-op merge must reproduce the file exactly");
@@ -65,6 +66,7 @@ fn adding_to_king_leaves_everything_else_identical() {
         previous_owned: vec![],
         new_duration: Some(30.0),
         excluded: vec![],
+        create_array: false,
     };
     let out = apply_merge(&text, &edit).unwrap();
 
@@ -105,6 +107,7 @@ fn add_then_remove_returns_to_original() {
         previous_owned: vec![],
         new_duration: None, // keep duration to preserve byte identity on remove
         excluded: vec![],
+        create_array: false,
     };
     let added = apply_merge(&text, &add).unwrap();
 
@@ -116,6 +119,7 @@ fn add_then_remove_returns_to_original() {
         previous_owned: vec![new_ref.into()],
         new_duration: None,
         excluded: vec![],
+        create_array: false,
     };
     let removed = apply_merge(&added, &remove).unwrap();
 
@@ -134,6 +138,7 @@ fn merging_both_events_is_independent() {
             previous_owned: vec![],
             new_duration: None,
             excluded: vec![],
+            create_array: false,
         },
         EventMerge {
             event_name: MOTHER.into(),
@@ -143,6 +148,7 @@ fn merging_both_events_is_independent() {
             previous_owned: vec![],
             new_duration: None,
             excluded: vec![],
+            create_array: false,
         },
     ];
     let out = apply_merges(&text, &edits).unwrap();
