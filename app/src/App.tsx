@@ -36,6 +36,7 @@ import {
   refreshVanilla as refreshVanillaApi,
   listEditableEvents,
   writeSoundBaseline,
+  writeTabFlavor,
   importPackEvents,
   scanPackContents,
   eventsForRefs,
@@ -95,6 +96,7 @@ import {
 } from "./lib/soundInventory";
 import { effectivePins, togglePinPatch, movePinPatch, baselineDocument } from "./lib/soundPins";
 import { Backdrop } from "./components/Backdrop";
+import shippedTabFlavor from "./data/tabFlavor.json";
 import { ImportReview, type PackReview, type ReviewEvent, type ReviewGroup } from "./components/ImportReview";
 import { SlotSoundPicker, type PickClip, type PickGroup } from "./components/SlotSoundPicker";
 import { useEscape } from "./lib/useEscape";
@@ -113,6 +115,7 @@ import { ParticleReference } from "./components/ParticleReference";
 import { ParticleOutline } from "./components/ParticleOutline";
 import { MenuArtTab } from "./components/MenuArtTab";
 import { PostersTab } from "./components/PostersTab";
+import { AnimatedArt } from "./components/AnimatedArt";
 import { DigimodTab, DEFAULT_DIGIMOD } from "./components/DigimodTab";
 import { UiMasterTab } from "./components/UiMasterTab";
 import { getCopiedSound } from "./lib/soundClipboard";
@@ -154,6 +157,8 @@ const PARTICLE_GUIDE = "particleguide";
 const CUSTOM_SERVER = "customserver";
 /** Special always-present tab for replacing in-world posters/signs/graffiti. */
 const POSTERS = "posters";
+/** Animated paintings & signs (goldenboy44's Dynamic Paintings, with permission). */
+const ANIMATED_ART = "animatedart";
 /** Replace the game's screen art (play-mode cards, any panorama image). */
 const MENU_ART = "menuart";
 /** Jumpscares/Deaths (MoonahMasterUI) — only when the engine is detected installed. */
@@ -245,7 +250,8 @@ const TAB_LABELS: Record<string, string> = {
   [REPLACE_SOUNDS]: "All Sounds",
   [EFFECTS]: "Effects",
   [PARTICLE_GUIDE]: "Particle Guide",
-  [POSTERS]: "Wall Art",
+  [POSTERS]: "Static Art",
+  [ANIMATED_ART]: "Animated Art",
   [MENU_ART]: "Menu Art",
   [JUMPSCARES]: "Jumpscares",
   [UIMASTER]: "UI Master",
@@ -284,6 +290,11 @@ const TAB_CATEGORIES: { label: string; tabs: string[] }[] = [
 const SOUND_MASTER = "Sounds";
 const SOUND_MASTER_CATEGORIES = ["In-game", "Match", "Game SFX"];
 const SOUND_MASTER_TABS = ["ui", UNSORTED, LIBRARY, REPLACE_SOUNDS];
+
+/** The Wall Art master header: static sheet painting + animated surfaces
+ *  nest under one violet parent, mirroring the ♪ Sound master. */
+const WALL_MASTER = "Wall Art";
+const WALL_MASTER_TABS = [POSTERS, ANIMATED_ART];
 
 /** Tabs an auto-discovered/imported slot can be manually moved between. The
  *  id-keyed drill-in tabs (Heroes, Items) are excluded — their UIs render
@@ -1002,6 +1013,7 @@ function accentFor(ev: { group: string; side: string }): string {
   if (ev.group === EFFECTS) return "#c084fc"; // violet (VFX)
   if (ev.group === PARTICLE_GUIDE) return "#818cf8"; // indigo (VFX docs)
   if (ev.group === POSTERS) return "#8b5cf6"; // deep violet (posters)
+  if (ev.group === ANIMATED_ART) return "#a78bfa"; // lighter violet (animated art)
   if (ev.group === MENU_ART) return "#67e8f9"; // light cyan (menu art)
   if (ev.group === JUMPSCARES) return "#ef4444"; // red (spooky)
   if (ev.group === UIMASTER) return "#f59e0b"; // amber (experimental UI editing)
@@ -1054,6 +1066,14 @@ export default function App() {
   const [expandedSongs, setExpandedSongs] = useState<Record<string, boolean>>({});
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<string>("intro");
+  // Tab flavor text (the one-liner under each tab title): shipped JSON,
+  // editable in DEV builds only - the editor writes the repo data file so
+  // edits ship with the next release (same pattern as the sound baseline).
+  const [tabFlavor, setTabFlavor] = useState<Record<string, string>>(
+    shippedTabFlavor as Record<string, string>,
+  );
+  const [flavorEdit, setFlavorEdit] = useState<string | null>(null);
+  useEffect(() => setFlavorEdit(null), [activeTab]);
   // Selected hero in the Heroes grid (codename, e.g. "punkgoat") -> opens the
   // per-hero menu (background + ability bar + inline sounds).
   const [selectedHero, setSelectedHero] = useState<string | null>(null);
@@ -1500,6 +1520,10 @@ export default function App() {
       // Anything discovery/import routed into a group we don't know yet.
       ...seen.filter((g) => !SIDEBAR_ORDER.includes(g)),
     ];
+    // Wall Art rides directly under the Sounds block: its violet master is
+    // the visual sibling of the sky Sounds master.
+    out.push(POSTERS);
+    out.push(ANIMATED_ART);
     // Effects is experimental (VFX recolor): the toggle is authoritative.
     // Recolors in the project stop compiling while it's off (see the
     // CompileBar effectOverrides prop), so nothing ships invisibly.
@@ -1509,7 +1533,6 @@ export default function App() {
     out.push(PARTICLE_GUIDE);
     if (settings.experimentalUiMaster) out.push(UIMASTER);
     if (settings.experimentalEasyCompile) out.push(EASY_COMPILE);
-    out.push(POSTERS);
     out.push(MENU_ART);
     out.push(MODEL_SWAP);
     // Jumpscares when the MoonahMasterUI engine is in the user's mods, this
@@ -1539,7 +1562,9 @@ export default function App() {
     // harmless when unused and the foundation for splitting releases.
     out.push(PACK_BUILDER);
     out.push(LIBRARY, REPLACE_SOUNDS);
-    return out;
+    // Belt-and-braces: a tab listed twice (a discovery group colliding with a
+    // built-in id, or a mid-edit hot-reload) would double its sidebar row.
+    return [...new Set(out)];
   }, [
     project,
     settings.experimentalEffects,
@@ -1791,15 +1816,24 @@ export default function App() {
 
   const navItems = useMemo(() => {
     type Child = { type: "tab"; key: string } | { type: "category"; label: string; tabs: string[] };
-    const items: (Child | { type: "master"; label: string; items: Child[] })[] = [];
+    type Master = { type: "master"; label: string; tint: "sky" | "violet"; items: Child[] };
+    const items: (Child | Master)[] = [];
     const usedCats = new Set<string>();
-    let master: { type: "master"; label: string; items: Child[] } | null = null;
+    let soundMaster: Master | null = null;
+    let wallMaster: Master | null = null;
     const pushSound = (child: Child) => {
-      if (!master) {
-        master = { type: "master", label: SOUND_MASTER, items: [] };
-        items.push(master);
+      if (!soundMaster) {
+        soundMaster = { type: "master", label: SOUND_MASTER, tint: "sky", items: [] };
+        items.push(soundMaster);
       }
-      master.items.push(child);
+      soundMaster.items.push(child);
+    };
+    const pushWall = (child: Child) => {
+      if (!wallMaster) {
+        wallMaster = { type: "master", label: WALL_MASTER, tint: "violet", items: [] };
+        items.push(wallMaster);
+      }
+      wallMaster.items.push(child);
     };
     for (const g of tabs) {
       const cat = TAB_CATEGORIES.find((c) => c.tabs.includes(g));
@@ -1815,6 +1849,8 @@ export default function App() {
         else items.push(entry);
       } else if (SOUND_MASTER_TABS.includes(g)) {
         pushSound({ type: "tab", key: g });
+      } else if (WALL_MASTER_TABS.includes(g)) {
+        pushWall({ type: "tab", key: g });
       } else {
         items.push({ type: "tab", key: g });
       }
@@ -5668,6 +5704,9 @@ export default function App() {
     if (g === MOD_COMBINER) return settings.importedMods.length > 0;
     if (g === REPLACE_SOUNDS) return (p.soundOverrides ?? []).length > 0;
     if (g === EFFECTS) return (p.effectOverrides ?? []).length > 0;
+    if (g === POSTERS) return (p.posterOverrides ?? []).length > 0;
+    if (g === ANIMATED_ART)
+      return (p.dynpaints ?? []).some((d) => d.enabled !== false && !!d.sourceMedia);
     if (g === CUSTOM_SERVER)
       return (
         (p.vdataOverrides ?? []).length > 0 ||
@@ -6031,6 +6070,10 @@ export default function App() {
       ? (project?.modules ?? []).length
       : g === MODEL_SWAP
       ? (project?.modelOverrides ?? []).filter((o) => o.enabled !== false).length
+      : g === POSTERS
+      ? (project?.posterOverrides ?? []).length
+      : g === ANIMATED_ART
+      ? (project?.dynpaints ?? []).filter((d) => d.enabled !== false && !!d.sourceMedia).length
       : g === REPLACE_SOUNDS
         ? (project?.soundOverrides ?? []).length
         : g === EFFECTS
@@ -6105,7 +6148,7 @@ export default function App() {
     const count = tabCount(g);
     const active = g === activeTab;
     const tint =
-      !indented && (g === "heroes" || g === ITEMS || g === POSTERS)
+      !indented && (g === "heroes" || g === ITEMS)
         ? accentFor({ group: g, side: "" })
         : null;
     if (tint) {
@@ -6303,6 +6346,24 @@ export default function App() {
             const collapsed = collapsedCats.has(item.label);
             const soundCount = visibleTabs.reduce((n, t) => n + tabCount(t), 0);
             const hasActive = allTabs.includes(activeTab);
+            // Tailwind needs literal class names, so each master tint is a
+            // spelled-out skin (sky = Sounds, violet = Wall Art).
+            const skin =
+              item.tint === "violet"
+                ? {
+                    act: "border-violet-500/50 bg-violet-500/10 text-violet-100",
+                    idle: "border-violet-500/25 bg-violet-500/5 text-violet-300/90 hover:border-violet-400/50 hover:text-violet-200",
+                    chev: "text-violet-500/80",
+                    badge: "bg-violet-500/15 text-violet-300",
+                    rail: "border-violet-500/25",
+                  }
+                : {
+                    act: "border-sky-500/50 bg-sky-500/10 text-sky-100",
+                    idle: "border-sky-500/25 bg-sky-500/5 text-sky-300/90 hover:border-sky-400/50 hover:text-sky-200",
+                    chev: "text-sky-500/80",
+                    badge: "bg-sky-500/15 text-sky-300",
+                    rail: "border-sky-500/25",
+                  };
             return (
               <div
                 key={item.label}
@@ -6319,14 +6380,12 @@ export default function App() {
                     })
                   }
                   className={`mt-1 flex items-center justify-between rounded-lg border px-3 py-1.5 text-left text-[11px] font-bold uppercase tracking-widest transition ${
-                    hasActive
-                      ? "border-sky-500/50 bg-sky-500/10 text-sky-100"
-                      : "border-sky-500/25 bg-sky-500/5 text-sky-300/90 hover:border-sky-400/50 hover:text-sky-200"
+                    hasActive ? skin.act : skin.idle
                   }`}
                 >
                   <span className="flex items-center gap-1.5">
                     <span
-                      className={`text-[9px] text-sky-500/80 transition-transform duration-200 ${
+                      className={`text-[9px] ${skin.chev} transition-transform duration-200 ${
                         collapsed ? "" : "rotate-90"
                       }`}
                     >
@@ -6335,7 +6394,7 @@ export default function App() {
                     {item.label}
                   </span>
                   {soundCount > 0 && (
-                    <span className="rounded bg-sky-500/15 px-1.5 text-[10px] font-semibold text-sky-300">
+                    <span className={`rounded ${skin.badge} px-1.5 text-[10px] font-semibold`}>
                       {soundCount}
                     </span>
                   )}
@@ -6349,7 +6408,7 @@ export default function App() {
                       transition={{ duration: 0.2, ease: "easeOut" }}
                       className="overflow-hidden"
                     >
-                      <div className="ml-3 flex flex-col gap-1 border-l border-sky-500/25 pl-1.5">
+                      <div className={`ml-3 flex flex-col gap-1 border-l ${skin.rail} pl-1.5`}>
                         {item.items.map((c) =>
                           c.type === "tab" ? (
                             (!modifiedOnly || groupModified(c.key) || c.key === activeTab) &&
@@ -6406,36 +6465,80 @@ export default function App() {
             <h2 className="bg-gradient-to-r from-zinc-50 to-zinc-400 bg-clip-text text-xl font-bold tracking-tight text-transparent">
               {TAB_LABELS[activeTab] ?? activeTab}
             </h2>
-            {/* Only the specialty tabs get a one-line explainer; the regular
-                sound tabs speak for themselves. */}
+            {/* One-line explainer under the title, from data/tabFlavor.json
+                ("soundTabs" = the shared line for the Most used | All sound
+                tabs). Dev builds edit any tab's line in place; Save writes
+                the repo data file so the text ships with the next release. */}
             {(() => {
-              const sub =
-                activeTab === MOD_COMBINER
-                  ? "Merge other mods' sounds into your compile - nothing of yours is removed."
-                  : activeTab === REPLACE_SOUNDS
-                    ? "Replace any game sound directly by its file - no soundevents touched. Browse a category, preview, then drop in your audio."
-                    : activeTab === EFFECTS
-                      ? "Recolor any particle effect - hero abilities, item effects, and more. Preview the recolor live, then compile to apply."
-                      : activeTab === PARTICLE_GUIDE
-                        ? "Every particle function in the game with what it does and the values Valve actually uses - the docs the particle editor never had."
-                        : activeTab === POSTERS
-                        ? "Replace the world's posters, signs, ghost signs, and graffiti with your own images - drop a PNG onto a region and compile."
-                        : activeTab === MENU_ART
-                          ? "Replace the game's screen art - the play-mode cards, their hero portraits, or any menu image by path."
-                        : activeTab === JUMPSCARES
-                          ? "Random jumpscares while you play + videos when you die - your MoonahMasterUI mod, configured here and rebuilt on compile."
-                          : activeTab === UIMASTER
-                            ? "Edit the game's UI files directly - decompiled to source, compiled back into your mod. Very experimental."
-                            : activeTab === PACK_BUILDER
-                              ? "Organize the pack into named modules - the future split points for standalone releases. Compiling still builds everything together."
-                              : activeTab === MODEL_SWAP
-                                ? "Put your own model on a hero or on the game's objects - the urn, crates, soul containers, map props. The original's animations, physics and setup stay; your build ships with the normal compile."
-                                : activeTab === UNSORTED
-                                  ? "Everything that doesn't have a home tab yet, plus one search box over every sound event in the game."
-                                  : showSoundToggle
-                                    ? "Most used shows the curated and pinned sounds. Switch to All to browse every sound event this tab covers and pin the ones you reach for."
-                                    : null;
-              return sub ? <p className="mt-1 text-sm text-zinc-500">{sub}</p> : null;
+              const own = tabFlavor[activeTab];
+              const key =
+                own !== undefined
+                  ? activeTab
+                  : showSoundToggle && tabFlavor.soundTabs !== undefined
+                    ? "soundTabs"
+                    : null;
+              const sub = key ? tabFlavor[key] : undefined;
+              if (import.meta.env.DEV && flavorEdit !== null) {
+                const saveFlavor = async () => {
+                  const editKey = key ?? activeTab;
+                  const next = { ...tabFlavor };
+                  const t = flavorEdit.trim();
+                  if (t) next[editKey] = t;
+                  else delete next[editKey];
+                  setTabFlavor(next);
+                  setFlavorEdit(null);
+                  try {
+                    const p = await writeTabFlavor(JSON.stringify(next));
+                    push("success", `Flavor text saved to ${p}`);
+                  } catch (e) {
+                    push("error", `${e}`);
+                  }
+                };
+                return (
+                  <div className="mt-1 w-[36rem] max-w-full">
+                    <textarea
+                      value={flavorEdit}
+                      onChange={(e) => setFlavorEdit(e.target.value)}
+                      rows={3}
+                      autoFocus
+                      className="w-full rounded border border-amber-500/40 bg-zinc-950 p-2 text-sm text-zinc-200"
+                    />
+                    <div className="mt-1 flex items-center gap-2">
+                      <button
+                        onClick={() => void saveFlavor()}
+                        className="rounded bg-amber-500/20 px-2 py-0.5 text-xs font-medium text-amber-200 hover:bg-amber-500/30"
+                      >
+                        Save
+                      </button>
+                      <button
+                        onClick={() => setFlavorEdit(null)}
+                        className="rounded px-2 py-0.5 text-xs text-zinc-500 hover:text-zinc-300"
+                      >
+                        Cancel
+                      </button>
+                      <span className="text-[10px] text-zinc-600">
+                        dev only - saves "{key ?? activeTab}" to app/src/data/tabFlavor.json;
+                        empty removes the line
+                      </span>
+                    </div>
+                  </div>
+                );
+              }
+              if (!sub && !import.meta.env.DEV) return null;
+              return (
+                <p className="mt-1 text-sm text-zinc-500">
+                  {sub}
+                  {import.meta.env.DEV && (
+                    <button
+                      onClick={() => setFlavorEdit(sub ?? "")}
+                      title="Edit this tab's flavor text (dev build only; Save writes the repo file)"
+                      className={`text-xs text-zinc-700 transition hover:text-amber-300 ${sub ? "ml-2" : ""}`}
+                    >
+                      ✎
+                    </button>
+                  )}
+                </p>
+              );
             })()}
           </div>
           <div className="flex shrink-0 items-center gap-2">
@@ -6697,6 +6800,14 @@ export default function App() {
             helperPath={settings.vpkHelperPath}
             ffmpegPath={settings.ffmpegPath}
             onChange={(next) => setProject((prev) => (prev ? { ...prev, digimod: next } : prev))}
+          />
+        ) : activeTab === ANIMATED_ART ? (
+          <AnimatedArt
+            dynpaints={project?.dynpaints ?? []}
+            onDynpaintsChange={(list) =>
+              setProject((prev) => (prev ? { ...prev, dynpaints: list } : prev))
+            }
+            ffmpegPath={settings.ffmpegPath}
           />
         ) : activeTab === POSTERS ? (
           <PostersTab
@@ -7059,6 +7170,7 @@ export default function App() {
             globalOverrides={settings.experimentalServer ? (project.globalOverrides ?? []) : []}
             worldOverrides={settings.experimentalServer ? (project.worldOverrides ?? []) : []}
             posterOverrides={project.posterOverrides ?? []}
+            dynpaints={project.dynpaints ?? []}
             heroTextures={project.heroTextures ?? []}
             digimod={project.digimod ?? null}
             uiOverrides={settings.experimentalUiMaster ? (project.uiOverrides ?? []) : []}

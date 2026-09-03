@@ -257,6 +257,28 @@ export interface WorldOverride {
   value: string;
 }
 
+/** One animated painting (Dynamic Paintings technique by goldenboy44 -
+ *  leonyarov - used with permission): a gif/video played on an in-world
+ *  painting via a flipbook material on a quad over it. */
+export interface DynpaintEntry {
+  /** Registry id, e.g. "hideout_portrait_canvas". */
+  id: string;
+  /** The gif/video the frames come from. */
+  sourceMedia: string;
+  /** Seconds per frame; 0 = follow the source's own frame rate. */
+  dwell: number;
+  /** Frame cap - keeps the texture (and VRAM) sane. */
+  maxFrames: number;
+  enabled: boolean;
+  /** Which surface of the host (dynpaintTargets panels); "card1" default. */
+  panel?: string;
+  /** How the source lands on the surface, like regular poster regions. */
+  fit?: "cover" | "contain" | "stretch";
+  /** Crop/letterbox position on the overflowing axis, 0..1 (0.5 = center). */
+  cropX?: number;
+  cropY?: number;
+}
+
 export interface Project {
   version: number;
   gameContentRoot: string;
@@ -287,6 +309,8 @@ export interface Project {
    *  independent on purpose so modules survive Shared Pack sync. Content not
    *  claimed by any module belongs to the implicit Core module. */
   modules?: PackModule[];
+  /** Animated paintings (Dynamic Paintings, with goldenboy44's permission). */
+  dynpaints?: DynpaintEntry[];
 }
 
 /** One Pack Builder module (see `Project.modules`). */

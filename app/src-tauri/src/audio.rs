@@ -624,7 +624,7 @@ fn hash_key(key: &str) -> String {
 }
 
 /// Derive the ffprobe binary path from the ffmpeg path (same directory).
-fn ffprobe_from(ffmpeg: &str) -> String {
+pub(crate) fn ffprobe_from(ffmpeg: &str) -> String {
     let p = std::path::Path::new(ffmpeg);
     if let Some(parent) = p.parent() {
         if !parent.as_os_str().is_empty() {

@@ -45,6 +45,7 @@ static int Dispatch(string[] args)
             "texturebatch" => TextureBatch(args),
             "heroes" => Heroes(args),
             "worldrects" => WorldRects(args),
+            "dmxsplit" => DmxSplit(args),
             _ => Unknown(args[0]),
         };
     }
@@ -1163,4 +1164,74 @@ static int List(string[] args)
         }
     }
     return 0;
+}
+
+// Filter a model DMX's face sets by material (Dynamic Paintings combo models:
+// each card ships arch mesh + its quad as ONE fused DMX; "keep dynpaint"
+// yields a quad-only DMX - optionally retargeted to a per-card material so
+// every sign can carry its own animation - while "drop dynpaint" yields the
+// bare arch). Vertex data is left as-is; the compiler strips unreferenced
+// vertices.
+static int DmxSplit(string[] args)
+{
+    if (args.Length < 5)
+    {
+        Console.Error.WriteLine("usage: dmxsplit <in.dmx> <out.dmx> <keep|drop> <materialSubstring> [newMaterialPath]");
+        return 2;
+    }
+    var inPath = Path.GetFullPath(args[1]);
+    var outPath = Path.GetFullPath(args[2]);
+    var mode = args[3]; // keep | drop | rename (rename = keep all, retarget matches)
+    var keepMode = mode == "keep";
+    var needle = args[4];
+    var newMat = args.Length > 5 ? args[5] : null;
+
+    var dm = Datamodel.Datamodel.Load(inPath);
+    int kept = 0, removed = 0, renamed = 0;
+    foreach (var el in dm.AllElements.ToList())
+    {
+        if (el.ClassName != "DmeMesh")
+        {
+            continue;
+        }
+        if (el["faceSets"] is not Datamodel.ElementArray faceSets)
+        {
+            continue;
+        }
+        var keep = new List<Datamodel.Element>();
+        foreach (var fsObj in faceSets.ToList())
+        {
+            if (fsObj is not Datamodel.Element fs)
+            {
+                continue;
+            }
+            var matEl = fs["material"] as Datamodel.Element;
+            var mtl = matEl?["mtlName"] as string ?? "";
+            var match = mtl.Contains(needle, StringComparison.OrdinalIgnoreCase);
+            var keepThis = mode == "rename" || (keepMode ? match : !match);
+            if (keepThis)
+            {
+                if (match && newMat != null && matEl != null)
+                {
+                    matEl["mtlName"] = newMat;
+                    renamed++;
+                }
+                keep.Add(fs);
+                kept++;
+            }
+            else
+            {
+                removed++;
+            }
+        }
+        faceSets.Clear();
+        foreach (var fs in keep)
+        {
+            faceSets.Add(fs);
+        }
+    }
+    Directory.CreateDirectory(Path.GetDirectoryName(outPath)!);
+    dm.Save(outPath, "binary", 9);
+    Console.WriteLine($"facesets: kept {kept}, removed {removed}, retargeted {renamed}");
+    return kept > 0 ? 0 : 1;
 }

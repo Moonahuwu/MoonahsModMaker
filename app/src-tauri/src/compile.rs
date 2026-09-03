@@ -106,7 +106,7 @@ fn default_events_relpath() -> String {
     "soundevents/music.vsndevts".to_string()
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct CompileConfig {
     /// Addon CONTENT root where sources are written, e.g.
@@ -200,6 +200,11 @@ pub struct CompileConfig {
     /// `.vmat_c` + `.vtex_c` at the vanilla paths (whole-material override).
     #[serde(default)]
     pub hero_textures: Vec<HeroTexCompile>,
+    /// Animated paintings (Dynamic Paintings technique by goldenboy44, used
+    /// with permission): frames from a gif/video tiled into a grid texture +
+    /// an exact flipbook material + the host quad model + blackouts.
+    #[serde(default)]
+    pub dynpaints: Vec<crate::dynpaint::DynpaintCompile>,
     /// Texture swaps inside bundled mod vpks (combined variant only).
     #[serde(default)]
     pub mod_textures: Vec<ModTextureCompile>,
@@ -933,14 +938,92 @@ pub(crate) fn run_compiler_raw(
         Err(format!(
             "resourcecompiler exit {}: {}",
             out.status.code().unwrap_or(-1),
-            // Prefer the most informative tail.
-            [stderr.trim(), stdout.trim()]
-                .iter()
-                .filter(|s| !s.is_empty())
-                .next()
-                .copied()
-                .unwrap_or("(no output)")
+            compiler_error_detail(&stdout, &stderr)
         ))
+    }
+}
+
+/// Self-heal for panorama compiles on the compile-only tools bundle: make
+/// sure `<tools>/game/core/panorama/panorama_config.txt` exists, extracting
+/// it from the game's own core pak (sibling of the citadel pak) when it
+/// doesn't. A full CSDK ships the file loose, so this is a no-op there.
+/// Proven on the real bundle: the digimod source batch went from "4
+/// compiled, 2 failed" to "6 compiled, 0 failed". Best-effort: None means
+/// nothing was staged (already there, or no game pak to take it from - the
+/// compile then fails with the REAL error line, which now surfaces).
+pub(crate) fn ensure_panorama_config(cfg: &CompileConfig) -> Option<String> {
+    let dest = Path::new(&cfg.game_info_dir)
+        .parent()?
+        .join("core")
+        .join("panorama")
+        .join("panorama_config.txt");
+    if dest.exists() {
+        return None;
+    }
+    let helper = cfg.vpk_helper_path.as_deref().filter(|h| !h.is_empty())?;
+    let pak = cfg.pak_path.as_deref().filter(|p| !p.is_empty())?;
+    // <game>/game/citadel/pak01_dir.vpk -> <game>/game/core/pak01_dir.vpk
+    let core_pak = Path::new(pak).parent()?.parent()?.join("core").join("pak01_dir.vpk");
+    if !core_pak.exists() {
+        return None;
+    }
+    crate::vpk::extract(
+        helper,
+        &core_pak.to_string_lossy(),
+        "panorama/panorama_config.txt",
+        &dest.to_string_lossy(),
+    )
+    .ok()?;
+    Some(
+        "staged core's panorama_config.txt into the compile tools (the download bundle lacks it; taken from the game files)"
+            .into(),
+    )
+}
+
+/// The lines worth showing from a failed resourcecompiler run. The REAL
+/// errors go to STDOUT; stderr carries boot noise (ILocalize localization
+/// warnings - which even contain the words "failed to load" - and graphics
+/// device creation). Showing whole-stderr buried the cause behind that noise
+/// (a real support case: the report ended at the ILocalize lines). Pick every
+/// error-looking line from both streams minus the known noise, else fall
+/// back to the streams' tails.
+pub(crate) fn compiler_error_detail(stdout: &str, stderr: &str) -> String {
+    let noise = |t: &str| {
+        t.contains("ILocalize::")
+            || t.starts_with("Creating device for graphics adapter")
+            || t.starts_with("Loaded ")
+    };
+    fn push(t: &str, picked: &mut Vec<String>) {
+        if !t.is_empty() && picked.len() < 12 && !picked.iter().any(|p| p == t) {
+            picked.push(t.to_string());
+        }
+    }
+    let mut picked: Vec<String> = Vec::new();
+    for stream in [stdout, stderr] {
+        for l in stream.lines() {
+            let t = l.trim();
+            if noise(t) {
+                continue;
+            }
+            let lower = t.to_ascii_lowercase();
+            if lower.contains("error") || lower.contains("failed") || lower.contains("exception") {
+                push(t, &mut picked);
+            }
+        }
+    }
+    if picked.is_empty() {
+        for stream in [stdout, stderr] {
+            let tail: Vec<&str> =
+                stream.lines().map(str::trim).filter(|l| !l.is_empty() && !noise(l)).collect();
+            for t in tail.iter().rev().take(4).rev() {
+                push(t, &mut picked);
+            }
+        }
+    }
+    if picked.is_empty() {
+        "(no output)".into()
+    } else {
+        picked.join(" | ")
     }
 }
 
@@ -1537,7 +1620,7 @@ fn compile_effect_overrides(
 /// (param, content-relative path) pairs in file order. Hero materials keep
 /// their textures next to the model (`models/heroes_*/...`), so both content
 /// roots count as a path (vector literals like `"[0.0 0.0 0.0]"` don't match).
-fn vmat_texture_refs(text: &str) -> Vec<(String, String)> {
+pub(crate) fn vmat_texture_refs(text: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for line in text.lines() {
         let t = line.trim();
@@ -1765,7 +1848,7 @@ fn composite_trans_alpha(
 /// material). So ALSO byte-scan the compiled vmat_c for every `.vtex` it
 /// actually references and stage whichever the compiler emitted.
 /// Proven end-to-end vs the CSDK: `e2e_hero_texture_ivy_no_dangling_refs`.
-fn poster_staged_rels(compiled_root: &Path, vmat_rel: &str, texture_refs: &[(String, String)]) -> Vec<String> {
+pub(crate) fn poster_staged_rels(compiled_root: &Path, vmat_rel: &str, texture_refs: &[(String, String)]) -> Vec<String> {
     let mut rels = Vec::new();
     let vmat_c = format!("{vmat_rel}_c");
     let vmat_c_abs = compiled_root.join(&vmat_c);
@@ -3266,6 +3349,7 @@ fn estimate_steps(cfg: &CompileConfig) -> usize {
         .collect::<std::collections::HashSet<_>>()
         .len();
     est += 2 * cfg.hero_textures.len();
+    est += 3 * cfg.dynpaints.len();
     est += 2 * cfg.mod_textures.len();
     est += cfg.model_overrides.len();
     if let Some(dm) = &cfg.digimod {
@@ -3328,6 +3412,17 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
     // 0. Write an encoding.txt alongside the source wavs of EVERY folder songs
     //    compile into, so the compiler picks up mp3 compression AND per-file
     //    loop points (_lp tracks) everywhere.
+    // The trimmed tools bundle has no `game/core` content, and the compiler
+    // hard-needs core's `panorama/panorama_config.txt` the moment ANY panorama
+    // input (panel js/css/xml, a panorama_image_list vdata) is in a batch -
+    // the init failure fails every input AFTER the panorama ones (the
+    // Jumpscares support case: "ERROR: 4 compiled, 2 failed" with the cause
+    // buried mid-log). The game ships the file in its core pak - stage it
+    // into the toolchain once (222 bytes) and the whole batch compiles.
+    if let Some(note) = ensure_panorama_config(cfg) {
+        report.ok_step("panorama config", note);
+    }
+
     if cfg.write_encoding_txt {
         use std::collections::BTreeMap;
         let mut songs_by_folder: BTreeMap<&str, Vec<&SongCompile>> = BTreeMap::new();
@@ -3635,6 +3730,11 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
     // recompile once (staged into every variant, like icons).
     let (poster_outputs, posters_dirty) = compile_posters(cfg, content_root, compiled_root, report)?;
 
+    // Animated paintings: frames -> grid texture + exact flipbook material +
+    // host quad (Dynamic Paintings technique by goldenboy44, with permission).
+    let (dynpaint_outputs, dynpaint_dirty) =
+        crate::dynpaint::compile_dynpaints(cfg, content_root, compiled_root, report);
+
     // Hero skin textures: decompile hero materials, swap/hue-rotate the color
     // map, recompile once (staged into every variant, like posters).
     let (herotex_outputs, herotex_dirty) =
@@ -3668,6 +3768,7 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
     // skip too (the build stamp guards config changes like removals/toggles).
     let overrides_dirty = effects_dirty
         || posters_dirty
+        || dynpaint_dirty
         || herotex_dirty
         || modtex_dirty
         || vdata_dirty
@@ -4373,6 +4474,17 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
             match copy_into(&src, &stage, rel) {
                 Ok(_) => staged += 1,
                 Err(e) => report.soft_fail(format!("stage poster: {rel}"), e.to_string()),
+            }
+        }
+        // Stage animated paintings (material + grid texture + quad + blackouts).
+        for rel in &dynpaint_outputs {
+            let src = compiled_root.join(rel);
+            if cfg.skip_compile && !src.exists() {
+                continue;
+            }
+            match copy_into(&src, &stage, rel) {
+                Ok(_) => staged += 1,
+                Err(e) => report.soft_fail(format!("stage animated: {rel}"), e.to_string()),
             }
         }
         // Stage hero skin textures (recompiled .vmat_c + .vtex_c at the game's paths).
@@ -5775,6 +5887,7 @@ mod tests {
             skip_compile: false,
             imported_mods: vec![],
             imported_mod_excludes: Default::default(),
+            dynpaints: vec![],
             events: vec![],
             icon_mods: vec![],
             sound_overrides: vec![],
@@ -5843,6 +5956,7 @@ mod tests {
             skip_compile: false,
             imported_mods: vec![],
             imported_mod_excludes: Default::default(),
+            dynpaints: vec![],
             events: vec![EventCompile {
                 event_name: "Music.MatchIntro.MatchStart.King".into(),
                 array_key: "vsnd_files".into(),
@@ -5987,6 +6101,7 @@ mod tests {
             skip_compile: false,
             imported_mods: vec![],
             imported_mod_excludes: Default::default(),
+            dynpaints: vec![],
             events: vec![EventCompile {
                 event_name: "Music.Koth.Capture.Lp".into(),
                 array_key: "vsnd_files_blocked".into(),
@@ -6282,6 +6397,7 @@ mod tests {
             skip_compile: false,
             imported_mods: vec![],
             imported_mod_excludes: Default::default(),
+            dynpaints: vec![],
             events: vec![],
             icon_mods: vec![],
             sound_overrides: vec![],
@@ -6409,6 +6525,7 @@ mod tests {
             skip_compile: false,
             imported_mods: vec![],
             imported_mod_excludes: Default::default(),
+            dynpaints: vec![],
             events: vec![],
             icon_mods: vec![],
             sound_overrides: vec![],
@@ -6517,6 +6634,7 @@ mod tests {
             skip_compile: false,
             imported_mods: vec![],
             imported_mod_excludes: Default::default(),
+            dynpaints: vec![],
             events: vec![],
             icon_mods: vec![],
             sound_overrides: vec![],
@@ -6624,6 +6742,7 @@ mod tests {
             skip_compile: false,
             imported_mods: vec![],
             imported_mod_excludes: Default::default(),
+            dynpaints: vec![],
             events: vec![],
             icon_mods: vec![],
             sound_overrides: vec![],
@@ -6916,6 +7035,7 @@ mod tests {
             skip_compile: true,
             imported_mods: vec![],
             imported_mod_excludes: Default::default(),
+            dynpaints: vec![],
             events: vec![],
             icon_mods: vec![],
             sound_overrides: vec![],
@@ -6946,5 +7066,76 @@ mod tests {
         assert!(staged.exists(), "artifact not staged at the vanilla path");
         assert!(report.output_path.is_some());
         let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod compiler_error_detail_tests {
+    use super::compiler_error_detail;
+
+    /// The Jumpscares support case: the report showed only stderr's boot
+    /// noise (ILocalize + device creation) while the real error sat in
+    /// stdout. The detail must surface the stdout error and drop the noise.
+    #[test]
+    fn real_error_beats_ilocalize_noise() {
+        let stderr = "ILocalize::AddFile() failed to load file \"resource/valve_english.txt\".\nILocalize::AddFile() failed to load file \"resource/countries_english.txt\".\nCreating device for graphics adapter 0 'NVIDIA GeForce RTX 4060' [vendorid 0x10DE]: 32.0.16.1088\n";
+        let stdout = "resourcecompiler.exe f 2\nCompiling 5 files\nERROR: panorama/scripts/moonah_master.js: script compile failed (v8 not initialized)\n1 compiled, 1 failed\n";
+        let d = compiler_error_detail(stdout, stderr);
+        assert!(d.contains("script compile failed"), "{d}");
+        assert!(d.contains("1 compiled, 1 failed"), "{d}");
+        assert!(!d.contains("ILocalize"), "noise must be dropped: {d}");
+        assert!(!d.contains("Creating device"), "noise must be dropped: {d}");
+
+        // No error-looking lines at all: fall back to the tails, still no noise.
+        let d2 = compiler_error_detail("did things\nlast line\n", stderr);
+        assert!(d2.contains("last line"), "{d2}");
+        assert!(!d2.contains("ILocalize"), "{d2}");
+        assert_eq!(compiler_error_detail("", ""), "(no output)");
+    }
+}
+
+#[cfg(test)]
+mod panorama_config_tests {
+    use super::*;
+
+    /// A trimmed-bundle toolchain must get core's panorama_config.txt staged
+    /// from the game's core pak (dir-transparent here); a toolchain that has
+    /// it (the full CSDK) is left alone.
+    #[test]
+    fn panorama_config_staged_from_core_pak() {
+        let t = std::env::temp_dir().join("eim_pano_cfg_test");
+        let _ = std::fs::remove_dir_all(&t);
+        // Trimmed toolchain: citadel only, no core.
+        std::fs::create_dir_all(t.join("tools/game/citadel")).unwrap();
+        // Fake game install: the core "pak" as a dir (the vpk layer copies
+        // straight from dirs, so no helper process is needed).
+        std::fs::create_dir_all(t.join("game/game/core/pak01_dir.vpk/panorama")).unwrap();
+        std::fs::write(
+            t.join("game/game/core/pak01_dir.vpk/panorama/panorama_config.txt"),
+            "cfg",
+        )
+        .unwrap();
+        std::fs::create_dir_all(t.join("game/game/citadel")).unwrap();
+        std::fs::write(t.join("game/game/citadel/pak01_dir.vpk"), "pak").unwrap();
+
+        let mut cfg = CompileConfig {
+            game_info_dir: t.join("tools/game/citadel").to_string_lossy().into_owned(),
+            vpk_helper_path: Some("unused-for-dir-sources".into()),
+            pak_path: Some(
+                t.join("game/game/citadel/pak01_dir.vpk").to_string_lossy().into_owned(),
+            ),
+            ..Default::default()
+        };
+        let note = ensure_panorama_config(&cfg);
+        assert!(note.is_some(), "must stage the config");
+        let dest = t.join("tools/game/core/panorama/panorama_config.txt");
+        assert_eq!(std::fs::read_to_string(&dest).unwrap(), "cfg");
+        // Second run: already there, no-op.
+        assert!(ensure_panorama_config(&cfg).is_none());
+        // No pak configured: quietly does nothing.
+        cfg.pak_path = None;
+        let _ = std::fs::remove_file(&dest);
+        assert!(ensure_panorama_config(&cfg).is_none());
+        let _ = std::fs::remove_dir_all(&t);
     }
 }

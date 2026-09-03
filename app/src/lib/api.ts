@@ -208,6 +208,17 @@ export interface CompileConfig {
   heroTextures?: HeroTexCompile[];
   /** Texture swaps inside bundled mod vpks (combined variant only). */
   modTextures?: ModTextureCompile[];
+  /** Animated paintings (goldenboy44 technique, with permission). */
+  dynpaints?: {
+    id: string;
+    sourceMedia: string;
+    dwell: number;
+    maxFrames: number;
+    panel: string;
+    fit: string;
+    cropX: number;
+    cropY: number;
+  }[];
   /** Custom hero models: pre-built vmdl_c artifacts staged at vanilla paths. */
   modelOverrides?: ModelOverrideCompile[];
   digimod?: DigimodCompile | null;
@@ -649,6 +660,12 @@ export function listSoundEvents(
  *  a release build rejects. */
 export function writeSoundBaseline(json: string): Promise<string> {
   return invoke("write_sound_baseline", { json });
+}
+
+/** Dev-build only: write the edited tab flavor lines into the repo's
+ *  shipped data file (app/src/data/tabFlavor.json). */
+export function writeTabFlavor(json: string): Promise<string> {
+  return invoke("write_tab_flavor", { json });
 }
 
 /** Enumerate every `.vsndevts` file in the game pak (relpaths, `_c` stripped),

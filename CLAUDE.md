@@ -225,6 +225,34 @@ contains `{` braces).
   (`project.model_overrides` / `ModelOverrideCompile`). E2E: ignored test
   `e2e_model_build_via_cs2` + committed rigged-cube fixture
   (`testdata/eim_testcube.fbx`, generated headlessly by Blender).
+- `dynpaint.rs` — Animated paintings (Dynamic Paintings technique + registry by
+  goldenboy44/leonyarov, used with permission): gif/video -> ffmpeg frames
+  (cover-cropped to the quad's aspect) -> POWER-OF-TWO grid texture (npot
+  fails GenerateMips and kills the material compile) -> exact flipbook vmat
+  (F_ENABLE_TEXTURE_TRANSFORMS + $ent_age DynamicParams expression - compiles
+  to bytecode via the CSDK, e2e-proven) -> staged with the bundled per-panel quad model
+  that OVERRIDES the host prop (expressions never tick on baked world
+  geometry, so the art rides an entity-hosted quad): hideout ghost pianist
+  (+ blackout textures at the stock portrait's hashed names), midtown church
+  archway (11 sign panels, stock mesh+collision rebuilt in) and a trash can
+  lid (5 panels) - ONE panel per host (they share the model path; guarded).
+  Fit modes cover/contain/stretch + crop position (`fit_filter`). Display registry
+  (incl. per-panel cells + roomLight): `src/data/dynpaintTargets.ts`; models:
+  `templates/dynpaint/`; MULTI-SURFACE hosts (combo=true) rebuild the host model at
+  compile time: bundled card vmdl_c -> scratch vpk -> helper `model` kit (cached in
+  content .eim_dynpaint_kits) -> helper `dmxsplit` (Datamodel face-set filter; base
+  card keeps stock mesh+its quad renamed, others become quad-only DMXes, each on a
+  per-panel material via `panel_rel`) -> `combo_vmdl` + CSDK compile (compiler strips
+  unreferenced verts: 2-panel combo ~= single-card size); per-surface max_tex is
+  graduated (host_max_tex: 1-2 surfaces 8192, 3-4 4096, 5+ 2048 - adding/removing
+  a surface changes the host ident so grids re-render at the new tier); UI =
+  the sidebar WALL ART master's Animated Art tab -> `AnimatedArt.tsx`
+  (aspect-true tiles, live fit/crop preview via object-fit/position, gif plays in
+  tile, video hover-play via videoThumbs, hideout room-light multiply overlay;
+  ONE selected-tile settings panel per host, click tile to open, "Apply look to
+  all" copies fit/crop/speed/frames host-wide; the Wall Art master sits directly
+  under the Sounds master).
+  E2E `e2e_dynpaint_hideout` (compiles hideout + a midtown card).
 - `packsync.rs` — Shared Pack profile sync (two people, one modpack, transport =
   any shared folder, typically a GitHub clone). Export walks the profile JSON
   **schema-blind**: every string that is an absolute path to something that exists
@@ -283,7 +311,13 @@ Headless compile uses the community **Reduced CSDK** toolchain via the content/g
 invocation includes `-danger_mode_ignore_schema_mismatches` — **required** because the
 CSDK tool DLLs mismatch the live game's particle schema and otherwise abort (benign for
 audio/soundevents). Looping `_lp` sounds need an `encoding.txt` with a per-file `loop`
-block in the same folder as the source wavs.
+block in the same folder as the source wavs. Panorama inputs (panel js/css/xml,
+panorama_image_list vdata) hard-need core's `panorama/panorama_config.txt`; the
+download bundle lacks game/core entirely, and the failed panorama init FAILS EVERY
+INPUT BATCHED AFTER the panorama ones ("4 compiled, 2 failed" with the cause mid-log,
+the Jumpscares support case) - `ensure_panorama_config` self-heals it from the game's
+core pak (compile_project + push_ui_files), and `compiler_error_detail` surfaces real
+error lines (stdout carries them; stderr is ILocalize/device-creation noise).
 
 ### 3. `tools/vpk-helper` — C# CLI (net10.0)
 Thin wrapper over **ValvePak** + **ValveResourceFormat**. Subcommands (see
@@ -308,8 +342,10 @@ cache for instant first paint (`lib/settings.ts`, with `buildCompileConfig` +
 `installSrcVpk`).
 
 **Tabs.** The sidebar is resizable (drag handle on its edge; dbl-click resets; width in
-localStorage) and organizes into four tinted section buttons: HEROES (mint #a7fff1),
-ITEMS (orange), WALL ART (violet), and the "SOUNDS" master (sky) which nests the
+localStorage) and organizes into tinted sections: HEROES (mint #a7fff1) and
+ITEMS (orange) buttons, plus two collapsible masters sharing one render path (navItems
+`master` items, `tint` sky|violet skins): "WALL ART" (violet; nests `posters` "Static
+Art" + `animatedart` "Animated Art" = `AnimatedArt.tsx`) and "SOUNDS" (sky) nesting the
 `TAB_CATEGORIES` groups (Match / In-game / Game SFX) plus `ui`, `unsorted`, and
 `replacesounds` (labeled "All Sounds") with animated collapse/expand. Slot groups:
 (`intro`, `match`, `stingers`, `brawl`, `urn`, `rift`, `midboss`, `powerups`, `teamobj`,
@@ -341,7 +377,11 @@ trans-mask detector was wrong on gutterless text sheets: it fused sign rows and 
 words per letter) — NOTE the four `hideout/*` sheets (category "hideout":
 the hideout's painting atlases, MODEL materials under `models/hideout/materials/`)
 are HAND-ADDED, a manifest regen must keep them, and `poster_sheet` accepts
-`models/` material paths for them — drop a PNG on a sheet region; compile decompiles the
+`models/` material paths for them (and `vmat_color_ref` must keep accepting
+models/ color refs - a materials/-only filter broke all four sheets); the 13
+`signage/*` sheets (materials/signage/ posters/billboards/museum banner/hologram/
+skybox neon, region-less: users draw custom regions) are hand-added the same way -
+the generator only mines materials/overlays/, so regens must keep BOTH families — drop a PNG on a sheet region; compile decompiles the
 `materials/overlays` material from the pak via the helper's `material` cmd, ffmpeg-
 composites the art into the rect (+ white-fills the trans rect for cut-out posters),
 strips VRF's "Compiled Textures" block, recompiles the `.vmat`, and stages the

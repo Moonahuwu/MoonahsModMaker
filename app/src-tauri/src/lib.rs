@@ -2,6 +2,7 @@ mod audio;
 mod commands;
 mod compile;
 mod digimod;
+mod dynpaint;
 mod host;
 mod install;
 mod models;
@@ -135,6 +136,7 @@ pub fn run() {
             commands::list_sound_events,
             commands::measure_loudness,
             commands::write_sound_baseline,
+            commands::write_tab_flavor,
             commands::list_soundevent_files,
             commands::download_tools,
             commands::download_ffmpeg,

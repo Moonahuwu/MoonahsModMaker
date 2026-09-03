@@ -5363,6 +5363,48 @@ pub fn write_sound_baseline(_json: String) -> Result<String, String> {
     Err("Saving the shipped baseline only works in a dev build (npm run tauri dev)".into())
 }
 
+/// Validate + pretty-print the tab flavor-text map (a flat JSON object of
+/// tab id -> one-line string) and write it to `path`. Path-parameterized so
+/// the writer is testable; the command below pins the repo data file.
+pub(crate) fn write_flavor_file(path: &std::path::Path, json: &str) -> Result<usize, String> {
+    let doc: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| format!("flavor map is not valid JSON: {e}"))?;
+    let obj = doc.as_object().ok_or("flavor map must be a JSON object")?;
+    for (k, v) in obj {
+        if !v.is_string() {
+            return Err(format!("\"{k}\" must be a string"));
+        }
+    }
+    let pretty = format!("{}\n", serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())?);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(path, pretty).map_err(|e| format!("write {}: {e}", path.display()))?;
+    Ok(obj.len())
+}
+
+/// Dev-build only: write the edited tab flavor lines into the repo's shipped
+/// data file (`app/src/data/tabFlavor.json`) so they ship with the next
+/// release. Same contract as `write_sound_baseline`.
+#[cfg(debug_assertions)]
+#[tauri::command]
+pub fn write_tab_flavor(json: String) -> Result<String, String> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("src")
+        .join("data")
+        .join("tabFlavor.json");
+    write_flavor_file(&path, &json)?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+/// Release builds have no repo to write into.
+#[cfg(not(debug_assertions))]
+#[tauri::command]
+pub fn write_tab_flavor(_json: String) -> Result<String, String> {
+    Err("Editing flavor text only works in a dev build (npm run tauri dev)".into())
+}
+
 /// Derive all paths for a song name (the single source of truth).
 #[tauri::command]
 pub fn derive_paths(
@@ -7187,6 +7229,12 @@ pub async fn push_ui_files(
             return Err("no edited UI files to push".to_string());
         }
         let mut report = compile::CompileReport::new();
+        // The UI push is ALL panorama files - the compile-only tools bundle
+        // needs core's panorama_config.txt staged first (see
+        // ensure_panorama_config; the Jumpscares support case).
+        if let Some(note) = compile::ensure_panorama_config(&config) {
+            report.ok_step("panorama config", note);
+        }
         let (rels, _dirty) = compile::compile_ui_overrides(
             &config,
             std::path::Path::new(&config.content_root),
@@ -8489,6 +8537,21 @@ fn hero_images_impl(
     Ok(out)
 }
 
+/// First TextureColor* reference in a decompiled vmat - the sheet's color
+/// map. Overlay sheets keep it under materials/, the hand-added hideout
+/// painting sheets under models/hideout/materials/ (a materials/-only filter
+/// here broke every hideout sheet with "no color texture", a real report).
+pub(crate) fn vmat_color_ref(text: &str) -> Option<String> {
+    text.lines()
+        .filter_map(|l| {
+            let t = l.trim();
+            let rest = t.strip_prefix("\"TextureColor")?;
+            let v = rest.split('"').nth(2)?;
+            (v.starts_with("materials/") || v.starts_with("models/")).then(|| v.to_string())
+        })
+        .next()
+}
+
 /// Decompile a poster atlas material from the game pak into the app-data cache
 /// (once) and return its color texture as a viewable PNG. Powers the Posters
 /// tab sheet display.
@@ -8523,15 +8586,7 @@ pub fn poster_sheet(
         )?;
     }
     let text = std::fs::read_to_string(&vmat).map_err(|e| e.to_string())?;
-    let color_rel = text
-        .lines()
-        .filter_map(|l| {
-            let t = l.trim();
-            let rest = t.strip_prefix("\"TextureColor")?;
-            let v = rest.split('"').nth(2)?;
-            v.starts_with("materials/").then(|| v.to_string())
-        })
-        .next()
+    let color_rel = vmat_color_ref(&text)
         .ok_or_else(|| format!("no color texture in {material}"))?;
     let color_abs = root.join(&color_rel);
     if !color_abs.exists() {
@@ -9560,5 +9615,27 @@ mod setup_validation_tests {
         assert!(good.addons_dir.ok, "{good:?}");
         assert!(good.addon_name.ok && good.sound_folder.ok);
         let _ = std::fs::remove_dir_all(std::env::temp_dir().join("eim_setup_validate"));
+    }
+}
+
+#[cfg(test)]
+mod poster_sheet_tests {
+    use super::vmat_color_ref;
+
+    /// The hideout painting sheets are MODEL materials - their color ref
+    /// lives under models/, and rejecting it broke every hideout sheet
+    /// ("no color texture in models/hideout/..." - a real report).
+    #[test]
+    fn color_ref_accepts_model_materials() {
+        let hideout =
+            "\t\"TextureColor1\"\t\"models/hideout/materials/hideout_portraits_color.png\"\n";
+        assert_eq!(
+            vmat_color_ref(hideout).as_deref(),
+            Some("models/hideout/materials/hideout_portraits_color.png")
+        );
+        let overlay = "\t\"TextureColor\"\t\"materials/overlays/x_color.png\"\n";
+        assert_eq!(vmat_color_ref(overlay).as_deref(), Some("materials/overlays/x_color.png"));
+        // Constant-vector colors are not textures.
+        assert_eq!(vmat_color_ref("\t\"TextureColor1\"\t\"[1.0 1.0 1.0 0.0]\"\n"), None);
     }
 }

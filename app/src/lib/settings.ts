@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { CompileConfig, EffectCompile, EventCompile, GbModInfo, GlobalCompile, HeroTexCompile, IconCompile, ModTextureCompile, PosterCompile, ProfileCompilePrefs, SoundOverrideCompile, VdataCompile, WorldCompile } from "./api";
 import { loadSettings, saveSettings, renderSpecOf } from "./api";
-import type { DigimodConfig, EffectOverride, EventProject, HeroTextureOverride, LibraryItem, ModelOverride, ModTextureOverride, PosterOverride, SoundOverride, UiFileOverride } from "../types";
+import type { DigimodConfig, DynpaintEntry, EffectOverride, EventProject, HeroTextureOverride, LibraryItem, ModelOverride, ModTextureOverride, PosterOverride, SoundOverride, UiFileOverride } from "../types";
 import { songHash, overrideHash, effectHash, posterHash, heroTexHash, modTexHash } from "./songHash";
 
 // User-facing settings. We derive the verbose CompileConfig paths from a CSDK
@@ -528,8 +528,21 @@ export function buildCompileConfig(
   heroTextures: HeroTextureOverride[] = [],
   modTextureOverrides: ModTextureOverride[] = [],
   modelOverrides: ModelOverride[] = [],
+  dynpaints: DynpaintEntry[] = [],
 ): CompileConfig {
   const explicitOverrideRefs = new Set(soundOverrides.map((o) => o.targetRef));
+  const dynpaintCompiles = dynpaints
+    .filter((d) => d.enabled !== false && d.sourceMedia)
+    .map((d) => ({
+      id: d.id,
+      sourceMedia: d.sourceMedia,
+      dwell: d.dwell ?? 0,
+      maxFrames: d.maxFrames ?? 240,
+      panel: d.panel ?? "card1",
+      fit: d.fit ?? "cover",
+      cropX: d.cropX ?? 0.5,
+      cropY: d.cropY ?? 0.5,
+    }));
   const directTargets = new Map<string, string>();
   for (const ev of events) {
     // Soundstack-driven slots (Rift capture loop layers): no vsnd refs exist
@@ -702,6 +715,7 @@ export function buildCompileConfig(
     posterOverrides: posterCompiles,
     heroTextures: heroTexCompiles,
     modTextures: modTexCompiles,
+    dynpaints: dynpaintCompiles,
     modelOverrides: modelOverrides
       .filter((m) => m.enabled !== false && m.artifact)
       .map((m) => ({

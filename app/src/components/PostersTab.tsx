@@ -849,7 +849,10 @@ export function PostersTab({
                   </span>
                 </div>
                 {sheetHidden && (
-                  <span className="absolute left-4 top-4 rounded bg-amber-400/90 px-1.5 text-[10px] font-bold text-zinc-900">
+                  <span
+                    title="No map geometry samples this sheet - but sign props/models may still show it in game; replacing regions here still works"
+                    className="absolute left-4 top-4 rounded bg-amber-400/90 px-1.5 text-[10px] font-bold text-zinc-900"
+                  >
                     unused
                   </span>
                 )}
@@ -910,8 +913,19 @@ export function PostersTab({
           {sheet.width}×{sheet.height}
           {!sheet.curated && " · auto-mapped regions"}
         </span>
+        {sheet.id === "hideout/portrait_large" && (
+          <span
+            className="rounded bg-violet-500/15 px-1.5 text-[10px] font-semibold text-violet-300"
+            title="This painting can play a GIF or video: set it up under Wall Art > Animated Art in the sidebar. Painting it HERE changes the static picture as usual."
+          >
+            ▶ can be animated
+          </span>
+        )}
         {hiddenSheetSet.has(sheet.id) && (
-          <span className="rounded bg-amber-400/90 px-1.5 text-[10px] font-bold text-zinc-900">
+          <span
+            title="No map geometry samples this sheet - but sign props/models may still show it in game; replacing regions here still works"
+            className="rounded bg-amber-400/90 px-1.5 text-[10px] font-bold text-zinc-900"
+          >
             unused sheet
           </span>
         )}

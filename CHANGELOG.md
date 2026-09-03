@@ -2,6 +2,24 @@
 
 All notable changes since 1.0.4. Download: https://gamebanana.com/tools/23422
 
+## 1.4 (2026-09-03)
+
+### Animated paintings and signs (NEW)
+- Wall Art can now play a GIF or video on in-world surfaces: the big painting above the hideout fireplace, plus 16 Midtown sign surfaces across two hosts (library paintings, the item ads outside the T1 camps, adframes, standees, a square billboard) - pick a surface, pick the file, compile, done. The animation is compiled into your pack like everything else: installs with your addon, joins Shared Pack sync, no separate files. Frames pack into a texture grid and a shader expression steps through them in game; the hideout bakes the room's dim warm light in so the picture sits naturally.
+- Wall Art is now its own sidebar section with two tabs, Static Art and Animated Art, and you can fill AS MANY animated surfaces as you like - every sign gets its own art, speed and fit at once (the compile rebuilds the host model with one quad and one material per animated surface). The Wall Art section sits right under Sounds, and a filled wall stays tidy: click a tile to open its settings in one compact panel, with "Apply look to all" to copy one tile's fit and speed across the whole wall. Per-surface texture size is tiered by how many surfaces animate on one host (1-2: 8192px, 3-4: 4096px, 5+: 2048px) so a fully filled wall stays easy on video memory, and hover-played video previews release their memory as soon as you move away.
+- "Modified only" now correctly keeps Wall Art visible when you have poster art queued (it used to hide the tab). The Animated tab shows every surface as a tile with its REAL in-game shape, grouped by host - your art renders inside the tile exactly as it will be cropped in game (GIFs animate right in the tile, videos play on hover), the hideout tile can preview the room's lighting.
+- Fit options like regular posters: Fill (crop the overflow, with a position pick), Fit (letterbox), or Stretch - plus speed (or the source's own rate) and a frame cap. A still image works too: it becomes a static picture on the surface (handy for the Midtown signs, which have no regular region). The static hideout portrait sheet points at the Animated tab with a "can be animated" tag.
+- A surface that cannot be read no longer sinks the wall: the compile drops just that surface, builds the rest, and retries the dropped one automatically on your next compile. Failed extractions now report the actual ffmpeg error (and the exact command) instead of three lines of progress noise, and leftover frames from an interrupted run can never pad a later build.
+- Technique, host research and surface data by goldenboy44 (leonyarov), used with permission - check out the original Dynamic Paintings web tool at gamebanana.com/tools/23828. Midtown surfaces are marked beta, matching his own tool.
+
+### Wall Art: missing signs found, hideout paintings fixed, "unused" explained
+- 13 new sheets under Signs & Billboards: the street poster collages, billboards, the museum banner, hologram and six neon boards (the game's materials/signage/ tree) were never scanned into the manifest, so a whole family of in-world posters and signs simply was not offered. They start without pre-drawn regions - use the region editor to outline the poster you want (or replace the whole sheet).
+- Hideout painting sheets load again: "Couldn't load the sheet texture: no color texture in models/hideout/..." was the tab rejecting color textures that live under models/ (all four hideout sheets were hit).
+- "Unused" now says what it means: no MAP geometry samples that art - but sign props and models can still show it in game (the map scan cannot see those), and replacing an unused region still compiles and works. The toggle description and the amber chips explain this now; some unused entries really are cut content.
+
+### Jumpscares: compiling on the downloaded tools
+- Compiling a Jumpscares/Deaths mod with the app-downloaded compile tools failed ("resourcecompiler exit 1" with only localization warnings shown). Two fixes: the app now stages the one tiny file the download bundle is missing (core's panorama_config.txt, taken from your own game files) before compiling - panorama UI, images and the sounds batched after them all compile again; and compile errors now show the compiler's ACTUAL error lines instead of the first warnings it printed, so the next report says what really broke. Same fix applies to UI Master pushes.
+
 ## 1.3 (2026-08-25)
 
 ### Model Replacement: ragdolls work again

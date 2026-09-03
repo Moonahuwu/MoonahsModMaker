@@ -398,7 +398,7 @@ export function SetupSection({
               checked={settings.showUnusedPosters}
               onChange={(v) => update({ showUnusedPosters: v })}
               title="Show unused poster assets"
-              desc="Reveal poster sheets/regions marked unused (cut content like Neon Prime leftovers) in the Wall Art tab."
+              desc="Reveal poster sheets/regions marked unused in the Wall Art tab. Unused means no MAP geometry samples them - but some still appear in game on sign props and models (camp signs, boards), which the map scan cannot see. Replacing an unused region still compiles and works; others are genuinely cut content (Neon Prime leftovers)."
               accent="accent-amber-500"
             />
           </div>

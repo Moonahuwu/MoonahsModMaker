@@ -394,3 +394,20 @@ pub fn extract(
     cmd.args(["extract", vpk, internal_path, out_file]);
     run(cmd, "extract")
 }
+
+/// Filter a model DMX's face sets by material via the helper's `dmxsplit`
+/// (Dynamic Paintings combo models): mode `keep` keeps only matching face
+/// sets, `drop` removes them, `rename` keeps everything - and in all modes
+/// a matching face set's material is retargeted to `new_material`.
+pub fn dmx_split(
+    helper_path: &str,
+    input: &str,
+    output: &str,
+    mode: &str,
+    material_needle: &str,
+    new_material: &str,
+) -> Result<String, String> {
+    let mut cmd = helper_command(helper_path);
+    cmd.args(["dmxsplit", input, output, mode, material_needle, new_material]);
+    run(cmd, "dmxsplit")
+}
