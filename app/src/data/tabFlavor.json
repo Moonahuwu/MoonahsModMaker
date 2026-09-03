@@ -1,15 +1,14 @@
 {
-  "modcombiner": "Merge other mods' sounds into your compile - nothing of yours is removed.",
-  "replacesounds": "Replace any game sound directly by its file - no soundevents touched. Browse a category, preview, then drop in your audio.",
+  "animatedart": "Play GIFs and videos on in-world paintings and signs",
   "effects": "Recolor any particle effect - hero abilities, item effects, and more. Preview the recolor live, then compile to apply.",
+  "jumpscares": "Random jumpscares while you play + videos when you die - your MoonahMasterUI mod, configured here and rebuilt on compile.",
+  "menuart": "Replace the game's screen art - the play-mode cards, their hero portraits, or any menu image by path.",
+  "modcombiner": "Merge other mods' sounds into your compile - nothing of yours is removed.",
+  "modelswap": "Put your own model on a hero or on the game's objects - the urn, crates, soul containers, map props. The original's animations, physics and setup stay; your build ships with the normal compile.",
+  "packbuilder": "Organize the pack into named modules - the future split points for standalone releases. Compiling still builds everything together.",
   "particleguide": "Every particle function in the game with what it does and the values Valve actually uses - the docs the particle editor never had.",
   "posters": "Replace the world's posters, signs, ghost signs, and graffiti with your own images - drop a PNG onto a region and compile.",
-  "animatedart": "Play GIFs and videos on in-world paintings and signs - fill as many surfaces as you like. Technique by goldenboy44, used with permission.",
-  "menuart": "Replace the game's screen art - the play-mode cards, their hero portraits, or any menu image by path.",
-  "jumpscares": "Random jumpscares while you play + videos when you die - your MoonahMasterUI mod, configured here and rebuilt on compile.",
+  "replacesounds": "Replace any game sound directly by its file",
   "uimaster": "Edit the game's UI files directly - decompiled to source, compiled back into your mod. Very experimental.",
-  "packbuilder": "Organize the pack into named modules - the future split points for standalone releases. Compiling still builds everything together.",
-  "modelswap": "Put your own model on a hero or on the game's objects - the urn, crates, soul containers, map props. The original's animations, physics and setup stay; your build ships with the normal compile.",
-  "unsorted": "Everything that doesn't have a home tab yet, plus one search box over every sound event in the game.",
-  "soundTabs": "Most used shows the curated and pinned sounds. Switch to All to browse every sound event this tab covers and pin the ones you reach for."
+  "unsorted": "Everything that doesn't have a home tab yet, plus one search box over every sound event in the game."
 }

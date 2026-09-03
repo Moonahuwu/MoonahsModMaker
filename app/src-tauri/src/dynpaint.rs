@@ -346,6 +346,23 @@ fn run_ffmpeg(ffmpeg: &str, args: &[&str]) -> Result<(), String> {
     }
 }
 
+/// Animated WebP sniff: RIFF/WEBP magic with an ANIM chunk in the header
+/// region. Twitter/Discord serve these constantly (often named .gif);
+/// ffmpeg builds broadly cannot decode them, so they route via the helper.
+pub(crate) fn is_animated_webp(path: &str) -> bool {
+    use std::io::Read;
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut buf = [0u8; 256];
+    let n = f.read(&mut buf).unwrap_or(0);
+    let b = &buf[..n];
+    b.len() >= 16
+        && &b[0..4] == b"RIFF"
+        && &b[8..12] == b"WEBP"
+        && b.windows(4).any(|w| w == b"ANIM")
+}
+
 /// The source's frames-per-second, via ffprobe next to ffmpeg.
 fn probe_fps(ffmpeg: &str, media: &str) -> Option<f64> {
     let ffprobe = crate::audio::ffprobe_from(ffmpeg);
@@ -469,19 +486,16 @@ fn build_surface(
     dp: &DynpaintCompile,
     p: &DynPanel,
     ffmpeg: &str,
+    helper: Option<&str>,
     max_tex: u32,
     report: &mut CompileReport,
 ) -> Result<(String, String), ()> {
     let step = format!("animated: {} {}", dp.id, p.id);
-    // Seconds per frame: the knob, else the source's own rate, clamped to
-    // goldenboy44's sane range (60fps .. one frame a minute).
-    let dwell = if dp.dwell > 0.0 {
-        dp.dwell.clamp(0.0167, 60.0)
-    } else {
-        probe_fps(ffmpeg, &dp.source_media)
-            .map(|fps| (1.0 / fps).clamp(0.0167, 60.0))
-            .unwrap_or(0.04)
-    };
+    // Seconds per frame: the knob, else the source's own rate (filled in per
+    // extraction path below), clamped to goldenboy44's sane range (60fps ..
+    // one frame a minute).
+    let explicit_dwell = dp.dwell > 0.0;
+    let mut dwell = if explicit_dwell { dp.dwell.clamp(0.0167, 60.0) } else { 0.04 };
     let max_frames = dp.max_frames.clamp(1, 2000);
 
     // Pass 1: frames at full cell size, fitted to the quad's aspect.
@@ -505,27 +519,92 @@ fn build_surface(
         return Err(());
     }
     let (cw, ch) = p.cell;
-    let vf = format!(
-        "fps={:.6},{}",
-        1.0 / dwell,
-        fit_filter(&dp.fit, cw, ch, dp.crop_x, dp.crop_y)
-    );
     let pattern = frames_dir.join("f_%05d.png");
-    if let Err(e) = run_ffmpeg(
-        ffmpeg,
-        &[
-            "-y",
-            "-i",
+    if is_animated_webp(&dp.source_media) {
+        // ffmpeg builds broadly fail on Twitter/Discord-style animated WebP
+        // ("Cannot determine format of input after EOF" - reproduced on
+        // 7.1.1, 8.0.1 AND a 2026 master build), so the helper's Skia does
+        // the decode (it reads exactly what Chrome reads) and ffmpeg only
+        // fits the resulting plain PNGs onto the cell.
+        let Some(helper) = helper.filter(|h| !h.is_empty()) else {
+            report.soft_fail(
+                step,
+                "animated WebP needs the vpk helper - set it in Settings".to_string(),
+            );
+            return Err(());
+        };
+        let raw_dir = frames_dir.with_file_name(format!("{}_raw", p.id));
+        let _ = std::fs::remove_dir_all(&raw_dir);
+        let decoded = match crate::vpk::webp_frames(
+            helper,
             &dp.source_media,
-            "-vf",
-            &vf,
-            "-frames:v",
-            &max_frames.to_string(),
-            &pattern.to_string_lossy(),
-        ],
-    ) {
-        report.soft_fail(step, e);
-        return Err(());
+            &raw_dir.to_string_lossy(),
+            max_frames,
+        ) {
+            Ok(out) => out,
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&raw_dir);
+                report.soft_fail(step, format!("decoding animated WebP: {e}"));
+                return Err(());
+            }
+        };
+        if !explicit_dwell {
+            if let Some(ms) = decoded
+                .split_whitespace()
+                .find_map(|w| w.strip_prefix("avg_ms="))
+                .and_then(|v| v.parse::<f64>().ok())
+                .filter(|ms| *ms > 0.0)
+            {
+                dwell = (ms / 1000.0).clamp(0.0167, 60.0);
+            }
+        }
+        let raw_pattern = raw_dir.join("f_%05d.png");
+        let fit = fit_filter(&dp.fit, cw, ch, dp.crop_x, dp.crop_y);
+        let fitted = run_ffmpeg(
+            ffmpeg,
+            &[
+                "-y",
+                "-framerate",
+                "25",
+                "-i",
+                &raw_pattern.to_string_lossy(),
+                "-vf",
+                &fit,
+                &pattern.to_string_lossy(),
+            ],
+        );
+        let _ = std::fs::remove_dir_all(&raw_dir);
+        if let Err(e) = fitted {
+            report.soft_fail(step, e);
+            return Err(());
+        }
+    } else {
+        if !explicit_dwell {
+            dwell = probe_fps(ffmpeg, &dp.source_media)
+                .map(|fps| (1.0 / fps).clamp(0.0167, 60.0))
+                .unwrap_or(0.04);
+        }
+        let vf = format!(
+            "fps={:.6},{}",
+            1.0 / dwell,
+            fit_filter(&dp.fit, cw, ch, dp.crop_x, dp.crop_y)
+        );
+        if let Err(e) = run_ffmpeg(
+            ffmpeg,
+            &[
+                "-y",
+                "-i",
+                &dp.source_media,
+                "-vf",
+                &vf,
+                "-frames:v",
+                &max_frames.to_string(),
+                &pattern.to_string_lossy(),
+            ],
+        ) {
+            report.soft_fail(step, e);
+            return Err(());
+        }
     }
     let n = std::fs::read_dir(&frames_dir).map(|rd| rd.count()).unwrap_or(0) as u32;
     if n == 0 {
@@ -729,7 +808,16 @@ pub fn compile_dynpaints(
         let mut vmat_rels: Vec<String> = Vec::new();
         let mut details: Vec<String> = Vec::new();
         for &(dp, p) in &active {
-            match build_surface(content_root, t, dp, p, ffmpeg, max_tex, report) {
+            match build_surface(
+                content_root,
+                t,
+                dp,
+                p,
+                ffmpeg,
+                cfg.vpk_helper_path.as_deref(),
+                max_tex,
+                report,
+            ) {
                 Ok((vmat_rel, detail)) => {
                     built.push((dp, p));
                     vmat_rels.push(vmat_rel);
@@ -974,6 +1062,31 @@ mod dynpaint_tests {
     }
 
     #[test]
+    fn animated_webp_sniff() {
+        let dir = std::env::temp_dir().join("eim_webp_sniff_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |name: &str, bytes: &[u8]| {
+            let p = dir.join(name);
+            std::fs::write(&p, bytes).unwrap();
+            p.to_string_lossy().into_owned()
+        };
+        // Animated: RIFF/WEBP with VP8X + ANIM chunk (the Twitter shape).
+        let mut anim = b"RIFF\x82\x85\x43\x00WEBPVP8X\x0a\x00\x00\x00\x12\x00\x00\x00\xff\x04\x00\xcf\x02\x00".to_vec();
+        anim.extend_from_slice(b"ANIM\x06\x00\x00\x00\xff\xff\x00\x00\x00\x00");
+        assert!(is_animated_webp(&write("anim.webp", &anim)));
+        // Still webp: no ANIM chunk anywhere in the header.
+        assert!(!is_animated_webp(&write(
+            "still.webp",
+            b"RIFF\x24\x00\x00\x00WEBPVP8 \x18\x00\x00\x00\x30\x01\x00\x9d\x01\x2a\x01\x00\x01\x00"
+        )));
+        // A real gif (extension lies are irrelevant - bytes decide).
+        assert!(!is_animated_webp(&write("a.gif", b"GIF89a\x01\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00")));
+        assert!(!is_animated_webp(&dir.join("missing.webp").to_string_lossy()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn max_tex_tiers_bound_host_vram() {
         // Tiers are monotonic (more surfaces never get a BIGGER cap) and the
         // worst-case host VRAM stays bounded: n * cap^2 texels ~= n * cap^2
@@ -1174,12 +1287,21 @@ mod dynpaint_tests {
         let _ = std::fs::remove_dir_all(&content);
         std::fs::create_dir_all(&content).unwrap();
         let mut report = CompileReport::new();
-        let cases: [(&DynTarget, &str, &str, &str); 2] = [
+        let helper = r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\tools\vpk-helper\bin\Release\net10.0\vpk-helper.dll";
+        let cases: [(&DynTarget, &str, &str, &str); 3] = [
             (&ARCHMOTHER, "card1", r"D:\Downloads 2.0\yuta-jjk.gif", "stretch"),
             (
                 &HIDDEN_KING,
                 "card10",
                 r"D:\Downloads 2.0\RyukiriDragon-2070886693905834479-1.gif",
+                "cover",
+            ),
+            // The 2026-09-03 report: a Twitter animated WebP every local
+            // ffmpeg build refuses - must route through the helper's Skia.
+            (
+                &HIDDEN_KING,
+                "card6",
+                r"C:\Users\ethob\Downloads\HIY3jAwWQAEBmzt.webp",
                 "cover",
             ),
         ];
@@ -1195,7 +1317,7 @@ mod dynpaint_tests {
                 crop_x: 0.5,
                 crop_y: 0.5,
             };
-            match build_surface(&content, t, &dp, p, "ffmpeg", 2048, &mut report) {
+            match build_surface(&content, t, &dp, p, "ffmpeg", Some(helper), 2048, &mut report) {
                 Ok((rel, detail)) => eprintln!("OK {panel}: {detail} ({rel})"),
                 Err(()) => {}
             }

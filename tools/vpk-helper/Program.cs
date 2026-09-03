@@ -46,6 +46,7 @@ static int Dispatch(string[] args)
             "heroes" => Heroes(args),
             "worldrects" => WorldRects(args),
             "dmxsplit" => DmxSplit(args),
+            "webpframes" => WebpFrames(args),
             _ => Unknown(args[0]),
         };
     }
@@ -1163,6 +1164,66 @@ static int List(string[] args)
                 Console.WriteLine(full);
         }
     }
+    return 0;
+}
+
+// Decode an animated image (animated WebP above all: ffmpeg builds broadly
+// fail on Twitter/Discord's animated WebP flavor, while Skia decodes exactly
+// what Chrome does) into a PNG frame sequence. Prints "frames=N avg_ms=D".
+static int WebpFrames(string[] args)
+{
+    if (args.Length < 3)
+    {
+        Console.Error.WriteLine("usage: webpframes <in.webp|image> <outDir> [maxFrames]");
+        return 2;
+    }
+    var input = args[1];
+    var outDir = args[2];
+    var max = args.Length > 3 && int.TryParse(args[3], out var m) ? Math.Max(1, m) : 2000;
+    using var codec = SKCodec.Create(input, out var codecResult);
+    if (codec == null)
+    {
+        Console.Error.WriteLine($"cannot decode {input}: {codecResult}");
+        return 1;
+    }
+    var frameInfo = codec.FrameInfo; // empty for still images
+    var n = Math.Min(Math.Max(frameInfo.Length, 1), max);
+    Directory.CreateDirectory(outDir);
+    var info = new SKImageInfo(codec.Info.Width, codec.Info.Height, SKColorType.Rgba8888, SKAlphaType.Premul);
+    using var bmp = new SKBitmap(info);
+    long totalMs = 0;
+    for (int i = 0; i < n; i++)
+    {
+        if (frameInfo.Length > 0)
+        {
+            // Sequential decode keeps the composited prior frame in bmp, so a
+            // frame that builds on an earlier one has its base ready.
+            var required = frameInfo[i].RequiredFrame;
+            var opts = required >= 0 ? new SKCodecOptions(i, required) : new SKCodecOptions(i);
+            if (required < 0) bmp.Erase(SKColors.Transparent);
+            var r = codec.GetPixels(info, bmp.GetPixels(), opts);
+            if (r != SKCodecResult.Success && r != SKCodecResult.IncompleteInput)
+            {
+                Console.Error.WriteLine($"frame {i}: {r}");
+                return 1;
+            }
+            totalMs += Math.Max(frameInfo[i].Duration, 10);
+        }
+        else
+        {
+            var r = codec.GetPixels(info, bmp.GetPixels());
+            if (r != SKCodecResult.Success && r != SKCodecResult.IncompleteInput)
+            {
+                Console.Error.WriteLine($"decode: {r}");
+                return 1;
+            }
+        }
+        using var img = SKImage.FromBitmap(bmp);
+        using var data = img.Encode(SKEncodedImageFormat.Png, 100);
+        using var fs = File.Create(Path.Combine(outDir, $"f_{i + 1:D5}.png"));
+        data.SaveTo(fs);
+    }
+    Console.WriteLine($"frames={n} avg_ms={(frameInfo.Length > 0 ? totalMs / n : 0)}");
     return 0;
 }
 

@@ -238,7 +238,7 @@ contains `{` braces).
   lid (5 panels) - ONE panel per host (they share the model path; guarded).
   Fit modes cover/contain/stretch + crop position (`fit_filter`). Display registry
   (incl. per-panel cells + roomLight): `src/data/dynpaintTargets.ts`; models:
-  `templates/dynpaint/`; MULTI-SURFACE hosts (combo=true) rebuild the host model at
+  `templates/dynpaint/`; animated-WebP media (Twitter/Discord, ffmpeg-undecodable: reproduced on 7.1.1/8.0.1/2026-master) routes via helper `webpframes` (SkiaSharp SKCodec frame loop, prints frames=N avg_ms=D; `is_animated_webp` byte-sniff RIFF+WEBP+ANIM) then ffmpeg only fits the PNGs; MULTI-SURFACE hosts (combo=true) rebuild the host model at
   compile time: bundled card vmdl_c -> scratch vpk -> helper `model` kit (cached in
   content .eim_dynpaint_kits) -> helper `dmxsplit` (Datamodel face-set filter; base
   card keeps stock mesh+its quad renamed, others become quad-only DMXes, each on a

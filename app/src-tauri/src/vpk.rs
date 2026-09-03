@@ -399,6 +399,20 @@ pub fn extract(
 /// (Dynamic Paintings combo models): mode `keep` keeps only matching face
 /// sets, `drop` removes them, `rename` keeps everything - and in all modes
 /// a matching face set's material is retargeted to `new_material`.
+/// Decode an animated image (Twitter/Discord-style animated WebP above all,
+/// which ffmpeg builds broadly cannot read) into a PNG frame sequence via
+/// the helper's Skia. Returns the helper's stdout ("frames=N avg_ms=D").
+pub fn webp_frames(
+    helper_path: &str,
+    input: &str,
+    out_dir: &str,
+    max_frames: u32,
+) -> Result<String, String> {
+    let mut cmd = helper_command(helper_path);
+    cmd.args(["webpframes", input, out_dir, &max_frames.to_string()]);
+    run(cmd, "webpframes")
+}
+
 pub fn dmx_split(
     helper_path: &str,
     input: &str,
