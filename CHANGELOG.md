@@ -2,6 +2,11 @@
 
 All notable changes since 1.0.4. Download: https://gamebanana.com/tools/23422
 
+## Unreleased
+
+### Animated art: see where every surface lives
+- Every empty surface tile now shows an in-game photo of its location (goldenboy44's preview shots, used with permission), and the Midtown sections carry his Hidden King and ArchMother logos - no more guessing which adframe is which. Your art still replaces the photo the moment you fill a tile.
+
 ## 1.4.1 (2026-09-04)
 
 ### Animated art: Twitter/Discord "gifs" that are secretly WebP now work

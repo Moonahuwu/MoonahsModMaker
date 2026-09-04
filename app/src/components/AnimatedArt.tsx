@@ -5,6 +5,8 @@ import { videoThumb } from "../lib/videoThumbs";
 import type { DynpaintEntry } from "../types";
 import {
   DYNPAINT_TARGETS,
+  hostBanner,
+  panelPhoto,
   type DynpaintPanelInfo,
   type DynpaintTargetInfo,
 } from "../data/dynpaintTargets";
@@ -185,7 +187,7 @@ function SurfaceTile({
             ? `${panel.title} - ${panel.blurb}. Click to edit its settings.`
             : `${panel.title} - ${panel.blurb}. Click to pick an image, GIF or video.`
         }
-        className={`relative overflow-hidden rounded-md border transition ${
+        className={`group relative overflow-hidden rounded-md border transition ${
           selected
             ? "border-violet-300 shadow-[0_0_16px_rgba(167,139,250,0.45)]"
             : active
@@ -205,11 +207,33 @@ function SurfaceTile({
             )}
           </>
         ) : (
-          <span className="flex h-full w-full flex-col items-center justify-center gap-1 px-2 text-center">
-            <span className="text-[11px] font-medium text-zinc-400">{panel.title}</span>
-            <span className="text-[9px] leading-tight text-zinc-600">{panel.blurb}</span>
-            <span className="mt-1 text-[10px] text-violet-300/80">＋ animate</span>
-          </span>
+          <>
+            {/* Where this surface lives in game (goldenboy44's location
+                shots) - dimmed so the label stays readable. */}
+            <img
+              src={panelPhoto(target.id, panel.id)}
+              alt=""
+              loading="lazy"
+              decoding="async"
+              draggable={false}
+              className="absolute inset-0 h-full w-full object-cover opacity-80 transition group-hover:opacity-100"
+              onError={(e) => {
+                (e.target as HTMLImageElement).hidden = true;
+              }}
+            />
+            <span className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-black/25" />
+            <span className="relative flex h-full w-full flex-col items-center justify-center gap-1 px-2 text-center">
+              <span className="text-[11px] font-medium text-zinc-200 [text-shadow:0_1px_3px_rgba(0,0,0,0.9)]">
+                {panel.title}
+              </span>
+              <span className="text-[9px] leading-tight text-zinc-300/90 [text-shadow:0_1px_2px_rgba(0,0,0,0.9)]">
+                {panel.blurb}
+              </span>
+              <span className="mt-1 text-[10px] text-violet-200 [text-shadow:0_1px_2px_rgba(0,0,0,0.9)]">
+                ＋ animate
+              </span>
+            </span>
+          </>
         )}
       </button>
       <span
@@ -318,7 +342,18 @@ export function AnimatedArt({
         return (
           <section key={t.id} className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
             <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-sm font-semibold text-zinc-200">{t.name}</h3>
+              {/* The midtown hosts get goldenboy44's stylized logo in place
+                  of a plain name; the name rides along for screen readers. */}
+              {hostBanner(t.id) ? (
+                <img
+                  src={hostBanner(t.id)}
+                  alt={t.name}
+                  draggable={false}
+                  className="h-8 w-auto select-none"
+                />
+              ) : (
+                <h3 className="text-sm font-semibold text-zinc-200">{t.name}</h3>
+              )}
               <span className="text-[11px] text-zinc-600">{t.where}</span>
               {t.beta && (
                 <span

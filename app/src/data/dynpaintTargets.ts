@@ -5,9 +5,22 @@
 // https://github.com/leonyarov/deadlock-dynamic-paintings
 //
 // The compile-side twin (cells, models, material paths) lives in
-// dynpaint.rs; panel ids and cells must match it. Every panel of a host
-// overrides the same model file, so ONE surface per host can be animated at
-// a time.
+// dynpaint.rs; panel ids and cells must match it.
+
+/** In-game location photo for a surface (goldenboy44's preview shots, used
+ *  with permission; bundled under public/dynpaint, named `<target>_<panel>`).
+ *  Every registry panel has one, so this is pure convention. */
+export function panelPhoto(targetId: string, panelId: string): string {
+  return `/dynpaint/${targetId}_${panelId}.jpg`;
+}
+
+/** Stylized host banner (the Hidden King / Archmother logos from his site);
+ *  only the midtown hosts have one. */
+export function hostBanner(targetId: string): string | undefined {
+  return targetId === "midtown_hidden_king" || targetId === "midtown_archmother"
+    ? `/dynpaint/${targetId}_host.png`
+    : undefined;
+}
 
 export interface DynpaintPanelInfo {
   id: string;

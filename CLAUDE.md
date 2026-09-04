@@ -248,7 +248,9 @@ contains `{` braces).
   a surface changes the host ident so grids re-render at the new tier); UI =
   the sidebar WALL ART master's Animated Art tab -> `AnimatedArt.tsx`
   (aspect-true tiles, live fit/crop preview via object-fit/position, gif plays in
-  tile, video hover-play via videoThumbs, hideout room-light multiply overlay;
+  tile, video hover-play via videoThumbs, hideout room-light multiply overlay,
+  empty tiles show goldenboy44 location photos + host logo banners (public/dynpaint/,
+  `panelPhoto`/`hostBanner` convention over <target>_<panel>.jpg / <target>_host.png);
   ONE selected-tile settings panel per host, click tile to open, "Apply look to
   all" copies fit/crop/speed/frames host-wide; the Wall Art master sits directly
   under the Sounds master).
