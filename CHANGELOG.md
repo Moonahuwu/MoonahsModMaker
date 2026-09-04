@@ -2,7 +2,7 @@
 
 All notable changes since 1.0.4. Download: https://gamebanana.com/tools/23422
 
-## Unreleased
+## 1.4.1 (2026-09-04)
 
 ### Animated art: Twitter/Discord "gifs" that are secretly WebP now work
 - Media saved from Twitter or Discord is often an animated WebP file (sometimes even named .gif), and ffmpeg cannot read those at all - every surface using one failed with "Cannot determine format of input". The app now detects animated WebP by its actual bytes and decodes it with the same engine Chrome uses, so those files just work - real frame timing included. Nothing to convert, nothing to rename.
