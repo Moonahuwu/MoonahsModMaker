@@ -997,11 +997,23 @@ impl Project {
                     "sounds/npc/neutrals/vaults/vault_hit_heavy_01.vsnd",
                     "soundevents/npc/neut_vaults.vsndevts",
                 ),
+                // 2026-09-29 patch: Vault.HitSuccess split into a Light and a Heavy
+                // variant (same jackpot sting; the payout ride-along on track_2
+                // differs). The old slot id keeps users' tracks on the Light twin.
                 slot(
                     "sinners_hit_success",
                     "sinners",
-                    "Final hit (jackpot)",
-                    "Vault.HitSuccess",
+                    "Final hit (jackpot, light)",
+                    "Vault.HitSuccess.Light",
+                    "vsnd_files",
+                    "sounds/npc/neutrals/vaults/vault_hit_stinger_05.vsnd",
+                    "soundevents/npc/neut_vaults.vsndevts",
+                ),
+                slot(
+                    "sinners_hit_success_heavy",
+                    "sinners",
+                    "Final hit (jackpot, heavy)",
+                    "Vault.HitSuccess.Heavy",
                     "vsnd_files",
                     "sounds/npc/neutrals/vaults/vault_hit_stinger_05.vsnd",
                     "soundevents/npc/neut_vaults.vsndevts",
@@ -1024,13 +1036,54 @@ impl Project {
                     "sounds/mods/weapon/lucky/lucky_proc_01.vsnd",
                     "soundevents/npc/neut_vaults.vsndevts",
                 ),
+                // 2026-09-29 patch: Props.Vault.Destruction (stock vault_payout.vsnd)
+                // is gone; the payout burst now rides track_2 of the jackpot hit
+                // (Light = vault_payout, Heavy = vault_payout_heavy) and the vault's
+                // actual destruction got its own Vault.Destroyed event. The old slot
+                // id follows the payout file so users' tracks keep playing.
                 slot(
                     "sinners_payout",
                     "sinners",
-                    "Payout burst",
-                    "Props.Vault.Destruction",
-                    "vsnd_files",
+                    "Payout burst (light)",
+                    "Vault.HitSuccess.Light",
+                    "track_2.track_vsnd_files",
                     "sounds/npc/neutrals/vaults/vault_payout.vsnd",
+                    "soundevents/npc/neut_vaults.vsndevts",
+                ),
+                slot(
+                    "sinners_payout_heavy",
+                    "sinners",
+                    "Payout burst (heavy)",
+                    "Vault.HitSuccess.Heavy",
+                    "track_2.track_vsnd_files",
+                    "sounds/npc/neutrals/vaults/vault_payout_heavy.vsnd",
+                    "soundevents/npc/neut_vaults.vsndevts",
+                ),
+                slot(
+                    "sinners_destroyed",
+                    "sinners",
+                    "Vault destroyed",
+                    "Vault.Destroyed",
+                    "vsnd_files",
+                    "sounds/npc/neutrals/vaults/vault_destroy_01.vsnd",
+                    "soundevents/npc/neut_vaults.vsndevts",
+                ),
+                slot(
+                    "sinners_powerup_light",
+                    "sinners",
+                    "Powerup gained (light)",
+                    "Vault.Powerup.Gained.Light",
+                    "vsnd_files",
+                    "sounds/npc/neutrals/vaults/vault_powerup_gained_light.vsnd",
+                    "soundevents/npc/neut_vaults.vsndevts",
+                ),
+                slot(
+                    "sinners_powerup_heavy",
+                    "sinners",
+                    "Powerup gained (heavy)",
+                    "Vault.Powerup.Gained.Heavy",
+                    "vsnd_files",
+                    "sounds/npc/neutrals/vaults/vault_powerup_gained_heavy.vsnd",
                     "soundevents/npc/neut_vaults.vsndevts",
                 ),
                 slot(
@@ -1378,16 +1431,9 @@ impl Project {
                     "sounds/music/music_stinger_first_blood.vsnd",
                     "soundevents/music.vsndevts",
                 ),
-                // NOTE: "stringer" typo below is Valve's, in the live game data.
-                slot(
-                    "stinger_killstreak",
-                    "stingers",
-                    "Kill streak (generic)",
-                    "Stinger.KillStreak",
-                    "vsnd_files",
-                    "sounds/music/music_stringer_kill_streak.vsnd",
-                    "soundevents/music.vsndevts",
-                ),
+                // Stinger.KillStreak (the generic kill-streak event, stock
+                // "music_stringer_kill_streak.vsnd" - Valve's typo) was REMOVED by
+                // the 2026-09-29 patch; only the numbered KillStreak_01..09 remain.
                 slot(
                     "stinger_ks_01",
                     "stingers",
@@ -1674,7 +1720,7 @@ mod tests {
         let p = Project::default_for_match_intro();
         let json = serde_json::to_string_pretty(&p).unwrap();
         let back: Project = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.events.len(), 110);
+        assert_eq!(back.events.len(), 114);
         // The in-rift capture loop layers are stack-default merge slots: one
         // per soundstack layer array, each a real random pool.
         let cap = back.events.iter().find(|e| e.id == "rift_capture_loop").unwrap();
@@ -1700,6 +1746,21 @@ mod tests {
         assert!(back.events.iter().any(|e| e.id == "sinners_jingle_1"
             && e.array_key == "track_2.track_vsnd_files"
             && e.events_relpath == "soundevents/npc/neut_vaults.vsndevts"));
+        // 2026-09-29 patch remaps: the jackpot hit split into Light/Heavy (the
+        // old slot id follows the Light twin), the payout burst now rides the
+        // hit's track_2, and the removed generic kill-streak stinger is gone
+        // from the defaults (its numbered children remain).
+        assert!(back.events.iter().any(|e| e.id == "sinners_hit_success"
+            && e.event_name == "Vault.HitSuccess.Light"
+            && e.array_key == "vsnd_files"));
+        assert!(back.events.iter().any(|e| e.id == "sinners_payout"
+            && e.event_name == "Vault.HitSuccess.Light"
+            && e.array_key == "track_2.track_vsnd_files"
+            && e.stock_entry == "sounds/npc/neutrals/vaults/vault_payout.vsnd"));
+        assert!(back.events.iter().any(|e| e.id == "sinners_destroyed" && e.event_name == "Vault.Destroyed"));
+        assert!(!back.events.iter().any(|e| e.event_name == "Stinger.KillStreak"
+            || e.event_name == "Vault.HitSuccess"
+            || e.event_name == "Props.Vault.Destruction"));
         // The match-flow / stinger / brawl groups are present.
         assert!(back.events.iter().any(|e| e.id == "match_win"
             && e.event_name == "Music.Match.Win"

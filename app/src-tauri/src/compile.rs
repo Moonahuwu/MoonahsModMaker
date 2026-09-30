@@ -1951,6 +1951,27 @@ fn resolve_missing_texture_refs(
 /// Swap/recolor each hero material's color map and recompile the material at
 /// its vanilla path (the model is never touched, so the UVs stay put).
 /// Returns compiled-root-relative `_c` paths to stage.
+/// True when `file` was written before `reference` was last modified - the
+/// "this decompiled copy predates the game pak" test behind the vanilla
+/// self-refresh. Unreadable metadata on either side counts as not stale (never
+/// re-fetch on a guess).
+fn older_than(file: &Path, reference: &Path) -> bool {
+    match (std::fs::metadata(file).and_then(|m| m.modified()), std::fs::metadata(reference).and_then(|m| m.modified())) {
+        (Ok(f), Ok(r)) => f < r,
+        _ => false,
+    }
+}
+
+/// The compiler's `gameinfo.gi` (`<csdk>/game/citadel/gameinfo.gi`): handed to
+/// the helper so material extraction reads the CSDK's own shaders - see
+/// `vpk::material_from_vpk_with_shaders`.
+fn compiler_gameinfo(cfg: &CompileConfig) -> String {
+    Path::new(&cfg.game_info_dir)
+        .join("gameinfo.gi")
+        .to_string_lossy()
+        .into_owned()
+}
+
 fn compile_hero_textures(
     cfg: &CompileConfig,
     content_root: &Path,
@@ -1997,11 +2018,12 @@ fn compile_hero_textures(
         dirty = true;
         // Fresh vanilla decompile so a removed/changed edit never lingers in
         // the previously-composited art.
-        if let Err(e) = crate::vpk::material_from_vpk(
+        if let Err(e) = crate::vpk::material_from_vpk_with_shaders(
             helper,
             pak,
             &format!("{vmat_rel}_c"),
             &content_root.to_string_lossy(),
+            Some(&compiler_gameinfo(cfg)),
         ) {
             report.soft_fail(format!("decompile material: {}", ov.label), e);
             continue 'overrides;
@@ -2308,9 +2330,13 @@ fn compile_posters(
         // resets the sheet textures so removed overrides don't linger).
         for mat in &materials {
             let mat_c = format!("{mat}_c");
-            if let Err(e) =
-                crate::vpk::material_from_vpk(helper, pak, &mat_c, &content_root.to_string_lossy())
-            {
+            if let Err(e) = crate::vpk::material_from_vpk_with_shaders(
+                helper,
+                pak,
+                &mat_c,
+                &content_root.to_string_lossy(),
+                Some(&compiler_gameinfo(cfg)),
+            ) {
                 report.soft_fail(format!("decompile material: {mat}"), e);
                 continue 'sheets;
             }
@@ -3883,7 +3909,18 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
             // If the vanilla base is missing this events file (e.g. a soundevents
             // file referenced by a slot but not pulled by an earlier refresh),
             // decompile it straight from the live pak so compile self-heals.
-            if !vanilla.exists() {
+            // Same when the copy PREDATES the game pak: a patch rewrites these
+            // shared files (2026-09-29 renamed whole hero kits and added
+            // events), and merging into the old copy ships a file that lacks
+            // every event the patch added - those play NOTHING in game. The
+            // merge base must always be the live game's file.
+            let stale = cfg
+                .pak_path
+                .as_deref()
+                .filter(|p| !p.is_empty())
+                .map(|pak| vanilla.exists() && older_than(&vanilla, Path::new(pak)))
+                .unwrap_or(false);
+            if !vanilla.exists() || stale {
                 if let (Some(helper), Some(pak)) =
                     (helper_opt, cfg.pak_path.as_deref().filter(|p| !p.is_empty()))
                 {
@@ -3895,7 +3932,11 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
                     {
                         Ok(_) => report.ok_step(
                             format!("[{}] fetch vanilla {rel}", v.name),
-                            "from game pak".to_string(),
+                            if stale {
+                                "refreshed from the game pak (the game updated since this copy)".to_string()
+                            } else {
+                                "from game pak".to_string()
+                            },
                         ),
                         // A pack-only NEW file legitimately isn't in the pak;
                         // only a slot-referenced file failing to fetch is a
@@ -5918,6 +5959,261 @@ mod tests {
             assert!(Path::new(&compiled_root).join(rel).exists(), "missing {rel}");
         }
         eprintln!("both files recompiled OK");
+    }
+
+    fn e2e_base_cfg(addon: &str, out_name: &str) -> CompileConfig {
+        let csdk = r"C:\Users\ethob\Desktop\DeadlockModding\Reduced_CSDK_12";
+        let content_root = format!(r"{csdk}\content\citadel_addons\{addon}");
+        let compiled_root = format!(r"{csdk}\game\citadel_addons\{addon}");
+        let out = std::env::temp_dir().join(out_name);
+        let _ = std::fs::remove_dir_all(&out);
+        let _ = std::fs::remove_dir_all(&content_root);
+        let _ = std::fs::remove_dir_all(&compiled_root);
+        CompileConfig {
+            content_root,
+            compiled_root,
+            game_info_dir: format!(r"{csdk}\game\citadel"),
+            sound_folder: "sounds/music/match_intro".into(),
+            resource_compiler: format!(r"{csdk}\game\bin_tools\win64\resourcecompiler.exe"),
+            ffmpeg_path: None,
+            vpk_helper_path: Some(
+                r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\tools\vpk-helper\dist\vpk-helper.exe".into(),
+            ),
+            vanilla_root: r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\ModFiles".into(),
+            pak_path: Some(r"D:\SteamLibrary\steamapps\common\Deadlock\game\citadel\pak01_dir.vpk".into()),
+            output_dir: out.to_string_lossy().into_owned(),
+            output_mode: "vpk".into(),
+            vpk_name: "pak01_dir.vpk".into(),
+            zip_output: false,
+            write_encoding_txt: true,
+            skip_compile: false,
+            imported_mods: vec![],
+            imported_mod_excludes: Default::default(),
+            dynpaints: vec![],
+            events: vec![],
+            icon_mods: vec![],
+            sound_overrides: vec![],
+            effect_overrides: vec![],
+            vdata_overrides: vec![],
+            global_overrides: vec![],
+            world_overrides: vec![],
+            poster_overrides: vec![],
+            hero_textures: vec![],
+            mod_textures: vec![],
+            model_overrides: vec![],
+            digimod: None,
+            ui_overrides: vec![],
+            credits_text: None,
+            export_only: false,
+        }
+    }
+
+    /// Icon replacements against the LIVE game: an ability icon and a menu
+    /// card (raster -> vtex_c) plus a hero name logo (-> vsvg_c) must land at
+    /// their vanilla paths in the built vpk. Run after a game patch.
+    #[test]
+    #[ignore]
+    fn e2e_icon_mods_compile_to_vanilla_paths() {
+        let mut cfg = e2e_base_cfg("eim_icons_e2e_addon", "eim_icons_e2e_out");
+        let png = concat!(env!("CARGO_MANIFEST_DIR"), "/icons/128x128.png");
+        let targets = [
+            ("panorama/images/hud/abilities/bull_charge_psd.vtex_c", 128u32, 128u32),
+            ("panorama/images/main_menu/play/card_play_psd.vtex_c", 512, 512),
+            ("panorama/images/heroes/hero_names/abrams.vsvg_c", 256, 128),
+        ];
+        cfg.icon_mods = targets
+            .iter()
+            .enumerate()
+            .map(|(i, (t, w, h))| IconCompile {
+                source_image: png.into(),
+                target_vtexc: t.to_string(),
+                width: *w,
+                height: *h,
+                hue: if i == 0 { 90.0 } else { 0.0 },
+            })
+            .collect();
+        let report = run(&cfg);
+        for s in &report.steps {
+            println!("[{}] {} :: {}", if s.ok { "OK" } else { "FAIL" }, s.name, s.detail);
+        }
+        assert!(report.ok, "icon pipeline failed");
+        let staging = Path::new(&cfg.output_dir).join("mine").join("_staging");
+        for (t, _, _) in targets {
+            let p = staging.join(t.replace('/', std::path::MAIN_SEPARATOR_STR));
+            assert!(p.is_file(), "{t} not staged at its vanilla path ({})", p.display());
+            assert!(std::fs::metadata(&p).unwrap().len() > 100, "{t} is empty");
+        }
+        assert!(Path::new(&cfg.output_dir).join("mine").join("pak01_dir.vpk").exists(), "vpk not produced");
+    }
+
+    /// A vanilla events copy that PREDATES the game pak is re-fetched before
+    /// the merge (the 2026-09-29 "bell plays nothing" hunt found the app
+    /// merging into pre-patch copies, which ship without every event the
+    /// patch added). The stale copy here lacks ChinatownBell.Ring entirely;
+    /// after the compile the merged file must carry it plus our track.
+    #[test]
+    #[ignore]
+    fn e2e_stale_vanilla_events_refresh_from_pak() {
+        let mut cfg = e2e_base_cfg("eim_stale_e2e_addon", "eim_stale_e2e_out");
+        let csdk = r"C:\Users\ethob\Desktop\DeadlockModding\Reduced_CSDK_12";
+        // Temp vanilla root: the live gameplay.vsndevts with the bell block cut
+        // out, dated 2020 so it is older than any game pak.
+        let vroot = std::env::temp_dir().join("eim_stale_e2e_vanilla");
+        let _ = std::fs::remove_dir_all(&vroot);
+        std::fs::create_dir_all(vroot.join("soundevents")).unwrap();
+        let live = std::fs::read_to_string(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../../ModFiles/soundevents/gameplay.vsndevts"),
+        )
+        .unwrap();
+        let start = live.find("\tChinatownBell.Ring = ").expect("live file has the bell");
+        let end = start + live[start..].find("\n\t}\n").unwrap() + 4;
+        let stale_text = format!("{}{}", &live[..start], &live[end..]);
+        assert!(!stale_text.contains("ChinatownBell.Ring"));
+        let stale = vroot.join("soundevents").join("gameplay.vsndevts");
+        std::fs::write(&stale, &stale_text).unwrap();
+        let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_577_836_800);
+        std::fs::File::options().write(true).open(&stale).unwrap().set_modified(old).unwrap();
+        cfg.vanilla_root = vroot.to_string_lossy().into_owned();
+        cfg.events = vec![EventCompile {
+            event_name: "ChinatownBell.Ring".into(),
+            array_key: "vsnd_files".into(),
+            stock_entry: "sounds/gameplay/chinatown_bell_ring_01.vsnd".into(),
+            sound_folder: Some("sounds/gameplay".into()),
+            duration_mode: "auto".into(),
+            duration_manual: None,
+            previous_owned: vec![],
+            excluded: vec![],
+            events_relpath: "soundevents/gameplay.vsndevts".into(),
+            adopted: vec![],
+            attributes: vec![],
+            create_array: false,
+            songs: vec![SongCompile {
+                sound_name: "eim_bell_e2e".into(),
+                source_audio: format!(r"{csdk}\content\citadel\wunderwaffe\wunderwaffeshoot1.mp3"),
+                trim_start: 0.0,
+                trim_end: 1.0,
+                gain_db: 0.0,
+                fade_in: 0.0,
+                fade_out: 0.2,
+                looping: false,
+                layers: vec![],
+                spec: Default::default(),
+                current_hash: None,
+                last_compiled_hash: None,
+            }],
+        }];
+        let report = run(&cfg);
+        for s in &report.steps {
+            println!("[{}] {} :: {}", if s.ok { "OK" } else { "FAIL" }, s.name, s.detail);
+        }
+        assert!(report.ok, "compile failed");
+        assert!(
+            report.steps.iter().any(|s| s.name.contains("fetch vanilla soundevents/gameplay.vsndevts") && s.detail.contains("refreshed")),
+            "the stale vanilla copy was not refreshed from the pak"
+        );
+        let merged = std::fs::read_to_string(Path::new(&cfg.content_root).join("soundevents").join("gameplay.vsndevts")).unwrap();
+        assert!(merged.contains("ChinatownBell.Ring"), "merged file lacks the bell event");
+        assert!(merged.contains("eim_bell_e2e.vsnd"), "merged file lacks our track:\n{merged}");
+        assert!(!report.steps.iter().any(|s| s.detail.contains("not in game")), "slot was skipped as drifted");
+        // The refreshed copy is now newer than the pak: a second run must not re-fetch.
+        let report2 = run(&cfg);
+        assert!(report2.ok);
+        assert!(!report2.steps.iter().any(|s| s.detail.contains("refreshed from the game pak")), "re-fetched although fresh");
+    }
+
+    /// Builds the "rainbow shield" HUD mod (2026-09-30 request): the shield
+    /// fill inside the health bar, the small shield bar and the shielded
+    /// health / shield numbers flow through a soft rainbow. Pure panorama CSS
+    /// (whole-file UI overrides of the live game's hud_health /
+    /// hud_health_container stylesheets), no textures.
+    ///
+    /// What Panorama actually animates smoothly, learned the hard way in game:
+    /// - gradient values in keyframes do NOT interpolate - they SWITCH at each
+    ///   keyframe (v1/v3 "changed every half second"; the game's own
+    ///   'deltaswipe' steps the same way);
+    /// - `hue-rotation` in keyframes does not animate in the HUD at all (v2);
+    /// - solid `background-color`, `color` and `wash-color` interpolate per
+    ///   frame (health_pulse, regenBoost, Outer_Flash in the game's CSS).
+    /// So v4: the fill keeps a STATIC soft vertical gradient (white at the tip
+    /// to a light grey at the base - the spatial shading) and its colour is
+    /// driven by an animated `wash-color` through the palette; the numbers
+    /// animate solid `color` through the same palette on the same timeline.
+    /// The fill's tip is white x wash = the wash colour = the number's colour,
+    /// so the number is the exact continuation of the fill at every instant,
+    /// and a thin shield just shows the top of the shading (nothing to squish).
+    /// Output: <repo>/output/rainbow_shield/mine/pak01_dir.vpk. Run with:
+    ///   cargo test -p app --lib -- --ignored build_rainbow_shield_mod --nocapture
+    #[test]
+    #[ignore]
+    fn build_rainbow_shield_mod() {
+        let mut cfg = e2e_base_cfg("eim_rainbow_shield_addon", "eim_rainbow_shield_tmp");
+        cfg.output_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../output/rainbow_shield").into();
+        let _ = std::fs::remove_dir_all(&cfg.output_dir);
+        let helper = cfg.vpk_helper_path.clone().unwrap();
+        let pak = cfg.pak_path.clone().unwrap();
+        let tmp = std::env::temp_dir().join("eim_rainbow_shield_src");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // Soft pastels around the vanilla shield cyan: cyan, periwinkle,
+        // orchid, mint, and back. Six stops so no hop is bigger than the rest.
+        let colors = ["#7ff0ff", "#9fb6ff", "#f2a8ff", "#ffb8c8", "#a8ffd4", "#7ff0ff"];
+        let keyframes = |name: &str, prop: &str| {
+            let mut out = format!("@keyframes '{name}'{{");
+            let last = colors.len() - 1;
+            for (i, c) in colors.iter().enumerate() {
+                out.push_str(&format!("{}%{{{prop}: {c};}}", i * 100 / last));
+            }
+            out.push('}');
+            out
+        };
+        let anim = |name: &str| {
+            format!("animation-name: {name};animation-duration: 2.4s;animation-timing-function: ease-in-out;animation-iteration-count: infinite;")
+        };
+        let wash_kf = keyframes("eim_rainbow_wash", "wash-color");
+        let text_kf = keyframes("eim_rainbow_text", "color");
+        // The static shading the wash colours: white at the tip (so the tip IS
+        // the wash colour), a light grey at the base.
+        let shading = "background-color: gradient( linear, 0% 0%, 0% 100%, from( #ffffff ), to( #c9d3d8 ) );";
+        let health_extra = format!(
+            "\n/* Moonahs Mod Maker: rainbow shield v4 */\n{wash_kf}{text_kf}\
+             #shield_bar_2 .ProgressBarMiddle{{{shading}wash-color: #7ff0ff;{}}}\
+             #shield_bar .ProgressBarLeft{{{shading}wash-color: #7ff0ff;{}}}\
+             #shield_bar .progress_bar_current{{color: #7ff0ff;{}}}\n",
+            anim("eim_rainbow_wash"),
+            anim("eim_rainbow_wash"),
+            anim("eim_rainbow_text")
+        );
+        let container_extra = format!(
+            "\n/* Moonahs Mod Maker: rainbow shield v4 */\n{text_kf}\
+             .HasBulletShield .currentHealthLabel,.HasTechShield .currentHealthLabel,.shieldActive .currentHealthLabel{{color: #7ff0ff;{}}}\
+             #BulletShieldNumbers .progress_bar_current,#TechShieldNumbers .progress_bar_current{{{}}}\n",
+            anim("eim_rainbow_text"),
+            anim("eim_rainbow_text")
+        );
+
+        let mut ui = Vec::new();
+        for (rel, extra) in [
+            ("panorama/styles/hud_health.vcss_c", &health_extra),
+            ("panorama/styles/hud_health_container.vcss_c", &container_extra),
+        ] {
+            let out = tmp.join(rel.trim_end_matches("_c").replace('/', "_"));
+            crate::vpk::decompile_from_vpk(&helper, &pak, rel, &out.to_string_lossy()).expect("decompile vanilla css");
+            let mut text = std::fs::read_to_string(&out).expect("read css");
+            assert!(text.contains("#shield_bar") || text.contains("currentHealthLabel"), "unexpected vanilla css for {rel}");
+            text.push_str(extra);
+            ui.push(UiFileCompile { target_rel: rel.into(), text });
+        }
+        cfg.ui_overrides = ui;
+
+        let report = run(&cfg);
+        for s in &report.steps {
+            println!("[{}] {} :: {}", if s.ok { "OK" } else { "FAIL" }, s.name, s.detail);
+        }
+        assert!(report.ok, "rainbow shield build failed");
+        let vpk = Path::new(&cfg.output_dir).join("mine").join("pak01_dir.vpk");
+        assert!(vpk.exists(), "vpk not produced");
+        println!("rainbow shield mod: {}", vpk.display());
     }
 
     /// Full end-to-end pipeline against the local CSDK + ffmpeg + ValvePak.

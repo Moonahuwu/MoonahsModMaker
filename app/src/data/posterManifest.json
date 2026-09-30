@@ -20,7 +20,7 @@
      "w": 1024,
      "h": 861,
      "alphaCoverage": 0.13,
-     "placements": 7
+     "placements": 1
     },
     {
      "id": "item_07",
@@ -28,7 +28,7 @@
      "y": 881,
      "w": 1024,
      "h": 143,
-     "alphaCoverage": 0,
+     "alphaCoverage": 0.0,
      "placements": 1
     },
     {
@@ -106,7 +106,16 @@
      "w": 1024,
      "h": 764,
      "alphaCoverage": 0.101,
-     "placements": 74
+     "placements": 138
+    },
+    {
+     "id": "item_07",
+     "x": 23,
+     "y": 334,
+     "w": 1001,
+     "h": 533,
+     "alphaCoverage": 0.141,
+     "placements": 2
     },
     {
      "id": "item_06",
@@ -114,7 +123,7 @@
      "y": 781,
      "w": 1024,
      "h": 243,
-     "alphaCoverage": 0,
+     "alphaCoverage": 0.0,
      "placements": 1
     },
     {
@@ -183,7 +192,7 @@
      "w": 2048,
      "h": 1137,
      "alphaCoverage": 0.075,
-     "placements": 60
+     "placements": 68
     },
     {
      "id": "item_00",
@@ -260,7 +269,7 @@
      "w": 2048,
      "h": 2048,
      "alphaCoverage": 0.202,
-     "placements": 566
+     "placements": 568
     }
    ]
   },
@@ -283,7 +292,7 @@
      "w": 1024,
      "h": 680,
      "alphaCoverage": 0.293,
-     "placements": 58
+     "placements": 28
     },
     {
      "id": "item_57",
@@ -292,88 +301,34 @@
      "w": 1024,
      "h": 1024,
      "alphaCoverage": 0.211,
-     "placements": 111
-    },
-    {
-     "id": "item_67",
-     "x": 824,
-     "y": 504,
-     "w": 190,
-     "h": 528,
-     "alphaCoverage": 0.661,
-     "placements": 37
-    },
-    {
-     "id": "item_66",
-     "x": 0,
-     "y": 512,
-     "w": 832,
-     "h": 528,
-     "alphaCoverage": 0.314,
-     "placements": 1
+     "placements": 519
     },
     {
      "id": "item_64",
      "x": 0,
-     "y": 1024,
+     "y": 512,
      "w": 1024,
+     "h": 1024,
+     "alphaCoverage": 0.499,
+     "placements": 72
+    },
+    {
+     "id": "item_20",
+     "x": 832,
+     "y": 512,
+     "w": 1216,
      "h": 512,
-     "alphaCoverage": 0.608,
-     "placements": 49
+     "alphaCoverage": 0.257,
+     "placements": 52
     },
     {
-     "id": "item_59",
-     "x": 291,
-     "y": 1024,
-     "w": 1189,
-     "h": 520,
-     "alphaCoverage": 0.495,
-     "placements": 40
-    },
-    {
-     "id": "item_63",
-     "x": 1024,
-     "y": 1024,
-     "w": 1024,
-     "h": 512,
-     "alphaCoverage": 0.487,
-     "placements": 49
-    },
-    {
-     "id": "item_60",
-     "x": 20,
-     "y": 1528,
-     "w": 1012,
-     "h": 520,
-     "alphaCoverage": 0.702,
-     "placements": 8
-    },
-    {
-     "id": "item_62",
+     "id": "item_68",
      "x": 0,
-     "y": 1536,
-     "w": 1024,
-     "h": 512,
-     "alphaCoverage": 0.704,
-     "placements": 14
-    },
-    {
-     "id": "item_61",
-     "x": 1024,
-     "y": 1536,
-     "w": 1024,
-     "h": 512,
-     "alphaCoverage": 0.655,
-     "placements": 29
-    },
-    {
-     "id": "item_65",
-     "x": 8,
-     "y": 1544,
-     "w": 1016,
-     "h": 504,
-     "alphaCoverage": 0.721,
-     "placements": 27
+     "y": 1024,
+     "w": 2048,
+     "h": 1024,
+     "alphaCoverage": 0.614,
+     "placements": 306
     },
     {
      "id": "item_04",
@@ -475,21 +430,30 @@
      "unused": true
     },
     {
+     "id": "item_67",
+     "x": 824,
+     "y": 504,
+     "w": 190,
+     "h": 528,
+     "alphaCoverage": 0.661,
+     "unused": true
+    },
+    {
+     "id": "item_66",
+     "x": 0,
+     "y": 512,
+     "w": 832,
+     "h": 528,
+     "alphaCoverage": 0.314,
+     "unused": true
+    },
+    {
      "id": "item_19",
      "x": 833,
      "y": 525,
      "w": 166,
      "h": 150,
      "alphaCoverage": 0.89,
-     "unused": true
-    },
-    {
-     "id": "item_20",
-     "x": 1043,
-     "y": 525,
-     "w": 859,
-     "h": 480,
-     "alphaCoverage": 0.19,
      "unused": true
     },
     {
@@ -655,6 +619,24 @@
      "unused": true
     },
     {
+     "id": "item_59",
+     "x": 291,
+     "y": 1024,
+     "w": 1189,
+     "h": 520,
+     "alphaCoverage": 0.495,
+     "unused": true
+    },
+    {
+     "id": "item_63",
+     "x": 1024,
+     "y": 1024,
+     "w": 1024,
+     "h": 512,
+     "alphaCoverage": 0.487,
+     "unused": true
+    },
+    {
      "id": "item_33",
      "x": 1041,
      "y": 1050,
@@ -706,6 +688,42 @@
      "w": 96,
      "h": 264,
      "alphaCoverage": 0.429,
+     "unused": true
+    },
+    {
+     "id": "item_60",
+     "x": 20,
+     "y": 1528,
+     "w": 1012,
+     "h": 520,
+     "alphaCoverage": 0.702,
+     "unused": true
+    },
+    {
+     "id": "item_62",
+     "x": 0,
+     "y": 1536,
+     "w": 1024,
+     "h": 512,
+     "alphaCoverage": 0.704,
+     "unused": true
+    },
+    {
+     "id": "item_61",
+     "x": 1024,
+     "y": 1536,
+     "w": 1024,
+     "h": 512,
+     "alphaCoverage": 0.655,
+     "unused": true
+    },
+    {
+     "id": "item_65",
+     "x": 8,
+     "y": 1544,
+     "w": 1016,
+     "h": 504,
+     "alphaCoverage": 0.721,
      "unused": true
     },
     {
@@ -904,12 +922,12 @@
    "posters": [
     {
      "id": "item_00",
-     "x": 10,
-     "y": 11,
-     "w": 237,
-     "h": 239,
-     "alphaCoverage": 0.419,
-     "unused": true
+     "x": 0,
+     "y": 0,
+     "w": 256,
+     "h": 256,
+     "alphaCoverage": 0.362,
+     "placements": 1
     }
    ]
   },
@@ -932,7 +950,7 @@
      "w": 768,
      "h": 1280,
      "alphaCoverage": 0.173,
-     "placements": 3
+     "placements": 1
     },
     {
      "id": "item_32",
@@ -950,7 +968,7 @@
      "w": 768,
      "h": 768,
      "alphaCoverage": 0.18,
-     "placements": 514
+     "placements": 506
     },
     {
      "id": "item_31",
@@ -959,7 +977,7 @@
      "w": 570,
      "h": 361,
      "alphaCoverage": 0.122,
-     "placements": 3
+     "placements": 4
     },
     {
      "id": "item_07",
@@ -977,15 +995,15 @@
      "w": 1024,
      "h": 768,
      "alphaCoverage": 0.079,
-     "placements": 1814
+     "placements": 1822
     },
     {
-     "id": "item_30",
-     "x": 2048,
+     "id": "item_10",
+     "x": 1993,
      "y": 2048,
-     "w": 2048,
-     "h": 1024,
-     "alphaCoverage": 0.123,
+     "w": 1071,
+     "h": 847,
+     "alphaCoverage": 0.107,
      "placements": 1
     },
     {
@@ -995,25 +1013,7 @@
      "w": 1536,
      "h": 1309,
      "alphaCoverage": 0.332,
-     "placements": 21
-    },
-    {
-     "id": "item_33",
-     "x": 2080,
-     "y": 3264,
-     "w": 480,
-     "h": 32,
-     "alphaCoverage": 0.032,
-     "placements": 2
-    },
-    {
-     "id": "item_34",
-     "x": 2080,
-     "y": 3296,
-     "w": 480,
-     "h": 32,
-     "alphaCoverage": 0,
-     "placements": 4
+     "placements": 10
     },
     {
      "id": "item_25",
@@ -1022,15 +1022,6 @@
      "w": 768,
      "h": 512,
      "alphaCoverage": 0.154,
-     "placements": 1
-    },
-    {
-     "id": "item_26",
-     "x": 760,
-     "y": 3584,
-     "w": 792,
-     "h": 512,
-     "alphaCoverage": 0.519,
      "placements": 1
     },
     {
@@ -1088,21 +1079,21 @@
      "unused": true
     },
     {
+     "id": "item_30",
+     "x": 2048,
+     "y": 2048,
+     "w": 2048,
+     "h": 1024,
+     "alphaCoverage": 0.123,
+     "unused": true
+    },
+    {
      "id": "item_11",
      "x": 3118,
      "y": 2099,
      "w": 921,
      "h": 535,
      "alphaCoverage": 0.24,
-     "unused": true
-    },
-    {
-     "id": "item_10",
-     "x": 1943,
-     "y": 2136,
-     "w": 1006,
-     "h": 611,
-     "alphaCoverage": 0.169,
      "unused": true
     },
     {
@@ -1205,12 +1196,39 @@
      "unused": true
     },
     {
+     "id": "item_33",
+     "x": 2080,
+     "y": 3264,
+     "w": 480,
+     "h": 32,
+     "alphaCoverage": 0.032,
+     "unused": true
+    },
+    {
+     "id": "item_34",
+     "x": 2080,
+     "y": 3296,
+     "w": 480,
+     "h": 32,
+     "alphaCoverage": 0,
+     "unused": true
+    },
+    {
      "id": "item_24",
      "x": 1602,
      "y": 3345,
      "w": 872,
      "h": 735,
      "alphaCoverage": 0.135,
+     "unused": true
+    },
+    {
+     "id": "item_26",
+     "x": 760,
+     "y": 3584,
+     "w": 792,
+     "h": 512,
+     "alphaCoverage": 0.519,
      "unused": true
     },
     {
@@ -1255,103 +1273,22 @@
    "height": 2048,
    "posters": [
     {
-     "id": "item_00",
-     "x": 0,
-     "y": 0,
-     "w": 1024,
-     "h": 512,
-     "alphaCoverage": 0.583,
-     "placements": 4
-    },
-    {
-     "id": "item_20",
-     "x": 695,
-     "y": 512,
-     "w": 73,
-     "h": 259,
-     "alphaCoverage": 0.101,
-     "placements": 8
-    },
-    {
-     "id": "item_03",
-     "x": 768,
-     "y": 512,
-     "w": 256,
-     "h": 752,
-     "alphaCoverage": 0.265,
-     "placements": 46
-    },
-    {
-     "id": "item_04",
-     "x": 1024,
-     "y": 512,
-     "w": 1024,
-     "h": 528,
-     "alphaCoverage": 0.628,
-     "placements": 13
-    },
-    {
      "id": "item_19",
      "x": 749,
      "y": 543,
      "w": 313,
      "h": 663,
      "alphaCoverage": 0.245,
-     "placements": 49
+     "placements": 6
     },
     {
-     "id": "item_06",
+     "id": "item_00",
      "x": 0,
-     "y": 768,
-     "w": 768,
-     "h": 496,
-     "alphaCoverage": 0.703,
-     "placements": 21
-    },
-    {
-     "id": "item_07",
-     "x": 1024,
-     "y": 1040,
-     "w": 1024,
-     "h": 496,
-     "alphaCoverage": 0.588,
-     "placements": 34
-    },
-    {
-     "id": "item_18",
-     "x": 0,
-     "y": 1264,
-     "w": 1024,
-     "h": 272,
-     "alphaCoverage": 0.595,
-     "placements": 7
-    },
-    {
-     "id": "item_15",
-     "x": 0,
-     "y": 1536,
-     "w": 704,
-     "h": 512,
-     "alphaCoverage": 0.662,
-     "placements": 10
-    },
-    {
-     "id": "item_16",
-     "x": 736,
-     "y": 1536,
-     "w": 320,
-     "h": 512,
-     "alphaCoverage": 0.557,
-     "placements": 14
-    },
-    {
-     "id": "item_17",
-     "x": 1024,
-     "y": 1536,
+     "y": 0,
      "w": 1024,
      "h": 512,
-     "alphaCoverage": 0.613,
-     "placements": 9
+     "alphaCoverage": 0.583,
+     "unused": true
     },
     {
      "id": "item_01",
@@ -1360,6 +1297,33 @@
      "w": 816,
      "h": 475,
      "alphaCoverage": 0.839,
+     "unused": true
+    },
+    {
+     "id": "item_20",
+     "x": 695,
+     "y": 512,
+     "w": 73,
+     "h": 259,
+     "alphaCoverage": 0.101,
+     "unused": true
+    },
+    {
+     "id": "item_03",
+     "x": 768,
+     "y": 512,
+     "w": 256,
+     "h": 752,
+     "alphaCoverage": 0.265,
+     "unused": true
+    },
+    {
+     "id": "item_04",
+     "x": 1024,
+     "y": 512,
+     "w": 1024,
+     "h": 528,
+     "alphaCoverage": 0.628,
      "unused": true
     },
     {
@@ -1378,6 +1342,33 @@
      "w": 31,
      "h": 228,
      "alphaCoverage": 0.586,
+     "unused": true
+    },
+    {
+     "id": "item_06",
+     "x": 0,
+     "y": 768,
+     "w": 768,
+     "h": 496,
+     "alphaCoverage": 0.703,
+     "unused": true
+    },
+    {
+     "id": "item_07",
+     "x": 1024,
+     "y": 1040,
+     "w": 1024,
+     "h": 496,
+     "alphaCoverage": 0.588,
+     "unused": true
+    },
+    {
+     "id": "item_18",
+     "x": 0,
+     "y": 1264,
+     "w": 1024,
+     "h": 272,
+     "alphaCoverage": 0.595,
      "unused": true
     },
     {
@@ -1442,6 +1433,33 @@
      "h": 50,
      "alphaCoverage": 0.922,
      "unused": true
+    },
+    {
+     "id": "item_15",
+     "x": 0,
+     "y": 1536,
+     "w": 704,
+     "h": 512,
+     "alphaCoverage": 0.662,
+     "unused": true
+    },
+    {
+     "id": "item_16",
+     "x": 736,
+     "y": 1536,
+     "w": 320,
+     "h": 512,
+     "alphaCoverage": 0.557,
+     "unused": true
+    },
+    {
+     "id": "item_17",
+     "x": 1024,
+     "y": 1536,
+     "w": 1024,
+     "h": 512,
+     "alphaCoverage": 0.613,
+     "unused": true
     }
    ]
   },
@@ -1461,19 +1479,10 @@
      "id": "item_00",
      "x": 0,
      "y": 0,
-     "w": 800,
+     "w": 768,
      "h": 512,
-     "alphaCoverage": 0.439,
-     "placements": 26
-    },
-    {
-     "id": "item_38",
-     "x": 832,
-     "y": 0,
-     "w": 144,
-     "h": 288,
-     "alphaCoverage": 0.176,
-     "placements": 6
+     "alphaCoverage": 0.457,
+     "placements": 50
     },
     {
      "id": "item_02",
@@ -1482,178 +1491,70 @@
      "w": 1024,
      "h": 512,
      "alphaCoverage": 0.218,
-     "placements": 29
-    },
-    {
-     "id": "item_39",
-     "x": 832,
-     "y": 288,
-     "w": 144,
-     "h": 136,
-     "alphaCoverage": 0.207,
-     "placements": 2
+     "placements": 7
     },
     {
      "id": "item_08",
      "x": 0,
      "y": 512,
-     "w": 800,
+     "w": 768,
      "h": 512,
-     "alphaCoverage": 0.153,
-     "placements": 19
+     "alphaCoverage": 0.159,
+     "placements": 11
     },
     {
-     "id": "item_11",
-     "x": 1024,
-     "y": 512,
-     "w": 1024,
-     "h": 512,
-     "alphaCoverage": 0.589,
-     "placements": 26
-    },
-    {
-     "id": "item_12",
-     "x": 832,
-     "y": 720,
-     "w": 144,
-     "h": 112,
-     "alphaCoverage": 0.171,
-     "placements": 2
-    },
-    {
-     "id": "item_41",
-     "x": 832,
-     "y": 912,
-     "w": 144,
-     "h": 112,
-     "alphaCoverage": 0.116,
-     "placements": 2
-    },
-    {
-     "id": "item_37",
+     "id": "item_15",
      "x": 0,
      "y": 1024,
      "w": 192,
-     "h": 544,
-     "alphaCoverage": 0.251,
-     "placements": 12
+     "h": 192,
+     "alphaCoverage": 0.262,
+     "placements": 1
     },
     {
      "id": "item_16",
-     "x": 256,
+     "x": 272,
      "y": 1024,
-     "w": 320,
-     "h": 192,
-     "alphaCoverage": 0.208,
-     "placements": 3
+     "w": 296,
+     "h": 184,
+     "alphaCoverage": 0.234,
+     "placements": 1
     },
     {
-     "id": "item_40",
-     "x": 576,
+     "id": "item_17",
+     "x": 768,
      "y": 1024,
-     "w": 144,
-     "h": 128,
-     "alphaCoverage": 0.092,
-     "placements": 2
-    },
-    {
-     "id": "item_18",
-     "x": 1024,
-     "y": 1024,
-     "w": 1024,
-     "h": 512,
-     "alphaCoverage": 0.688,
-     "placements": 8
-    },
-    {
-     "id": "item_42",
-     "x": 576,
-     "y": 1168,
-     "w": 144,
-     "h": 96,
-     "alphaCoverage": 0.14,
-     "placements": 2
-    },
-    {
-     "id": "item_36",
-     "x": 192,
-     "y": 1208,
-     "w": 344,
-     "h": 328,
-     "alphaCoverage": 0.255,
-     "placements": 73
+     "w": 256,
+     "h": 256,
+     "alphaCoverage": 0.181,
+     "placements": 5
     },
     {
      "id": "item_35",
      "x": 192,
-     "y": 1280,
-     "w": 544,
-     "h": 288,
-     "alphaCoverage": 0.266,
-     "placements": 52
-    },
-    {
-     "id": "item_22",
-     "x": 192,
-     "y": 1280,
+     "y": 1208,
      "w": 576,
-     "h": 256,
-     "alphaCoverage": 0.282,
-     "placements": 177
+     "h": 512,
+     "alphaCoverage": 0.243,
+     "placements": 364
     },
     {
-     "id": "item_23",
-     "x": 736,
-     "y": 1280,
-     "w": 288,
-     "h": 240,
-     "alphaCoverage": 0.228,
-     "placements": 2
-    },
-    {
-     "id": "item_30",
-     "x": 1536,
-     "y": 1536,
-     "w": 512,
-     "h": 256,
-     "alphaCoverage": 0.217,
-     "placements": 3
-    },
-    {
-     "id": "item_25",
+     "id": "item_24",
      "x": 0,
-     "y": 1568,
-     "w": 544,
-     "h": 480,
-     "alphaCoverage": 0.503,
-     "placements": 4
-    },
-    {
-     "id": "item_26",
-     "x": 576,
-     "y": 1568,
+     "y": 1408,
      "w": 192,
-     "h": 160,
-     "alphaCoverage": 0.191,
-     "placements": 4
+     "h": 128,
+     "alphaCoverage": 0.229,
+     "placements": 9
     },
     {
-     "id": "item_27",
-     "x": 768,
-     "y": 1568,
-     "w": 256,
-     "h": 216,
-     "alphaCoverage": 0.255,
-     "placements": 2
-    },
-    {
-     "id": "item_28",
-     "x": 1088,
-     "y": 1632,
-     "w": 416,
-     "h": 320,
-     "alphaCoverage": 0.313,
-     "placements": 4
+     "id": "item_32",
+     "x": 576,
+     "y": 1792,
+     "w": 448,
+     "h": 256,
+     "alphaCoverage": 0.249,
+     "placements": 7
     },
     {
      "id": "item_33",
@@ -1662,16 +1563,16 @@
      "w": 512,
      "h": 256,
      "alphaCoverage": 0.279,
-     "placements": 2
+     "placements": 1
     },
     {
-     "id": "item_32",
-     "x": 544,
-     "y": 1808,
-     "w": 480,
-     "h": 240,
-     "alphaCoverage": 0.248,
-     "placements": 15
+     "id": "item_38",
+     "x": 832,
+     "y": 0,
+     "w": 144,
+     "h": 288,
+     "alphaCoverage": 0.176,
+     "unused": true
     },
     {
      "id": "item_01",
@@ -1698,6 +1599,15 @@
      "w": 98,
      "h": 54,
      "alphaCoverage": 0.376,
+     "unused": true
+    },
+    {
+     "id": "item_39",
+     "x": 832,
+     "y": 288,
+     "w": 144,
+     "h": 136,
+     "alphaCoverage": 0.207,
      "unused": true
     },
     {
@@ -1728,6 +1638,15 @@
      "unused": true
     },
     {
+     "id": "item_11",
+     "x": 1024,
+     "y": 512,
+     "w": 1024,
+     "h": 512,
+     "alphaCoverage": 0.589,
+     "unused": true
+    },
+    {
      "id": "item_09",
      "x": 842,
      "y": 536,
@@ -1746,12 +1665,30 @@
      "unused": true
     },
     {
+     "id": "item_12",
+     "x": 832,
+     "y": 720,
+     "w": 144,
+     "h": 112,
+     "alphaCoverage": 0.171,
+     "unused": true
+    },
+    {
      "id": "item_13",
      "x": 859,
      "y": 841,
      "w": 93,
      "h": 59,
      "alphaCoverage": 0.223,
+     "unused": true
+    },
+    {
+     "id": "item_41",
+     "x": 832,
+     "y": 912,
+     "w": 144,
+     "h": 112,
+     "alphaCoverage": 0.116,
      "unused": true
     },
     {
@@ -1764,21 +1701,39 @@
      "unused": true
     },
     {
-     "id": "item_17",
-     "x": 777,
-     "y": 1029,
-     "w": 231,
-     "h": 242,
-     "alphaCoverage": 0.212,
+     "id": "item_37",
+     "x": 0,
+     "y": 1024,
+     "w": 192,
+     "h": 544,
+     "alphaCoverage": 0.251,
      "unused": true
     },
     {
-     "id": "item_15",
-     "x": 31,
-     "y": 1041,
-     "w": 130,
-     "h": 160,
-     "alphaCoverage": 0.423,
+     "id": "item_40",
+     "x": 576,
+     "y": 1024,
+     "w": 144,
+     "h": 128,
+     "alphaCoverage": 0.092,
+     "unused": true
+    },
+    {
+     "id": "item_18",
+     "x": 1024,
+     "y": 1024,
+     "w": 1024,
+     "h": 512,
+     "alphaCoverage": 0.688,
+     "unused": true
+    },
+    {
+     "id": "item_42",
+     "x": 576,
+     "y": 1168,
+     "w": 144,
+     "h": 96,
+     "alphaCoverage": 0.14,
      "unused": true
     },
     {
@@ -1788,6 +1743,15 @@
      "w": 90,
      "h": 56,
      "alphaCoverage": 0.337,
+     "unused": true
+    },
+    {
+     "id": "item_36",
+     "x": 192,
+     "y": 1208,
+     "w": 344,
+     "h": 328,
+     "alphaCoverage": 0.255,
      "unused": true
     },
     {
@@ -1809,12 +1773,66 @@
      "unused": true
     },
     {
-     "id": "item_24",
-     "x": 15,
-     "y": 1448,
-     "w": 161,
-     "h": 78,
-     "alphaCoverage": 0.373,
+     "id": "item_22",
+     "x": 192,
+     "y": 1280,
+     "w": 576,
+     "h": 256,
+     "alphaCoverage": 0.282,
+     "unused": true
+    },
+    {
+     "id": "item_23",
+     "x": 736,
+     "y": 1280,
+     "w": 288,
+     "h": 240,
+     "alphaCoverage": 0.228,
+     "unused": true
+    },
+    {
+     "id": "item_30",
+     "x": 1536,
+     "y": 1536,
+     "w": 512,
+     "h": 256,
+     "alphaCoverage": 0.217,
+     "unused": true
+    },
+    {
+     "id": "item_25",
+     "x": 0,
+     "y": 1568,
+     "w": 544,
+     "h": 480,
+     "alphaCoverage": 0.503,
+     "unused": true
+    },
+    {
+     "id": "item_26",
+     "x": 576,
+     "y": 1568,
+     "w": 192,
+     "h": 160,
+     "alphaCoverage": 0.191,
+     "unused": true
+    },
+    {
+     "id": "item_27",
+     "x": 768,
+     "y": 1568,
+     "w": 256,
+     "h": 216,
+     "alphaCoverage": 0.255,
+     "unused": true
+    },
+    {
+     "id": "item_28",
+     "x": 1088,
+     "y": 1632,
+     "w": 416,
+     "h": 320,
+     "alphaCoverage": 0.313,
      "unused": true
     },
     {
@@ -1862,10 +1880,10 @@
      "id": "item_00",
      "x": 0,
      "y": 0,
-     "w": 1408,
-     "h": 1536,
-     "alphaCoverage": 0.226,
-     "placements": 481
+     "w": 2048,
+     "h": 2048,
+     "alphaCoverage": 0.17,
+     "placements": 1194
     },
     {
      "id": "item_05",
@@ -1874,7 +1892,7 @@
      "w": 1024,
      "h": 2048,
      "alphaCoverage": 0.203,
-     "placements": 648
+     "unused": true
     },
     {
      "id": "item_01",
@@ -1883,7 +1901,7 @@
      "w": 512,
      "h": 512,
      "alphaCoverage": 0.289,
-     "placements": 249
+     "unused": true
     },
     {
      "id": "item_02",
@@ -1892,7 +1910,7 @@
      "w": 512,
      "h": 512,
      "alphaCoverage": 0.272,
-     "placements": 11
+     "unused": true
     },
     {
      "id": "item_03",
@@ -1901,7 +1919,7 @@
      "w": 640,
      "h": 768,
      "alphaCoverage": 0.132,
-     "placements": 51
+     "unused": true
     },
     {
      "id": "item_04",
@@ -1927,31 +1945,22 @@
    "height": 2048,
    "posters": [
     {
-     "id": "item_18",
+     "id": "item_20",
      "x": 0,
      "y": 0,
-     "w": 1024,
-     "h": 768,
-     "alphaCoverage": 0.098,
-     "placements": 81
+     "w": 2048,
+     "h": 976,
+     "alphaCoverage": 0.144,
+     "placements": 626
     },
     {
-     "id": "item_17",
-     "x": 192,
-     "y": 0,
-     "w": 832,
-     "h": 1024,
-     "alphaCoverage": 0.092,
-     "placements": 58
-    },
-    {
-     "id": "item_03",
-     "x": 1024,
-     "y": 0,
-     "w": 1024,
-     "h": 1024,
-     "alphaCoverage": 0.16,
-     "placements": 181
+     "id": "item_22",
+     "x": 1615,
+     "y": 558,
+     "w": 408,
+     "h": 466,
+     "alphaCoverage": 0.085,
+     "placements": 14
     },
     {
      "id": "item_19",
@@ -1960,7 +1969,16 @@
      "w": 608,
      "h": 544,
      "alphaCoverage": 0.177,
-     "placements": 205
+     "placements": 281
+    },
+    {
+     "id": "item_07",
+     "x": 768,
+     "y": 768,
+     "w": 256,
+     "h": 256,
+     "alphaCoverage": 0.403,
+     "placements": 47
     },
     {
      "id": "item_12",
@@ -1969,7 +1987,7 @@
      "w": 1024,
      "h": 1056,
      "alphaCoverage": 0.364,
-     "placements": 704
+     "placements": 558
     },
     {
      "id": "item_11",
@@ -1981,13 +1999,22 @@
      "placements": 25
     },
     {
+     "id": "item_21",
+     "x": 1024,
+     "y": 1024,
+     "w": 999,
+     "h": 1024,
+     "alphaCoverage": 0.384,
+     "placements": 48
+    },
+    {
      "id": "item_13",
      "x": 768,
      "y": 1280,
      "w": 256,
      "h": 256,
      "alphaCoverage": 0.427,
-     "placements": 27
+     "placements": 30
     },
     {
      "id": "item_14",
@@ -1996,7 +2023,34 @@
      "w": 1024,
      "h": 640,
      "alphaCoverage": 0.185,
-     "placements": 1486
+     "placements": 1482
+    },
+    {
+     "id": "item_18",
+     "x": 0,
+     "y": 0,
+     "w": 1024,
+     "h": 768,
+     "alphaCoverage": 0.098,
+     "unused": true
+    },
+    {
+     "id": "item_17",
+     "x": 192,
+     "y": 0,
+     "w": 832,
+     "h": 1024,
+     "alphaCoverage": 0.092,
+     "unused": true
+    },
+    {
+     "id": "item_03",
+     "x": 1024,
+     "y": 0,
+     "w": 1024,
+     "h": 1024,
+     "alphaCoverage": 0.16,
+     "unused": true
     },
     {
      "id": "item_00",
@@ -2023,15 +2077,6 @@
      "w": 114,
      "h": 376,
      "alphaCoverage": 0.333,
-     "unused": true
-    },
-    {
-     "id": "item_07",
-     "x": 776,
-     "y": 775,
-     "w": 242,
-     "h": 242,
-     "alphaCoverage": 0.45,
      "unused": true
     },
     {
@@ -2127,25 +2172,25 @@
      "w": 591,
      "h": 86,
      "alphaCoverage": 0.303,
-     "placements": 6
+     "placements": 4
     },
     {
      "id": "item_62",
      "x": 21,
      "y": 30,
-     "w": 563,
+     "w": 564,
      "h": 94,
      "alphaCoverage": 0.265,
-     "placements": 3
+     "placements": 10
     },
     {
      "id": "item_65",
-     "x": 615,
+     "x": 614,
      "y": 117,
-     "w": 553,
+     "w": 554,
      "h": 82,
      "alphaCoverage": 0.296,
-     "placements": 20
+     "placements": 13
     },
     {
      "id": "item_61",
@@ -2154,7 +2199,7 @@
      "w": 511,
      "h": 134,
      "alphaCoverage": 0.245,
-     "placements": 41
+     "placements": 39
     },
     {
      "id": "item_66",
@@ -2163,7 +2208,7 @@
      "w": 158,
      "h": 211,
      "alphaCoverage": 0.254,
-     "placements": 24
+     "placements": 21
     },
     {
      "id": "item_64",
@@ -2181,7 +2226,7 @@
      "w": 253,
      "h": 251,
      "alphaCoverage": 0.321,
-     "placements": 32
+     "placements": 30
     },
     {
      "id": "item_53",
@@ -2190,7 +2235,7 @@
      "w": 208,
      "h": 198,
      "alphaCoverage": 0.402,
-     "placements": 12
+     "placements": 6
     },
     {
      "id": "item_60",
@@ -2199,25 +2244,16 @@
      "w": 608,
      "h": 200,
      "alphaCoverage": 0.276,
-     "placements": 23
-    },
-    {
-     "id": "item_54",
-     "x": 827,
-     "y": 336,
-     "w": 168,
-     "h": 165,
-     "alphaCoverage": 0.748,
-     "placements": 10
+     "placements": 31
     },
     {
      "id": "item_59",
      "x": 0,
-     "y": 632,
+     "y": 598,
      "w": 2048,
-     "h": 1416,
-     "alphaCoverage": 0.673,
-     "placements": 189
+     "h": 1450,
+     "alphaCoverage": 0.658,
+     "placements": 221
     },
     {
      "id": "item_22",
@@ -2670,6 +2706,15 @@
      "unused": true
     },
     {
+     "id": "item_54",
+     "x": 827,
+     "y": 336,
+     "w": 168,
+     "h": 165,
+     "alphaCoverage": 0.748,
+     "unused": true
+    },
+    {
      "id": "item_55",
      "x": 1228,
      "y": 336,
@@ -2745,7 +2790,7 @@
      "w": 686,
      "h": 256,
      "alphaCoverage": 0.357,
-     "placements": 14
+     "unused": true
     },
     {
      "id": "item_00",
@@ -2754,7 +2799,7 @@
      "w": 894,
      "h": 256,
      "alphaCoverage": 0.315,
-     "placements": 66
+     "unused": true
     },
     {
      "id": "iron_steel_banner",
@@ -2866,15 +2911,6 @@
    "height": 2048,
    "posters": [
     {
-     "id": "item_00",
-     "x": 1439,
-     "y": 686,
-     "w": 321,
-     "h": 530,
-     "alphaCoverage": 1,
-     "placements": 1
-    },
-    {
      "id": "dark_window",
      "x": 1085,
      "y": 10,
@@ -2963,6 +2999,15 @@
      "unused": true
     },
     {
+     "id": "item_00",
+     "x": 1439,
+     "y": 686,
+     "w": 321,
+     "h": 530,
+     "alphaCoverage": 1,
+     "unused": true
+    },
+    {
      "id": "king_game_poster",
      "x": 1393,
      "y": 988,
@@ -3039,16 +3084,7 @@
      "w": 415,
      "h": 415,
      "alphaCoverage": 1,
-     "placements": 1
-    },
-    {
-     "id": "maj_flav_drink",
-     "x": 0,
-     "y": 512,
-     "w": 512,
-     "h": 1024,
-     "alphaCoverage": 1,
-     "placements": 1
+     "unused": true
     },
     {
      "id": "band_1874",
@@ -3075,6 +3111,15 @@
      "w": 122,
      "h": 243,
      "alphaCoverage": 0.996,
+     "unused": true
+    },
+    {
+     "id": "maj_flav_drink",
+     "x": 0,
+     "y": 512,
+     "w": 512,
+     "h": 1024,
+     "alphaCoverage": 1,
      "unused": true
     },
     {
@@ -3179,7 +3224,7 @@
      "w": 640,
      "h": 256,
      "alphaCoverage": 0.679,
-     "placements": 2
+     "unused": true
     },
     {
      "id": "wolf_mural",
@@ -3188,7 +3233,7 @@
      "w": 512,
      "h": 512,
      "alphaCoverage": 0.5,
-     "placements": 21
+     "unused": true
     },
     {
      "id": "sumo_knife_mural",
@@ -3197,7 +3242,7 @@
      "w": 512,
      "h": 512,
      "alphaCoverage": 0.455,
-     "placements": 1
+     "unused": true
     },
     {
      "id": "item_04",
@@ -3646,40 +3691,13 @@
    "height": 4096,
    "posters": [
     {
-     "id": "item_19",
-     "x": 256,
-     "y": 0,
-     "w": 1608,
-     "h": 923,
-     "alphaCoverage": 0.193,
-     "placements": 4
-    },
-    {
      "id": "item_16",
      "x": 256,
-     "y": 128,
+     "y": 0,
      "w": 2304,
-     "h": 1152,
-     "alphaCoverage": 0.175,
-     "placements": 154
-    },
-    {
-     "id": "item_17",
-     "x": 256,
-     "y": 128,
-     "w": 2270,
-     "h": 1113,
-     "alphaCoverage": 0.182,
-     "placements": 2
-    },
-    {
-     "id": "item_00",
-     "x": 354,
-     "y": 141,
-     "w": 2206,
-     "h": 1139,
-     "alphaCoverage": 0.184,
-     "placements": 1
+     "h": 1280,
+     "alphaCoverage": 0.157,
+     "placements": 167
     },
     {
      "id": "item_20",
@@ -3688,7 +3706,7 @@
      "w": 1024,
      "h": 1024,
      "alphaCoverage": 0.05,
-     "placements": 41
+     "placements": 44
     },
     {
      "id": "item_25",
@@ -3697,7 +3715,7 @@
      "w": 768,
      "h": 768,
      "alphaCoverage": 0.137,
-     "placements": 54
+     "placements": 113
     },
     {
      "id": "item_27",
@@ -3715,7 +3733,7 @@
      "w": 448,
      "h": 640,
      "alphaCoverage": 0.197,
-     "placements": 55
+     "placements": 61
     },
     {
      "id": "item_21",
@@ -3728,12 +3746,12 @@
     },
     {
      "id": "item_22",
-     "x": 2050,
+     "x": 2048,
      "y": 1536,
-     "w": 1738,
+     "w": 1740,
      "h": 512,
      "alphaCoverage": 0.122,
-     "placements": 16
+     "placements": 19
     },
     {
      "id": "item_24",
@@ -3742,7 +3760,7 @@
      "w": 768,
      "h": 768,
      "alphaCoverage": 0.138,
-     "placements": 67
+     "placements": 60
     },
     {
      "id": "item_09",
@@ -3751,7 +3769,7 @@
      "w": 1024,
      "h": 512,
      "alphaCoverage": 0.152,
-     "placements": 4
+     "placements": 5
     },
     {
      "id": "item_23",
@@ -3760,7 +3778,7 @@
      "w": 768,
      "h": 768,
      "alphaCoverage": 0.133,
-     "placements": 17
+     "placements": 13
     },
     {
      "id": "item_26",
@@ -3769,7 +3787,7 @@
      "w": 1280,
      "h": 448,
      "alphaCoverage": 0.164,
-     "placements": 292
+     "placements": 293
     },
     {
      "id": "item_12",
@@ -3787,25 +3805,61 @@
      "w": 2304,
      "h": 768,
      "alphaCoverage": 0.241,
-     "placements": 176
+     "placements": 241
     },
     {
-     "id": "item_15",
+     "id": "item_29",
      "x": 2816,
      "y": 3328,
      "w": 1024,
-     "h": 576,
-     "alphaCoverage": 0.171,
-     "placements": 701
+     "h": 512,
+     "alphaCoverage": 0.192,
+     "placements": 690
     },
     {
-     "id": "item_28",
-     "x": 2433,
-     "y": 3803,
-     "w": 191,
-     "h": 165,
-     "alphaCoverage": 0.043,
-     "placements": 7
+     "id": "item_15",
+     "x": 2887,
+     "y": 3328,
+     "w": 953,
+     "h": 576,
+     "alphaCoverage": 0.182,
+     "placements": 14
+    },
+    {
+     "id": "item_30",
+     "x": 2816,
+     "y": 3591,
+     "w": 384,
+     "h": 288,
+     "alphaCoverage": 0.065,
+     "placements": 6
+    },
+    {
+     "id": "item_19",
+     "x": 256,
+     "y": 0,
+     "w": 1608,
+     "h": 923,
+     "alphaCoverage": 0.193,
+     "unused": true
+    },
+    {
+     "id": "item_17",
+     "x": 256,
+     "y": 128,
+     "w": 2270,
+     "h": 1113,
+     "alphaCoverage": 0.182,
+     "unused": true
+    },
+    {
+     "id": "item_00",
+     "x": 354,
+     "y": 141,
+     "w": 2206,
+     "h": 1139,
+     "alphaCoverage": 0.184,
+     "unused": true
     },
     {
      "id": "item_01",
@@ -3905,6 +3959,15 @@
      "h": 461,
      "alphaCoverage": 0.298,
      "unused": true
+    },
+    {
+     "id": "item_28",
+     "x": 2433,
+     "y": 3803,
+     "w": 191,
+     "h": 165,
+     "alphaCoverage": 0.043,
+     "unused": true
     }
    ]
   },
@@ -3927,7 +3990,7 @@
      "w": 960,
      "h": 896,
      "alphaCoverage": 0.084,
-     "placements": 7
+     "placements": 4
     },
     {
      "id": "item_03",
@@ -3936,7 +3999,7 @@
      "w": 812,
      "h": 1047,
      "alphaCoverage": 0.201,
-     "placements": 17
+     "placements": 14
     },
     {
      "id": "item_01",
@@ -3978,7 +4041,7 @@
      "w": 1388,
      "h": 1664,
      "alphaCoverage": 0.913,
-     "placements": 18
+     "placements": 1
     },
     {
      "id": "item_06",
@@ -3987,7 +4050,7 @@
      "w": 545,
      "h": 546,
      "alphaCoverage": 0.947,
-     "placements": 97
+     "placements": 32
     },
     {
      "id": "item_03",
@@ -3996,16 +4059,7 @@
      "w": 382,
      "h": 1500,
      "alphaCoverage": 0.951,
-     "placements": 224
-    },
-    {
-     "id": "item_01",
-     "x": 1504,
-     "y": 552,
-     "w": 400,
-     "h": 1496,
-     "alphaCoverage": 0.953,
-     "placements": 74
+     "placements": 53
     },
     {
      "id": "item_05",
@@ -4014,7 +4068,7 @@
      "w": 368,
      "h": 1484,
      "alphaCoverage": 0.956,
-     "placements": 18
+     "placements": 4
     },
     {
      "id": "item_02",
@@ -4023,7 +4077,16 @@
      "w": 1504,
      "h": 389,
      "alphaCoverage": 0.823,
-     "placements": 52
+     "placements": 51
+    },
+    {
+     "id": "item_01",
+     "x": 1504,
+     "y": 552,
+     "w": 400,
+     "h": 1496,
+     "alphaCoverage": 0.953,
+     "unused": true
     },
     {
      "id": "item_04",
@@ -4032,7 +4095,7 @@
      "w": 1500,
      "h": 381,
      "alphaCoverage": 0.828,
-     "placements": 2
+     "unused": true
     }
    ]
   },
@@ -4049,6 +4112,15 @@
    "height": 2048,
    "posters": [
     {
+     "id": "item_00",
+     "x": 0,
+     "y": 0,
+     "w": 2048,
+     "h": 1024,
+     "alphaCoverage": 0.886,
+     "placements": 3
+    },
+    {
      "id": "item_01",
      "x": 0,
      "y": 1024,
@@ -4058,13 +4130,13 @@
      "placements": 1
     },
     {
-     "id": "item_00",
-     "x": 0,
-     "y": 0,
-     "w": 2048,
-     "h": 2048,
-     "alphaCoverage": 0.784,
-     "unused": true
+     "id": "item_02",
+     "x": 853,
+     "y": 1376,
+     "w": 36,
+     "h": 331,
+     "alphaCoverage": 0.992,
+     "placements": 2
     }
    ]
   },
@@ -4083,11 +4155,11 @@
     {
      "id": "item_00",
      "x": 0,
-     "y": 121,
+     "y": 0,
      "w": 2048,
-     "h": 784,
-     "alphaCoverage": 0.94,
-     "unused": true
+     "h": 1024,
+     "alphaCoverage": 0.72,
+     "placements": 4
     }
    ]
   },
@@ -4127,13 +4199,22 @@
    "height": 2048,
    "posters": [
     {
-     "id": "item_00",
+     "id": "item_01",
      "x": 0,
      "y": 0,
-     "w": 1024,
+     "w": 72,
      "h": 2048,
-     "alphaCoverage": 0.834,
-     "placements": 1069
+     "alphaCoverage": 0.839,
+     "placements": 43
+    },
+    {
+     "id": "item_00",
+     "x": 72,
+     "y": 0,
+     "w": 952,
+     "h": 2048,
+     "alphaCoverage": 0.833,
+     "placements": 1
     }
    ]
   },
@@ -4156,7 +4237,7 @@
      "w": 1024,
      "h": 2048,
      "alphaCoverage": 0.267,
-     "placements": 64
+     "placements": 248
     },
     {
      "id": "item_01",
@@ -4187,7 +4268,7 @@
      "y": 0,
      "w": 2048,
      "h": 38,
-     "alphaCoverage": 0,
+     "alphaCoverage": 0.0,
      "placements": 1
     },
     {
@@ -4196,7 +4277,7 @@
      "y": 171,
      "w": 2048,
      "h": 61,
-     "alphaCoverage": 0,
+     "alphaCoverage": 0.0,
      "placements": 21
     },
     {
@@ -4206,7 +4287,7 @@
      "w": 2048,
      "h": 1687,
      "alphaCoverage": 0.857,
-     "placements": 17
+     "placements": 11
     }
    ]
   },
@@ -4224,12 +4305,12 @@
    "posters": [
     {
      "id": "item_00",
-     "x": 2,
+     "x": 0,
      "y": 0,
-     "w": 2046,
+     "w": 2048,
      "h": 2048,
-     "alphaCoverage": 0.93,
-     "placements": 1
+     "alphaCoverage": 0.929,
+     "placements": 2
     }
    ]
   },
@@ -4249,10 +4330,10 @@
      "id": "item_00",
      "x": 0,
      "y": 0,
-     "w": 1024,
+     "w": 1016,
      "h": 2048,
-     "alphaCoverage": 0.978,
-     "placements": 22
+     "alphaCoverage": 0.979,
+     "placements": 13
     }
    ]
   },
@@ -4275,7 +4356,7 @@
      "w": 1024,
      "h": 2048,
      "alphaCoverage": 0.978,
-     "placements": 106
+     "unused": true
     }
    ]
   },
@@ -4293,12 +4374,21 @@
    "posters": [
     {
      "id": "item_00",
-     "x": 164,
+     "x": 62,
      "y": 0,
-     "w": 1724,
+     "w": 1920,
      "h": 2048,
-     "alphaCoverage": 0.982,
-     "unused": true
+     "alphaCoverage": 0.888,
+     "placements": 2
+    },
+    {
+     "id": "item_01",
+     "x": 1980,
+     "y": 96,
+     "w": 68,
+     "h": 1952,
+     "alphaCoverage": 0.0,
+     "placements": 17
     }
    ]
   },
@@ -4321,7 +4411,7 @@
      "w": 2048,
      "h": 1024,
      "alphaCoverage": 0.965,
-     "placements": 19
+     "unused": true
     }
    ]
   },
@@ -4343,8 +4433,8 @@
      "y": 0,
      "w": 2048,
      "h": 1024,
-     "alphaCoverage": 0.951,
-     "unused": true
+     "alphaCoverage": 0.965,
+     "placements": 28
     }
    ]
   },
@@ -4361,31 +4451,22 @@
    "height": 2048,
    "posters": [
     {
-     "id": "hotel_vertical",
-     "x": 768,
-     "y": 0,
-     "w": 256,
-     "h": 862,
-     "alphaCoverage": 0.465,
-     "placements": 2
-    },
-    {
      "id": "drugs_vertical",
      "x": 1024,
      "y": 0,
      "w": 256,
      "h": 862,
      "alphaCoverage": 0.462,
-     "placements": 8
+     "placements": 3
     },
     {
-     "id": "caldera_vertical",
+     "id": "hotel_vertical",
      "x": 768,
-     "y": 862,
+     "y": 0,
      "w": 256,
-     "h": 1186,
-     "alphaCoverage": 0.403,
-     "placements": 10
+     "h": 862,
+     "alphaCoverage": 0.465,
+     "unused": true
     },
     {
      "id": "prime_neon_sold_here",
@@ -4403,6 +4484,15 @@
      "w": 640,
      "h": 1152,
      "alphaCoverage": 0.272,
+     "unused": true
+    },
+    {
+     "id": "caldera_vertical",
+     "x": 768,
+     "y": 862,
+     "w": 256,
+     "h": 1186,
+     "alphaCoverage": 0.403,
      "unused": true
     },
     {
@@ -4480,7 +4570,7 @@
      "w": 1463,
      "h": 694,
      "alphaCoverage": 0.847,
-     "placements": 4
+     "placements": 8
     },
     {
      "id": "plaza_classy_fridge",
@@ -4498,7 +4588,7 @@
      "w": 576,
      "h": 344,
      "alphaCoverage": 0.965,
-     "placements": 4
+     "placements": 2
     },
     {
      "id": "atm",
@@ -4525,7 +4615,7 @@
      "w": 35,
      "h": 85,
      "alphaCoverage": 0.372,
-     "placements": 4
+     "placements": 5
     },
     {
      "id": "item_00",
@@ -4534,7 +4624,7 @@
      "w": 2013,
      "h": 1024,
      "alphaCoverage": 0.933,
-     "placements": 37
+     "placements": 39
     },
     {
      "id": "canned_spirits",
@@ -4664,7 +4754,7 @@
      "y": 1528,
      "w": 1024,
      "h": 520,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 5
     },
     {
@@ -4841,7 +4931,7 @@
      "w": 1927,
      "h": 1985,
      "alphaCoverage": 0.16,
-     "placements": 9
+     "placements": 10
     },
     {
      "id": "item_01",
@@ -4850,7 +4940,7 @@
      "w": 1929,
      "h": 1920,
      "alphaCoverage": 0.161,
-     "placements": 6
+     "placements": 7
     },
     {
      "id": "item_02",
@@ -4876,21 +4966,21 @@
    "height": 2048,
    "posters": [
     {
+     "id": "item_00",
+     "x": 0,
+     "y": 0,
+     "w": 2048,
+     "h": 2048,
+     "alphaCoverage": 0.036,
+     "placements": 741
+    },
+    {
      "id": "item_01",
      "x": 1024,
      "y": 0,
      "w": 1024,
      "h": 1024,
      "alphaCoverage": 0.035,
-     "placements": 551
-    },
-    {
-     "id": "item_00",
-     "x": 11,
-     "y": 10,
-     "w": 2026,
-     "h": 2029,
-     "alphaCoverage": 0.037,
      "unused": true
     }
    ]
@@ -4909,12 +4999,12 @@
    "posters": [
     {
      "id": "item_15",
-     "x": 1471,
+     "x": 1536,
      "y": 0,
-     "w": 577,
+     "w": 512,
      "h": 384,
-     "alphaCoverage": 0.238,
-     "placements": 278
+     "alphaCoverage": 0.268,
+     "placements": 79
     },
     {
      "id": "item_00",
@@ -5126,7 +5216,7 @@
      "w": 760,
      "h": 1024,
      "alphaCoverage": 0,
-     "placements": 6
+     "unused": true
     },
     {
      "id": "item_00",
@@ -5157,17 +5247,8 @@
      "y": 0,
      "w": 696,
      "h": 1040,
-     "alphaCoverage": 0,
-     "placements": 14
-    },
-    {
-     "id": "item_01",
-     "x": 0,
-     "y": 1160,
-     "w": 1288,
-     "h": 888,
-     "alphaCoverage": 0,
-     "placements": 1
+     "alphaCoverage": 0.0,
+     "placements": 2
     },
     {
      "id": "item_00",
@@ -5175,6 +5256,15 @@
      "y": 0,
      "w": 2048,
      "h": 2048,
+     "alphaCoverage": 0,
+     "unused": true
+    },
+    {
+     "id": "item_01",
+     "x": 0,
+     "y": 1160,
+     "w": 1288,
+     "h": 888,
      "alphaCoverage": 0,
      "unused": true
     }
@@ -5193,148 +5283,13 @@
    "height": 2048,
    "posters": [
     {
-     "id": "item_38",
-     "x": 1920,
-     "y": 0,
-     "w": 128,
-     "h": 909,
-     "alphaCoverage": 0.37,
-     "placements": 2
-    },
-    {
-     "id": "item_28",
-     "x": 0,
-     "y": 128,
-     "w": 1440,
-     "h": 128,
-     "alphaCoverage": 0.414,
-     "placements": 4
-    },
-    {
-     "id": "item_29",
-     "x": 0,
-     "y": 256,
-     "w": 1392,
-     "h": 128,
-     "alphaCoverage": 0.438,
-     "placements": 3
-    },
-    {
-     "id": "item_30",
-     "x": 0,
-     "y": 384,
-     "w": 1344,
-     "h": 128,
-     "alphaCoverage": 0.452,
-     "placements": 4
-    },
-    {
-     "id": "item_07",
-     "x": 1408,
-     "y": 384,
-     "w": 480,
-     "h": 128,
-     "alphaCoverage": 0.407,
-     "placements": 2
-    },
-    {
-     "id": "item_31",
-     "x": 0,
-     "y": 512,
-     "w": 1200,
-     "h": 128,
-     "alphaCoverage": 0.439,
-     "placements": 6
-    },
-    {
-     "id": "item_11",
-     "x": 1280,
-     "y": 512,
-     "w": 496,
-     "h": 128,
-     "alphaCoverage": 0.375,
-     "placements": 4
-    },
-    {
-     "id": "item_32",
-     "x": 1792,
-     "y": 512,
-     "w": 128,
-     "h": 1152,
-     "alphaCoverage": 0.326,
-     "placements": 3
-    },
-    {
      "id": "item_14",
      "x": 0,
      "y": 640,
-     "w": 1086,
+     "w": 1088,
      "h": 128,
-     "alphaCoverage": 0.442,
-     "placements": 3
-    },
-    {
-     "id": "item_15",
-     "x": 1152,
-     "y": 640,
-     "w": 624,
-     "h": 128,
-     "alphaCoverage": 0.428,
-     "placements": 3
-    },
-    {
-     "id": "item_33",
-     "x": 0,
-     "y": 768,
-     "w": 1056,
-     "h": 128,
-     "alphaCoverage": 0.421,
-     "placements": 37
-    },
-    {
-     "id": "item_48",
-     "x": 1152,
-     "y": 768,
-     "w": 624,
-     "h": 128,
-     "alphaCoverage": 0.411,
-     "placements": 3
-    },
-    {
-     "id": "item_34",
-     "x": 0,
-     "y": 896,
-     "w": 1024,
-     "h": 128,
-     "alphaCoverage": 0.435,
-     "placements": 6
-    },
-    {
-     "id": "item_46",
-     "x": 1024,
-     "y": 896,
-     "w": 672,
-     "h": 128,
-     "alphaCoverage": 0.443,
-     "placements": 2
-    },
-    {
-     "id": "item_35",
-     "x": 0,
-     "y": 1024,
-     "w": 976,
-     "h": 128,
-     "alphaCoverage": 0.456,
-     "placements": 2
-    },
-    {
-     "id": "item_50",
-     "x": 1920,
-     "y": 1024,
-     "w": 128,
-     "h": 512,
-     "alphaCoverage": 0.36,
-     "placements": 3
+     "alphaCoverage": 0.441,
+     "placements": 10
     },
     {
      "id": "item_36",
@@ -5343,16 +5298,7 @@
      "w": 960,
      "h": 128,
      "alphaCoverage": 0.442,
-     "placements": 3
-    },
-    {
-     "id": "item_44",
-     "x": 1024,
-     "y": 1280,
-     "w": 688,
-     "h": 128,
-     "alphaCoverage": 0.443,
-     "placements": 4
+     "placements": 1
     },
     {
      "id": "item_37",
@@ -5361,79 +5307,16 @@
      "w": 928,
      "h": 128,
      "alphaCoverage": 0.45,
-     "placements": 6
+     "placements": 1
     },
     {
-     "id": "item_43",
-     "x": 1024,
-     "y": 1408,
-     "w": 710,
-     "h": 128,
-     "alphaCoverage": 0.415,
-     "placements": 2
-    },
-    {
-     "id": "item_39",
-     "x": 0,
-     "y": 1536,
-     "w": 893,
-     "h": 128,
-     "alphaCoverage": 0.42,
-     "placements": 4
-    },
-    {
-     "id": "item_47",
-     "x": 896,
-     "y": 1664,
-     "w": 640,
-     "h": 128,
-     "alphaCoverage": 0.458,
-     "placements": 2
-    },
-    {
-     "id": "item_40",
-     "x": 0,
-     "y": 1792,
-     "w": 800,
-     "h": 128,
-     "alphaCoverage": 0.454,
-     "placements": 8
-    },
-    {
-     "id": "item_42",
-     "x": 896,
-     "y": 1792,
-     "w": 720,
-     "h": 128,
-     "alphaCoverage": 0.459,
-     "placements": 2
-    },
-    {
-     "id": "item_41",
-     "x": 0,
-     "y": 1920,
-     "w": 768,
-     "h": 128,
-     "alphaCoverage": 0.422,
-     "placements": 2
-    },
-    {
-     "id": "item_49",
-     "x": 768,
-     "y": 1920,
-     "w": 512,
-     "h": 128,
-     "alphaCoverage": 0.407,
-     "placements": 2
-    },
-    {
-     "id": "item_45",
-     "x": 1280,
-     "y": 1920,
-     "w": 672,
-     "h": 128,
-     "alphaCoverage": 0.468,
-     "placements": 8
+     "id": "item_38",
+     "x": 1920,
+     "y": 0,
+     "w": 128,
+     "h": 909,
+     "alphaCoverage": 0.37,
+     "unused": true
     },
     {
      "id": "item_00",
@@ -5451,6 +5334,24 @@
      "w": 93,
      "h": 229,
      "alphaCoverage": 0.586,
+     "unused": true
+    },
+    {
+     "id": "item_28",
+     "x": 0,
+     "y": 128,
+     "w": 1440,
+     "h": 128,
+     "alphaCoverage": 0.414,
+     "unused": true
+    },
+    {
+     "id": "item_29",
+     "x": 0,
+     "y": 256,
+     "w": 1392,
+     "h": 128,
+     "alphaCoverage": 0.438,
      "unused": true
     },
     {
@@ -5481,6 +5382,24 @@
      "unused": true
     },
     {
+     "id": "item_30",
+     "x": 0,
+     "y": 384,
+     "w": 1344,
+     "h": 128,
+     "alphaCoverage": 0.452,
+     "unused": true
+    },
+    {
+     "id": "item_07",
+     "x": 1408,
+     "y": 384,
+     "w": 480,
+     "h": 128,
+     "alphaCoverage": 0.407,
+     "unused": true
+    },
+    {
      "id": "item_05",
      "x": 18,
      "y": 392,
@@ -5505,6 +5424,33 @@
      "w": 102,
      "h": 111,
      "alphaCoverage": 0.587,
+     "unused": true
+    },
+    {
+     "id": "item_31",
+     "x": 0,
+     "y": 512,
+     "w": 1200,
+     "h": 128,
+     "alphaCoverage": 0.439,
+     "unused": true
+    },
+    {
+     "id": "item_11",
+     "x": 1280,
+     "y": 512,
+     "w": 496,
+     "h": 128,
+     "alphaCoverage": 0.375,
+     "unused": true
+    },
+    {
+     "id": "item_32",
+     "x": 1792,
+     "y": 512,
+     "w": 128,
+     "h": 1152,
+     "alphaCoverage": 0.326,
      "unused": true
     },
     {
@@ -5544,6 +5490,15 @@
      "unused": true
     },
     {
+     "id": "item_15",
+     "x": 1152,
+     "y": 640,
+     "w": 624,
+     "h": 128,
+     "alphaCoverage": 0.428,
+     "unused": true
+    },
+    {
      "id": "item_16",
      "x": 1803,
      "y": 648,
@@ -5559,6 +5514,24 @@
      "w": 96,
      "h": 109,
      "alphaCoverage": 0.646,
+     "unused": true
+    },
+    {
+     "id": "item_33",
+     "x": 0,
+     "y": 768,
+     "w": 1056,
+     "h": 128,
+     "alphaCoverage": 0.421,
+     "unused": true
+    },
+    {
+     "id": "item_48",
+     "x": 1152,
+     "y": 768,
+     "w": 624,
+     "h": 128,
+     "alphaCoverage": 0.411,
      "unused": true
     },
     {
@@ -5589,12 +5562,48 @@
      "unused": true
     },
     {
+     "id": "item_34",
+     "x": 0,
+     "y": 896,
+     "w": 1024,
+     "h": 128,
+     "alphaCoverage": 0.435,
+     "unused": true
+    },
+    {
+     "id": "item_46",
+     "x": 1024,
+     "y": 896,
+     "w": 672,
+     "h": 128,
+     "alphaCoverage": 0.443,
+     "unused": true
+    },
+    {
      "id": "item_21",
      "x": 1806,
      "y": 907,
      "w": 101,
      "h": 105,
      "alphaCoverage": 0.63,
+     "unused": true
+    },
+    {
+     "id": "item_35",
+     "x": 0,
+     "y": 1024,
+     "w": 976,
+     "h": 128,
+     "alphaCoverage": 0.456,
+     "unused": true
+    },
+    {
+     "id": "item_50",
+     "x": 1920,
+     "y": 1024,
+     "w": 128,
+     "h": 512,
+     "alphaCoverage": 0.36,
      "unused": true
     },
     {
@@ -5625,6 +5634,15 @@
      "unused": true
     },
     {
+     "id": "item_44",
+     "x": 1024,
+     "y": 1280,
+     "w": 688,
+     "h": 128,
+     "alphaCoverage": 0.443,
+     "unused": true
+    },
+    {
      "id": "item_26",
      "x": 1936,
      "y": 1290,
@@ -5643,12 +5661,84 @@
      "unused": true
     },
     {
+     "id": "item_43",
+     "x": 1024,
+     "y": 1408,
+     "w": 710,
+     "h": 128,
+     "alphaCoverage": 0.415,
+     "unused": true
+    },
+    {
      "id": "item_27",
      "x": 9,
      "y": 1416,
      "w": 2022,
      "h": 622,
      "alphaCoverage": 0.378,
+     "unused": true
+    },
+    {
+     "id": "item_39",
+     "x": 0,
+     "y": 1536,
+     "w": 893,
+     "h": 128,
+     "alphaCoverage": 0.42,
+     "unused": true
+    },
+    {
+     "id": "item_47",
+     "x": 896,
+     "y": 1664,
+     "w": 640,
+     "h": 128,
+     "alphaCoverage": 0.458,
+     "unused": true
+    },
+    {
+     "id": "item_40",
+     "x": 0,
+     "y": 1792,
+     "w": 800,
+     "h": 128,
+     "alphaCoverage": 0.454,
+     "unused": true
+    },
+    {
+     "id": "item_42",
+     "x": 896,
+     "y": 1792,
+     "w": 720,
+     "h": 128,
+     "alphaCoverage": 0.459,
+     "unused": true
+    },
+    {
+     "id": "item_41",
+     "x": 0,
+     "y": 1920,
+     "w": 768,
+     "h": 128,
+     "alphaCoverage": 0.422,
+     "unused": true
+    },
+    {
+     "id": "item_49",
+     "x": 768,
+     "y": 1920,
+     "w": 512,
+     "h": 128,
+     "alphaCoverage": 0.407,
+     "unused": true
+    },
+    {
+     "id": "item_45",
+     "x": 1280,
+     "y": 1920,
+     "w": 672,
+     "h": 128,
+     "alphaCoverage": 0.468,
      "unused": true
     }
    ]
@@ -5666,165 +5756,30 @@
    "height": 2048,
    "posters": [
     {
-     "id": "item_17",
-     "x": 0,
-     "y": 0,
-     "w": 1504,
-     "h": 128,
-     "alphaCoverage": 0.444,
-     "placements": 3
-    },
-    {
      "id": "item_18",
      "x": 0,
      "y": 256,
      "w": 1152,
      "h": 128,
      "alphaCoverage": 0.442,
-     "placements": 17
+     "placements": 9
     },
     {
-     "id": "item_19",
-     "x": 0,
-     "y": 384,
-     "w": 1120,
-     "h": 128,
-     "alphaCoverage": 0.435,
-     "placements": 4
-    },
-    {
-     "id": "item_05",
-     "x": 0,
+     "id": "item_06",
+     "x": 650,
      "y": 512,
-     "w": 1072,
+     "w": 422,
      "h": 128,
-     "alphaCoverage": 0.43,
-     "placements": 34
-    },
-    {
-     "id": "item_07",
-     "x": 1152,
-     "y": 512,
-     "w": 512,
-     "h": 128,
-     "alphaCoverage": 0.364,
-     "placements": 11
-    },
-    {
-     "id": "item_08",
-     "x": 0,
-     "y": 640,
-     "w": 1056,
-     "h": 128,
-     "alphaCoverage": 0.44,
-     "placements": 5
-    },
-    {
-     "id": "item_09",
-     "x": 1152,
-     "y": 640,
-     "w": 432,
-     "h": 128,
-     "alphaCoverage": 0.474,
+     "alphaCoverage": 0.408,
      "placements": 2
-    },
-    {
-     "id": "item_33",
-     "x": 1024,
-     "y": 768,
-     "w": 528,
-     "h": 128,
-     "alphaCoverage": 0.403,
-     "placements": 1
     },
     {
      "id": "item_20",
      "x": 0,
      "y": 896,
-     "w": 928,
+     "w": 494,
      "h": 128,
-     "alphaCoverage": 0.405,
-     "placements": 1
-    },
-    {
-     "id": "item_32",
-     "x": 1024,
-     "y": 896,
-     "w": 560,
-     "h": 128,
-     "alphaCoverage": 0.418,
-     "placements": 3
-    },
-    {
-     "id": "item_21",
-     "x": 0,
-     "y": 1024,
-     "w": 896,
-     "h": 128,
-     "alphaCoverage": 0.442,
-     "placements": 12
-    },
-    {
-     "id": "item_28",
-     "x": 896,
-     "y": 1024,
-     "w": 704,
-     "h": 128,
-     "alphaCoverage": 0.447,
-     "placements": 18
-    },
-    {
-     "id": "item_22",
-     "x": 0,
-     "y": 1152,
-     "w": 880,
-     "h": 128,
-     "alphaCoverage": 0.432,
-     "placements": 12
-    },
-    {
-     "id": "item_31",
-     "x": 896,
-     "y": 1152,
-     "w": 592,
-     "h": 128,
-     "alphaCoverage": 0.421,
-     "placements": 2
-    },
-    {
-     "id": "item_23",
-     "x": 0,
-     "y": 1280,
-     "w": 864,
-     "h": 128,
-     "alphaCoverage": 0.459,
-     "placements": 3
-    },
-    {
-     "id": "item_29",
-     "x": 896,
-     "y": 1280,
-     "w": 640,
-     "h": 128,
-     "alphaCoverage": 0.461,
-     "placements": 1
-    },
-    {
-     "id": "item_30",
-     "x": 896,
-     "y": 1408,
-     "w": 624,
-     "h": 128,
-     "alphaCoverage": 0.446,
-     "placements": 6
-    },
-    {
-     "id": "item_25",
-     "x": 0,
-     "y": 1536,
-     "w": 800,
-     "h": 128,
-     "alphaCoverage": 0.361,
+     "alphaCoverage": 0.441,
      "placements": 2
     },
     {
@@ -5834,16 +5789,7 @@
      "w": 768,
      "h": 128,
      "alphaCoverage": 0.443,
-     "placements": 3
-    },
-    {
-     "id": "item_24",
-     "x": 768,
-     "y": 1664,
-     "w": 848,
-     "h": 128,
-     "alphaCoverage": 0.436,
-     "placements": 3
+     "placements": 4
     },
     {
      "id": "item_12",
@@ -5852,34 +5798,16 @@
      "w": 704,
      "h": 128,
      "alphaCoverage": 0.435,
-     "placements": 17
+     "placements": 1
     },
     {
-     "id": "item_27",
-     "x": 768,
-     "y": 1792,
-     "w": 752,
-     "h": 128,
-     "alphaCoverage": 0.421,
-     "placements": 2
-    },
-    {
-     "id": "item_15",
+     "id": "item_17",
      "x": 0,
-     "y": 1920,
-     "w": 736,
+     "y": 0,
+     "w": 1504,
      "h": 128,
-     "alphaCoverage": 0.452,
-     "placements": 9
-    },
-    {
-     "id": "item_16",
-     "x": 768,
-     "y": 1920,
-     "w": 672,
-     "h": 128,
-     "alphaCoverage": 0.44,
-     "placements": 3
+     "alphaCoverage": 0.444,
+     "unused": true
     },
     {
      "id": "item_00",
@@ -5909,6 +5837,15 @@
      "unused": true
     },
     {
+     "id": "item_19",
+     "x": 0,
+     "y": 384,
+     "w": 1120,
+     "h": 128,
+     "alphaCoverage": 0.435,
+     "unused": true
+    },
+    {
      "id": "item_04",
      "x": 545,
      "y": 392,
@@ -5927,12 +5864,48 @@
      "unused": true
     },
     {
-     "id": "item_06",
-     "x": 676,
-     "y": 521,
-     "w": 380,
-     "h": 110,
-     "alphaCoverage": 0.528,
+     "id": "item_05",
+     "x": 0,
+     "y": 512,
+     "w": 1072,
+     "h": 128,
+     "alphaCoverage": 0.43,
+     "unused": true
+    },
+    {
+     "id": "item_07",
+     "x": 1152,
+     "y": 512,
+     "w": 512,
+     "h": 128,
+     "alphaCoverage": 0.364,
+     "unused": true
+    },
+    {
+     "id": "item_08",
+     "x": 0,
+     "y": 640,
+     "w": 1056,
+     "h": 128,
+     "alphaCoverage": 0.44,
+     "unused": true
+    },
+    {
+     "id": "item_09",
+     "x": 1152,
+     "y": 640,
+     "w": 432,
+     "h": 128,
+     "alphaCoverage": 0.474,
+     "unused": true
+    },
+    {
+     "id": "item_33",
+     "x": 1024,
+     "y": 768,
+     "w": 528,
+     "h": 128,
+     "alphaCoverage": 0.403,
      "unused": true
     },
     {
@@ -5945,12 +5918,111 @@
      "unused": true
     },
     {
+     "id": "item_32",
+     "x": 1024,
+     "y": 896,
+     "w": 560,
+     "h": 128,
+     "alphaCoverage": 0.418,
+     "unused": true
+    },
+    {
+     "id": "item_21",
+     "x": 0,
+     "y": 1024,
+     "w": 896,
+     "h": 128,
+     "alphaCoverage": 0.442,
+     "unused": true
+    },
+    {
+     "id": "item_28",
+     "x": 896,
+     "y": 1024,
+     "w": 704,
+     "h": 128,
+     "alphaCoverage": 0.447,
+     "unused": true
+    },
+    {
+     "id": "item_22",
+     "x": 0,
+     "y": 1152,
+     "w": 880,
+     "h": 128,
+     "alphaCoverage": 0.432,
+     "unused": true
+    },
+    {
+     "id": "item_31",
+     "x": 896,
+     "y": 1152,
+     "w": 592,
+     "h": 128,
+     "alphaCoverage": 0.421,
+     "unused": true
+    },
+    {
+     "id": "item_23",
+     "x": 0,
+     "y": 1280,
+     "w": 864,
+     "h": 128,
+     "alphaCoverage": 0.459,
+     "unused": true
+    },
+    {
+     "id": "item_29",
+     "x": 896,
+     "y": 1280,
+     "w": 640,
+     "h": 128,
+     "alphaCoverage": 0.461,
+     "unused": true
+    },
+    {
+     "id": "item_30",
+     "x": 896,
+     "y": 1408,
+     "w": 624,
+     "h": 128,
+     "alphaCoverage": 0.446,
+     "unused": true
+    },
+    {
      "id": "item_11",
      "x": 6,
      "y": 1417,
      "w": 1579,
      "h": 364,
      "alphaCoverage": 0.436,
+     "unused": true
+    },
+    {
+     "id": "item_25",
+     "x": 0,
+     "y": 1536,
+     "w": 800,
+     "h": 128,
+     "alphaCoverage": 0.361,
+     "unused": true
+    },
+    {
+     "id": "item_24",
+     "x": 768,
+     "y": 1664,
+     "w": 848,
+     "h": 128,
+     "alphaCoverage": 0.436,
+     "unused": true
+    },
+    {
+     "id": "item_27",
+     "x": 768,
+     "y": 1792,
+     "w": 752,
+     "h": 128,
+     "alphaCoverage": 0.421,
      "unused": true
     },
     {
@@ -5969,6 +6041,24 @@
      "w": 325,
      "h": 107,
      "alphaCoverage": 0.507,
+     "unused": true
+    },
+    {
+     "id": "item_15",
+     "x": 0,
+     "y": 1920,
+     "w": 736,
+     "h": 128,
+     "alphaCoverage": 0.452,
+     "unused": true
+    },
+    {
+     "id": "item_16",
+     "x": 768,
+     "y": 1920,
+     "w": 672,
+     "h": 128,
+     "alphaCoverage": 0.44,
      "unused": true
     }
    ]
@@ -5989,10 +6079,46 @@
      "id": "grebb_frogs",
      "x": 0,
      "y": 0,
-     "w": 744,
-     "h": 1472,
-     "alphaCoverage": 0,
-     "placements": 76
+     "w": 720,
+     "h": 1471,
+     "alphaCoverage": 0.0,
+     "placements": 2
+    },
+    {
+     "id": "sanguine_laceration",
+     "x": 1344,
+     "y": 0,
+     "w": 704,
+     "h": 1360,
+     "alphaCoverage": 1.0,
+     "placements": 69
+    },
+    {
+     "id": "item_00",
+     "x": 1351,
+     "y": 24,
+     "w": 697,
+     "h": 1333,
+     "alphaCoverage": 1.0,
+     "placements": 1
+    },
+    {
+     "id": "perfect_shine",
+     "x": 950,
+     "y": 894,
+     "w": 362,
+     "h": 481,
+     "alphaCoverage": 1.0,
+     "placements": 8
+    },
+    {
+     "id": "item_01",
+     "x": 1093,
+     "y": 1418,
+     "w": 951,
+     "h": 630,
+     "alphaCoverage": 1.0,
+     "placements": 2
     },
     {
      "id": "friedlander_koppelman",
@@ -6001,7 +6127,7 @@
      "w": 132,
      "h": 1324,
      "alphaCoverage": 1,
-     "placements": 10
+     "unused": true
     },
     {
      "id": "macksound_hoff",
@@ -6010,70 +6136,7 @@
      "w": 252,
      "h": 776,
      "alphaCoverage": 1,
-     "placements": 11
-    },
-    {
-     "id": "sanguine_laceration",
-     "x": 1342,
-     "y": 0,
-     "w": 706,
-     "h": 1360,
-     "alphaCoverage": 1,
-     "placements": 221
-    },
-    {
-     "id": "item_00",
-     "x": 1358,
-     "y": 15,
-     "w": 675,
-     "h": 1327,
-     "alphaCoverage": 1,
-     "placements": 366
-    },
-    {
-     "id": "perfect_shine",
-     "x": 950,
-     "y": 894,
-     "w": 362,
-     "h": 482,
-     "alphaCoverage": 1,
-     "placements": 33
-    },
-    {
-     "id": "mosquito_prince",
-     "x": 1088,
-     "y": 1408,
-     "w": 960,
-     "h": 640,
-     "alphaCoverage": 1,
-     "placements": 51
-    },
-    {
-     "id": "item_01",
-     "x": 1094,
-     "y": 1418,
-     "w": 950,
-     "h": 630,
-     "alphaCoverage": 1,
-     "placements": 7
-    },
-    {
-     "id": "anathema_crest",
-     "x": 0,
-     "y": 1520,
-     "w": 272,
-     "h": 352,
-     "alphaCoverage": 0.11,
-     "placements": 48
-    },
-    {
-     "id": "anathema_text",
-     "x": 0,
-     "y": 1880,
-     "w": 895,
-     "h": 143,
-     "alphaCoverage": 0.427,
-     "placements": 326
+     "unused": true
     },
     {
      "id": "holy_chains",
@@ -6091,6 +6154,33 @@
      "w": 54,
      "h": 577,
      "alphaCoverage": 1,
+     "unused": true
+    },
+    {
+     "id": "mosquito_prince",
+     "x": 1088,
+     "y": 1408,
+     "w": 960,
+     "h": 640,
+     "alphaCoverage": 1,
+     "unused": true
+    },
+    {
+     "id": "anathema_crest",
+     "x": 0,
+     "y": 1520,
+     "w": 272,
+     "h": 352,
+     "alphaCoverage": 0.11,
+     "unused": true
+    },
+    {
+     "id": "anathema_text",
+     "x": 0,
+     "y": 1880,
+     "w": 895,
+     "h": 143,
+     "alphaCoverage": 0.427,
      "unused": true
     }
    ]
@@ -6113,18 +6203,9 @@
      "x": 0,
      "y": 0,
      "w": 1024,
-     "h": 1486,
-     "alphaCoverage": 1,
-     "placements": 17
-    },
-    {
-     "id": "rescue_beam",
-     "x": 1096,
-     "y": 0,
-     "w": 496,
-     "h": 1152,
-     "alphaCoverage": 1,
-     "placements": 6
+     "h": 1484,
+     "alphaCoverage": 1.0,
+     "placements": 1
     },
     {
      "id": "hex_jazz_records",
@@ -6133,7 +6214,25 @@
      "w": 384,
      "h": 1488,
      "alphaCoverage": 0.991,
-     "placements": 6
+     "placements": 2
+    },
+    {
+     "id": "yes_bottle",
+     "x": 1663,
+     "y": 1663,
+     "w": 384,
+     "h": 377,
+     "alphaCoverage": 0.998,
+     "placements": 1
+    },
+    {
+     "id": "rescue_beam",
+     "x": 1096,
+     "y": 0,
+     "w": 496,
+     "h": 1152,
+     "alphaCoverage": 1,
+     "unused": true
     },
     {
      "id": "white_crow",
@@ -6142,16 +6241,7 @@
      "w": 384,
      "h": 544,
      "alphaCoverage": 0.993,
-     "placements": 2
-    },
-    {
-     "id": "yes_bottle",
-     "x": 1663,
-     "y": 1663,
-     "w": 385,
-     "h": 385,
-     "alphaCoverage": 0.998,
-     "placements": 3
+     "unused": true
     },
     {
      "id": "crab_eyes",
@@ -6160,7 +6250,7 @@
      "w": 576,
      "h": 320,
      "alphaCoverage": 1,
-     "placements": 2
+     "unused": true
     }
    ]
   },
@@ -6183,7 +6273,7 @@
      "w": 1112,
      "h": 832,
      "alphaCoverage": 0.985,
-     "placements": 136
+     "placements": 1
     },
     {
      "id": "the_66th_store",
@@ -6192,7 +6282,7 @@
      "w": 835,
      "h": 1991,
      "alphaCoverage": 0.636,
-     "placements": 18
+     "unused": true
     },
     {
      "id": "spark_offering_mix",
@@ -6201,7 +6291,7 @@
      "w": 272,
      "h": 1024,
      "alphaCoverage": 1,
-     "placements": 1
+     "unused": true
     },
     {
      "id": "offering_unit_car",
@@ -6227,31 +6317,31 @@
    "height": 2048,
    "posters": [
     {
+     "id": "ethereal_strings",
+     "x": 0,
+     "y": 0,
+     "w": 896,
+     "h": 896,
+     "alphaCoverage": 0.0,
+     "placements": 6
+    },
+    {
      "id": "daveralie_fleur",
      "x": 1376,
      "y": 0,
      "w": 672,
      "h": 2047,
-     "alphaCoverage": 0,
+     "alphaCoverage": 0.0,
      "placements": 9
     },
     {
      "id": "dark_horizon_unicorn",
-     "x": 1,
-     "y": 1353,
-     "w": 1350,
-     "h": 693,
-     "alphaCoverage": 0,
-     "placements": 126
-    },
-    {
-     "id": "ethereal_strings",
      "x": 0,
-     "y": 0,
-     "w": 855,
-     "h": 858,
-     "alphaCoverage": 0,
-     "unused": true
+     "y": 1352,
+     "w": 1352,
+     "h": 696,
+     "alphaCoverage": 0.0,
+     "placements": 1
     }
    ]
   },
@@ -6274,7 +6364,7 @@
      "w": 760,
      "h": 1080,
      "alphaCoverage": 0,
-     "placements": 1
+     "unused": true
     },
     {
      "id": "eclipse_blades",
@@ -6283,7 +6373,7 @@
      "w": 672,
      "h": 2008,
      "alphaCoverage": 0,
-     "placements": 2
+     "unused": true
     },
     {
      "id": "dimensional_chess",
@@ -6314,8 +6404,17 @@
      "y": 0,
      "w": 712,
      "h": 1272,
-     "alphaCoverage": 0,
-     "placements": 7
+     "alphaCoverage": 0.0,
+     "placements": 3
+    },
+    {
+     "id": "somnex_astral",
+     "x": 0,
+     "y": 1328,
+     "w": 2048,
+     "h": 720,
+     "alphaCoverage": 0.0,
+     "placements": 3
     },
     {
      "id": "optiwerk_scope",
@@ -6324,16 +6423,7 @@
      "w": 1080,
      "h": 1272,
      "alphaCoverage": 0,
-     "placements": 1
-    },
-    {
-     "id": "somnex_astral",
-     "x": 0,
-     "y": 1328,
-     "w": 2048,
-     "h": 720,
-     "alphaCoverage": 0,
-     "placements": 3
+     "unused": true
     }
    ]
   },
@@ -6356,7 +6446,7 @@
      "w": 696,
      "h": 1016,
      "alphaCoverage": 0,
-     "placements": 6
+     "unused": true
     },
     {
      "id": "spirattra",
@@ -6365,7 +6455,7 @@
      "w": 911,
      "h": 1288,
      "alphaCoverage": 0,
-     "placements": 1
+     "unused": true
     },
     {
      "id": "longston_hats",
@@ -6374,7 +6464,7 @@
      "w": 924,
      "h": 1024,
      "alphaCoverage": 0,
-     "placements": 3
+     "unused": true
     }
    ]
   },
@@ -6396,17 +6486,8 @@
      "y": 0,
      "w": 640,
      "h": 1192,
-     "alphaCoverage": 0,
-     "placements": 13
-    },
-    {
-     "id": "dr_rockwells_dental",
-     "x": 0,
-     "y": 1264,
-     "w": 2048,
-     "h": 784,
-     "alphaCoverage": 0,
-     "placements": 1
+     "alphaCoverage": 0.0,
+     "placements": 23
     },
     {
      "id": "golden_loops_cereal",
@@ -6414,6 +6495,15 @@
      "y": 26,
      "w": 1331,
      "h": 1036,
+     "alphaCoverage": 0,
+     "unused": true
+    },
+    {
+     "id": "dr_rockwells_dental",
+     "x": 0,
+     "y": 1264,
+     "w": 2048,
+     "h": 784,
      "alphaCoverage": 0,
      "unused": true
     }
@@ -6434,11 +6524,11 @@
     {
      "id": "item_01",
      "x": 255,
-     "y": 0,
+     "y": 2,
      "w": 255,
-     "h": 256,
-     "alphaCoverage": 0.236,
-     "placements": 96
+     "h": 253,
+     "alphaCoverage": 0.239,
+     "placements": 19
     },
     {
      "id": "item_00",
@@ -6447,7 +6537,7 @@
      "w": 258,
      "h": 252,
      "alphaCoverage": 0.229,
-     "placements": 9
+     "unused": true
     },
     {
      "id": "item_31",
@@ -6456,52 +6546,7 @@
      "w": 255,
      "h": 255,
      "alphaCoverage": 0.149,
-     "placements": 56
-    },
-    {
-     "id": "item_32",
-     "x": 3,
-     "y": 512,
-     "w": 507,
-     "h": 128,
-     "alphaCoverage": 0.242,
-     "placements": 6
-    },
-    {
-     "id": "item_33",
-     "x": 3,
-     "y": 767,
-     "w": 507,
-     "h": 128,
-     "alphaCoverage": 0.202,
-     "placements": 10
-    },
-    {
-     "id": "item_34",
-     "x": 3,
-     "y": 897,
-     "w": 507,
-     "h": 128,
-     "alphaCoverage": 0.257,
-     "placements": 8
-    },
-    {
-     "id": "item_35",
-     "x": 140,
-     "y": 1030,
-     "w": 208,
-     "h": 116,
-     "alphaCoverage": 0.204,
-     "placements": 230
-    },
-    {
-     "id": "item_30",
-     "x": 0,
-     "y": 1280,
-     "w": 768,
-     "h": 128,
-     "alphaCoverage": 0.211,
-     "placements": 10
+     "unused": true
     },
     {
      "id": "item_02",
@@ -6510,6 +6555,15 @@
      "w": 209,
      "h": 142,
      "alphaCoverage": 0.325,
+     "unused": true
+    },
+    {
+     "id": "item_32",
+     "x": 3,
+     "y": 512,
+     "w": 507,
+     "h": 128,
+     "alphaCoverage": 0.242,
      "unused": true
     },
     {
@@ -6567,6 +6621,15 @@
      "unused": true
     },
     {
+     "id": "item_33",
+     "x": 3,
+     "y": 767,
+     "w": 507,
+     "h": 128,
+     "alphaCoverage": 0.202,
+     "unused": true
+    },
+    {
      "id": "item_09",
      "x": 54,
      "y": 798,
@@ -6585,6 +6648,15 @@
      "unused": true
     },
     {
+     "id": "item_34",
+     "x": 3,
+     "y": 897,
+     "w": 507,
+     "h": 128,
+     "alphaCoverage": 0.257,
+     "unused": true
+    },
+    {
      "id": "item_11",
      "x": 16,
      "y": 929,
@@ -6600,6 +6672,15 @@
      "w": 250,
      "h": 62,
      "alphaCoverage": 0.569,
+     "unused": true
+    },
+    {
+     "id": "item_35",
+     "x": 140,
+     "y": 1030,
+     "w": 208,
+     "h": 116,
+     "alphaCoverage": 0.204,
      "unused": true
     },
     {
@@ -6636,6 +6717,15 @@
      "w": 52,
      "h": 62,
      "alphaCoverage": 0.61,
+     "unused": true
+    },
+    {
+     "id": "item_30",
+     "x": 0,
+     "y": 1280,
+     "w": 768,
+     "h": 128,
+     "alphaCoverage": 0.211,
      "unused": true
     },
     {
@@ -6770,31 +6860,13 @@
    "height": 2048,
    "posters": [
     {
-     "id": "item_05",
-     "x": 0,
-     "y": 0,
-     "w": 638,
-     "h": 576,
-     "alphaCoverage": 1,
-     "placements": 387
-    },
-    {
-     "id": "item_03",
-     "x": 640,
-     "y": 0,
-     "w": 768,
-     "h": 704,
-     "alphaCoverage": 1,
-     "placements": 7
-    },
-    {
      "id": "item_06",
      "x": 1408,
      "y": 64,
      "w": 638,
      "h": 576,
-     "alphaCoverage": 1,
-     "placements": 564
+     "alphaCoverage": 1.0,
+     "placements": 158
     },
     {
      "id": "item_02",
@@ -6802,17 +6874,17 @@
      "y": 688,
      "w": 448,
      "h": 1312,
-     "alphaCoverage": 1,
-     "placements": 1582
+     "alphaCoverage": 1.0,
+     "placements": 196
     },
     {
      "id": "item_04",
      "x": 0,
      "y": 704,
-     "w": 709,
+     "w": 704,
      "h": 640,
-     "alphaCoverage": 1,
-     "placements": 277
+     "alphaCoverage": 1.0,
+     "placements": 10
     },
     {
      "id": "item_07",
@@ -6820,8 +6892,8 @@
      "y": 768,
      "w": 512,
      "h": 512,
-     "alphaCoverage": 1,
-     "placements": 172
+     "alphaCoverage": 1.0,
+     "placements": 157
     },
     {
      "id": "item_08",
@@ -6829,8 +6901,8 @@
      "y": 1408,
      "w": 448,
      "h": 575,
-     "alphaCoverage": 1,
-     "placements": 1770
+     "alphaCoverage": 1.0,
+     "placements": 183
     },
     {
      "id": "item_01",
@@ -6838,8 +6910,17 @@
      "y": 1472,
      "w": 1088,
      "h": 576,
+     "alphaCoverage": 1.0,
+     "placements": 1
+    },
+    {
+     "id": "item_05",
+     "x": 0,
+     "y": 0,
+     "w": 638,
+     "h": 576,
      "alphaCoverage": 1,
-     "placements": 521
+     "unused": true
     },
     {
      "id": "item_00",
@@ -6847,6 +6928,15 @@
      "y": 0,
      "w": 2048,
      "h": 2048,
+     "alphaCoverage": 1,
+     "unused": true
+    },
+    {
+     "id": "item_03",
+     "x": 640,
+     "y": 0,
+     "w": 768,
+     "h": 704,
      "alphaCoverage": 1,
      "unused": true
     }
@@ -6871,7 +6961,7 @@
      "w": 1024,
      "h": 256,
      "alphaCoverage": 0.263,
-     "placements": 80
+     "placements": 19
     },
     {
      "id": "item_02",
@@ -6880,16 +6970,7 @@
      "w": 1024,
      "h": 256,
      "alphaCoverage": 0.306,
-     "placements": 76
-    },
-    {
-     "id": "item_03",
-     "x": 0,
-     "y": 256,
-     "w": 1792,
-     "h": 256,
-     "alphaCoverage": 0.292,
-     "placements": 32
+     "placements": 1
     },
     {
      "id": "item_05",
@@ -6898,7 +6979,7 @@
      "w": 1280,
      "h": 256,
      "alphaCoverage": 0.325,
-     "placements": 53
+     "placements": 7
     },
     {
      "id": "item_06",
@@ -6907,70 +6988,16 @@
      "w": 768,
      "h": 256,
      "alphaCoverage": 0.305,
-     "placements": 134
+     "placements": 1
     },
     {
-     "id": "item_28",
+     "id": "item_31",
      "x": 0,
      "y": 768,
-     "w": 1152,
-     "h": 256,
-     "alphaCoverage": 0.309,
-     "placements": 126
-    },
-    {
-     "id": "item_26",
-     "x": 0,
-     "y": 1024,
-     "w": 1536,
-     "h": 256,
-     "alphaCoverage": 0.239,
-     "placements": 8
-    },
-    {
-     "id": "item_27",
-     "x": 0,
-     "y": 1280,
-     "w": 1408,
-     "h": 256,
-     "alphaCoverage": 0.234,
-     "placements": 4
-    },
-    {
-     "id": "item_13",
-     "x": 1664,
-     "y": 1408,
-     "w": 128,
-     "h": 128,
-     "alphaCoverage": 0.354,
-     "placements": 12
-    },
-    {
-     "id": "item_14",
-     "x": 1792,
-     "y": 1408,
-     "w": 128,
-     "h": 128,
-     "alphaCoverage": 0.36,
-     "placements": 161
-    },
-    {
-     "id": "item_15",
-     "x": 0,
-     "y": 1536,
-     "w": 640,
-     "h": 128,
-     "alphaCoverage": 0.351,
-     "placements": 48
-    },
-    {
-     "id": "item_16",
-     "x": 1152,
-     "y": 1536,
-     "w": 896,
-     "h": 128,
-     "alphaCoverage": 0.355,
-     "placements": 62
+     "w": 2048,
+     "h": 896,
+     "alphaCoverage": 0.191,
+     "placements": 108
     },
     {
      "id": "item_30",
@@ -6979,7 +7006,16 @@
      "w": 896,
      "h": 256,
      "alphaCoverage": 0.228,
-     "placements": 379
+     "placements": 143
+    },
+    {
+     "id": "item_32",
+     "x": 1248,
+     "y": 1760,
+     "w": 800,
+     "h": 288,
+     "alphaCoverage": 0.223,
+     "placements": 1
     },
     {
      "id": "item_25",
@@ -6988,7 +7024,7 @@
      "w": 704,
      "h": 128,
      "alphaCoverage": 0.273,
-     "placements": 70
+     "placements": 17
     },
     {
      "id": "item_00",
@@ -7009,12 +7045,30 @@
      "unused": true
     },
     {
+     "id": "item_03",
+     "x": 0,
+     "y": 256,
+     "w": 1792,
+     "h": 256,
+     "alphaCoverage": 0.292,
+     "unused": true
+    },
+    {
      "id": "item_04",
      "x": 1388,
      "y": 294,
      "w": 272,
      "h": 185,
      "alphaCoverage": 0.47,
+     "unused": true
+    },
+    {
+     "id": "item_28",
+     "x": 0,
+     "y": 768,
+     "w": 1152,
+     "h": 256,
+     "alphaCoverage": 0.309,
      "unused": true
     },
     {
@@ -7036,6 +7090,15 @@
      "unused": true
     },
     {
+     "id": "item_26",
+     "x": 0,
+     "y": 1024,
+     "w": 1536,
+     "h": 256,
+     "alphaCoverage": 0.239,
+     "unused": true
+    },
+    {
      "id": "item_09",
      "x": 45,
      "y": 1079,
@@ -7054,6 +7117,15 @@
      "unused": true
     },
     {
+     "id": "item_27",
+     "x": 0,
+     "y": 1280,
+     "w": 1408,
+     "h": 256,
+     "alphaCoverage": 0.234,
+     "unused": true
+    },
+    {
      "id": "item_12",
      "x": 602,
      "y": 1334,
@@ -7069,6 +7141,42 @@
      "w": 471,
      "h": 144,
      "alphaCoverage": 0.521,
+     "unused": true
+    },
+    {
+     "id": "item_13",
+     "x": 1664,
+     "y": 1408,
+     "w": 128,
+     "h": 128,
+     "alphaCoverage": 0.354,
+     "unused": true
+    },
+    {
+     "id": "item_14",
+     "x": 1792,
+     "y": 1408,
+     "w": 128,
+     "h": 128,
+     "alphaCoverage": 0.36,
+     "unused": true
+    },
+    {
+     "id": "item_15",
+     "x": 0,
+     "y": 1536,
+     "w": 640,
+     "h": 128,
+     "alphaCoverage": 0.351,
+     "unused": true
+    },
+    {
+     "id": "item_16",
+     "x": 1152,
+     "y": 1536,
+     "w": 896,
+     "h": 128,
+     "alphaCoverage": 0.355,
      "unused": true
     },
     {
@@ -7158,49 +7266,13 @@
    "height": 2048,
    "posters": [
     {
-     "id": "item_01",
-     "x": 0,
-     "y": 0,
-     "w": 1216,
-     "h": 128,
-     "alphaCoverage": 0.444,
-     "placements": 6
-    },
-    {
-     "id": "item_40",
-     "x": 0,
-     "y": 128,
-     "w": 1120,
-     "h": 128,
-     "alphaCoverage": 0.439,
-     "placements": 3
-    },
-    {
-     "id": "item_41",
-     "x": 0,
-     "y": 256,
-     "w": 1104,
-     "h": 128,
-     "alphaCoverage": 0.45,
-     "placements": 6
-    },
-    {
-     "id": "item_45",
-     "x": 1152,
-     "y": 256,
-     "w": 400,
-     "h": 128,
-     "alphaCoverage": 0.413,
-     "placements": 4
-    },
-    {
      "id": "item_44",
      "x": 1024,
      "y": 384,
      "w": 448,
      "h": 128,
      "alphaCoverage": 0.456,
-     "placements": 17
+     "placements": 3
     },
     {
      "id": "item_11",
@@ -7209,25 +7281,7 @@
      "w": 895,
      "h": 256,
      "alphaCoverage": 0.455,
-     "placements": 9
-    },
-    {
-     "id": "item_16",
-     "x": 0,
-     "y": 768,
-     "w": 872,
-     "h": 128,
-     "alphaCoverage": 0.436,
      "placements": 3
-    },
-    {
-     "id": "item_17",
-     "x": 896,
-     "y": 768,
-     "w": 512,
-     "h": 128,
-     "alphaCoverage": 0.438,
-     "placements": 4
     },
     {
      "id": "item_37",
@@ -7236,34 +7290,7 @@
      "w": 1183,
      "h": 256,
      "alphaCoverage": 0.438,
-     "placements": 7
-    },
-    {
-     "id": "item_43",
-     "x": 896,
-     "y": 1024,
-     "w": 560,
-     "h": 128,
-     "alphaCoverage": 0.457,
-     "placements": 2
-    },
-    {
-     "id": "item_46",
-     "x": 1868,
-     "y": 1024,
-     "w": 80,
-     "h": 256,
-     "alphaCoverage": 0,
-     "placements": 6
-    },
-    {
-     "id": "item_47",
-     "x": 1948,
-     "y": 1024,
-     "w": 60,
-     "h": 256,
-     "alphaCoverage": 0,
-     "placements": 6
+     "placements": 3
     },
     {
      "id": "item_39",
@@ -7272,16 +7299,7 @@
      "w": 1024,
      "h": 256,
      "alphaCoverage": 0.412,
-     "placements": 6
-    },
-    {
-     "id": "item_27",
-     "x": 0,
-     "y": 1536,
-     "w": 704,
-     "h": 128,
-     "alphaCoverage": 0.404,
-     "placements": 3
+     "placements": 2
     },
     {
      "id": "item_38",
@@ -7302,22 +7320,13 @@
      "placements": 2
     },
     {
-     "id": "item_42",
+     "id": "item_01",
      "x": 0,
-     "y": 1792,
-     "w": 624,
+     "y": 0,
+     "w": 1216,
      "h": 128,
-     "alphaCoverage": 0.441,
-     "placements": 1
-    },
-    {
-     "id": "item_33",
-     "x": 768,
-     "y": 1792,
-     "w": 624,
-     "h": 128,
-     "alphaCoverage": 0.49,
-     "placements": 2
+     "alphaCoverage": 0.444,
+     "unused": true
     },
     {
      "id": "item_00",
@@ -7347,6 +7356,15 @@
      "unused": true
     },
     {
+     "id": "item_40",
+     "x": 0,
+     "y": 128,
+     "w": 1120,
+     "h": 128,
+     "alphaCoverage": 0.439,
+     "unused": true
+    },
+    {
      "id": "item_04",
      "x": 10,
      "y": 137,
@@ -7371,6 +7389,24 @@
      "w": 93,
      "h": 107,
      "alphaCoverage": 0.683,
+     "unused": true
+    },
+    {
+     "id": "item_41",
+     "x": 0,
+     "y": 256,
+     "w": 1104,
+     "h": 128,
+     "alphaCoverage": 0.45,
+     "unused": true
+    },
+    {
+     "id": "item_45",
+     "x": 1152,
+     "y": 256,
+     "w": 400,
+     "h": 128,
+     "alphaCoverage": 0.413,
      "unused": true
     },
     {
@@ -7446,6 +7482,24 @@
      "unused": true
     },
     {
+     "id": "item_16",
+     "x": 0,
+     "y": 768,
+     "w": 872,
+     "h": 128,
+     "alphaCoverage": 0.436,
+     "unused": true
+    },
+    {
+     "id": "item_17",
+     "x": 896,
+     "y": 768,
+     "w": 512,
+     "h": 128,
+     "alphaCoverage": 0.438,
+     "unused": true
+    },
+    {
      "id": "item_18",
      "x": 11,
      "y": 900,
@@ -7461,6 +7515,33 @@
      "w": 510,
      "h": 111,
      "alphaCoverage": 0.524,
+     "unused": true
+    },
+    {
+     "id": "item_43",
+     "x": 896,
+     "y": 1024,
+     "w": 560,
+     "h": 128,
+     "alphaCoverage": 0.457,
+     "unused": true
+    },
+    {
+     "id": "item_46",
+     "x": 1868,
+     "y": 1024,
+     "w": 80,
+     "h": 256,
+     "alphaCoverage": 0,
+     "unused": true
+    },
+    {
+     "id": "item_47",
+     "x": 1948,
+     "y": 1024,
+     "w": 60,
+     "h": 256,
+     "alphaCoverage": 0,
      "unused": true
     },
     {
@@ -7527,6 +7608,15 @@
      "unused": true
     },
     {
+     "id": "item_27",
+     "x": 0,
+     "y": 1536,
+     "w": 704,
+     "h": 128,
+     "alphaCoverage": 0.404,
+     "unused": true
+    },
+    {
      "id": "item_28",
      "x": 1550,
      "y": 1547,
@@ -7551,6 +7641,24 @@
      "w": 293,
      "h": 109,
      "alphaCoverage": 0.613,
+     "unused": true
+    },
+    {
+     "id": "item_42",
+     "x": 0,
+     "y": 1792,
+     "w": 624,
+     "h": 128,
+     "alphaCoverage": 0.441,
+     "unused": true
+    },
+    {
+     "id": "item_33",
+     "x": 768,
+     "y": 1792,
+     "w": 624,
+     "h": 128,
+     "alphaCoverage": 0.49,
      "unused": true
     },
     {
@@ -7609,8 +7717,8 @@
      "y": 0,
      "w": 2048,
      "h": 512,
-     "alphaCoverage": 1,
-     "placements": 2
+     "alphaCoverage": 1.0,
+     "placements": 7
     },
     {
      "id": "item_24",
@@ -7618,8 +7726,8 @@
      "y": 529,
      "w": 2046,
      "h": 481,
-     "alphaCoverage": 1,
-     "placements": 2
+     "alphaCoverage": 1.0,
+     "placements": 3
     },
     {
      "id": "item_25",
@@ -7855,10 +7963,19 @@
      "id": "item_00",
      "x": 0,
      "y": 0,
-     "w": 2048,
+     "w": 1970,
      "h": 1024,
-     "alphaCoverage": 0.638,
-     "placements": 48
+     "alphaCoverage": 0.637,
+     "placements": 2
+    },
+    {
+     "id": "item_01",
+     "x": 3,
+     "y": 1384,
+     "w": 2045,
+     "h": 664,
+     "alphaCoverage": 0.458,
+     "placements": 36
     },
     {
      "id": "item_02",
@@ -7867,16 +7984,7 @@
      "w": 2048,
      "h": 360,
      "alphaCoverage": 0.755,
-     "placements": 7
-    },
-    {
-     "id": "item_01",
-     "x": 0,
-     "y": 1376,
-     "w": 1136,
-     "h": 672,
-     "alphaCoverage": 0.436,
-     "placements": 36
+     "unused": true
     },
     {
      "id": "item_03",
@@ -7885,7 +7993,7 @@
      "w": 912,
      "h": 672,
      "alphaCoverage": 0.491,
-     "placements": 41
+     "unused": true
     }
    ]
   },
@@ -7902,22 +8010,31 @@
    "height": 2048,
    "posters": [
     {
+     "id": "item_05",
+     "x": 0,
+     "y": 0,
+     "w": 1536,
+     "h": 896,
+     "alphaCoverage": 1.0,
+     "placements": 1
+    },
+    {
      "id": "item_04",
      "x": 0,
      "y": 0,
      "w": 1576,
      "h": 904,
      "alphaCoverage": 1,
-     "placements": 47
+     "unused": true
     },
     {
-     "id": "item_05",
+     "id": "item_00",
      "x": 0,
      "y": 0,
-     "w": 1568,
-     "h": 896,
+     "w": 2048,
+     "h": 2048,
      "alphaCoverage": 1,
-     "placements": 7
+     "unused": true
     },
     {
      "id": "item_07",
@@ -7926,7 +8043,7 @@
      "w": 233,
      "h": 1353,
      "alphaCoverage": 1,
-     "placements": 13
+     "unused": true
     },
     {
      "id": "item_06",
@@ -7935,7 +8052,7 @@
      "w": 240,
      "h": 2048,
      "alphaCoverage": 1,
-     "placements": 23
+     "unused": true
     },
     {
      "id": "item_01",
@@ -7944,7 +8061,7 @@
      "w": 1568,
      "h": 1150,
      "alphaCoverage": 1,
-     "placements": 1
+     "unused": true
     },
     {
      "id": "item_02",
@@ -7953,7 +8070,7 @@
      "w": 1576,
      "h": 1144,
      "alphaCoverage": 1,
-     "placements": 24
+     "unused": true
     },
     {
      "id": "item_03",
@@ -7962,7 +8079,7 @@
      "w": 1552,
      "h": 1128,
      "alphaCoverage": 1,
-     "placements": 3
+     "unused": true
     },
     {
      "id": "item_08",
@@ -7970,15 +8087,6 @@
      "y": 1350,
      "w": 238,
      "h": 698,
-     "alphaCoverage": 1,
-     "placements": 40
-    },
-    {
-     "id": "item_00",
-     "x": 0,
-     "y": 0,
-     "w": 2048,
-     "h": 2048,
      "alphaCoverage": 1,
      "unused": true
     }
@@ -8002,8 +8110,8 @@
      "y": 264,
      "w": 960,
      "h": 240,
-     "alphaCoverage": 1,
-     "placements": 2
+     "alphaCoverage": 1.0,
+     "placements": 1
     },
     {
      "id": "item_03",
@@ -8011,8 +8119,8 @@
      "y": 512,
      "w": 1024,
      "h": 512,
-     "alphaCoverage": 1,
-     "placements": 4
+     "alphaCoverage": 1.0,
+     "placements": 238
     },
     {
      "id": "item_02",
@@ -8020,8 +8128,8 @@
      "y": 512,
      "w": 1024,
      "h": 512,
-     "alphaCoverage": 1,
-     "placements": 4
+     "alphaCoverage": 1.0,
+     "placements": 5
     },
     {
      "id": "item_05",
@@ -8029,26 +8137,26 @@
      "y": 536,
      "w": 999,
      "h": 480,
-     "alphaCoverage": 1,
-     "placements": 7
+     "alphaCoverage": 1.0,
+     "placements": 8
+    },
+    {
+     "id": "item_08",
+     "x": 1536,
+     "y": 1024,
+     "w": 256,
+     "h": 1024,
+     "alphaCoverage": 1.0,
+     "placements": 1
     },
     {
      "id": "item_01",
-     "x": 0,
-     "y": 1024,
-     "w": 1027,
-     "h": 512,
-     "alphaCoverage": 1,
-     "placements": 3
-    },
-    {
-     "id": "item_06",
-     "x": 1800,
-     "y": 1032,
-     "w": 240,
-     "h": 1008,
-     "alphaCoverage": 1,
-     "placements": 11
+     "x": 1,
+     "y": 1031,
+     "w": 1025,
+     "h": 387,
+     "alphaCoverage": 1.0,
+     "placements": 2
     },
     {
      "id": "item_04",
@@ -8056,8 +8164,8 @@
      "y": 1536,
      "w": 1024,
      "h": 512,
-     "alphaCoverage": 1,
-     "placements": 2
+     "alphaCoverage": 1.0,
+     "placements": 7
     },
     {
      "id": "item_00",
@@ -8065,6 +8173,15 @@
      "y": 0,
      "w": 2048,
      "h": 2048,
+     "alphaCoverage": 1,
+     "unused": true
+    },
+    {
+     "id": "item_06",
+     "x": 1800,
+     "y": 1032,
+     "w": 240,
+     "h": 1008,
      "alphaCoverage": 1,
      "unused": true
     }
@@ -8268,7 +8385,7 @@
      "y": 0,
      "w": 140,
      "h": 136,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 1
     },
     {
@@ -8277,7 +8394,7 @@
      "y": 0,
      "w": 132,
      "h": 136,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 1
     },
     {
@@ -8286,7 +8403,7 @@
      "y": 0,
      "w": 132,
      "h": 136,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 1
     },
     {
@@ -8295,7 +8412,7 @@
      "y": 0,
      "w": 172,
      "h": 248,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 1
     },
     {
@@ -8304,7 +8421,7 @@
      "y": 1,
      "w": 138,
      "h": 136,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 1
     },
     {
@@ -8313,7 +8430,7 @@
      "y": 2,
      "w": 138,
      "h": 136,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 1
     },
     {
@@ -8322,7 +8439,7 @@
      "y": 2,
      "w": 139,
      "h": 137,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 1
     },
     {
@@ -8331,7 +8448,7 @@
      "y": 136,
      "w": 140,
      "h": 136,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 1
     },
     {
@@ -8340,7 +8457,7 @@
      "y": 136,
      "w": 140,
      "h": 140,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 1
     },
     {
@@ -8349,7 +8466,7 @@
      "y": 136,
      "w": 140,
      "h": 140,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 1
     },
     {
@@ -8358,7 +8475,7 @@
      "y": 137,
      "w": 137,
      "h": 135,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 1
     },
     {
@@ -8367,7 +8484,7 @@
      "y": 139,
      "w": 133,
      "h": 132,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 1
     },
     {
@@ -8376,7 +8493,7 @@
      "y": 143,
      "w": 138,
      "h": 136,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 1
     },
     {
@@ -8385,7 +8502,7 @@
      "y": 259,
      "w": 85,
      "h": 135,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 1
     },
     {
@@ -8394,7 +8511,7 @@
      "y": 276,
      "w": 308,
      "h": 204,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 1
     },
     {
@@ -8403,8 +8520,8 @@
      "y": 278,
      "w": 95,
      "h": 227,
-     "alphaCoverage": 1,
-     "placements": 2
+     "alphaCoverage": 1.0,
+     "placements": 3
     },
     {
      "id": "painting_16",
@@ -8412,7 +8529,7 @@
      "y": 282,
      "w": 92,
      "h": 226,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 2
     },
     {
@@ -8421,8 +8538,8 @@
      "y": 294,
      "w": 132,
      "h": 397,
-     "alphaCoverage": 1,
-     "placements": 2
+     "alphaCoverage": 1.0,
+     "placements": 3
     },
     {
      "id": "item_02",
@@ -8430,7 +8547,7 @@
      "y": 298,
      "w": 133,
      "h": 389,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 2
     },
     {
@@ -8439,7 +8556,7 @@
      "y": 348,
      "w": 130,
      "h": 346,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 1
     },
     {
@@ -8448,8 +8565,8 @@
      "y": 480,
      "w": 316,
      "h": 208,
-     "alphaCoverage": 1,
-     "placements": 2
+     "alphaCoverage": 1.0,
+     "placements": 1
     },
     {
      "id": "item_00",
@@ -8457,7 +8574,7 @@
      "y": 488,
      "w": 304,
      "h": 204,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 1
     },
     {
@@ -8466,7 +8583,7 @@
      "y": 513,
      "w": 156,
      "h": 104,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 7
     },
     {
@@ -8475,7 +8592,7 @@
      "y": 564,
      "w": 103,
      "h": 275,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 1
     },
     {
@@ -8484,7 +8601,7 @@
      "y": 625,
      "w": 159,
      "h": 115,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 1
     },
     {
@@ -8493,7 +8610,7 @@
      "y": 696,
      "w": 92,
      "h": 148,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 1
     },
     {
@@ -8502,8 +8619,26 @@
      "y": 696,
      "w": 96,
      "h": 148,
-     "alphaCoverage": 1,
-     "placements": 1
+     "alphaCoverage": 1.0,
+     "placements": 2
+    },
+    {
+     "id": "painting_22",
+     "x": 3,
+     "y": 698,
+     "w": 91,
+     "h": 146,
+     "alphaCoverage": 1.0,
+     "placements": 3
+    },
+    {
+     "id": "painting_23",
+     "x": 96,
+     "y": 699,
+     "w": 91,
+     "h": 142,
+     "alphaCoverage": 1.0,
+     "placements": 3
     },
     {
      "id": "painting_26",
@@ -8511,17 +8646,17 @@
      "y": 702,
      "w": 94,
      "h": 139,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 1
     },
     {
-     "id": "painting_23",
-     "x": 96,
-     "y": 705,
-     "w": 91,
-     "h": 136,
-     "alphaCoverage": 1,
-     "placements": 1
+     "id": "painting_28",
+     "x": 571,
+     "y": 702,
+     "w": 84,
+     "h": 142,
+     "alphaCoverage": 1.0,
+     "placements": 2
     },
     {
      "id": "painting_25",
@@ -8529,7 +8664,7 @@
      "y": 706,
      "w": 89,
      "h": 133,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 1
     },
     {
@@ -8538,25 +8673,7 @@
      "y": 707,
      "w": 91,
      "h": 135,
-     "alphaCoverage": 1,
-     "placements": 1
-    },
-    {
-     "id": "painting_22",
-     "x": 4,
-     "y": 708,
-     "w": 90,
-     "h": 133,
-     "alphaCoverage": 1,
-     "placements": 1
-    },
-    {
-     "id": "painting_28",
-     "x": 570,
-     "y": 708,
-     "w": 79,
-     "h": 134,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 1
     },
     {
@@ -8565,7 +8682,7 @@
      "y": 844,
      "w": 312,
      "h": 104,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 1
     },
     {
@@ -8574,7 +8691,7 @@
      "y": 847,
      "w": 272,
      "h": 101,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 1
     },
     {
@@ -8583,7 +8700,7 @@
      "y": 848,
      "w": 176,
      "h": 84,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 1
     },
     {
@@ -8592,7 +8709,7 @@
      "y": 854,
      "w": 112,
      "h": 166,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 1
     },
     {
@@ -8601,7 +8718,7 @@
      "y": 932,
      "w": 128,
      "h": 88,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 1
     },
     {
@@ -8705,8 +8822,8 @@
      "y": 0,
      "w": 672,
      "h": 280,
-     "alphaCoverage": 1,
-     "placements": 4
+     "alphaCoverage": 1.0,
+     "placements": 3
     },
     {
      "id": "scene_01",
@@ -8714,7 +8831,7 @@
      "y": 0,
      "w": 341,
      "h": 452,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 1
     },
     {
@@ -8723,7 +8840,7 @@
      "y": 284,
      "w": 672,
      "h": 276,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 1
     },
     {
@@ -8732,7 +8849,7 @@
      "y": 568,
      "w": 672,
      "h": 272,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 1
     }
    ]
@@ -8778,7 +8895,7 @@
      "y": 0,
      "w": 360,
      "h": 512,
-     "alphaCoverage": 1,
+     "alphaCoverage": 1.0,
      "placements": 48
     }
    ]
@@ -8801,8 +8918,8 @@
      "y": 0,
      "w": 1388,
      "h": 1664,
-     "alphaCoverage": 1,
-     "placements": 18
+     "alphaCoverage": 1.0,
+     "placements": 1
     },
     {
      "id": "item_06",
@@ -8810,8 +8927,8 @@
      "y": 0,
      "w": 545,
      "h": 546,
-     "alphaCoverage": 1,
-     "placements": 97
+     "alphaCoverage": 1.0,
+     "placements": 32
     },
     {
      "id": "item_03",
@@ -8819,8 +8936,26 @@
      "y": 548,
      "w": 382,
      "h": 1500,
-     "alphaCoverage": 1,
-     "placements": 224
+     "alphaCoverage": 1.0,
+     "placements": 53
+    },
+    {
+     "id": "item_05",
+     "x": 1511,
+     "y": 554,
+     "w": 368,
+     "h": 1484,
+     "alphaCoverage": 1.0,
+     "placements": 4
+    },
+    {
+     "id": "item_02",
+     "x": 0,
+     "y": 1659,
+     "w": 1504,
+     "h": 389,
+     "alphaCoverage": 1.0,
+     "placements": 50
     },
     {
      "id": "item_01",
@@ -8829,25 +8964,7 @@
      "w": 400,
      "h": 1496,
      "alphaCoverage": 1,
-     "placements": 74
-    },
-    {
-     "id": "item_05",
-     "x": 1511,
-     "y": 554,
-     "w": 368,
-     "h": 1484,
-     "alphaCoverage": 1,
-     "placements": 18
-    },
-    {
-     "id": "item_02",
-     "x": 0,
-     "y": 1659,
-     "w": 1504,
-     "h": 389,
-     "alphaCoverage": 1,
-     "placements": 52
+     "unused": true
     },
     {
      "id": "item_04",
@@ -8856,7 +8973,7 @@
      "w": 1500,
      "h": 381,
      "alphaCoverage": 1,
-     "placements": 2
+     "unused": true
     }
    ]
   },

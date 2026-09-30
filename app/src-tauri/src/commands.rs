@@ -7320,7 +7320,13 @@ pub async fn clear_pushed_ui(citadel_dir: String) -> Result<u32, String> {
 /// only surfaces "Fix for new patch" when they differ.
 #[tauri::command]
 pub fn file_stamp(path: String) -> String {
-    match std::fs::metadata(&path) {
+    stamp_of(&path)
+}
+
+/// `len|mtime_secs` identity of a file, "" when it can't be read. Shared by
+/// the `file_stamp` command and `game_data_refresh_needed`.
+pub(crate) fn stamp_of(path: &str) -> String {
+    match std::fs::metadata(path) {
         Ok(m) => {
             let secs = m
                 .modified()
@@ -7332,6 +7338,91 @@ pub fn file_stamp(path: String) -> String {
         }
         Err(_) => String::new(),
     }
+}
+
+static GAME_DATA_STAMP_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// One-shot cache invalidation when the GAME updated underneath us.
+///
+/// Every hero / item read is served from app-data caches (hero + ability
+/// vdata, per-hero detail / voicelines / sounds / material lists, item roster
+/// + details, decoded stock-sound previews) that only rebuilt on an explicit
+/// `refresh`, which no UI path ever sent. After a Deadlock patch the Heroes
+/// and Items tabs kept showing the OLD game (2026-09-29: six new heroes
+/// missing, two removed ones still listed, renamed ability events dead).
+/// This compares `pak01_dir.vpk`'s identity (the same `len|mtime` stamp the
+/// compile bar's "Fix for new patch" watches) with the one recorded at the
+/// last wipe and, when it differs, drops every game-derived cache ONCE so the
+/// next reads rebuild from the live pak. Returns true when the caller's own
+/// read must bypass its cache (the wipe just happened). Serialized because
+/// the boot-time preload fires dozens of these at once.
+pub(crate) fn game_data_refresh_needed(app: &tauri::AppHandle, pak_path: &str) -> bool {
+    use tauri::Manager;
+    let stamp = stamp_of(pak_path);
+    if stamp.is_empty() {
+        return false; // no pak to compare against - never wipe blindly
+    }
+    let Ok(data) = app.path().app_data_dir() else {
+        return false;
+    };
+    let stamp_file = data.join("game_pak.stamp");
+    let _guard = GAME_DATA_STAMP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    if std::fs::read_to_string(&stamp_file)
+        .map(|s| s.trim() == stamp)
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    wipe_game_data_caches(&data);
+    let _ = std::fs::create_dir_all(&data);
+    let _ = std::fs::write(&stamp_file, &stamp);
+    true
+}
+
+/// The app-data files derived from the game pak (see
+/// `game_data_refresh_needed`). User content is never touched: portrait PNGs
+/// stay too (the roster refresh re-decodes them in one pass anyway).
+fn wipe_game_data_caches(data: &std::path::Path) {
+    fn rm_matching(dir: &std::path::Path, pred: impl Fn(&str) -> bool) {
+        if let Ok(rd) = std::fs::read_dir(dir) {
+            for e in rd.flatten() {
+                let n = e.file_name().to_string_lossy().to_string();
+                if pred(&n) {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
+    }
+    // Heroes: vdata + every per-hero derivative.
+    let hp = data.join("hero_portraits");
+    for f in ["heroes.vdata", "abilities.vdata", "hero_sound_files.txt", "event_index.json"] {
+        let _ = std::fs::remove_file(hp.join(f));
+    }
+    for d in ["heroevents", "hero_images", "ability_icons"] {
+        let _ = std::fs::remove_dir_all(hp.join(d));
+    }
+    rm_matching(&hp, |n| {
+        n.ends_with(".json")
+            && (n.starts_with("detail_")
+                || n.starts_with("vo_")
+                || n.starts_with("herosnd_")
+                || n.starts_with("roster"))
+    });
+    // Hero texture material lists (the extracted vanilla materials next to
+    // them are re-pulled by the list rebuild / every compile).
+    rm_matching(&data.join("hero_textures"), |n| n.starts_with("mats_") && n.ends_with(".json"));
+    // Items: roster, per-item details, the mods event index, decoded icons.
+    let items = data.join("items");
+    for f in ["roster_v2.json", "mods_event_index.json"] {
+        let _ = std::fs::remove_file(items.join(f));
+    }
+    for d in ["modevents", "icons"] {
+        let _ = std::fs::remove_dir_all(items.join(d));
+    }
+    rm_matching(&items, |n| n.starts_with("detail_"));
+    // Decoded stock-sound previews (keyed by pak path + internal ref, so a
+    // patched file under the same name would keep playing the old audio).
+    rm_matching(&data.join("decoded"), |n| n.starts_with("stock_"));
 }
 
 /// Which of `names` (case-insensitive exe names) are currently running.
@@ -8806,42 +8897,60 @@ fn hero_materials_impl(
 
 #[tauri::command]
 pub async fn hero_roster(app: tauri::AppHandle, helper_path: String, pak_path: String, refresh: Option<bool>) -> Result<Vec<HeroPortrait>, String> {
-    tauri::async_runtime::spawn_blocking(move || hero_roster_impl(app, helper_path, pak_path, refresh))
+    tauri::async_runtime::spawn_blocking(move || {
+        let refresh = Some(refresh.unwrap_or(false) | game_data_refresh_needed(&app, &pak_path));
+        hero_roster_impl(app, helper_path, pak_path, refresh)
+    })
         .await
         .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 pub async fn hero_detail(app: tauri::AppHandle, helper_path: String, pak_path: String, codename: String, refresh: Option<bool>) -> Result<Vec<HeroAbility>, String> {
-    tauri::async_runtime::spawn_blocking(move || hero_detail_impl(app, helper_path, pak_path, codename, refresh))
+    tauri::async_runtime::spawn_blocking(move || {
+        let refresh = Some(refresh.unwrap_or(false) | game_data_refresh_needed(&app, &pak_path));
+        hero_detail_impl(app, helper_path, pak_path, codename, refresh)
+    })
         .await
         .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 pub async fn hero_voicelines(app: tauri::AppHandle, helper_path: String, pak_path: String, codename: String, refresh: Option<bool>) -> Result<Vec<VoiceLine>, String> {
-    tauri::async_runtime::spawn_blocking(move || hero_voicelines_impl(app, helper_path, pak_path, codename, refresh))
+    tauri::async_runtime::spawn_blocking(move || {
+        let refresh = Some(refresh.unwrap_or(false) | game_data_refresh_needed(&app, &pak_path));
+        hero_voicelines_impl(app, helper_path, pak_path, codename, refresh)
+    })
         .await
         .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 pub async fn hero_sounds(app: tauri::AppHandle, helper_path: String, pak_path: String, codename: String, refresh: Option<bool>) -> Result<Vec<HeroSound>, String> {
-    tauri::async_runtime::spawn_blocking(move || hero_sounds_impl(app, helper_path, pak_path, codename, refresh))
+    tauri::async_runtime::spawn_blocking(move || {
+        let refresh = Some(refresh.unwrap_or(false) | game_data_refresh_needed(&app, &pak_path));
+        hero_sounds_impl(app, helper_path, pak_path, codename, refresh)
+    })
         .await
         .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 pub async fn item_roster(app: tauri::AppHandle, helper_path: String, pak_path: String, refresh: Option<bool>) -> Result<Vec<ItemCard>, String> {
-    tauri::async_runtime::spawn_blocking(move || item_roster_impl(app, helper_path, pak_path, refresh))
+    tauri::async_runtime::spawn_blocking(move || {
+        let refresh = Some(refresh.unwrap_or(false) | game_data_refresh_needed(&app, &pak_path));
+        item_roster_impl(app, helper_path, pak_path, refresh)
+    })
         .await
         .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 pub async fn item_detail(app: tauri::AppHandle, helper_path: String, pak_path: String, item_name: String, refresh: Option<bool>) -> Result<Vec<HeroAbilitySound>, String> {
-    tauri::async_runtime::spawn_blocking(move || item_detail_impl(app, helper_path, pak_path, item_name, refresh))
+    tauri::async_runtime::spawn_blocking(move || {
+        let refresh = Some(refresh.unwrap_or(false) | game_data_refresh_needed(&app, &pak_path));
+        item_detail_impl(app, helper_path, pak_path, item_name, refresh)
+    })
         .await
         .map_err(|e| e.to_string())?
 }
@@ -8862,14 +8971,20 @@ pub async fn browse_game_sounds(app: tauri::AppHandle, helper_path: String, pak_
 
 #[tauri::command]
 pub async fn hero_materials(app: tauri::AppHandle, helper_path: String, pak_path: String, codename: String, refresh: Option<bool>) -> Result<Vec<HeroMaterial>, String> {
-    tauri::async_runtime::spawn_blocking(move || hero_materials_impl(app, helper_path, pak_path, codename, refresh))
+    tauri::async_runtime::spawn_blocking(move || {
+        let refresh = Some(refresh.unwrap_or(false) | game_data_refresh_needed(&app, &pak_path));
+        hero_materials_impl(app, helper_path, pak_path, codename, refresh)
+    })
         .await
         .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 pub async fn hero_images(app: tauri::AppHandle, helper_path: String, pak_path: String, codename: String, display_stem: String) -> Result<Vec<HeroImage>, String> {
-    tauri::async_runtime::spawn_blocking(move || hero_images_impl(app, helper_path, pak_path, codename, display_stem))
+    tauri::async_runtime::spawn_blocking(move || {
+        game_data_refresh_needed(&app, &pak_path);
+        hero_images_impl(app, helper_path, pak_path, codename, display_stem)
+    })
         .await
         .map_err(|e| e.to_string())?
 }

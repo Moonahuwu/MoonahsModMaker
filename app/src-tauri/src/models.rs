@@ -1546,8 +1546,15 @@ fn compile_materials(
                 );
             };
             let gv_norm = gv.replace('\\', "/");
-            crate::vpk::material_from_vpk(helper, pak, &format!("{gv_norm}_c"), &content.to_string_lossy())
-                .map_err(|e| format!("decompile {gv_norm}: {e}"))?;
+            let shader_gi = tools_root.join("game/citadel/gameinfo.gi").to_string_lossy().into_owned();
+            crate::vpk::material_from_vpk_with_shaders(
+                helper,
+                pak,
+                &format!("{gv_norm}_c"),
+                &content.to_string_lossy(),
+                Some(&shader_gi),
+            )
+            .map_err(|e| format!("decompile {gv_norm}: {e}"))?;
             let src_abs = content.join(gv_norm.replace('/', std::path::MAIN_SEPARATOR_STR));
             let text = std::fs::read_to_string(&src_abs)
                 .map_err(|e| format!("read decompiled {gv_norm}: {e}"))?;

@@ -9,8 +9,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="ValvePak" Version="4.0.0.142" />
-    <PackageReference Include="ValveResourceFormat" Version="19.2.6339" />
+    <PackageReference Include="ValvePak" Version="5.0.2.177" />
+    <PackageReference Include="ValveResourceFormat" Version="20.0.6980" />
   </ItemGroup>
 
 </Project>

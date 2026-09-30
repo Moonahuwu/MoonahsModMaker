@@ -5,6 +5,7 @@
     { "key": "soundevents/gameplay.vsndevts::Player.GetGold::vsnd_files", "group": "gameplay", "label": "Get souls (player)" },
     { "key": "soundevents/gameplay.vsndevts::Player.ClaimOrb::vsnd_files", "group": "gameplay", "label": "Soul orb claimed" },
     { "key": "soundevents/gameplay.vsndevts::Player.AcquireAp::vsnd_files", "group": "gameplay", "label": "Ability point" },
+    { "key": "soundevents/gameplay.vsndevts::ChinatownBell.Ring::vsnd_files", "group": "gameplay", "label": "Chinatown bell tower (camp under attack)" },
     { "key": "soundevents/damage.vsndevts::Damage.Send::vsnd_files", "group": "combat", "label": "Hit (you deal)" },
     { "key": "soundevents/damage.vsndevts::Damage.Send.Lethal::vsnd_files", "group": "combat", "label": "Kill hit (you deal)" },
     { "key": "soundevents/damage.vsndevts::Damage.Receive.Lethal::vsnd_files", "group": "combat", "label": "Your death hit" },
@@ -18,7 +19,7 @@
     { "key": "soundevents/ziplines.vsndevts::Ability.ZipLine.Start::vsnd_files", "group": "mapsfx", "label": "Zipline start" },
     { "key": "soundevents/powerups.vsndevts::Powerup.Spawn.Generic::vsnd_files", "group": "powerups", "label": "Stat box drop spawn" },
     { "key": "soundevents/powerups.vsndevts::Powerup.Pickup.Spirit::vsnd_files", "group": "powerups", "label": "Stat pickup (spirit)" },
-    { "key": "soundevents/powerups.vsndevts::Powerup.Pickup.Weapon::vsnd_files", "group": "powerups", "label": "Stat pickup (weapon)" },
+    { "key": "soundevents/powerups.vsndevts::Powerup.Pickup.Wpn.Damage::vsnd_files", "group": "powerups", "label": "Stat pickup (weapon damage)" },
     { "key": "soundevents/powerups.vsndevts::Powerup.Pickup.Ammo::vsnd_files", "group": "powerups", "label": "Stat pickup (ammo)" },
     { "key": "soundevents/powerups.vsndevts::Powerup.Pickup.Health::vsnd_files", "group": "powerups", "label": "Stat pickup (health)" },
     { "key": "soundevents/powerups.vsndevts::Powerup.Pickup.Souls::vsnd_files", "group": "powerups", "label": "Soul pickup" },
@@ -26,6 +27,7 @@
     { "key": "soundevents/npc/troopers.vsndevts::TrooperRifle.Fire::vsnd_files", "group": "npcs", "label": "Trooper rifle fire" },
     { "key": "soundevents/npc/guardians.vsndevts::Guardian.Tier1.Death.Initial::vsnd_files", "group": "npcs", "label": "Guardian death" },
     { "key": "soundevents/world_ambient_emitters.vsndevts::World.Ambient.Emitter.Waterfall.Lp::vsnd_files", "group": "ambience", "label": "Waterfall loop" },
-    { "key": "soundevents/ambience/ambience_hideout.vsndevts::Amb.Hideout.Fireplace::vsnd_files_close", "group": "ambience", "label": "Hideout fireplace (close)" }
+    { "key": "soundevents/ambience/ambience_hideout.vsndevts::Amb.Hideout.Fireplace::vsnd_files_close", "group": "ambience", "label": "Hideout fireplace (close)" },
+    { "key": "soundevents/ambience/lanes.vsndevts::Amb.ChinatownShopBellRing::vsnd_files", "group": "ambience", "label": "Chinatown shop bell (hit the sign)" }
   ]
 }

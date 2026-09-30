@@ -718,8 +718,14 @@ function reconcileProject(savedIn: Project, defIn: Project, pins: Map<string, So
     (e) =>
       !defIds.has(e.id) &&
       // Auto-discovered slots persist always (keep the catch-all tab stable);
-      // hero/item slots persist only when they hold content.
-      (isAutoSlot(e.id) || (isDynamicSlot(e.id) && slotHasContent(e))) &&
+      // hero/item slots persist only when they hold content. A CURATED slot
+      // that left the defaults (a patch removed its event - Stinger.KillStreak
+      // on 2026-09-29) also stays while it holds content: the compile skips it
+      // as drifted and "Fix for new patch" reports it, but the user's track
+      // is never silently dropped from the project.
+      (isAutoSlot(e.id) ||
+        (isDynamicSlot(e.id) && slotHasContent(e)) ||
+        (!isAutoSlot(e.id) && !isDynamicSlot(e.id) && slotHasContent(e))) &&
       // Excluded imports (EXCLUDED_IMPORT_TERMS, e.g. the priest mod or the
       // Jumpscares engine's Moonah./Digi. events) are purged on load — adopted
       // refs and importer-absorbed songs (importedRef) go with them, but never

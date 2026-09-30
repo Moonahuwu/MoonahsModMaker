@@ -159,7 +159,12 @@ contains `{` braces).
   texture-level on purpose, no material recompile, so custom shaders can't break;
   `compile_mod_textures` stages them into the COMBINED variant only, after the
   mod's own extraction so ours wins).
-- `compile.rs` — the one-button pipeline. `compile_project` is **async** and wraps the
+- `compile.rs` — the one-button pipeline. **Merge base freshness:** a vanilla events
+  copy that is MISSING or OLDER than `pak_path` (mtime, `older_than`) is re-decompiled
+  from the live pak before the merge ("refreshed from the game pak" step) - a pre-patch
+  copy ships without every event the patch added (they play nothing), e2e
+  `e2e_stale_vanilla_events_refresh_from_pak`. Icon mods vs the live game: e2e
+  `e2e_icon_mods_compile_to_vanilla_paths` (ability vtex_c, menu card, hero-name vsvg_c). `compile_project` is **async** and wraps the
   heavy work in `spawn_blocking` so the UI stays responsive (returns a `CompileReport`
   with panic-safe error handling). Per song: ffmpeg render → `resourcecompiler`
   (audio mp3/wav → `.vsnd_c`) → kv3-core merge of events → timestamped backup → write
@@ -322,7 +327,19 @@ core pak (compile_project + push_ui_files), and `compiler_error_detail` surfaces
 error lines (stdout carries them; stderr is ILocalize/device-creation noise).
 
 ### 3. `tools/vpk-helper` — C# CLI (net10.0)
-Thin wrapper over **ValvePak** + **ValveResourceFormat**. Subcommands (see
+Thin wrapper over **ValvePak** + **ValveResourceFormat** (VRF 20.0 / ValvePak
+5.0.2 since 2026-09-29 - VRF 20 pins ValvePak 5; ValvePak 6 renamed the
+namespace and does not link). **Shader gotcha:** the extracted vmat's texture
+INPUT names come from the shader, and a game patch can ship a `.vcs` version VRF
+cannot read yet (2026-09-29: vcs 72 vs "59 through 71") - that failed every
+poster / hero-texture compile. `SafeShaderLoader` never lets a shader take the
+extract down, and `material` takes an optional 4th arg (the COMPILER's
+`gameinfo.gi`; Rust `material_from_vpk_with_shaders`) so input names come from
+the CSDK's own shaders, which is what resourcecompiler accepts anyway: pbr.vfx
+hero materials need the `TextureColor1` layer naming - the generic fallback
+`TextureColor` compiles to DEFAULT textures (a recolor comes out vanilla).
+Every compile-side extraction passes it; preview-only extractions don't need it.
+Subcommands (see
 `Program.cs` switch): `pack`, `extract`, `extractall`, `list`, `decode` (`.vsnd_c` →
 playable audio, used for "compare to original" and downloads), `decompile`
 (`.vsndevts_c` → KV3 text, used to import other mods and refresh vanilla data),
@@ -470,6 +487,16 @@ Power Jump). Valve reuses other kits' files on some hero events (Billy's Blasted
 `ModMenuOverlay` is a separate always-on-top window (F8 in-game mod
 menu / RCON admin).
 
+**Game-update self-heal (2026-09-29):** every hero / item read goes through
+`game_data_refresh_needed` (commands.rs): it compares `pak01_dir.vpk`'s
+`len|mtime` stamp with app-data `game_pak.stamp` and, on a change, wipes every
+pak-derived cache once (hero_portraits vdata + detail/vo/herosnd/roster json +
+hero_images/ability_icons, hero_textures `mats_*`, items roster/details/icons,
+`decoded/stock_*` previews) and forces that read to rebuild. Before this the
+caches only rebuilt on an explicit `refresh` no UI path ever sent, so a patch
+left Heroes/Items on the old roster. Sound events still go through "Fix for new
+patch" (the compile bar's own stamp check).
+
 **Chrome.** A ⚙ cog opens `SetupSection` as a modal (paths + toggles like
 `includeUiSounds` and `experimentalEffects`); `ProfileSwitcher` in the top bar
 switches/creates/renames named mod configs; sticky `CompileBar` drives compile **and
@@ -500,6 +527,22 @@ current defaults, so new default slots appear for existing users automatically.
   `ModFiles/`, `sounds/`, `soundevents/`, `compilerstuff/`, `VanillaFiles/`, plus build
   output. Several tests read `ModFiles/soundevents/music.vsndevts`, so they require those
   files present locally (the e2e compile test additionally needs the CSDK toolchain).
+  NOTE `ModFiles/soundevents/music.vsndevts` is deliberately the COMMUNITY-MERGED file
+  (King = stock + kingintro + kingintro2, Mother = stock + 3): kv3-core's `real_file`
+  tests assert those pools. Don't overwrite it with a vanilla decompile (a copy lives in
+  app-data `packs/OldMegapack_*/MERGEDSoundevents/soundevents/`); the OTHER ModFiles
+  soundevents are plain vanilla decompiles and can be refreshed freely.
+- **After a Deadlock patch** (done 2026-09-29, ClientVersion 6712): decompile every
+  `soundevents/*.vsndevts_c` from the new pak and diff event names against the last
+  refresh, then check `project.rs` defaults + `soundBaseline.json` pins against them
+  (dead events get remapped/retired, never left pointing at nothing); re-mine the
+  poster manifest (helper `worldrects` on every `maps/*.vpk` -> `curate_uv.py`; regions
+  only retired maps placed flip to `unused`); `refresh_corpus` + the particle-catalog
+  build chain; re-measure `MenuArtTab` curated card dims from the pak; diff
+  `scripts/heroes.vdata` hero keys (new/removed heroes need no code, the roster is
+  data-driven); run the ignored e2e tests (`e2e_real_compile_to_vpk`,
+  `e2e_hero_cards_fold_rules`, `e2e_poster_replace`, `e2e_hero_texture*`,
+  `e2e_dynpaint_hideout_compiles`) - a helper/VRF format bump shows up there first.
 - Deadlock is installed at `D:\SteamLibrary\steamapps\common\Deadlock`; the CSDK toolchain
   used for verified compiles is `Reduced_CSDK_12`. Real paths are configured at runtime in
   the app's Setup panel (and auto-detected via `autodetect_paths`).

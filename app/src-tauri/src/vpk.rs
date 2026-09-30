@@ -283,8 +283,29 @@ pub fn material_from_vpk(
     internal_vmat_c: &str,
     out_root: &str,
 ) -> Result<Vec<String>, String> {
+    material_from_vpk_with_shaders(helper_path, vpk, internal_vmat_c, out_root, None)
+}
+
+/// `material_from_vpk` that also hands the helper the COMPILER's game dir
+/// (its `gameinfo.gi`), so the extracted vmat's texture input names come from
+/// the shaders resourcecompiler will actually compile against. Needed since
+/// the 2026-09-29 patch: the live game's shaders are a newer format than the
+/// extraction library reads, and without a shader the generic input names
+/// (`TextureColor` instead of pbr's `TextureColor1`) compile to DEFAULT
+/// textures - a hero recolor silently came out vanilla-grey. Every compile
+/// path that recompiles an extracted material must use this.
+pub fn material_from_vpk_with_shaders(
+    helper_path: &str,
+    vpk: &str,
+    internal_vmat_c: &str,
+    out_root: &str,
+    shader_gameinfo: Option<&str>,
+) -> Result<Vec<String>, String> {
     let mut cmd = helper_command(helper_path);
     cmd.args(["material", vpk, internal_vmat_c, out_root]);
+    if let Some(gi) = shader_gameinfo.filter(|g| !g.trim().is_empty()) {
+        cmd.arg(gi);
+    }
     let out = run(cmd, "material")?;
     let root = Path::new(out_root);
     let written: Vec<String> = out

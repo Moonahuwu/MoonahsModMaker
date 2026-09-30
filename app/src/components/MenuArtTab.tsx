@@ -26,39 +26,36 @@ interface MenuGroup {
   slots: MenuSlot[];
 }
 
-/** Curated slots, dims measured from the live pak (2026-07-26 patch). */
+/** Curated slots, dims measured from the live pak (2026-09-29 patch: the
+ *  main card went square, the Custom/Explore/Sandbox cards became compact
+ *  landscape tiles, Tutorial became Learn, and the "Play menu rows" images
+ *  were removed from the game). */
 const GROUPS: MenuGroup[] = [
   {
     label: "Play page cards",
     hint: "The big mode cards on the Play screen",
     slots: [
-      { slug: "card_play", label: "Main mode card", path: "main_menu/play/card_play_psd", w: 1546, h: 2113 },
-      { slug: "card_play_subject", label: "Main mode portrait", hint: "the Geist art on the card", path: "main_menu/play/card_play_subject_psd", w: 1546, h: 2113 },
+      { slug: "card_play", label: "Main mode card", path: "main_menu/play/card_play_psd", w: 2113, h: 2113 },
+      { slug: "card_play_subject", label: "Main mode portrait", hint: "the hero art on the card", path: "main_menu/play/card_play_subject_psd", w: 1986, h: 2113 },
       { slug: "card_brawl", label: "Street Brawl card", path: "main_menu/play/card_brawl_psd", w: 1298, h: 2113 },
       { slug: "card_brawl_subject", label: "Street Brawl portrait", hint: "the Lash art on the card", path: "main_menu/play/card_brawl_subject_psd", w: 1546, h: 2113 },
       { slug: "card_ranked", label: "Ranked card", path: "main_menu/play/card_ranked_psd", w: 1298, h: 2113 },
       { slug: "card_ranked_subject", label: "Ranked portrait", hint: "the hero art on the card", path: "main_menu/play/card_ranked_subject_psd", w: 1546, h: 2113 },
+      { slug: "card_learn", label: "Learn card", hint: "was the Tutorial card", path: "main_menu/play/card_learn_psd", w: 1298, h: 2113 },
+      { slug: "card_learn_subject", label: "Learn portrait", path: "main_menu/play/card_learn_subject_psd", w: 1546, h: 2113 },
+      { slug: "card_cancel", label: "Cancel card", hint: "shown while searching for a match", path: "main_menu/play/card_cancel_psd", w: 1298, h: 2113 },
+      { slug: "card_cancel_subject", label: "Cancel portrait", path: "main_menu/play/card_cancel_subject_psd", w: 1546, h: 2113 },
+      { slug: "card_roster_subject", label: "Roster portrait", path: "main_menu/play/card_roster_subject_psd", w: 1546, h: 2113 },
+      { slug: "card_bots_sm", label: "Bots card (small)", path: "main_menu/play/card_bots_sm_psd", w: 711, h: 472 },
       { slug: "card_bots_subject", label: "Bots portrait", path: "main_menu/play/card_bots_subject_sm_psd", w: 1112, h: 1100 },
-      { slug: "card_custom", label: "Custom match card", path: "main_menu/play/card_custom_psd", w: 610, h: 852 },
+      { slug: "card_custom", label: "Custom match card", path: "main_menu/play/card_custom_psd", w: 712, h: 442 },
       { slug: "card_custom_subject", label: "Custom match portrait", path: "main_menu/play/card_custom_subject_psd", w: 610, h: 852 },
-      { slug: "card_map", label: "Explore map card", path: "main_menu/play/card_map_psd", w: 612, h: 862 },
+      { slug: "card_map", label: "Explore map card", path: "main_menu/play/card_map_psd", w: 711, h: 472 },
       { slug: "card_map_subject", label: "Explore map portrait", path: "main_menu/play/card_map_subject_psd", w: 612, h: 862 },
-      { slug: "card_sandbox", label: "Sandbox card", path: "main_menu/play/card_sandbox_psd", w: 616, h: 892 },
+      { slug: "card_sandbox", label: "Sandbox card", path: "main_menu/play/card_sandbox_psd", w: 712, h: 447 },
       { slug: "card_sandbox_subject", label: "Sandbox portrait", path: "main_menu/play/card_sandbox_subject_psd", w: 616, h: 892 },
-      { slug: "card_tutorial", label: "Tutorial card", path: "main_menu/play/card_tutorial_psd", w: 1916, h: 855 },
+      { slug: "play_inactive", label: "Play (inactive) tile", path: "main_menu/play/play_inactive_psd", w: 1391, h: 1142 },
       { slug: "select_play_mode", label: "\"Select play mode\" banner", path: "main_menu/temp/select_play_mode_psd", w: 2000, h: 300 },
-    ],
-  },
-  {
-    label: "Play menu rows",
-    hint: "The compact list version of the play menu",
-    slots: [
-      { slug: "menu_deadlock", label: "Deadlock (main mode)", path: "main_menu/menu_images/menu_play_deadlock_psd", w: 513, h: 663 },
-      { slug: "menu_playersbots", label: "Players vs bots", path: "main_menu/menu_images/menu_play_playersbots_psd", w: 513, h: 663 },
-      { slug: "menu_custom", label: "Custom match", path: "main_menu/menu_images/menu_play_custom_match_horizontal_psd", w: 495, h: 329 },
-      { slug: "menu_exploremap", label: "Explore map", path: "main_menu/menu_images/menu_play_exploremap_psd", w: 495, h: 329 },
-      { slug: "menu_privatebots", label: "Private bots", path: "main_menu/menu_images/menu_play_privatebots_horizontal_psd", w: 495, h: 329 },
-      { slug: "menu_sandbox", label: "Sandbox", path: "main_menu/menu_images/menu_play_sandbox_horizontal_psd", w: 495, h: 329 },
     ],
   },
 ];

@@ -1,4 +1,4 @@
-// vpk-helper: tiny CLI over ValvePak (the same library Source 2 Viewer uses) so
+﻿// vpk-helper: tiny CLI over ValvePak (the same library Source 2 Viewer uses) so
 // the Rust/Tauri backend can produce game-valid Source 2 VPKs by shelling out.
 //
 // Commands:
@@ -287,12 +287,20 @@ static int MaterialCmd(string[] args)
 {
     if (args.Length < 4)
     {
-        Console.Error.WriteLine("usage: material <vpk> <internalVmatC> <outRoot>");
+        Console.Error.WriteLine("usage: material <vpk> <internalVmatC> <outRoot> [shaderGameinfo]");
         return 2;
     }
     var vpk = Path.GetFullPath(args[1]);
     var internalPath = args[2].Replace('\\', '/').TrimStart('/');
     var outRoot = Path.GetFullPath(args[3]);
+    // Optional: a gameinfo.gi (or any file) inside the COMPILER's game dir.
+    // The extracted vmat's texture input names come from the shader, and the
+    // names the CSDK's resourcecompiler accepts are the ones in ITS shaders -
+    // the live game's can be newer (2026-09-29: vcs 72, unreadable, and hero
+    // materials on pbr.vfx want the "TextureColor1" layer naming that only
+    // the shader reveals; the generic fallback names compile to default
+    // textures). So prefer the compiler's shaders when the caller has them.
+    var shaderSource = args.Length >= 5 ? args[4] : Environment.GetEnvironmentVariable("EIM_SHADER_GAMEINFO");
     using var package = new Package();
     package.Read(vpk);
     var entry = package.FindEntry(internalPath);
@@ -318,7 +326,12 @@ static int MaterialCmd(string[] args)
     resource.Read(new MemoryStream(bytes));
     // The loader lets FileExtract resolve the material's texture references
     // back into the pak so the source textures can be reconstructed.
-    using var loader = new GameFileLoader(package, vpk);
+    using var gameLoader = new GameFileLoader(package, vpk);
+    GameFileLoader? shaderLoader = null;
+    if (!string.IsNullOrWhiteSpace(shaderSource) && File.Exists(shaderSource))
+        shaderLoader = new GameFileLoader(null, Path.GetFullPath(shaderSource));
+    using var _shaderLoader = shaderLoader;
+    var loader = new SafeShaderLoader(gameLoader, shaderLoader);
     using var content = FileExtract.Extract(resource, loader, null);
     var vmatPath = Prepare(vmatRel);
     File.WriteAllBytes(vmatPath, content.Data);
@@ -390,7 +403,8 @@ static int ModelCmd(string[] args)
 
     using var resource = new Resource();
     resource.Read(new MemoryStream(bytes));
-    using var loader = new GameFileLoader(package, vpk);
+    using var gameLoader = new GameFileLoader(package, vpk);
+    var loader = new SafeShaderLoader(gameLoader);
     using var content = FileExtract.Extract(resource, loader, null);
     var vmdlPath = Prepare(vmdlRel);
     File.WriteAllBytes(vmdlPath, content.Data);
@@ -986,7 +1000,8 @@ static int Gltf(string[] args)
     var outDir = Path.GetDirectoryName(outFile);
     if (!string.IsNullOrEmpty(outDir))
         Directory.CreateDirectory(outDir);
-    using var loader = new GameFileLoader(package, vpk);
+    using var gameLoader = new GameFileLoader(package, vpk);
+    var loader = new SafeShaderLoader(gameLoader);
     var exporter = new GltfModelExporter(loader)
     {
         ExportMaterials = withMaterials,
@@ -1295,4 +1310,63 @@ static int DmxSplit(string[] args)
     dm.Save(outPath, "binary", 9);
     Console.WriteLine($"facesets: kept {kept}, removed {removed}, retargeted {renamed}");
     return kept > 0 ? 0 : 1;
+}
+
+
+/// <summary>
+/// A file loader that never lets a compiled SHADER take the extract down.
+/// Game patches ship newer .vcs versions before ValveResourceFormat learns
+/// them (2026-09-29: Deadlock moved to vcs 72 while VRF 20.0 reads "59 through
+/// 71"), and VRF's material/model extraction only consults the shader for
+/// nicer texture-input names - its built-in basic provider covers the common
+/// shaders. Everything else resolves through the real game loader unchanged.
+/// A shader that fails to load is reported once on stderr and treated as
+/// absent, so posters, hero textures and model kits keep working across a
+/// shader-format bump instead of failing every material with "Only VCS file
+/// versions N through M are supported".
+/// </summary>
+sealed class SafeShaderLoader : IFileLoader
+{
+    private readonly IFileLoader inner;
+    /// <summary>Shaders to consult FIRST: the compiler's own (see MaterialCmd).</summary>
+    private readonly IFileLoader? preferredShaders;
+    private static readonly HashSet<string> warned = new(StringComparer.OrdinalIgnoreCase);
+
+    public SafeShaderLoader(IFileLoader inner, IFileLoader? preferredShaders = null)
+    {
+        this.inner = inner;
+        this.preferredShaders = preferredShaders;
+    }
+
+    public Resource? LoadFile(string file) => inner.LoadFile(file);
+    public Resource? LoadFileCompiled(string file) => inner.LoadFileCompiled(file);
+    public Stream? GetFileStream(string file) => inner.GetFileStream(file);
+
+    public ValveResourceFormat.CompiledShader.ShaderCollection? LoadShader(string shaderName)
+    {
+        if (preferredShaders is not null)
+        {
+            try
+            {
+                var s = preferredShaders.LoadShader(shaderName);
+                if (s is not null)
+                    return s;
+            }
+            catch (Exception ex)
+            {
+                if (warned.Add("compiler:" + shaderName))
+                    Console.Error.WriteLine($"warning: compiler shader {shaderName} unreadable ({ex.Message.Trim()}) - trying the game's");
+            }
+        }
+        try
+        {
+            return inner.LoadShader(shaderName);
+        }
+        catch (Exception ex)
+        {
+            if (warned.Add(shaderName))
+                Console.Error.WriteLine($"warning: shader {shaderName} unreadable ({ex.Message.Trim()}) - extracting without it");
+            return null;
+        }
+    }
 }

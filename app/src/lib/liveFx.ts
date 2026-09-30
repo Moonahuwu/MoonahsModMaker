@@ -37,7 +37,11 @@ const lerp = (a: number, b: number, t: number) => a + (b - a) * Math.min(1, Math
 const dbToLin = (db: number) => Math.pow(10, db / 20);
 
 /** Decaying, darkened noise - the same recipe the ffmpeg render uses for its
- *  synthetic impulse response (anoisesrc pink + exp fade + lowpass). */
+ *  synthetic impulse response (anoisesrc white + exp fade + lowpass),
+ *  normalized to UNIT ENERGY per channel like the render's `irnorm=2`, so the
+ *  wet leg sits at the same level here and in the compiled file. (The
+ *  ConvolverNode's own normalization is switched off: its calibration scales
+ *  with the tail length and never matched ffmpeg.) */
 function makeImpulse(ctx: BaseAudioContext, decay: number, damp: number): AudioBuffer {
   const rate = ctx.sampleRate;
   const len = Math.max(1, Math.floor(rate * decay));
@@ -47,12 +51,17 @@ function makeImpulse(ctx: BaseAudioContext, decay: number, damp: number): AudioB
   for (let ch = 0; ch < 2; ch++) {
     const d = buf.getChannelData(ch);
     let lp = 0;
+    let energy = 0;
     for (let i = 0; i < len; i++) {
       const white = Math.random() * 2 - 1;
       lp += k * (white - lp);
       // Exponential tail: -60 dB at `decay`.
-      d[i] = lp * Math.exp((-6.9 * i) / len);
+      const v = lp * Math.exp((-6.9 * i) / len);
+      d[i] = v;
+      energy += v * v;
     }
+    const scale = energy > 0 ? 1 / Math.sqrt(energy) : 1;
+    for (let i = 0; i < len; i++) d[i] *= scale;
   }
   return buf;
 }
@@ -306,6 +315,15 @@ export function createLiveFxChain(ctx: AudioContext, fx: SoundFx | undefined): L
       updaters.push(apply);
     } else {
       const conv = ctx.createConvolver();
+      conv.normalize = false; // the IR is unit-energy already (see makeImpulse)
+      // Same transparent safety limiter the render puts after the sum: tails
+      // add peaks, and a hot source can pass full scale.
+      const lim = ctx.createDynamicsCompressor();
+      lim.threshold.value = -1;
+      lim.knee.value = 0;
+      lim.ratio.value = 20;
+      lim.attack.value = 0.002;
+      lim.release.value = 0.06;
       const apply = (f: SoundFx | undefined) => {
         const r = f?.reverb;
         if (!r) return;
@@ -318,16 +336,18 @@ export function createLiveFxChain(ctx: AudioContext, fx: SoundFx | undefined): L
           conv.buffer = makeImpulse(ctx, decay, damp);
           lastIr = irKey;
         }
-        dry.gain.value = lerp(1, 0.55, w);
-        wet.gain.value = lerp(0, 1.3, w);
+        // The render's amix weights (audio.rs ReverbGraph): level-preserving.
+        dry.gain.value = lerp(1, 0.6, w);
+        wet.gain.value = lerp(0, 0.5, w);
       };
       tail.connect(dry);
       dry.connect(sum);
       tail.connect(conv);
       conv.connect(wet);
       wet.connect(sum);
-      nodes.push(conv, dry, wet, sum);
-      tail = sum;
+      sum.connect(lim);
+      nodes.push(conv, dry, wet, sum, lim);
+      tail = lim;
       apply(fx);
       updaters.push(apply);
     }

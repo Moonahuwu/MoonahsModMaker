@@ -67,7 +67,7 @@ export const DYNPAINT_TARGETS: DynpaintTargetInfo[] = [
     name: "The Hidden King signs",
     where: "Midtown, church district (Amber side)",
     beta: true,
-    note: "Signs draw while their host archway does (out to roughly 4,400 units - vanilla culling).",
+    note: "Signs draw while their host archway does (out to roughly 4,400 units - vanilla culling). Midtown was rebuilt in the 2026-09-29 patch: the host prop is still in the map, but these surfaces have not been re-checked in game since.",
     panels: [
       { id: "card1", title: "Library Painting #1", blurb: "The painting on the right", cell: { w: 364, h: 720 } },
       { id: "card2", title: "Library Painting #2", blurb: "The painting on the left", cell: { w: 364, h: 720 } },
@@ -87,7 +87,7 @@ export const DYNPAINT_TARGETS: DynpaintTargetInfo[] = [
     name: "The Archmother signs",
     where: "Midtown, bodega corner (Sapphire side)",
     beta: true,
-    note: "Signs draw while their host prop does (vanilla culling).",
+    note: "Signs draw while their host prop does (vanilla culling). Midtown was rebuilt in the 2026-09-29 patch: the host prop is still in the map, but these surfaces have not been re-checked in game since.",
     panels: [
       { id: "card1", title: "Horizontal Adframe #1", blurb: "Above the curiosity shop", cell: { w: 1028, h: 256 } },
       { id: "card2", title: "Horizontal Adframe #2", blurb: "Above the double veil", cell: { w: 1028, h: 256 } },

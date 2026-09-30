@@ -256,6 +256,27 @@ fn filter_set(ffmpeg: &str) -> std::sync::Arc<std::collections::HashSet<String>>
     arc
 }
 
+/// Whether this ffmpeg's `afir` has the `irnorm` option (6.1+). Older builds
+/// only have `gtype`, whose "gn" mode is the nearest unit-energy equivalent.
+fn afir_has_irnorm(ffmpeg: &str) -> bool {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(v) = cache.lock().ok().and_then(|m| m.get(ffmpeg).copied()) {
+        return v;
+    }
+    // Unknown binary (tests) -> assume modern, like `has` assumes every filter.
+    let v = match crate::procutil::quiet(ffmpeg).args(["-hide_banner", "-h", "filter=afir"]).output() {
+        Ok(out) => String::from_utf8_lossy(&out.stdout).contains("irnorm"),
+        Err(_) => true,
+    };
+    if let Ok(mut m) = cache.lock() {
+        m.insert(ffmpeg.to_string(), v);
+    }
+    v
+}
+
 /// Map an fx "amount" 0..100 onto a range.
 fn lerp(a: f64, b: f64, t: f64) -> f64 {
     a + (b - a) * t.clamp(0.0, 1.0)
@@ -265,11 +286,31 @@ fn lerp(a: f64, b: f64, t: f64) -> f64 {
 /// append after the input's format normalization (empty when nothing is on).
 /// `reverb` needs a second stream (the impulse response), so it's returned
 /// separately as a source-filter graph snippet the caller wires in.
+/// The convolution reverb as a REAL dry/wet mix. ffmpeg's `afir` has no mix
+/// of its own: its `dry`/`wet` options are the input and OUTPUT gains, so the
+/// whole signal used to go through the impulse response and came out 28-35 dB
+/// quieter (the default IR normalization is the worst-case-peak L1 norm, and
+/// a 1-4 s noise IR has a huge one) - "reverb made my sound silent in game".
+/// Now the track is split, only the wet leg is convolved with a UNIT-ENERGY
+/// (L2) white-noise IR, and the two are summed with these weights; measured
+/// on a bell, a hit and a voice line the result sits within about 2 dB of the
+/// dry sound at any wet amount (white, not pink: a pink IR's low end boosts a
+/// low sound by 10 dB after energy normalization).
+struct ReverbGraph {
+    /// Source-filter chain generating the impulse response stream.
+    ir: String,
+    /// The `afir=...` filter that convolves the wet leg with it.
+    afir: String,
+    /// amix weights for the untouched and the convolved leg.
+    dry_weight: f64,
+    wet_weight: f64,
+}
+
 struct FxChain {
     pre: String,
-    /// `Some((ir_graph, afir_args))`: generate the IR from this source-filter
-    /// chain and convolve with these args. None = no reverb / aecho in `pre`.
-    reverb: Option<(String, String)>,
+    /// Convolution reverb, wired by `track_graph`. None = no reverb, or the
+    /// echo-based slapback which lives in `pre`.
+    reverb: Option<ReverbGraph>,
 }
 
 fn fx_chain(fx: &Fx, ffmpeg: &str) -> FxChain {
@@ -381,20 +422,23 @@ fn fx_chain(fx: &Fx, ffmpeg: &str) -> FxChain {
                 ));
             } else {
                 // Convolution with a synthetic impulse response: decaying
-                // pink noise, darkened (lowpass) so long tails don't fizz.
+                // white noise, darkened (lowpass) so long tails don't fizz.
+                // See `ReverbGraph` for why it is white and unit-energy.
                 let d = if r.decay > 0.0 { r.decay.clamp(0.1, 6.0) } else { decay };
                 let ir = format!(
-                    "anoisesrc=d={}:c=pink:r=48000:a=0.6:s=7,afade=t=out:st=0:d={}:curve=exp,lowpass=f={},aformat=sample_fmts=fltp:channel_layouts=mono",
+                    "anoisesrc=d={}:c=white:r=48000:a=0.6:s=7,afade=t=out:st=0:d={}:curve=exp,lowpass=f={},aformat=sample_fmts=fltp:channel_layouts=mono",
                     fmt(d),
                     fmt(d),
                     fmt(damp)
                 );
-                let args = format!(
-                    "afir=dry={}:wet={}:irfmt=mono:gtype=peak",
-                    fmt(lerp(1.0, 0.55, wet)),
-                    fmt(lerp(0.0, 1.3, wet))
-                );
-                reverb = Some((ir, args));
+                let norm = if afir_has_irnorm(ffmpeg) { "irnorm=2" } else { "gtype=gn" };
+                let afir = format!("afir=dry=1:wet=1:{norm}:irfmt=mono");
+                reverb = Some(ReverbGraph {
+                    ir,
+                    afir,
+                    dry_weight: lerp(1.0, 0.6, wet),
+                    wet_weight: lerp(0.0, 0.5, wet),
+                });
             }
         }
     }
@@ -514,9 +558,14 @@ fn track_graph(
         (label.to_string(), String::new())
     };
     let main = match chain.reverb {
-        Some((ir, afir)) => format!(
-            "{input_pad}{fmt_in}{}[{label}_dry];{ir}[{label}_ir];[{label}_dry][{label}_ir]{afir},volume={gain_db}dB{extra}[{body_label}];",
-            chain.pre
+        // Split, convolve only the wet leg, weighted sum, then a transparent
+        // safety limiter: tails add peaks, and the sum can pass 0 dBFS on a
+        // hot source (the compile encodes to integer PCM).
+        Some(ReverbGraph { ir, afir, dry_weight, wet_weight }) => format!(
+            "{input_pad}{fmt_in}{},asplit[{label}_dry][{label}_x];{ir}[{label}_ir];[{label}_x][{label}_ir]{afir}[{label}_wet];[{label}_dry][{label}_wet]amix=inputs=2:normalize=0:weights={} {},alimiter=limit=0.97:attack=2:release=60:level=false,volume={gain_db}dB{extra}[{body_label}];",
+            chain.pre,
+            fmt(dry_weight),
+            fmt(wet_weight)
         ),
         None => format!("{input_pad}{fmt_in}{},volume={gain_db}dB{extra}[{body_label}];", chain.pre),
     };
@@ -1031,7 +1080,7 @@ mod fx_tests {
             loudness_method: String::new(),
         };
         let g = track_graph("[0:a]", "a0", 0.0, Some(&fx), "ffmpeg-not-here", "", 0.0);
-        let order = ["areverse", "rubberband=pitch=2.000000", "highpass=f=300", "acrusher=bits=8.000000", "tremolo=f=4.000000:d=0.500000", "acompressor=", "[a0_dry];anoisesrc=d=1.800000", "[a0_ir];[a0_dry][a0_ir]afir=dry=", "irfmt=mono:gtype=peak,volume=0dB[a0];"];
+        let order = ["areverse", "rubberband=pitch=2.000000", "highpass=f=300", "acrusher=bits=8.000000", "tremolo=f=4.000000:d=0.500000", "acompressor=", ",asplit[a0_dry][a0_x];anoisesrc=d=1.800000:c=white", "[a0_ir];[a0_x][a0_ir]afir=dry=1:wet=1:irnorm=2:irfmt=mono[a0_wet];[a0_dry][a0_wet]amix=inputs=2:normalize=0:weights=0.800000 0.250000,alimiter=", ",volume=0dB[a0];"];
         let mut last = 0;
         for o in order {
             let i = g.find(o).unwrap_or_else(|| panic!("{o} missing in {g}"));
@@ -1053,6 +1102,48 @@ mod fx_tests {
     /// Real ffmpeg: every effect + layer feature in one render, checked by
     /// output duration. Needs ffmpeg on PATH (or the bundle).
     ///   cargo test -p app --lib -- --ignored e2e_fx_render --nocapture
+    /// The reverb must not change the level: it used to run the WHOLE signal
+    /// through afir (no dry/wet mix in that filter, worst-case-peak IR norm)
+    /// and came out 28-35 dB quieter - "the sound plays nothing in game".
+    #[test]
+    #[ignore]
+    fn e2e_reverb_keeps_level_real_ffmpeg() {
+        let ffmpeg = "ffmpeg";
+        if crate::procutil::quiet(ffmpeg).arg("-version").output().map(|o| !o.status.success()).unwrap_or(true) {
+            eprintln!("skipping: no ffmpeg");
+            return;
+        }
+        let dir = std::env::temp_dir().join("eim_reverb_level_e2e");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // A broadband burst with a decay (game sounds are broadband; a pure
+        // sine would only measure the IR's random gain at that one frequency
+        // plus coherent dry/wet cancellation, which every reverb has).
+        let src = dir.join("src.wav");
+        let ok = crate::procutil::quiet(ffmpeg)
+            .args(["-y", "-f", "lavfi", "-i", "anoisesrc=c=pink:s=3:d=2:a=0.5,afade=t=out:st=0.5:d=1.5", "-ac", "2"])
+            .arg(&src)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        assert!(ok, "source tone");
+        let src = src.to_string_lossy().into_owned();
+        let render = |name: &str, fx: Option<Fx>| {
+            let spec = RenderSpec { bite_mode: BiteMode::Base, bite_seconds: 0.0, fx, start_offset: 0.0 };
+            let out = dir.join(name);
+            render_spec_to(Some(ffmpeg), &src, 0.0, 2.0, 0.0, 0.0, 0.0, &[], &spec, &out.to_string_lossy()).expect("render");
+            measure_loudness(Some(ffmpeg), &out.to_string_lossy()).expect("measure").rms
+        };
+        let dry = render("dry.wav", None);
+        for (preset, wet) in [("room", 50.0), ("room", 100.0), ("hall", 50.0), ("hall", 100.0), ("cave", 100.0), ("slap", 100.0)] {
+            let fx = Fx { reverb: Some(FxReverb { preset: preset.into(), wet, decay: 0.0 }), ..Default::default() };
+            let got = render(&format!("{preset}_{wet}.wav"), Some(fx));
+            let diff = got - dry;
+            eprintln!("{preset} {wet}%: {diff:+.1} dB vs dry");
+            assert!(diff.abs() <= 3.5, "{preset} at {wet}% wet moved the level by {diff:+.1} dB (dry {dry:.1}, got {got:.1})");
+        }
+    }
+
     #[test]
     #[ignore]
     fn e2e_fx_render_real_ffmpeg() {
