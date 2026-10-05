@@ -21,6 +21,44 @@ EXTRA_SHEETS = [
      "materials": ["materials/overlays/signs_bodega01a.vmat"],
      "colorTexture": "signs_bodega01a_color.png", "transTexture": "signs_bodega01a_93bba988_trans.png",
      "width": 2048, "height": 2048, "posters": []},
+    # 2026-10-04: sheets the rebuilt Midtown places that the app never offered
+    # (found by diffing worldrects' placed materials against the manifest).
+    # Only sheets with a real COLOR texture - the mask-only ones (sigil_*,
+    # ritual_circle_a, subway_signage, chinatown_signs_02/03: constant colour +
+    # a translucency mask) cannot be painted by the colour-compositing compile.
+    {"id": "chinatown_signs_01", "category": "signage", "curated": False,
+     "materials": ["materials/overlays/chinatown_signs_01.vmat"],
+     "colorTexture": "chinatown_signs_01_color.png", "transTexture": "chinatown_signs_01_6b2405a9_trans.png",
+     "width": 2048, "height": 2048, "posters": []},
+    {"id": "signs_composite04a", "category": "signage", "curated": False,
+     "materials": ["materials/overlays/signs_composite04a.vmat"],
+     "colorTexture": "signs_composite04a_color.png", "transTexture": None,
+     "width": 2048, "height": 2048, "posters": []},
+    {"id": "signs_composite05a", "category": "signage", "curated": False,
+     "materials": ["materials/overlays/signs_composite05a.vmat"],
+     "colorTexture": "signs_composite05a_color.png", "transTexture": None,
+     "width": 2048, "height": 2048, "posters": []},
+    {"id": "signs_composite06a", "category": "signage", "curated": False,
+     "materials": ["materials/overlays/signs_composite06a.vmat"],
+     "colorTexture": "signs_composite06a_color.png", "transTexture": "signs_composite06a_5ed2546b_trans.png",
+     "width": 2048, "height": 2048, "posters": []},
+    {"id": "garage_decals", "category": "signage", "curated": False,
+     "materials": ["materials/overlays/garage_decals.vmat"],
+     "colorTexture": "garage_decals_color.png", "transTexture": "garage_decals_3ec19225_trans.png",
+     "width": 1024, "height": 1024, "posters": []},
+    {"id": "graffiti_tags_06", "category": "graffiti", "curated": False,
+     "materials": ["materials/overlays/graffiti_tags_06.vmat"],
+     "colorTexture": "graffiti_tags_06_color.png", "transTexture": "graffiti_tags_06_723fa8fa_trans.png",
+     "width": 2048, "height": 2048, "posters": []},
+    # Shown only on a PROP model (the campus banner): reached through the
+    # extra-model list + skin scan (see README). Checked and NOT added: the
+    # map's manifest also names theater_posters_01, campus_banner_01 / 01b and
+    # signs_broadway_01, but no mesh the map loads (world nodes, referenced
+    # models with every skin, map-local entity models) draws them.
+    {"id": "signage/campus_banner_02", "category": "signage", "curated": False,
+     "materials": ["materials/signage/campus_banner_02.vmat"],
+     "colorTexture": "campus_banner_02_color.png", "transTexture": None,
+     "width": 2048, "height": 512, "posters": []},
 ]
 
 

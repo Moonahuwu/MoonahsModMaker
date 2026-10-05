@@ -238,9 +238,35 @@ contains `{` braces).
   to bytecode via the CSDK, e2e-proven) -> staged with the bundled per-panel quad model
   that OVERRIDES the host prop (expressions never tick on baked world
   geometry, so the art rides an entity-hosted quad): hideout ghost pianist
-  (+ blackout textures at the stock portrait's hashed names), midtown church
-  archway (11 sign panels, stock mesh+collision rebuilt in) and a trash can
-  lid (5 panels) - ONE panel per host (they share the model path; guarded).
+  (+ blackout textures at the stock portrait's hashed names) and, in Midtown,
+  originally the church archway (11 sign panels, stock mesh+collision rebuilt
+  in) and a trash can lid (5 panels) - ONE panel per host (they share the model
+  path; guarded).
+  **Midtown after the 2026-09-29 map rebuild** (audited 10-04): both original
+  hosts became baked scenery - named only in `dl_midtown.vmap_c`'s dependency list,
+  no entity in any lump, nothing at the old host origins - so their quads never
+  draw. HIDDEN KING is RE-HOSTED (`Rehost` in dynpaint.rs) onto the plaza gate
+  `models/architecture/arch_plaza_01/arch_plaza_01_gate_structure_01` (prop_dynamic
+  at 5984 -2392 256, yaw 180.03302): the ONLY single-instance, this-map-only,
+  un-animated prop_dynamic left in the map. Five surfaces survived at their exact
+  old spots (cards 1,2,5,7,10 = Library Paintings #1-#4 + T2 Camp Painting); the
+  bundled church-archway card models still supply the quads, `dmxsplit`'s rigid
+  move (yaw + translation, BAKED into the vertices - the compiler ignores a vmdl
+  mesh node's import_translation/import_rotation for DMX) carries each into the
+  gate's space, and the gate's own mesh + collision come from the game pak at
+  compile time (`ensure_stock_kit`, cached per pak build; `splice_render_meshes`
+  adds the quads to the kit's vmdl). The e2e measures every quad against the map
+  (0.01u). NOT yet seen in game: test pak builder `build_midtown_gate_test_pak`
+  -> `output/midtown_gate_test/pak01_dir.vpk`. The six other Hidden King panels
+  are `gone` in the frontend registry (hidden unless holding saved art, never
+  built) and absent from the backend. ARCHMOTHER stays `offline`
+  (`dynpaintTargets.ts`): that side's only single-instance prop is an animated
+  statue globe. `liveDynpaints` drops offline hosts + gone panels from
+  `buildCompileConfig` and the content counts. After any map patch re-check each
+  host: decompile `maps/<map>/entities/*.vents_c` and confirm an entity with the
+  host model at the registry pose; measure quads with helper `worldrects
+  <pack-of-loose-models.vpk> <pak> out.json "models/" models.txt` (a world-less
+  vpk is accepted when a model list is given).
   Fit modes cover/contain/stretch + crop position (`fit_filter`). Display registry
   (incl. per-panel cells + roomLight): `src/data/dynpaintTargets.ts`; models:
   `templates/dynpaint/`; animated-WebP media (Twitter/Discord, ffmpeg-undecodable: reproduced on 7.1.1/8.0.1/2026-master) routes via helper `webpframes` (SkiaSharp SKCodec frame loop, prints frames=N avg_ms=D; `is_animated_webp` byte-sniff RIFF+WEBP+ANIM) then ffmpeg only fits the PNGs; MULTI-SURFACE hosts (combo=true) rebuild the host model at
@@ -543,6 +569,22 @@ current defaults, so new default slots appear for existing users automatically.
   data-driven); run the ignored e2e tests (`e2e_real_compile_to_vpk`,
   `e2e_hero_cards_fold_rules`, `e2e_poster_replace`, `e2e_hero_texture*`,
   `e2e_dynpaint_hideout_compiles`) - a helper/VRF format bump shows up there first.
+  **Wall Art manifest regen (recipe in `tools/poster-manifest/README.md`):**
+  `map_models.py` (every model a map can show: vdata-defined props + the models
+  inside the map package) -> `worldrects ... "materials/overlays/,models/hideout/
+  materials/,materials/signage/" <map>_models.txt` (skin-aware: credits every
+  material-group alternate) -> `curate_uv.py`. Geometry alone misses prop-shown art
+  (subway advert posters, banners), and `load_maps` must clamp edge-overshooting
+  quads (the fireplace Patron Portrait is u 0..1.031 - dropping it hid the sheet).
+  New in-game sheets go in `EXTRA_SHEETS` (colour-textured only; mask-only sheets
+  cannot be painted). `e2e_poster_sweep_live` compiles a replacement on EVERY sheet
+  (`EIM_SHEET=a,b` to focus + assert).
+  **New hero:** `EIM_HERO=<code> cargo test -p app --lib -- --ignored e2e_hero_smoke_live
+  --nocapture` checks everything the Heroes tab derives for them from the LIVE pak
+  (roster flags + card, ability cards + decoded icons, folded sound events, hero
+  vsndevts, VO file, background + name logo); no `EIM_HERO` = sweep every released hero
+  (report only). Hero data is fully data-driven, so a new hero needs no code - the
+  smoke test is how you prove it (Ratking, 2026-10-02: 4 cards/4 icons/36 events).
 - Deadlock is installed at `D:\SteamLibrary\steamapps\common\Deadlock`; the CSDK toolchain
   used for verified compiles is `Reduced_CSDK_12`. Real paths are configured at runtime in
   the app's Setup panel (and auto-detected via `autodetect_paths`).

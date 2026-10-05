@@ -3,6 +3,7 @@ import type { CompileConfig, EffectCompile, EventCompile, GbModInfo, GlobalCompi
 import { loadSettings, saveSettings, renderSpecOf } from "./api";
 import type { DigimodConfig, DynpaintEntry, EffectOverride, EventProject, HeroTextureOverride, LibraryItem, ModelOverride, ModTextureOverride, PosterOverride, SoundOverride, UiFileOverride } from "../types";
 import { songHash, overrideHash, effectHash, posterHash, heroTexHash, modTexHash } from "./songHash";
+import { liveDynpaints } from "../data/dynpaintTargets";
 
 // User-facing settings. We derive the verbose CompileConfig paths from a CSDK
 // root + addon name so the user only manages a few friendly fields.
@@ -531,7 +532,8 @@ export function buildCompileConfig(
   dynpaints: DynpaintEntry[] = [],
 ): CompileConfig {
   const explicitOverrideRefs = new Set(soundOverrides.map((o) => o.targetRef));
-  const dynpaintCompiles = dynpaints
+  // Hosts the current map no longer has are left out (see `offline`).
+  const dynpaintCompiles = liveDynpaints(dynpaints)
     .filter((d) => d.enabled !== false && d.sourceMedia)
     .map((d) => ({
       id: d.id,

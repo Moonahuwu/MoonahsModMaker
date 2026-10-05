@@ -19,12 +19,43 @@ Manifest v2 regions come from the compiled maps themselves, not from mask
 guessing: every poster quad's UV rect is read out of the world geometry.
 
 ```sh
-# 1. mine every map (seconds each; needs the helper built: dotnet build in tools/vpk-helper)
-for m in dl_streets dl_midtown dl_hideout street_test hero_testing 1v1_test new_player_basics; do
-  dotnet tools/vpk-helper/bin/Release/net10.0/vpk-helper.dll worldrects     "<Deadlock>/game/citadel/maps/$m.vpk" "<Deadlock>/game/citadel/pak01_dir.vpk" out/uv/${m}_rects.json
+# 0. every model each map can show (props defined in game data, models stored
+#    inside the map package) - worldrects cannot find those on its own
+python map_models.py "<Deadlock>/game/citadel" ../vpk-helper/dist/vpk-helper.exe out/models
+# 1. mine every map (needs the helper built: dotnet build in tools/vpk-helper)
+for m in dl_midtown dl_hideout new_player_basics hero_testing; do
+  ../vpk-helper/dist/vpk-helper.exe worldrects "<Deadlock>/game/citadel/maps/$m.vpk"     "<Deadlock>/game/citadel/pak01_dir.vpk" out/uv/${m}_rects.json     "materials/overlays/,models/hideout/materials/,materials/signage/" out/models/${m}_models.txt
 done
 # 2. curate into the manifest (+ review overlays: green = placed region, grey = unused old one)
 python curate_uv.py out/uv --overlays out/uv_overlays        # add --dry to preview only
+```
+
+Three things the 2026-10-04 regen learned the hard way (all handled by the
+recipe above - do not drop any of them):
+
+- **Pass the models list.** Without it the scan only sees world geometry: the
+  subway advert posters, campus / museum banners and anything else shown on a
+  prop model come out "unused". (The helper's own entity pass finds nothing
+  since the ValveResourceFormat 20 upgrade - "0 from entities" in its log.)
+- **Skins count.** `worldrects` credits every material a model's material
+  groups can put on a draw call, so art swapped in per placement is found.
+- **Include `materials/signage/`.** Billboards and banners live there.
+
+`uv_rects.load_maps` clamps a quad that merely overshoots the texture edge
+(the hideout's big fireplace portrait is one quad with u 0..1.031); it used to
+drop such rects as "tiling" and the Patron Portrait was flagged unused.
+
+After a regen, diff what the maps place against the manifest to spot sheets
+the app does not offer yet (new art families Valve added), and add the ones
+with a real colour texture to `EXTRA_SHEETS` in `curate_uv.py`. Mask-only
+sheets (constant colour + a translucency mask: sigil_*, ritual_circle_a,
+subway_signage, chinatown_signs_02/03) cannot be painted by the colour
+compositing compile and are deliberately left out. `vpk-helper matrefs <pak>
+out.tsv` lists every material's textures when you need to check which
+materials share a sheet. Then prove every sheet still compiles:
+
+```sh
+cargo test -p app --lib -- --ignored e2e_poster_sweep_live --nocapture
 ```
 
 `worldrects` walks the world nodes (world geometry + baked static props) and

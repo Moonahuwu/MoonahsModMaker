@@ -2445,6 +2445,15 @@ fn hero_roster_impl(
         if HERO_CODE_DENYLIST.contains(&h.code.as_str()) {
             continue;
         }
+        // Unreleased heroes sit in the vdata with the released flags but no
+        // signature abilities yet (2026-09-29 patch: artist, baba, chessmaster,
+        // deadpack, nurse), and the helper decodes their small portrait as a
+        // card, so they passed every other check and showed on the grid with
+        // a drill-in that could only fail ("no bound abilities"). No
+        // abilities = not a playable hero = not on the roster.
+        if hero_bound_abilities(&text, &h.code).is_empty() {
+            continue;
+        }
         // The portrait file is keyed by the card code (e.g. orion -> archer);
         // fall back to the hero code if there's no explicit card image.
         let png = h
@@ -4592,7 +4601,43 @@ fn prettify_hero_sound(event: &str, code: &str) -> String {
 }
 
 /// A hero's non-VO sound events (gunfire, abilities, movement) from
-/// `soundevents/hero/<code>.vsndevts`. Cached per hero. Empty if no file.
+/// The events file that holds a hero's own sounds. Usually
+/// `soundevents/hero/<codename>.vsndevts`, but Valve keeps some heroes' files
+/// under an older name (Abrams = hero_atlas -> abrams.vsndevts, Lady Geist =
+/// ghost -> geist.vsndevts, Pocket = synth -> pocket.vsndevts), and the
+/// "More sounds" section used to come up EMPTY for them (the codename file
+/// does not exist, and that miss was cached as `[]`). The ability cards never
+/// had this problem because `hero_detail_at` locates events through the
+/// event index, so the file their vdata-bound sounds live in is the answer:
+/// take the `soundevents/hero/*` file the cards reference most, falling back
+/// to the codename when the cards reference none.
+pub(crate) fn hero_sound_relpath(
+    base: &std::path::Path,
+    helper_path: &str,
+    pak_path: &str,
+    codename: &str,
+) -> String {
+    let fallback = format!("soundevents/hero/{codename}.vsndevts");
+    let Ok(cards) = hero_detail_at(base, helper_path, pak_path, codename, None) else {
+        return fallback;
+    };
+    let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for c in &cards {
+        for snd in &c.sounds {
+            if snd.events_relpath.starts_with("soundevents/hero/") {
+                *counts.entry(snd.events_relpath.as_str()).or_insert(0) += 1;
+            }
+        }
+    }
+    counts
+        .into_iter()
+        .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(a.0)))
+        .map(|(rel, _)| rel.to_string())
+        .unwrap_or(fallback)
+}
+
+/// `soundevents/hero/<code>.vsndevts` (resolved by `hero_sound_relpath`).
+/// Cached per hero. Empty if no file.
 fn hero_sounds_impl(
     app: tauri::AppHandle,
     helper_path: String,
@@ -4613,10 +4658,14 @@ fn hero_sounds_impl(
         }
     }
 
-    let relpath = format!("soundevents/hero/{codename}.vsndevts");
+    let relpath = hero_sound_relpath(&base, &helper_path, &pak_path, &codename);
+    let stem = relpath
+        .trim_start_matches("soundevents/hero/")
+        .trim_end_matches(".vsndevts")
+        .to_string();
     let snd_dir = base.join("heroevents");
     std::fs::create_dir_all(&snd_dir).map_err(|e| e.to_string())?;
-    let snd_file = snd_dir.join(format!("{codename}.vsndevts"));
+    let snd_file = snd_dir.join(format!("{stem}.vsndevts"));
     if refresh.unwrap_or(false) || !snd_file.exists() {
         if crate::vpk::decompile_from_vpk(&helper_path, &pak_path, &format!("{relpath}_c"), &snd_file.to_string_lossy()).is_err() {
             let _ = std::fs::write(&cache, "[]");
@@ -4628,7 +4677,9 @@ fn hero_sounds_impl(
         .into_iter()
         .filter(|(_, r)| r.is_some())
         .map(|(event, stock_ref)| HeroSound {
-            label: prettify_hero_sound(&event, &codename),
+            // Labels strip the file's own prefix (Abrams' events start with
+            // "Abrams." although his codename is atlas).
+            label: prettify_hero_sound(&event, &stem),
             category: hero_sound_category(&event).to_string(),
             event_name: event,
             array_key: "vsnd_files".to_string(),
@@ -8468,6 +8519,81 @@ pub struct HeroImage {
 /// small + minimap icons, menu background, name logo) into the app-data cache.
 /// `display_stem` is the display-name file stem (abrams, grey_talon, ...) used
 /// by backgrounds + hero_names; `codename` is the internal one (atlas, ...).
+/// The image files a hero's vdata block DECLARES, as (slot kind, compiled
+/// target path). The source extension is part of the compiled name
+/// (`heroes/hornet_sm.png` -> `panorama/images/heroes/hornet_sm_png.vtex_c`),
+/// and it is not always psd: Vindicta's small icon is the one hero image Valve
+/// builds from a PNG, so the slot never appeared for her while every name was
+/// assembled with a hard-coded `_psd` (GameBanana report, 2026-10-04).
+fn hero_image_targets(vdata: &str, code: &str) -> Vec<(&'static str, String)> {
+    const FIELDS: [(&str, &str); 5] = [
+        ("m_strIconHeroCardCritical", "card_critical"),
+        ("m_strIconHeroCardGloat", "card_gloat"),
+        ("m_strIconHeroCard", "card"),
+        ("m_strIconImageSmall", "sm"),
+        ("m_strMinimapImage", "mm"),
+    ];
+    let open = format!("hero_{code}");
+    let mut in_hero = false;
+    let mut out: Vec<(&'static str, String)> = Vec::new();
+    for line in vdata.lines() {
+        let t = line.trim();
+        if let Some(k) = t.strip_suffix('=').map(str::trim) {
+            if let Some(c) = k.strip_prefix("hero_") {
+                if c.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
+                    if in_hero {
+                        break; // reached the next hero
+                    }
+                    in_hero = k == open;
+                    continue;
+                }
+            }
+        }
+        if !in_hero {
+            continue;
+        }
+        // Longest key first in FIELDS, and match on the full key + " =" so
+        // `m_strIconHeroCard` cannot claim the Critical / Gloat lines.
+        for (field, kind) in FIELDS {
+            let Some(rest) = t.strip_prefix(field) else { continue };
+            if !rest.trim_start().starts_with('=') {
+                continue;
+            }
+            if let Some(path) = between(rest, "{images}/", "\"") {
+                if let Some((stem, ext)) = path.rsplit_once('.') {
+                    if !stem.is_empty() && !ext.is_empty() && !out.iter().any(|(k, _)| *k == kind) {
+                        out.push((kind, format!("panorama/images/{stem}_{ext}.vtex_c")));
+                    }
+                }
+            }
+            break;
+        }
+    }
+    out
+}
+
+/// Candidate target paths per hero image slot, in priority order: the file
+/// the vdata declares, then the conventional `<stem>_<kind>_psd` name, then
+/// its `_png` twin (a slot the vdata does not list - `vertical` - only has the
+/// conventional names). The first one that exists in the pak wins.
+fn hero_image_kind_candidates(vdata: &str, code: &str, img_stem: &str) -> Vec<(&'static str, String)> {
+    let declared = hero_image_targets(vdata, code);
+    let mut out: Vec<(&'static str, String)> = Vec::new();
+    for kind in ["card", "card_critical", "card_gloat", "vertical", "sm", "mm"] {
+        let mut push = |t: String| {
+            if !out.iter().any(|(k, x)| *k == kind && *x == t) {
+                out.push((kind, t));
+            }
+        };
+        if let Some((_, t)) = declared.iter().find(|(k, _)| *k == kind) {
+            push(t.clone());
+        }
+        push(format!("panorama/images/heroes/{img_stem}_{kind}_psd.vtex_c"));
+        push(format!("panorama/images/heroes/{img_stem}_{kind}_png.vtex_c"));
+    }
+    out
+}
+
 fn hero_images_impl(
     app: tauri::AppHandle,
     helper_path: String,
@@ -8496,14 +8622,11 @@ fn hero_images_impl(
             &heroes_vdata.to_string_lossy(),
         )?;
     }
-    let img_stem = std::fs::read_to_string(&heroes_vdata)
-        .ok()
-        .and_then(|text| {
-            parse_heroes_vdata(&text)
-                .into_iter()
-                .find(|h| h.code == codename)
-                .and_then(|h| h.card_code)
-        })
+    let heroes_text = std::fs::read_to_string(&heroes_vdata).unwrap_or_default();
+    let img_stem = parse_heroes_vdata(&heroes_text)
+        .into_iter()
+        .find(|h| h.code == codename)
+        .and_then(|h| h.card_code)
         .unwrap_or_else(|| codename.clone());
 
     // Background + name-logo stems are INCONSISTENT in the game files:
@@ -8536,14 +8659,7 @@ fn hero_images_impl(
             stem_candidates.push(a.to_string());
         }
     }
-    let mut kinds: Vec<(&str, String)> = vec![
-        ("card", format!("panorama/images/heroes/{img_stem}_card_psd.vtex_c")),
-        ("card_critical", format!("panorama/images/heroes/{img_stem}_card_critical_psd.vtex_c")),
-        ("card_gloat", format!("panorama/images/heroes/{img_stem}_card_gloat_psd.vtex_c")),
-        ("vertical", format!("panorama/images/heroes/{img_stem}_vertical_psd.vtex_c")),
-        ("sm", format!("panorama/images/heroes/{img_stem}_sm_psd.vtex_c")),
-        ("mm", format!("panorama/images/heroes/{img_stem}_mm_psd.vtex_c")),
-    ];
+    let mut kinds: Vec<(&str, String)> = hero_image_kind_candidates(&heroes_text, &codename, &img_stem);
     for s in &stem_candidates {
         kinds.push(("background", format!("panorama/images/heroes/backgrounds/{s}_bg_psd.vtex_c")));
     }
@@ -8555,15 +8671,21 @@ fn hero_images_impl(
         .collect();
     if !missing.is_empty() {
         if let Ok(pairs) = crate::vpk::texture_batch(&helper_path, &pak_path, &dir.to_string_lossy(), &missing) {
-            for (stem, png) in pairs {
-                // stem is the vtex file stem — map it back to its kind slot.
-                if let Some((kind, target)) = kinds.iter().find(|(_, t)| {
-                    t.rsplit('/').next().unwrap_or("").trim_end_matches(".vtex_c") == stem
-                }) {
+            // stem (the vtex file stem) -> decoded png
+            let mut decoded: std::collections::HashMap<String, String> = pairs.into_iter().collect();
+            // Kinds carry several candidate paths (the vdata-declared file,
+            // then name fallbacks; several stems for backgrounds). Walk them in
+            // priority order so the FIRST candidate that decoded wins the slot,
+            // and remember which path that was - it is the override target.
+            let mut filled: std::collections::HashSet<&str> = std::collections::HashSet::new();
+            for (kind, target) in &kinds {
+                let stem = target.rsplit('/').next().unwrap_or("").trim_end_matches(".vtex_c");
+                let Some(png) = decoded.remove(stem) else { continue };
+                if filled.insert(kind) && !dir.join(format!("{kind}.png")).exists() {
                     let _ = std::fs::rename(&png, dir.join(format!("{kind}.png")));
-                    // Remember WHICH candidate path decoded (kinds can carry
-                    // several stems for the same kind, e.g. background).
                     let _ = std::fs::write(dir.join(format!("{kind}.target.txt")), target);
+                } else {
+                    let _ = std::fs::remove_file(&png); // a lower-priority twin
                 }
             }
         }
@@ -8997,6 +9119,141 @@ mod tests {
     /// live pak (Setup paths); works in a scratch copy of the app-data
     /// `hero_portraits` cache so the user's cache is untouched.
     ///   cargo test -p app --lib -- --ignored e2e_hero_cards --nocapture
+    #[test]
+    fn hero_image_slots_follow_the_vdata_extension() {
+        let vdata = "{\n\thero_hornet = \n\t{\n\t\tm_strIconImageSmall = panorama:\"file://{images}/heroes/hornet_sm.png\"\n\t\tm_strMinimapImage = panorama:\"file://{images}/heroes/hornet_mm.psd\"\n\t\tm_strIconHeroCard = panorama:\"file://{images}/heroes/hornet_card.psd\"\n\t\tm_strIconHeroCardCritical = panorama:\"file://{images}/heroes/hornet_card_critical.psd\"\n\t\tm_strIconHeroCardGloat = panorama:\"file://{images}/heroes/hornet_card_gloat.psd\"\n\t}\n\thero_haze = \n\t{\n\t\tm_strIconImageSmall = panorama:\"file://{images}/heroes/haze_sm.psd\"\n\t}\n}\n";
+        let t = hero_image_targets(vdata, "hornet");
+        let get = |k: &str| t.iter().find(|(kind, _)| *kind == k).map(|(_, p)| p.as_str());
+        // Vindicta's small icon is compiled from a PNG - the reported bug.
+        assert_eq!(get("sm"), Some("panorama/images/heroes/hornet_sm_png.vtex_c"));
+        assert_eq!(get("mm"), Some("panorama/images/heroes/hornet_mm_psd.vtex_c"));
+        assert_eq!(get("card"), Some("panorama/images/heroes/hornet_card_psd.vtex_c"));
+        assert_eq!(get("card_critical"), Some("panorama/images/heroes/hornet_card_critical_psd.vtex_c"));
+        assert_eq!(get("card_gloat"), Some("panorama/images/heroes/hornet_card_gloat_psd.vtex_c"));
+        // The next hero's block does not leak in.
+        assert_eq!(hero_image_targets(vdata, "haze"), vec![("sm", "panorama/images/heroes/haze_sm_psd.vtex_c".to_string())]);
+        // Candidates: declared first, then the psd / png conventions; a slot
+        // the vdata never lists still gets both conventional names.
+        let c = hero_image_kind_candidates(vdata, "hornet", "hornet");
+        let of = |k: &str| c.iter().filter(|(kind, _)| *kind == k).map(|(_, p)| p.as_str()).collect::<Vec<_>>();
+        assert_eq!(of("sm"), vec!["panorama/images/heroes/hornet_sm_png.vtex_c", "panorama/images/heroes/hornet_sm_psd.vtex_c"]);
+        assert_eq!(of("mm"), vec!["panorama/images/heroes/hornet_mm_psd.vtex_c", "panorama/images/heroes/hornet_mm_png.vtex_c"]);
+        assert_eq!(of("vertical"), vec!["panorama/images/heroes/hornet_vertical_psd.vtex_c", "panorama/images/heroes/hornet_vertical_png.vtex_c"]);
+    }
+
+    /// Live-pak smoke test of everything the Heroes tab derives per hero:
+    /// roster membership (vdata flags + a decoded card), ability cards with
+    /// decoded icons, sound events folded onto them, the hero's own
+    /// sound-event file, the voice-line file and the card / background /
+    /// name-logo images. Run after a patch (new hero): all released heroes by
+    /// default, or `EIM_HERO=ratking` (comma list) to focus and FAIL on gaps.
+    ///   EIM_HERO=ratking cargo test -p app --lib -- --ignored e2e_hero_smoke_live --nocapture
+    #[test]
+    #[ignore]
+    fn e2e_hero_smoke_live() {
+        let helper = r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\tools\vpk-helper\dist\vpk-helper.exe";
+        let pak = r"D:\SteamLibrary\steamapps\common\Deadlock\game\citadel\pak01_dir.vpk";
+        if !std::path::Path::new(helper).exists() || !std::path::Path::new(pak).exists() {
+            eprintln!("skipping: helper/pak not present");
+            return;
+        }
+        let base = std::env::temp_dir().join("eim_hero_smoke").join("hero_portraits");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        // Fresh from the live pak on purpose (no cache reuse): this is the
+        // "did the patch break a hero" check.
+        let vdata = base.join("heroes.vdata");
+        crate::vpk::decompile_from_vpk(helper, pak, "scripts/heroes.vdata_c", &vdata.to_string_lossy()).expect("heroes.vdata");
+        crate::vpk::heroes(helper, pak, &base.to_string_lossy()).expect("portrait decode");
+        let heroes = parse_heroes_vdata(&std::fs::read_to_string(&vdata).unwrap());
+        let focus: Option<Vec<String>> = std::env::var("EIM_HERO")
+            .ok()
+            .map(|v| v.split(',').map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect());
+        // Same rules the roster applies: flags, denylist, and a real decoded
+        // card (the WIP heroes in vdata have no card yet and never show).
+        let card_of = |h: &HeroInfo| {
+            let stem = h.card_code.clone().unwrap_or_else(|| h.code.clone());
+            let png = base.join(format!("{stem}.png"));
+            (stem, png.exists() && std::fs::metadata(&png).map(|m| m.len() >= 4000).unwrap_or(false))
+        };
+        let vtext = std::fs::read_to_string(&vdata).unwrap();
+        let released: Vec<&HeroInfo> = heroes
+            .iter()
+            .filter(|h| !h.disabled && !h.in_dev && !HERO_CODE_DENYLIST.contains(&h.code.as_str()))
+            .filter(|h| !hero_bound_abilities(&vtext, &h.code).is_empty())
+            .filter(|h| card_of(h).1)
+            .filter(|h| focus.as_ref().map_or(true, |f| f.contains(&h.code)))
+            .collect();
+        if let Some(f) = &focus {
+            for code in f {
+                assert!(heroes.iter().any(|h| &h.code == code), "{code}: not in heroes.vdata at all");
+                assert!(released.iter().any(|h| &h.code == code), "{code}: in vdata but the roster hides it (disabled / in development / no abilities bound / no card art yet)");
+            }
+        }
+        let images = crate::vpk::list(helper, pak, Some("panorama/images/heroes/")).expect("list images");
+        let sounds = crate::vpk::list(helper, pak, Some("soundevents/")).expect("list soundevents");
+        let has = |list: &Vec<String>, rel: &str| list.iter().any(|p| p.eq_ignore_ascii_case(rel));
+        let mut problems: Vec<String> = Vec::new();
+        println!("{:<14} {:>5} {:>5} {:>6}  card bg name snd vo", "hero", "abil", "icons", "events");
+        for h in &released {
+            let code = &h.code;
+            let (stem, card_ok) = card_of(h);
+            let logo = h.name.clone().unwrap_or_else(|| stem.clone());
+            let bg_ok = [stem.as_str(), logo.as_str(), code.as_str()]
+                .iter()
+                .any(|s| has(&images, &format!("panorama/images/heroes/backgrounds/{s}_bg_psd.vtex_c")));
+            let name_ok = [logo.as_str(), stem.as_str(), code.as_str()]
+                .iter()
+                .any(|s| has(&images, &format!("panorama/images/heroes/hero_names/{s}.vsvg_c")));
+            let vo_ok = has(&sounds, &format!("soundevents/vo/generated_vo_hero_{code}.vsndevts_c"));
+            let cards = match hero_detail_at(&base, helper, pak, code, Some(true)) {
+                Ok(c) => c,
+                Err(e) => {
+                    problems.push(format!("{code}: hero_detail failed: {e}"));
+                    println!("{code:<14} detail FAILED: {e}");
+                    continue;
+                }
+            };
+            let icons = cards
+                .iter()
+                .filter(|c| c.icon_path.as_deref().map(|p| std::path::Path::new(p).exists()).unwrap_or(false))
+                .count();
+            let events: usize = cards.iter().map(|c| c.sounds.len()).sum();
+            // Every image the vdata declares (card / critical / gloat / small /
+            // minimap) must exist at the compiled name derived from it.
+            for (kind, target) in hero_image_targets(&vtext, code) {
+                if !has(&images, &target) {
+                    problems.push(format!("{code}: declared {kind} image {target} missing"));
+                }
+            }
+            // The "More sounds" file, resolved the way the tab resolves it.
+            let snd_rel = hero_sound_relpath(&base, helper, pak, code);
+            let snd_ok = has(&sounds, &format!("{snd_rel}_c"));
+            println!(
+                "{code:<14} {:>5} {:>5} {:>6}  {}    {}  {}    {}   {}",
+                cards.len(), icons, events,
+                if card_ok { "ok" } else { "--" }, if bg_ok { "ok" } else { "--" },
+                if name_ok { "ok" } else { "--" }, if snd_ok { "ok" } else { "--" }, if vo_ok { "ok" } else { "--" }
+            );
+            if cards.is_empty() { problems.push(format!("{code}: no ability cards")); }
+            if icons < cards.len() { problems.push(format!("{code}: {} of {} ability icons missing", cards.len() - icons, cards.len())); }
+            if events == 0 { problems.push(format!("{code}: no sound events on any card")); }
+            if !card_ok { problems.push(format!("{code}: card portrait missing (stem {stem})")); }
+            if !snd_ok { problems.push(format!("{code}: More-sounds file {snd_rel} missing")); }
+            if !vo_ok { problems.push(format!("{code}: voice-line file missing")); }
+            if !bg_ok { problems.push(format!("{code}: background image missing (soft)")); }
+            if !name_ok { problems.push(format!("{code}: name logo missing (soft)")); }
+        }
+        println!("--- {} hero(s) checked, {} finding(s)", released.len(), problems.len());
+        for p in &problems { println!("  {p}"); }
+        // Focused runs fail on any hard gap; the all-heroes sweep only reports
+        // (a few WIP heroes legitimately lack a logo or background).
+        if focus.is_some() {
+            let hard: Vec<&String> = problems.iter().filter(|p| !p.ends_with("(soft)")).collect();
+            assert!(hard.is_empty(), "hard gaps: {hard:?}");
+        }
+    }
+
     #[test]
     #[ignore]
     fn e2e_hero_cards_fold_rules() {

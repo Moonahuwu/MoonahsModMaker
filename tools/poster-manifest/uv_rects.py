@@ -23,11 +23,24 @@ def load_maps(rects_dir):
             for r in rs:
                 # Wrapped UVs: geometry often addresses the atlas at v -2..-1 etc.
                 # Shift the rect into its own period; a rect spanning a period
-                # boundary is a tiling decal, not a poster - skip it.
+                # boundary is a tiling decal, not a poster - skip it. But a quad
+                # that merely OVERSHOOTS the edge is a real placement: the
+                # hideout's big fireplace portrait is one full-sheet quad with
+                # u 0..1.031, and skipping it flagged the Patron Portrait
+                # "unused" (hidden in the app). Clamp a small edge overshoot, or
+                # a quad that covers essentially one whole period.
                 import math
                 du, dv = math.floor(r['u0']), math.floor(r['v0'])
                 u0, u1, v0, v1 = r['u0'] - du, r['u1'] - du, r['v0'] - dv, r['v1'] - dv
-                if u1 > 1.001 or v1 > 1.001:
+                def clamp_edge(lo, hi):
+                    if hi <= 1.001:
+                        return hi
+                    span = hi - lo
+                    if hi <= 1.05 or (0.95 <= span <= 1.1):
+                        return 1.0
+                    return None
+                u1, v1 = clamp_edge(u0, u1), clamp_edge(v0, v1)
+                if u1 is None or v1 is None:
                     continue
                 pos = r.get('pos')  # model-space bounds [x0,y0,z0,x1,y1,z1] or None
                 for m in (r.get('models') or ['?']):

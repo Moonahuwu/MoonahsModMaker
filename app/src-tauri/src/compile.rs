@@ -6121,44 +6121,54 @@ mod tests {
         assert!(!report2.steps.iter().any(|s| s.detail.contains("refreshed from the game pak")), "re-fetched although fresh");
     }
 
-    /// Builds the "rainbow shield" HUD mod (2026-09-30 request): the shield
-    /// fill inside the health bar, the small shield bar and the shielded
-    /// health / shield numbers flow through a soft rainbow. Pure panorama CSS
-    /// (whole-file UI overrides of the live game's hud_health /
-    /// hud_health_container stylesheets), no textures.
+    /// Builds the "rainbow shield" HUD mod (2026-09-30 request, extended
+    /// 10-01): the shield fill inside the health bar, the small shield bar and
+    /// the shielded health / shield numbers flow through a soft rainbow; the
+    /// health bar FRAME tints along while shielded (the health fill itself
+    /// stays vanilla so health reads distinctly); the over-the-head shield
+    /// segment on every hero carries the same rainbow; the Rejuvenator badge
+    /// rocks and glows; a NEW barrier squeezes in - the segment scales up
+    /// from its bottom edge, the boundary between current health and the
+    /// empty bar - stacked with the rainbow flow (the game stacks animations
+    /// the same way: `animation-name: KillAppear, Groove1`); shield fills
+    /// ease briefly when they shrink. (A shatter flash was tried and dropped.)
+    /// Readability on OTHER heroes' bars (10-01): an always-on / critical-pop
+    /// HP number was tried and SCRAPPED - the engine anchors the floating
+    /// damage numbers to that label (`#UnitHealthbarValue`), so any move of
+    /// it drags the damage readout along, and vanilla's own hit fade-in made
+    /// it noisy. Nothing in either pak touches that label now. The bar's
+    /// own tick lines (`#UnitHealthbarLines .line_large/.line_small`, placed
+    /// by the game at FIXED health intervals - the absolute-HP segmentation a
+    /// stylesheet could never compute) are drawn bold instead of near
+    /// invisible, so a tank's remaining chunks read from range.
+    /// Pure panorama CSS (whole-file UI overrides of the live game's
+    /// stylesheets), no textures.
     ///
-    /// What Panorama actually animates smoothly, learned the hard way in game:
-    /// - gradient values in keyframes do NOT interpolate - they SWITCH at each
-    ///   keyframe (v1/v3 "changed every half second"; the game's own
-    ///   'deltaswipe' steps the same way);
-    /// - `hue-rotation` in keyframes does not animate in the HUD at all (v2);
-    /// - solid `background-color`, `color` and `wash-color` interpolate per
-    ///   frame (health_pulse, regenBoost, Outer_Flash in the game's CSS).
-    /// So v4: the fill keeps a STATIC soft vertical gradient (white at the tip
-    /// to a light grey at the base - the spatial shading) and its colour is
-    /// driven by an animated `wash-color` through the palette; the numbers
-    /// animate solid `color` through the same palette on the same timeline.
-    /// The fill's tip is white x wash = the wash colour = the number's colour,
-    /// so the number is the exact continuation of the fill at every instant,
-    /// and a thin shield just shows the top of the shading (nothing to squish).
-    /// Output: <repo>/output/rainbow_shield/mine/pak01_dir.vpk. Run with:
+    /// What Panorama actually animates smoothly, learned in game:
+    /// - gradient values in keyframes do NOT interpolate (they switch);
+    /// - `hue-rotation` in keyframes does not animate in the HUD;
+    /// - solid `background-color`, `color`, `wash-color`, `brightness`,
+    ///   transforms and `pre-transform-scale2d` interpolate per frame.
+    /// So every moving colour here is a solid value: fills keep a STATIC soft
+    /// shading (white tip -> light grey base) coloured by an animated
+    /// `wash-color`; numbers animate solid `color` on the same timeline, so a
+    /// fill's tip (white x wash) always equals the number's colour.
+    /// Two paks: <repo>/output/rainbow_shield/mine/pak01_dir.vpk (shield only)
+    /// and <repo>/output/rainbow_shield_hp/mine/pak01_dir.vpk (shield + the
+    /// enemy-bar readability). Run with:
     ///   cargo test -p app --lib -- --ignored build_rainbow_shield_mod --nocapture
     #[test]
     #[ignore]
     fn build_rainbow_shield_mod() {
-        let mut cfg = e2e_base_cfg("eim_rainbow_shield_addon", "eim_rainbow_shield_tmp");
-        cfg.output_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../output/rainbow_shield").into();
-        let _ = std::fs::remove_dir_all(&cfg.output_dir);
-        let helper = cfg.vpk_helper_path.clone().unwrap();
-        let pak = cfg.pak_path.clone().unwrap();
         let tmp = std::env::temp_dir().join("eim_rainbow_shield_src");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
 
-        // Soft pastels around the vanilla shield cyan: cyan, periwinkle,
-        // orchid, mint, and back. Six stops so no hop is bigger than the rest.
-        let colors = ["#7ff0ff", "#9fb6ff", "#f2a8ff", "#ffb8c8", "#a8ffd4", "#7ff0ff"];
-        let keyframes = |name: &str, prop: &str| {
+        // Soft pastels around the vanilla shield cyan (fills + numbers) and a
+        // deeper set of the same hues for the frame so it stays an outline.
+        let pastel = ["#7ff0ff", "#9fb6ff", "#f2a8ff", "#ffb8c8", "#a8ffd4", "#7ff0ff"];
+        let deep = ["#2a8a99", "#3d55a8", "#8c3d99", "#a04a60", "#3d9970", "#2a8a99"];
+        let cycle = |name: &str, prop: &str, colors: &[&str]| {
             let mut out = format!("@keyframes '{name}'{{");
             let last = colors.len() - 1;
             for (i, c) in colors.iter().enumerate() {
@@ -6167,53 +6177,196 @@ mod tests {
             out.push('}');
             out
         };
-        let anim = |name: &str| {
+        let flow = |name: &str| {
             format!("animation-name: {name};animation-duration: 2.4s;animation-timing-function: ease-in-out;animation-iteration-count: infinite;")
         };
-        let wash_kf = keyframes("eim_rainbow_wash", "wash-color");
-        let text_kf = keyframes("eim_rainbow_text", "color");
-        // The static shading the wash colours: white at the tip (so the tip IS
-        // the wash colour), a light grey at the base.
-        let shading = "background-color: gradient( linear, 0% 0%, 0% 100%, from( #ffffff ), to( #c9d3d8 ) );";
+        let wash_kf = cycle("eim_rainbow_wash", "wash-color", &pastel);
+        let text_kf = cycle("eim_rainbow_text", "color", &pastel);
+        let frame_kf = cycle("eim_rainbow_frame", "wash-color", &deep);
+        // New barrier: the segment squeezes in, scaling up from its bottom edge
+        // (transform-origin 50% 100% = the top of current health), stacked
+        // with the endless rainbow wash on the same panel.
+        let shield_in_kf = "@keyframes 'eim_shield_in'{0%{transform: scaleY(0.05);}100%{transform: scaleY(1);}}";
+        let squeeze_and_flow = "transform-origin: 50% 100%;animation-name: eim_shield_in, eim_rainbow_wash;animation-duration: 0.18s, 2.4s;animation-timing-function: ease-out, ease-in-out;animation-iteration-count: 1, infinite;";
+        // Rejuvenator badge: a slow rock with a glow.
+        let rejuv_kf = "@keyframes 'eim_rejuv'{0%{transform: rotateZ(-8deg);brightness: 1;}50%{transform: rotateZ(8deg);brightness: 1.7;}100%{transform: rotateZ(-8deg);brightness: 1;}}";
+        // Static shading the wash colours (vertical bars: tip white; the
+        // over-the-head bar is horizontal: left white).
+        let shade_v = "background-color: gradient( linear, 0% 0%, 0% 100%, from( #ffffff ), to( #c9d3d8 ) );";
+        let shade_h = "background-color: gradient( linear, 0% 0%, 100% 0%, from( #ffffff ), to( #c9d3d8 ) );";
+        // Shield fills ease when their value changes. Short on purpose: a
+        // barrier appears instantly in game, so a gain must read as instant
+        // while a loss still slides down briefly (a transition cannot run
+        // at different speeds per direction). A shatter from damage adds the
+        // break flash on top, so expiry and shatter still read differently.
+        let ease_size = "transition-property: height, width;transition-duration: 0.12s;transition-timing-function: ease-out;";
+
         let health_extra = format!(
-            "\n/* Moonahs Mod Maker: rainbow shield v4 */\n{wash_kf}{text_kf}\
-             #shield_bar_2 .ProgressBarMiddle{{{shading}wash-color: #7ff0ff;{}}}\
-             #shield_bar .ProgressBarLeft{{{shading}wash-color: #7ff0ff;{}}}\
-             #shield_bar .progress_bar_current{{color: #7ff0ff;{}}}\n",
-            anim("eim_rainbow_wash"),
-            anim("eim_rainbow_wash"),
-            anim("eim_rainbow_text")
+            "\n/* Moonahs Mod Maker: rainbow shield v6 */\n{wash_kf}{text_kf}{frame_kf}{shield_in_kf}{rejuv_kf}\
+             #shield_bar_2 .ProgressBarMiddle{{{shade_v}wash-color: #7ff0ff;{ease_size}{}}}\
+             #shield_bar .ProgressBarLeft{{{shade_v}wash-color: #7ff0ff;{ease_size}{}}}\
+             .HasBulletShield #shield_bar_2 .ProgressBarMiddle,.HasTechShield #shield_bar_2 .ProgressBarMiddle,.shieldActive #shield_bar_2 .ProgressBarMiddle{{{squeeze_and_flow}}}\
+             .HasBulletShield #shield_bar .ProgressBarLeft,.HasTechShield #shield_bar .ProgressBarLeft,.shieldActive #shield_bar .ProgressBarLeft{{{squeeze_and_flow}}}\
+             #shield_bar .progress_bar_current{{color: #7ff0ff;{}}}\
+             .HasBulletShield #health_bar_frame,.HasTechShield #health_bar_frame,.shieldActive #health_bar_frame{{{}}}\
+             .healthLow #health_bar_frame{{animation-name: none;}}\
+             .HasRejuvenator #RejuvenatorContainer{{transform-origin: 50% 50%;{}}}\n",
+            flow("eim_rainbow_wash"),
+            flow("eim_rainbow_wash"),
+            flow("eim_rainbow_text"),
+            flow("eim_rainbow_frame"),
+            flow("eim_rejuv")
         );
         let container_extra = format!(
-            "\n/* Moonahs Mod Maker: rainbow shield v4 */\n{text_kf}\
+            "\n/* Moonahs Mod Maker: rainbow shield v6 */\n{text_kf}\
              .HasBulletShield .currentHealthLabel,.HasTechShield .currentHealthLabel,.shieldActive .currentHealthLabel{{color: #7ff0ff;{}}}\
              #BulletShieldNumbers .progress_bar_current,#TechShieldNumbers .progress_bar_current{{{}}}\n",
-            anim("eim_rainbow_text"),
-            anim("eim_rainbow_text")
+            flow("eim_rainbow_text"),
+            flow("eim_rainbow_text")
         );
+        // Over-the-head bars: the shield segment on every hero. The team /
+        // enemy / friend colour rules outrank a bare id, so match them too.
+        let unit_shield_extra = format!(
+            "\n/* Moonahs Mod Maker: rainbow shield v8 */\n{wash_kf}\
+             #unit_healthbar_bullet_shield,.team1 #unit_healthbar_bullet_shield,.team2 #unit_healthbar_bullet_shield,.enemy #unit_healthbar_bullet_shield,.friend #unit_healthbar_bullet_shield{{{shade_h}wash-color: #7ff0ff;transition-property: width;transition-duration: 0.12s;transition-timing-function: ease-out;{}}}\n",
+            flow("eim_rainbow_wash")
+        );
+        // Enemy-bar readability = only the bold tick marks (the game places
+        // them at fixed health intervals; vanilla draws them nearly invisible).
+        let unit_hp_extra = "/* enemy-bar readability: bold health ticks */\
+             .enemy #UnitHealthbarLines .line_large{width: 3px;opacity: 1;wash-color: rgb(20, 0, 0);}\
+             .enemy #UnitHealthbarLines .line_small{opacity: 0.85;wash-color: rgb(40, 0, 0);}\
+             .friend #UnitHealthbarLines .line_large,.team_neutral #UnitHealthbarLines .line_large{width: 3px;opacity: 1;}\
+             .friend #UnitHealthbarLines .line_small,.team_neutral #UnitHealthbarLines .line_small{opacity: 0.9;}\n".to_string();
 
-        let mut ui = Vec::new();
-        for (rel, extra) in [
-            ("panorama/styles/hud_health.vcss_c", &health_extra),
-            ("panorama/styles/hud_health_container.vcss_c", &container_extra),
-        ] {
-            let out = tmp.join(rel.trim_end_matches("_c").replace('/', "_"));
-            crate::vpk::decompile_from_vpk(&helper, &pak, rel, &out.to_string_lossy()).expect("decompile vanilla css");
-            let mut text = std::fs::read_to_string(&out).expect("read css");
-            assert!(text.contains("#shield_bar") || text.contains("currentHealthLabel"), "unexpected vanilla css for {rel}");
-            text.push_str(extra);
-            ui.push(UiFileCompile { target_rel: rel.into(), text });
+        for (out_name, with_hp) in [("rainbow_shield", false), ("rainbow_shield_hp", true)] {
+            let mut cfg = e2e_base_cfg("eim_rainbow_shield_addon", "eim_rainbow_shield_tmp");
+            cfg.output_dir = format!("{}/../../output/{out_name}", env!("CARGO_MANIFEST_DIR"));
+            let _ = std::fs::remove_dir_all(&cfg.output_dir);
+            let helper = cfg.vpk_helper_path.clone().unwrap();
+            let pak = cfg.pak_path.clone().unwrap();
+            let unit_extra = if with_hp { format!("{unit_shield_extra}{unit_hp_extra}") } else { unit_shield_extra.clone() };
+            let mut ui = Vec::new();
+            for (rel, extra, probe) in [
+                ("panorama/styles/hud_health.vcss_c", &health_extra, "#shield_bar"),
+                ("panorama/styles/hud_health_container.vcss_c", &container_extra, "currentHealthLabel"),
+                ("panorama/styles/unit_status_v2.vcss_c", &unit_extra, "unit_healthbar_bullet_shield"),
+            ] {
+                let out = tmp.join(rel.trim_end_matches("_c").replace('/', "_"));
+                crate::vpk::decompile_from_vpk(&helper, &pak, rel, &out.to_string_lossy()).expect("decompile vanilla css");
+                let mut text = std::fs::read_to_string(&out).expect("read css");
+                assert!(text.contains(probe), "unexpected vanilla css for {rel}: no {probe}");
+                text.push_str(extra);
+                ui.push(UiFileCompile { target_rel: rel.into(), text });
+            }
+            cfg.ui_overrides = ui;
+
+            let report = run(&cfg);
+            for s in &report.steps {
+                println!("[{}] {} :: {}", if s.ok { "OK" } else { "FAIL" }, s.name, s.detail);
+            }
+            assert!(report.ok, "rainbow shield build failed ({out_name})");
+            let vpk = Path::new(&cfg.output_dir).join("mine").join("pak01_dir.vpk");
+            assert!(vpk.exists(), "vpk not produced ({out_name})");
+            println!("{out_name}: {}", vpk.display());
         }
-        cfg.ui_overrides = ui;
+    }
 
+    /// Live sweep of the Wall Art manifest: one replacement on EVERY sheet
+    /// (street posters, signs, graffiti, sigils and the hideout portrait
+    /// sheets) compiled against the live pak + CSDK, checking that each
+    /// material's recompiled `.vmat_c` lands at its vanilla path. Run after a
+    /// game patch or a manifest regen; `EIM_SHEET=a,b` (substring match)
+    /// focuses on some sheets and FAILS on any that break, the full sweep
+    /// reports only.
+    ///   cargo test -p app --lib -- --ignored e2e_poster_sweep_live --nocapture
+    #[test]
+    #[ignore]
+    fn e2e_poster_sweep_live() {
+        let mut cfg = e2e_base_cfg("eim_poster_sweep_addon", "eim_poster_sweep_out");
+        let art = std::env::temp_dir().join("eim_poster_sweep_art.png");
+        let ok = crate::procutil::quiet("ffmpeg")
+            .args(["-y", "-f", "lavfi", "-i", "color=red:size=400x300", "-frames:v", "1"])
+            .arg(&art)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        assert!(ok, "ffmpeg not available to generate test art");
+        let manifest: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../src/data/posterManifest.json")).unwrap(),
+        )
+        .unwrap();
+        let focus: Option<Vec<String>> = std::env::var("EIM_SHEET")
+            .ok()
+            .map(|v| v.split(',').map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect());
+        let mut sheets: Vec<(String, Vec<String>)> = Vec::new();
+        for sh in manifest["sheets"].as_array().unwrap() {
+            let id = sh["id"].as_str().unwrap().to_string();
+            if let Some(f) = &focus {
+                if !f.iter().any(|x| id.to_lowercase().contains(x)) {
+                    continue;
+                }
+            }
+            let materials: Vec<String> = sh["materials"].as_array().unwrap().iter().map(|m| m.as_str().unwrap().to_string()).collect();
+            let (sw, shh) = (sh["width"].as_u64().unwrap_or(2048) as u32, sh["height"].as_u64().unwrap_or(2048) as u32);
+            // A region the game uses when there is one, else any region, else a
+            // corner of the sheet (region-less sheets take custom regions).
+            let posters = sh["posters"].as_array().cloned().unwrap_or_default();
+            let pick = posters
+                .iter()
+                .find(|p| !p["unused"].as_bool().unwrap_or(false))
+                .or_else(|| posters.first());
+            let (x, y, w, h, cov) = match pick {
+                Some(p) => (
+                    p["x"].as_u64().unwrap_or(0) as u32,
+                    p["y"].as_u64().unwrap_or(0) as u32,
+                    p["w"].as_u64().unwrap_or(64) as u32,
+                    p["h"].as_u64().unwrap_or(64) as u32,
+                    p["alphaCoverage"].as_f64().unwrap_or(1.0) as f32,
+                ),
+                None => (0, 0, 256.min(sw), 256.min(shh), 1.0),
+            };
+            cfg.poster_overrides.push(PosterCompile {
+                sheet_id: id.clone(),
+                materials: materials.clone(),
+                label: format!("sweep {id}"),
+                x,
+                y,
+                w,
+                h,
+                alpha_coverage: cov,
+                source_image: art.to_string_lossy().into_owned(),
+                fit: "cover".into(),
+                rotation: 0,
+                erase: false,
+                current_hash: None,
+                last_compiled_hash: None,
+            });
+            sheets.push((id, materials));
+        }
+        assert!(!sheets.is_empty(), "no sheets matched");
         let report = run(&cfg);
-        for s in &report.steps {
-            println!("[{}] {} :: {}", if s.ok { "OK" } else { "FAIL" }, s.name, s.detail);
+        for s in report.steps.iter().filter(|s| !s.ok) {
+            println!("[FAIL] {} :: {}", s.name, s.detail.chars().take(300).collect::<String>());
         }
-        assert!(report.ok, "rainbow shield build failed");
-        let vpk = Path::new(&cfg.output_dir).join("mine").join("pak01_dir.vpk");
-        assert!(vpk.exists(), "vpk not produced");
-        println!("rainbow shield mod: {}", vpk.display());
+        let staging = Path::new(&cfg.output_dir).join("mine").join("_staging");
+        let mut broken: Vec<String> = Vec::new();
+        for (id, materials) in &sheets {
+            let missing: Vec<&String> = materials
+                .iter()
+                .filter(|m| !staging.join(format!("{m}_c").replace('/', std::path::MAIN_SEPARATOR_STR)).is_file())
+                .collect();
+            if !missing.is_empty() {
+                broken.push(format!("{id}: no compiled {}", missing.iter().map(|m| m.as_str()).collect::<Vec<_>>().join(", ")));
+            }
+        }
+        println!("--- {} sheet(s) compiled, {} broken", sheets.len(), broken.len());
+        for b in &broken {
+            println!("  {b}");
+        }
+        if focus.is_some() {
+            assert!(broken.is_empty(), "sheets failed: {broken:?}");
+        }
     }
 
     /// Full end-to-end pipeline against the local CSDK + ffmpeg + ValvePak.

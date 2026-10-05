@@ -2,6 +2,30 @@
 
 All notable changes since 1.0.4. Download: https://gamebanana.com/tools/23422
 
+## 1.5.1 (2026-10-04)
+
+### Wall Art: what the game shows now, and the fireplace portrait is back
+- The hideout's big fireplace painting (the Patron Portrait) was hidden as "unused": its picture overshoots the edge of its texture by a sliver, and the scan that decides what is in the game threw such placements away. It is offered again.
+- Art shown on props is now counted as in game. The scan only looked at wall geometry, so posters shown on prop models (the subway advert posters: Crab Eyes, Rescue Beam, White Crow, the subway map; the campus and museum banners; a billboard) were marked unused or had no region. It now checks every model the maps reference, including the alternate skins a model can wear.
+- Seven sheets the rebuilt Midtown uses were never offered and are added: the Chinatown signs (23 signs), three newer sign composites, a garage decal sheet and a campus banner under Signs & Billboards, and a new tag sheet under Graffiti. 50 new regions in total.
+- Used and unused are re-checked against the 2026-10-02 maps. Every one of the 85 sheets, hideout paintings included, was compiled against the live game as a check.
+
+### Animated Art: Midtown paintings moved to a new host after the map rebuild
+- The hideout's animated portrait is unaffected by the patch: the prop it rides on is unchanged, and it was compiled against the live game again as a check.
+- The 2026-09-29 Midtown rebuild baked the two props the Midtown animated signs rode on (the church archway and a trash can lid) into the map's scenery, so none of the 16 signs showed any more. 1.5 wrongly said the host was still in the map.
+- The Hidden King side is back for the five surfaces the rebuilt map still has: Library Paintings #1 to #4 and the T2 Camp Painting. They now ride the plaza gate, the one prop left in the map that can host animated art. Every painting's position is measured against the map on a real compile (within 0.01 units), and art you had set on those five carries over. Not checked in game yet, so the group is marked beta.
+- The other six Hidden King surfaces (the ad frames and the standee) are gone from the rebuilt map. Art saved on them is kept and shown dimmed so you can remove it, and is left out of your packs.
+- The five Archmother signs stay switched off: that side of the map has no prop that can host them. The tab says so, takes no new art there, and leaves saved art out of your packs.
+
+### Heroes: Vindicta's Small icon can be replaced
+- Vindicta's Small icon slot was missing (only Minimap showed). Hers is the one hero image the game builds from a PNG instead of a PSD, and the app assembled every slot's file name assuming PSD, so it never found it. Each image slot now reads its real file from the game's own hero data, with the old naming as a fallback. Checked against the live game for all 39 heroes: every declared card, critical, gloat, small and minimap image resolves.
+
+### Heroes: unreleased heroes no longer clutter the grid
+- Since the 2026-09-29 patch the game data carries five heroes that are not out yet (no abilities, only a small placeholder portrait). They showed up on the Heroes grid and their page could only fail with "no bound abilities". A hero with no abilities is not playable and is now left off the roster; Ratking, who did get his kit on 2026-10-02, shows as normal.
+
+### Heroes: Abrams, Lady Geist and Pocket get their "More sounds" back
+- Those three heroes' sound files live under older names in the game (abrams, geist, pocket) while their internal codenames differ (atlas, ghost, synth). The "More sounds" section looked for a file named after the codename, found nothing, and cached that empty answer, so the Gunfire / Movement / other rows never appeared for them. The file is now found the same way the ability cards find their sounds. Ratking (added 2026-10-02) was checked end to end: roster, 4 ability cards with icons, 36 sound events, voice lines and card art all resolve with no changes.
+
 ## 1.5 (2026-09-30)
 
 ### Reverb no longer makes the sound almost silent

@@ -334,7 +334,13 @@ export function AnimatedArt({
       </p>
 
       {DYNPAINT_TARGETS.map((t) => {
-        const activeCount = t.panels.filter((p) => entryOf(t.id, p.id)?.sourceMedia).length;
+        // Surfaces gone from the current map only show while they still hold
+        // saved art (so it can be seen and removed); they never count as live.
+        const shown = t.panels.filter((p) => !p.gone || entryOf(t.id, p.id)?.sourceMedia);
+        const activeCount = shown.filter(
+          (p) => !p.gone && entryOf(t.id, p.id)?.sourceMedia,
+        ).length;
+        const goneCount = shown.filter((p) => p.gone).length;
         const sel = selected && selected.t === t.id ? entryOf(t.id, selected.p) : undefined;
         const selPanel =
           sel && selected ? t.panels.find((p) => p.id === selected.p) : undefined;
@@ -355,7 +361,7 @@ export function AnimatedArt({
                 <h3 className="text-sm font-semibold text-zinc-200">{t.name}</h3>
               )}
               <span className="text-[11px] text-zinc-600">{t.where}</span>
-              {t.beta && (
+              {t.beta && !t.offline && (
                 <span
                   className="rounded bg-amber-500/15 px-1.5 text-[10px] font-medium text-amber-300"
                   title="Newer surfaces, still being checked in game"
@@ -363,9 +369,18 @@ export function AnimatedArt({
                   beta
                 </span>
               )}
+              {t.offline && (
+                <span className="rounded bg-amber-500/15 px-1.5 text-[10px] font-semibold text-amber-300">
+                  not in the current map
+                </span>
+              )}
               {activeCount > 0 && (
-                <span className="rounded bg-violet-500/15 px-1.5 text-[10px] font-semibold text-violet-300">
-                  {activeCount} animated
+                <span
+                  className={`rounded px-1.5 text-[10px] font-semibold ${
+                    t.offline ? "bg-zinc-700/40 text-zinc-400" : "bg-violet-500/15 text-violet-300"
+                  }`}
+                >
+                  {t.offline ? `${activeCount} saved, not in packs` : `${activeCount} animated`}
                 </span>
               )}
               <div className="flex-1" />
@@ -385,27 +400,54 @@ export function AnimatedArt({
               )}
             </div>
 
-            <div className="mt-3 flex flex-wrap items-start gap-3">
-              {t.panels.map((p) => {
+            {t.offline && (
+              <p className="mt-2 max-w-3xl rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-200">
+                {t.offline}
+              </p>
+            )}
+            <div
+              className={`mt-3 flex flex-wrap items-start gap-3 ${t.offline ? "opacity-50" : ""}`}
+            >
+              {shown.map((p) => {
                 const entry = entryOf(t.id, p.id);
                 const isSel = !!selected && selected.t === t.id && selected.p === p.id;
                 return (
-                  <SurfaceTile
+                  <div
                     key={p.id}
+                    className={p.gone ? "opacity-50" : undefined}
+                    title={
+                      p.gone
+                        ? "This surface is gone from the current map - it is left out of your packs"
+                        : undefined
+                    }
+                  >
+                  <SurfaceTile
                     target={t}
                     panel={p}
                     entry={entry}
                     selected={isSel}
                     roomLightOn={roomLight}
                     onPick={() => {
-                      if (!entry?.sourceMedia) void pick(t, p.id);
-                      else setSelected(isSel ? null : { t: t.id, p: p.id });
+                      // An offline host takes no new art; what is already
+                      // set stays reachable (tune it, or remove it).
+                      if (!entry?.sourceMedia) {
+                        if (!t.offline) void pick(t, p.id);
+                      } else setSelected(isSel ? null : { t: t.id, p: p.id });
                     }}
                     ffmpegPath={ffmpegPath}
                   />
+                  </div>
                 );
               })}
             </div>
+            {goneCount > 0 && (
+              <p className="mt-2 text-[10px] text-amber-300/80">
+                {goneCount === 1
+                  ? "1 saved surface is gone from the current map and is left out of your packs."
+                  : `${goneCount} saved surfaces are gone from the current map and are left out of your packs.`}{" "}
+                Click one to remove it.
+              </p>
+            )}
             {activeCount > 2 && (
               <p className="mt-2 text-[10px] text-amber-300/80">
                 Many animated surfaces here: per-surface texture size steps down (3-4

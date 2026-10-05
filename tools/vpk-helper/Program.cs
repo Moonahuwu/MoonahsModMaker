@@ -45,6 +45,7 @@ static int Dispatch(string[] args)
             "texturebatch" => TextureBatch(args),
             "heroes" => Heroes(args),
             "worldrects" => WorldRects(args),
+            "matrefs" => MatRefs(args),
             "dmxsplit" => DmxSplit(args),
             "webpframes" => WebpFrames(args),
             _ => Unknown(args[0]),
@@ -561,7 +562,7 @@ static int WorldRects(string[] args)
 {
     if (args.Length < 4)
     {
-        Console.Error.WriteLine("usage: worldrects <mapVpk> <mainPak> <out.json> [materialPrefixes,comma,separated]");
+        Console.Error.WriteLine("usage: worldrects <mapVpk> <mainPak> <out.json> [materialPrefixes,comma,separated] [extraModels.txt]");
         return 2;
     }
     var mapVpk = Path.GetFullPath(args[1]);
@@ -597,13 +598,17 @@ static int WorldRects(string[] args)
 
     // 1) The world + its nodes -> every renderable model path.
     var worldEntry = map.Entries.Values.SelectMany(x => x).FirstOrDefault(e => e.GetFullPath().Replace('\\', '/').EndsWith("/world.vwrld_c"));
-    if (worldEntry == null) { Console.Error.WriteLine("no world.vwrld_c in the map vpk"); return 1; }
-    var worldPath = worldEntry.GetFullPath().Replace('\\', '/');
-    using var worldRes = LoadRes(worldPath);
-    var world = (World)worldRes.DataBlock;
+    // A vpk with no world - a pack of loose models, e.g. our own compiled
+    // animated-art hosts - is fine when the caller lists the models to scan:
+    // that is how a quad's placement is measured before it ships.
+    var modelsOnly = worldEntry == null && args.Length > 5 && File.Exists(args[5]);
+    if (worldEntry == null && !modelsOnly) { Console.Error.WriteLine("no world.vwrld_c in the map vpk"); return 1; }
+    var worldPath = worldEntry == null ? "" : worldEntry.GetFullPath().Replace('\\', '/');
+    using var worldRes = worldEntry == null ? null : LoadRes(worldPath);
+    var world = worldRes == null ? null : (World)worldRes.DataBlock;
     var modelPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     var nodeCount = 0;
-    foreach (var nodeName in world.GetWorldNodeNames())
+    foreach (var nodeName in world?.GetWorldNodeNames() ?? Enumerable.Empty<string>())
     {
         using var nodeRes = LoadRes(nodeName + ".vwnod_c");
         if (nodeRes == null) { Console.Error.WriteLine($"missing world node {nodeName}"); continue; }
@@ -623,7 +628,7 @@ static int WorldRects(string[] args)
     var entModels = 0;
     try
     {
-        foreach (var lumpName in world.GetEntityLumpNames())
+        foreach (var lumpName in world?.GetEntityLumpNames() ?? Enumerable.Empty<string>())
         {
             using var lumpRes = LoadRes(lumpName + ".vents_c");
             if (lumpRes == null) continue;
@@ -639,11 +644,35 @@ static int WorldRects(string[] args)
         }
     }
     catch (Exception ex) { Console.Error.WriteLine("entity scan skipped: " + ex.Message); }
-    Console.Error.WriteLine($"{nodeCount} world node(s), {modelPaths.Count} distinct model(s) ({entModels} from entities)");
+    // Models the walk above cannot reach: prop classes whose model comes from
+    // game data (vdata subclasses - breakable props, sign props, banners)
+    // instead of a world node or an entity `model` key. The caller mines every
+    // `models/*.vmdl` string out of the map vpk and hands the list in, so a
+    // poster shown only on such a prop still counts as placed (2026-10-04: the
+    // subway advert posters, campus banners and theater posters were all
+    // reported "unused" because of this).
+    var extraModels = 0;
+    if (args.Length > 5 && File.Exists(args[5]))
+    {
+        foreach (var line in File.ReadLines(args[5]))
+        {
+            var m = line.Trim().Replace('\\', '/');
+            if (m.EndsWith(".vmdl", StringComparison.OrdinalIgnoreCase) && modelPaths.Add(m)) extraModels++;
+        }
+    }
+    Console.Error.WriteLine($"{nodeCount} world node(s), {modelPaths.Count} distinct model(s) ({entModels} from entities, {extraModels} from the extra list)");
 
     // 2) Every mesh of every model: draw calls on matching materials -> UV islands.
     var rects = new Dictionary<string, Dictionary<string, (float u0, float v0, float u1, float v1, int quads, HashSet<string> models, float x0, float y0, float z0, float x1, float y1, float z1, bool hasPos)>>(StringComparer.OrdinalIgnoreCase);
     var meshesScanned = 0; var drawCallsHit = 0; var missingModels = 0;
+
+    // Material groups ("skins") of the model being scanned: default-group
+    // material -> the materials other groups put on the same triangles. A
+    // poster case / banner model ships one material in its draw calls and
+    // swaps the art per placement through a skin, so the alternates sample the
+    // very same UV rects (2026-10-04: theater posters, campus banners and the
+    // Broadway boards are only ever reached this way).
+    Dictionary<string, List<string>> currentAlts = null;
 
     void ScanMesh(Mesh mesh, string modelPath)
     {
@@ -688,7 +717,18 @@ static int WorldRects(string[] args)
             {
                 var mat = dc.GetStringProperty("m_material", null) ?? dc.GetStringProperty("m_pMaterial", "");
                 var matLower = mat.Replace('\\', '/').ToLowerInvariant();
-                if (!prefixes.Any(p => matLower.StartsWith(p))) continue;
+                var targets = new List<string>();
+                if (prefixes.Any(p => matLower.StartsWith(p))) targets.Add(mat);
+                if (currentAlts != null && currentAlts.TryGetValue(matLower, out var alts))
+                {
+                    foreach (var alt in alts)
+                    {
+                        var altLower = alt.ToLowerInvariant();
+                        if (prefixes.Any(p => altLower.StartsWith(p)) && !targets.Any(t => t.Equals(alt, StringComparison.OrdinalIgnoreCase)))
+                            targets.Add(alt);
+                    }
+                }
+                if (targets.Count == 0) continue;
                 var vbInfos = dc.GetArray("m_vertexBuffers");
                 if (vbInfos.Count == 0) continue;
                 var vbIndex = (int)vbInfos[0].GetIntegerProperty("m_hBuffer", 0);
@@ -750,17 +790,20 @@ static int WorldRects(string[] args)
                 }
                 if (islands.Count == 0) continue;
                 drawCallsHit++;
-                if (!rects.TryGetValue(mat, out var perMat)) { perMat = new(); rects[mat] = perMat; }
-                foreach (var (root, isl) in islands)
+                foreach (var target in targets)
                 {
-                    if (isl.u0 == float.MaxValue) continue;
-                    var bb = bounds[root];
-                    var hasPos = bb.x0 != float.MaxValue;
-                    // One entry per (model, island): the curation needs each
-                    // placement's pieces individually, with their world extents.
-                    var key = modelPath + "|" + perMat.Count;
-                    perMat[key] = (isl.u0, isl.v0, isl.u1, isl.v1, 1, new HashSet<string> { modelPath },
-                        hasPos ? bb.x0 : 0, hasPos ? bb.y0 : 0, hasPos ? bb.z0 : 0, hasPos ? bb.x1 : 0, hasPos ? bb.y1 : 0, hasPos ? bb.z1 : 0, hasPos);
+                    if (!rects.TryGetValue(target, out var perMat)) { perMat = new(); rects[target] = perMat; }
+                    foreach (var (root, isl) in islands)
+                    {
+                        if (isl.u0 == float.MaxValue) continue;
+                        var bb = bounds[root];
+                        var hasPos = bb.x0 != float.MaxValue;
+                        // One entry per (model, island): the curation needs each
+                        // placement's pieces individually, with their world extents.
+                        var key = modelPath + "|" + perMat.Count;
+                        perMat[key] = (isl.u0, isl.v0, isl.u1, isl.v1, 1, new HashSet<string> { modelPath },
+                            hasPos ? bb.x0 : 0, hasPos ? bb.y0 : 0, hasPos ? bb.z0 : 0, hasPos ? bb.x1 : 0, hasPos ? bb.y1 : 0, hasPos ? bb.z1 : 0, hasPos);
+                    }
                 }
             }
         }
@@ -771,6 +814,31 @@ static int WorldRects(string[] args)
         using var mres = LoadRes(modelPath.EndsWith("_c") ? modelPath : modelPath + "_c");
         if (mres == null) { missingModels++; continue; }
         if (mres.DataBlock is not Model model) continue;
+        currentAlts = null;
+        try
+        {
+            var groups = model.Data.GetArray("m_materialGroups");
+            if (groups != null && groups.Count > 1)
+            {
+                var first = groups[0].GetArray<string>("m_materials");
+                var alts = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+                for (var g = 1; g < groups.Count; g++)
+                {
+                    var other = groups[g].GetArray<string>("m_materials");
+                    if (first == null || other == null) continue;
+                    for (var i = 0; i < first.Length && i < other.Length; i++)
+                    {
+                        var from = (first[i] ?? "").Replace('\\', '/').ToLowerInvariant();
+                        var to = (other[i] ?? "").Replace('\\', '/');
+                        if (from.Length == 0 || to.Length == 0 || from == to.ToLowerInvariant()) continue;
+                        if (!alts.TryGetValue(from, out var list)) { list = new List<string>(); alts[from] = list; }
+                        if (!list.Any(x => x.Equals(to, StringComparison.OrdinalIgnoreCase))) list.Add(to);
+                    }
+                }
+                if (alts.Count > 0) currentAlts = alts;
+            }
+        }
+        catch (Exception ex) { Console.Error.WriteLine($"material groups skipped for {modelPath}: {ex.Message}"); }
         try
         {
             foreach (var (mesh, _, _) in model.GetEmbeddedMeshes()) ScanMesh(mesh, modelPath);
@@ -1248,11 +1316,17 @@ static int WebpFrames(string[] args)
 // every sign can carry its own animation - while "drop dynpaint" yields the
 // bare arch). Vertex data is left as-is; the compiler strips unreferenced
 // vertices.
+//
+// Optional rigid move (yaw about Z in degrees, then a translation): re-hosts a
+// quad authored in one prop's model space onto another prop. Baked into the
+// vertices because the compiler ignores a RenderMeshFile's import_translation
+// / import_rotation for DMX meshes (measured 2026-10-04: identity). Points get
+// R*p + t, normals and tangents R*n.
 static int DmxSplit(string[] args)
 {
     if (args.Length < 5)
     {
-        Console.Error.WriteLine("usage: dmxsplit <in.dmx> <out.dmx> <keep|drop> <materialSubstring> [newMaterialPath]");
+        Console.Error.WriteLine("usage: dmxsplit <in.dmx> <out.dmx> <keep|drop|rename> <materialSubstring> [newMaterialPath] [yawDeg tx ty tz]");
         return 2;
     }
     var inPath = Path.GetFullPath(args[1]);
@@ -1306,12 +1380,104 @@ static int DmxSplit(string[] args)
             faceSets.Add(fs);
         }
     }
+    var moved = 0;
+    if (args.Length > 9)
+    {
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        var yaw = double.Parse(args[6], inv) * Math.PI / 180.0;
+        var (cs, sn) = ((float)Math.Cos(yaw), (float)Math.Sin(yaw));
+        var t = new System.Numerics.Vector3(float.Parse(args[7], inv), float.Parse(args[8], inv), float.Parse(args[9], inv));
+        System.Numerics.Vector3 Rot(System.Numerics.Vector3 v) => new(v.X * cs - v.Y * sn, v.X * sn + v.Y * cs, v.Z);
+        foreach (var el in dm.AllElements.ToList())
+        {
+            if (el.ClassName != "DmeVertexData") continue;
+            foreach (var name in el.Keys.ToList())
+            {
+                var isPoint = name.StartsWith("position", StringComparison.OrdinalIgnoreCase);
+                var isDir = name.StartsWith("normal", StringComparison.OrdinalIgnoreCase)
+                    || name.StartsWith("tangent", StringComparison.OrdinalIgnoreCase)
+                    || name.StartsWith("binormal", StringComparison.OrdinalIgnoreCase);
+                if (!isPoint && !isDir) continue;
+                if (el[name] is IList<System.Numerics.Vector3> v3)
+                {
+                    for (var i = 0; i < v3.Count; i++) v3[i] = isPoint ? Rot(v3[i]) + t : Rot(v3[i]);
+                    if (isPoint) moved += v3.Count;
+                }
+                else if (el[name] is IList<System.Numerics.Vector4> v4 && isDir)
+                {
+                    for (var i = 0; i < v4.Count; i++)
+                    {
+                        var r = Rot(new System.Numerics.Vector3(v4[i].X, v4[i].Y, v4[i].Z));
+                        v4[i] = new System.Numerics.Vector4(r, v4[i].W);
+                    }
+                }
+            }
+        }
+        if (moved == 0)
+        {
+            Console.Error.WriteLine("dmxsplit: move requested but no position data found");
+            return 1;
+        }
+    }
     Directory.CreateDirectory(Path.GetDirectoryName(outPath)!);
     dm.Save(outPath, "binary", 9);
-    Console.WriteLine($"facesets: kept {kept}, removed {removed}, retargeted {renamed}");
+    Console.WriteLine($"facesets: kept {kept}, removed {removed}, retargeted {renamed}" + (moved > 0 ? $", moved {moved} vertex position(s)" : ""));
     return kept > 0 ? 0 : 1;
 }
 
+
+// matrefs <pak> <out.tsv> [pathPrefixes,comma,separated]
+// One line per compiled material: "<material.vmat>\t<texture.vtex>;<texture.vtex>;...".
+// A poster sheet's colour texture is usually sampled by SEVERAL materials (the
+// wall overlay plus "_surface" / prop variants); replacing the art means
+// recompiling every one of them, so the manifest needs the full list. The
+// texture references sit as plain strings in each vmat_c's reference block, so
+// this is a byte scan of every material in one process - no decompile.
+static int MatRefs(string[] args)
+{
+    if (args.Length < 3)
+    {
+        Console.Error.WriteLine("usage: matrefs <pak> <out.tsv> [pathPrefixes,comma,separated]");
+        return 2;
+    }
+    var pak = Path.GetFullPath(args[1]);
+    var outFile = Path.GetFullPath(args[2]);
+    var prefixes = (args.Length > 3 ? args[3] : "")
+        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Select(p => p.Replace('\\', '/').ToLowerInvariant()).ToArray();
+    using var package = new Package();
+    package.Read(pak);
+    var rx = new System.Text.RegularExpressions.Regex(@"[A-Za-z0-9_/\-\.]+\.vtex", System.Text.RegularExpressions.RegexOptions.Compiled);
+    var count = 0;
+    using var w = new StreamWriter(outFile, false, new System.Text.UTF8Encoding(false));
+    if (!package.Entries.TryGetValue("vmat_c", out var mats))
+    {
+        Console.Error.WriteLine("no vmat_c entries in the pak");
+        return 1;
+    }
+    foreach (var e in mats)
+    {
+        var full = e.GetFullPath().Replace('\\', '/');
+        var lower = full.ToLowerInvariant();
+        if (prefixes.Length > 0 && !prefixes.Any(p => lower.StartsWith(p))) continue;
+        byte[] bytes;
+        try { package.ReadEntry(e, out bytes); } catch { continue; }
+        // Latin1 keeps every byte as one char, so offsets and ASCII runs survive.
+        var text = System.Text.Encoding.Latin1.GetString(bytes);
+        var refs = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (System.Text.RegularExpressions.Match m in rx.Matches(text))
+        {
+            var v = m.Value.TrimStart('/', '.');
+            if (v.Contains('/')) refs.Add(v.ToLowerInvariant());
+        }
+        w.Write(full[..^2]); // drop "_c"
+        w.Write('\t');
+        w.WriteLine(string.Join(";", refs));
+        count++;
+    }
+    Console.WriteLine($"{count} material(s) -> {outFile}");
+    return 0;
+}
 
 /// <summary>
 /// A file loader that never lets a compiled SHADER take the extract down.

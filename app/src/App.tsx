@@ -116,6 +116,7 @@ import { ParticleOutline } from "./components/ParticleOutline";
 import { MenuArtTab } from "./components/MenuArtTab";
 import { PostersTab } from "./components/PostersTab";
 import { AnimatedArt } from "./components/AnimatedArt";
+import { liveDynpaints } from "./data/dynpaintTargets";
 import { DigimodTab, DEFAULT_DIGIMOD } from "./components/DigimodTab";
 import { UiMasterTab } from "./components/UiMasterTab";
 import { getCopiedSound } from "./lib/soundClipboard";
@@ -5712,7 +5713,7 @@ export default function App() {
     if (g === EFFECTS) return (p.effectOverrides ?? []).length > 0;
     if (g === POSTERS) return (p.posterOverrides ?? []).length > 0;
     if (g === ANIMATED_ART)
-      return (p.dynpaints ?? []).some((d) => d.enabled !== false && !!d.sourceMedia);
+      return liveDynpaints(p.dynpaints ?? []).some((d) => d.enabled !== false && !!d.sourceMedia);
     if (g === CUSTOM_SERVER)
       return (
         (p.vdataOverrides ?? []).length > 0 ||
@@ -6079,7 +6080,7 @@ export default function App() {
       : g === POSTERS
       ? (project?.posterOverrides ?? []).length
       : g === ANIMATED_ART
-      ? (project?.dynpaints ?? []).filter((d) => d.enabled !== false && !!d.sourceMedia).length
+      ? liveDynpaints(project?.dynpaints ?? []).filter((d) => d.enabled !== false && !!d.sourceMedia).length
       : g === REPLACE_SOUNDS
         ? (project?.soundOverrides ?? []).length
         : g === EFFECTS

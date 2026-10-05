@@ -446,3 +446,28 @@ pub fn dmx_split(
     cmd.args(["dmxsplit", input, output, mode, material_needle, new_material]);
     run(cmd, "dmxsplit")
 }
+
+/// `dmx_split` plus a rigid move of the mesh (yaw in degrees about Z, then a
+/// translation), baked into the vertices: re-hosts a quad authored in one
+/// prop's model space onto another prop. The compiler ignores a vmdl mesh
+/// node's import_translation / import_rotation for DMX meshes, so the move
+/// has to live in the geometry.
+#[allow(clippy::too_many_arguments)]
+pub fn dmx_split_moved(
+    helper_path: &str,
+    input: &str,
+    output: &str,
+    mode: &str,
+    material_needle: &str,
+    new_material: &str,
+    yaw_deg: f64,
+    translation: [f64; 3],
+) -> Result<String, String> {
+    let mut cmd = helper_command(helper_path);
+    cmd.args(["dmxsplit", input, output, mode, material_needle, new_material]);
+    cmd.arg(format!("{yaw_deg:.6}"));
+    for v in translation {
+        cmd.arg(format!("{v:.6}"));
+    }
+    run(cmd, "dmxsplit")
+}

@@ -25,6 +25,13 @@
 //! every quad its OWN per-panel material, and compile a combo vmdl. Proven
 //! vs the CSDK: a 2-panel combo compiles to ~the single-card size (the
 //! compiler strips unreferenced vertices) and references both materials.
+//!
+//! Re-hosted quads (`Rehost`): a map update can bake a host prop into the
+//! scenery (no entity = nothing ticks the expression = dead quads) while the
+//! surfaces it served stay put. The quads then move to another prop: the
+//! bundled card models still supply the geometry, each quad is moved rigidly
+//! from the old host's model space into the new one's, and the new host's own
+//! mesh + collision come out of the game pak at compile time.
 
 use crate::compile::{
     fingerprint, poster_staged_rels, run_resource_compiler_multi, vmat_texture_refs,
@@ -52,6 +59,47 @@ macro_rules! panel {
     };
 }
 
+/// Where a host prop stands in its map: the entity's origin and yaw (every
+/// Midtown host is a yaw-only prop at scale 1).
+#[derive(Clone, Copy)]
+pub(crate) struct HostPose {
+    origin: [f64; 3],
+    yaw: f64,
+}
+
+/// Quads authored in one prop's model space, carried by another prop. The
+/// 2026-09-29 Midtown rebuild baked the church archway into the map's scenery
+/// (no entity any more, so nothing draws a model override), while five of the
+/// surfaces it served stayed exactly where they were. The bundled card models
+/// keep supplying the quad geometry; each quad is moved rigidly from the old
+/// host's space into the new one's: world = R(from.yaw) p + from.origin, then
+/// new-local = R(-to.yaw) (world - to.origin). Measured vs the CSDK: the quads
+/// land within 0.01 units of their old world positions (the e2e re-measures
+/// it on every run).
+pub(crate) struct Rehost {
+    /// The model path the bundled card models were built at - their kits
+    /// decompile under it.
+    card_model_rel: &'static str,
+    /// The original host's placement (goldenboy44's registry).
+    from: HostPose,
+    /// The new host's placement in today's map (its entity lump).
+    to: HostPose,
+}
+
+impl Rehost {
+    /// The rigid move old-host-local -> new-host-local: (yaw in degrees
+    /// about Z, translation applied after the rotation).
+    pub(crate) fn delta(&self) -> (f64, [f64; 3]) {
+        let (s, c) = (-self.to.yaw).to_radians().sin_cos();
+        let d = [
+            self.from.origin[0] - self.to.origin[0],
+            self.from.origin[1] - self.to.origin[1],
+            self.from.origin[2] - self.to.origin[2],
+        ];
+        (self.from.yaw - self.to.yaw, [d[0] * c - d[1] * s, d[0] * s + d[1] * c, d[2]])
+    }
+}
+
 /// One animated-painting host: the material/texture paths our compile owns,
 /// the prop model the quads override, and the surfaces to choose from.
 pub(crate) struct DynTarget {
@@ -77,6 +125,9 @@ pub(crate) struct DynTarget {
     /// room's dimming in as a tint (~R x0.31 G x0.16 B x0.08, measured off
     /// an in-game shot). Midtown is daylight: full albedo, no tint.
     extra_params: &'static str,
+    /// Set when the quads ride a DIFFERENT prop than the one their bundled
+    /// models were authored for.
+    rehost: Option<Rehost>,
     panels: &'static [DynPanel],
 }
 
@@ -93,36 +144,44 @@ const HIDEOUT_PORTRAIT: DynTarget = DynTarget {
         "models/hideout/materials/hideout_portrait_large_selfillum_psd_e2306db2.vtex_c",
     ],
     extra_params: UNLIT_TINTED,
+    rehost: None,
     panels: &[panel!("card1", 512 x 764, "hideout_card1.vmdl_c")],
 };
 
-/// Midtown, church district: 11 sign surfaces riding the church archway (its
-/// stock mesh + collision are rebuilt into the replacement - the server keeps
-/// stock physics, so a client model without collision rubber-bands).
+/// Midtown, library + T2 camp (Amber side): the five painting surfaces that
+/// survived the 2026-09-29 map rebuild, riding the plaza gate - the one
+/// single-instance, this-map-only, un-animated `prop_dynamic` left in the map
+/// (found 2026-10-04 by sweeping every entity lump). Its stock mesh +
+/// collision are rebuilt into the replacement from the game pak: the server
+/// keeps stock physics, so a client model without collision rubber-bands. The
+/// quads still come from the church-archway card models, moved into the
+/// gate's space (`Rehost`). The other six old surfaces (ad frames, standee)
+/// are gone from the map and were dropped.
 const HIDDEN_KING: DynTarget = DynTarget {
-    vmat_rel: "models/architecture/arch_church/materials/dynpaint_hidden_king.vmat",
-    texture_rel: "models/architecture/arch_church/materials/dynpaint_midtown_hidden_king.png",
-    host_model_rel: "models/architecture/arch_church/arch_church_door_large.vmdl_c",
+    vmat_rel: "models/architecture/arch_plaza_01/materials/dynpaint_hidden_king.vmat",
+    texture_rel: "models/architecture/arch_plaza_01/materials/dynpaint_midtown_hidden_king.png",
+    host_model_rel: "models/architecture/arch_plaza_01/arch_plaza_01_gate_structure_01.vmdl_c",
     combo: true,
     blackout: &[],
     extra_params: UNLIT_PLAIN,
+    rehost: Some(Rehost {
+        card_model_rel: "models/architecture/arch_church/arch_church_door_large.vmdl_c",
+        from: HostPose { origin: [8107.992676, -1564.999756, 256.0], yaw: 89.999916 },
+        to: HostPose { origin: [5984.0, -2392.0, 256.0], yaw: 180.03302 },
+    }),
     panels: &[
         panel!("card1", 364 x 720, "hidden_king_card1.vmdl_c"),
         panel!("card2", 364 x 720, "hidden_king_card2.vmdl_c"),
-        panel!("card3", 528 x 496, "hidden_king_card3.vmdl_c"),
-        panel!("card4", 396 x 660, "hidden_king_card4.vmdl_c"),
         panel!("card5", 368 x 708, "hidden_king_card5.vmdl_c"),
-        panel!("card6", 396 x 660, "hidden_king_card6.vmdl_c"),
         panel!("card7", 364 x 720, "hidden_king_card7.vmdl_c"),
-        panel!("card8", 368 x 716, "hidden_king_card8.vmdl_c"),
-        panel!("card9", 748 x 352, "hidden_king_card9.vmdl_c"),
         panel!("card10", 756 x 348, "hidden_king_card10.vmdl_c"),
-        panel!("card11", 552 x 476, "hidden_king_card11.vmdl_c"),
     ],
 };
 
 /// Midtown, bodega corner: 5 sign surfaces riding (of all things) a trash
 /// can lid - the one single-instance clutter model on that side of the map.
+/// DEAD since the 2026-09-29 rebuild (the lid is baked scenery now and that
+/// side has no usable host prop); the frontend registry holds it offline.
 const ARCHMOTHER: DynTarget = DynTarget {
     vmat_rel: "models/clutter/materials/dynpaint_archmother.vmat",
     texture_rel: "models/clutter/materials/dynpaint_midtown_archmother.png",
@@ -130,6 +189,7 @@ const ARCHMOTHER: DynTarget = DynTarget {
     combo: true,
     blackout: &[],
     extra_params: UNLIT_PLAIN,
+    rehost: None,
     panels: &[
         panel!("card1", 1028 x 256, "archmother_card1.vmdl_c"),
         panel!("card2", 1028 x 256, "archmother_card2.vmdl_c"),
@@ -390,6 +450,41 @@ fn probe_fps(ffmpeg: &str, media: &str) -> Option<f64> {
 /// Bump when the kit/combo pipeline changes shape, so stale caches refill.
 const KIT_VERSION: &str = "k1";
 
+/// The model path a target's bundled card models were built at.
+fn card_model_rel(t: &DynTarget) -> &'static str {
+    t.rehost.as_ref().map(|r| r.card_model_rel).unwrap_or(t.host_model_rel)
+}
+
+fn model_stem(model_rel: &str) -> String {
+    Path::new(model_rel)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+fn model_dir(model_rel: &str) -> String {
+    Path::new(model_rel)
+        .parent()
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_default()
+}
+
+/// `len|mtime` of a file, "" when unreadable (cache identity).
+fn file_ident(path: &str) -> String {
+    std::fs::metadata(path)
+        .ok()
+        .map(|m| {
+            let secs = m
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            format!("{}|{secs}", m.len())
+        })
+        .unwrap_or_default()
+}
+
 /// A panel's decompiled kit (its fused mesh DMX + the physics DMX), built
 /// once from the bundled card model and cached under the content tree (a
 /// dot-dir the compiler never touches). The helper's `model` needs a real
@@ -402,7 +497,8 @@ fn ensure_kit(
     host_stem: &str,
 ) -> Result<(PathBuf, PathBuf), String> {
     let dir = content_root.join(".eim_dynpaint_kits").join(host_stem).join(p.id);
-    let internal = t.host_model_rel.trim_end_matches("_c");
+    let card_rel = card_model_rel(t);
+    let internal = card_rel.trim_end_matches("_c");
     let find_parts = |dir: &Path| -> Option<(PathBuf, PathBuf)> {
         let model_dir = dir.join(Path::new(internal).parent()?);
         let mut fused = None;
@@ -426,7 +522,7 @@ fn ensure_kit(
     // Scratch pack: the bundled card model at its real internal path.
     let scratch = std::env::temp_dir().join("eim_dynpaint_pack").join(host_stem).join(p.id);
     let _ = std::fs::remove_dir_all(&scratch);
-    let model_abs = scratch.join("tree").join(t.host_model_rel);
+    let model_abs = scratch.join("tree").join(card_rel);
     if let Some(parent) = model_abs.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -434,15 +530,181 @@ fn ensure_kit(
     let vpk = scratch.join("pack.vpk");
     crate::vpk::pack(helper, &scratch.join("tree").to_string_lossy(), &vpk.to_string_lossy())?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    crate::vpk::model_from_vpk(
-        helper,
-        &vpk.to_string_lossy(),
-        t.host_model_rel,
-        &dir.to_string_lossy(),
-    )?;
+    crate::vpk::model_from_vpk(helper, &vpk.to_string_lossy(), card_rel, &dir.to_string_lossy())?;
     let _ = std::fs::remove_dir_all(&scratch);
     std::fs::write(dir.join(".v"), KIT_VERSION).map_err(|e| e.to_string())?;
     find_parts(&dir).ok_or_else(|| format!("kit for {host_stem}/{} has no mesh DMX", p.id))
+}
+
+/// A re-hosted target's NEW host model, decompiled from the game pak into a
+/// kit (its vmdl + mesh/physics DMX) and cached per game-pak build - a patch
+/// that touches the prop re-kits it. Returns the kit's vmdl.
+fn ensure_stock_kit(
+    helper: &str,
+    pak: &str,
+    content_root: &Path,
+    t: &DynTarget,
+) -> Result<PathBuf, String> {
+    let internal = t.host_model_rel.trim_end_matches("_c");
+    let dir = content_root
+        .join(".eim_dynpaint_kits")
+        .join(model_stem(t.host_model_rel))
+        .join("_stock");
+    let want = format!("{KIT_VERSION}|{}", file_ident(pak));
+    let vmdl = dir.join(internal);
+    if vmdl.is_file()
+        && std::fs::read_to_string(dir.join(".v")).map(|v| v.trim() == want).unwrap_or(false)
+    {
+        return Ok(vmdl);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    crate::vpk::model_from_vpk(helper, pak, t.host_model_rel, &dir.to_string_lossy())?;
+    if !vmdl.is_file() {
+        return Err(format!(
+            "the game no longer has {} - the map's host prop changed, update the app",
+            t.host_model_rel
+        ));
+    }
+    std::fs::write(dir.join(".v"), want).map_err(|e| e.to_string())?;
+    Ok(vmdl)
+}
+
+/// Add RenderMeshFile nodes to the end of a decompiled vmdl's RenderMeshList,
+/// leaving every other node (the stock mesh, the physics shape with its
+/// surface property) exactly as the game's model has it.
+pub(crate) fn splice_render_meshes(vmdl: &str, mesh_rels: &[String]) -> Option<String> {
+    let list = vmdl.find("\"RenderMeshList\"")?;
+    let children = list + vmdl[list..].find("children")?;
+    let open = children + vmdl[children..].find('[')?;
+    let mut depth = 0usize;
+    let mut close = None;
+    for (i, ch) in vmdl[open..].char_indices() {
+        match ch {
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(open + i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let close = close?;
+    // Back up over the bracket's own indentation so the nodes sit on their
+    // own lines above it.
+    let line_start = vmdl[..close].rfind('\n').map(|i| i + 1).unwrap_or(close);
+    let nodes: String = mesh_rels
+        .iter()
+        .map(|rel| {
+            let stem = model_stem(rel);
+            format!(
+                "\t\t\t\t\t{{\n\t\t\t\t\t\t_class = \"RenderMeshFile\"\n\t\t\t\t\t\tname = \"{stem}\"\n\t\t\t\t\t\tfilename = \"{rel}\"\n\t\t\t\t\t}},\n"
+            )
+        })
+        .collect();
+    Some(format!("{}{}{}", &vmdl[..line_start], nodes, &vmdl[line_start..]))
+}
+
+/// A re-hosted combo model's sources: the new host's stock kit copied in,
+/// one moved quad DMX per built surface (each on its own per-panel
+/// material), and the kit's vmdl with the quads spliced in. Returns the
+/// vmdl's absolute path.
+fn stage_rehosted_model(
+    helper: &str,
+    cfg: &CompileConfig,
+    content_root: &Path,
+    t: &DynTarget,
+    rh: &Rehost,
+    built: &[(&DynpaintCompile, &DynPanel)],
+) -> Result<String, String> {
+    let pak = cfg.pak_path.as_deref().filter(|p| !p.is_empty()).ok_or_else(|| {
+        "the game pak is not set in Settings - it is needed to rebuild the host prop".to_string()
+    })?;
+    let kit_vmdl = ensure_stock_kit(helper, pak, content_root, t)?;
+    let model_dir_rel = model_dir(t.host_model_rel);
+    let out_dir = content_root.join(&model_dir_rel);
+    std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
+    // The kit's DMX files, at the paths its vmdl names.
+    let kit_dir = kit_vmdl.parent().ok_or_else(|| "host kit has no folder".to_string())?;
+    for e in std::fs::read_dir(kit_dir).map_err(|e| e.to_string())?.flatten() {
+        if e.path().extension().is_some_and(|x| x.eq_ignore_ascii_case("dmx")) {
+            std::fs::copy(e.path(), out_dir.join(e.file_name())).map_err(|e| e.to_string())?;
+        }
+    }
+    let (yaw, translation) = rh.delta();
+    let card_stem = model_stem(card_model_rel(t));
+    let mut quad_rels: Vec<String> = Vec::new();
+    for (_, p) in built {
+        let (fused, _) = ensure_kit(helper, content_root, t, p, &card_stem)
+            .map_err(|e| format!("{}: {e}", p.id))?;
+        let rel = format!("{model_dir_rel}/dynpaint_quad_{}.dmx", p.id);
+        crate::vpk::dmx_split_moved(
+            helper,
+            &fused.to_string_lossy(),
+            &content_root.join(&rel).to_string_lossy(),
+            "keep",
+            "dynpaint",
+            &panel_rel(t.vmat_rel, t, p.id),
+            yaw,
+            translation,
+        )
+        .map_err(|e| format!("{}: {e}", p.id))?;
+        quad_rels.push(rel);
+    }
+    let text = std::fs::read_to_string(&kit_vmdl).map_err(|e| e.to_string())?;
+    let vmdl = splice_render_meshes(&text, &quad_rels)
+        .ok_or_else(|| "the host prop's model has no render mesh list".to_string())?;
+    let vmdl_abs = content_root.join(t.host_model_rel.trim_end_matches("_c"));
+    std::fs::write(&vmdl_abs, vmdl).map_err(|e| e.to_string())?;
+    Ok(vmdl_abs.to_string_lossy().into_owned())
+}
+
+/// The classic combo sources (quads riding the prop they were authored for):
+/// the base panel's full mesh + quad-only meshes for the rest, every quad on
+/// its own per-panel material. Returns the vmdl's absolute path.
+fn stage_combo_model(
+    helper: &str,
+    content_root: &Path,
+    t: &DynTarget,
+    built: &[(&DynpaintCompile, &DynPanel)],
+) -> Result<String, String> {
+    let host_stem = model_stem(t.host_model_rel);
+    let model_dir_rel = model_dir(t.host_model_rel);
+    let mut mesh_rels: Vec<String> = Vec::new();
+    let mut phys_src: Option<PathBuf> = None;
+    for (i, (_, p)) in built.iter().enumerate() {
+        let (fused, phys) = ensure_kit(helper, content_root, t, p, &host_stem)
+            .map_err(|e| format!("{}: {e}", p.id))?;
+        phys_src.get_or_insert(phys);
+        let (mode, out_name) = if i == 0 {
+            ("rename", format!("dynpaint_base_{}.dmx", p.id))
+        } else {
+            ("keep", format!("dynpaint_quad_{}.dmx", p.id))
+        };
+        let out_rel = format!("{model_dir_rel}/{out_name}");
+        crate::vpk::dmx_split(
+            helper,
+            &fused.to_string_lossy(),
+            &content_root.join(&out_rel).to_string_lossy(),
+            mode,
+            "dynpaint",
+            &panel_rel(t.vmat_rel, t, p.id),
+        )
+        .map_err(|e| format!("{}: {e}", p.id))?;
+        mesh_rels.push(out_rel);
+    }
+    let phys_rel = format!("{model_dir_rel}/dynpaint_phys.dmx");
+    let phys_src = phys_src.ok_or_else(|| "no surface kit to build from".to_string())?;
+    std::fs::copy(&phys_src, content_root.join(&phys_rel)).map_err(|e| e.to_string())?;
+    let vmdl_abs = content_root.join(t.host_model_rel.trim_end_matches("_c"));
+    if let Some(parent) = vmdl_abs.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    std::fs::write(&vmdl_abs, combo_vmdl(&mesh_rels, &phys_rel)).map_err(|e| e.to_string())?;
+    Ok(vmdl_abs.to_string_lossy().into_owned())
 }
 
 /// The combo model source: the base panel's full mesh (stock geometry + its
@@ -751,6 +1013,18 @@ pub fn compile_dynpaints(
 
         // Host identity: every entry's media + knobs + the pipeline version.
         let mut ident_parts = vec![format!("dp3|{KIT_VERSION}|{target_id}")];
+        if let Some(rh) = &t.rehost {
+            // The host's own mesh comes out of the game pak: a game update
+            // (or a corrected placement) rebuilds the model.
+            let (yaw, tr) = rh.delta();
+            ident_parts.push(format!(
+                "rehost|{yaw:.6}|{:.4}|{:.4}|{:.4}|{}",
+                tr[0],
+                tr[1],
+                tr[2],
+                file_ident(cfg.pak_path.as_deref().unwrap_or(""))
+            ));
+        }
         for (dp, p) in &active {
             let meta = std::fs::metadata(&dp.source_media).ok();
             ident_parts.push(format!(
@@ -847,8 +1121,8 @@ pub fn compile_dynpaints(
 
         // The host model.
         if t.combo {
-            // Rebuild: base panel's full mesh + quad-only meshes for the
-            // rest, every quad on its own per-panel material.
+            // Rebuild the host with a quad per surface, each on its own
+            // per-panel material (re-hosted targets: on the new prop).
             let Some(helper) = cfg.vpk_helper_path.as_deref().filter(|h| !h.is_empty()) else {
                 report.soft_fail(
                     format!("animated: {target_id}"),
@@ -856,61 +1130,18 @@ pub fn compile_dynpaints(
                 );
                 continue;
             };
-            let host_stem = Path::new(t.host_model_rel)
-                .file_stem()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_else(|| (*target_id).to_string());
-            let model_dir_rel = Path::new(t.host_model_rel)
-                .parent()
-                .map(|p| p.to_string_lossy().replace('\\', "/"))
-                .unwrap_or_default();
-            let mut mesh_rels: Vec<String> = Vec::new();
-            let mut phys_src: Option<PathBuf> = None;
-            for (i, (dp, p)) in built.iter().enumerate() {
-                let (fused, phys) = match ensure_kit(helper, content_root, t, p, &host_stem) {
-                    Ok(k) => k,
-                    Err(e) => {
-                        report.soft_fail(format!("animated: {} {}", dp.id, p.id), e);
-                        continue 'targets;
-                    }
-                };
-                phys_src.get_or_insert(phys);
-                let (mode, out_name) = if i == 0 {
-                    ("rename", format!("dynpaint_base_{}.dmx", p.id))
-                } else {
-                    ("keep", format!("dynpaint_quad_{}.dmx", p.id))
-                };
-                let out_rel = format!("{model_dir_rel}/{out_name}");
-                let out_abs = content_root.join(&out_rel);
-                if let Err(e) = crate::vpk::dmx_split(
-                    helper,
-                    &fused.to_string_lossy(),
-                    &out_abs.to_string_lossy(),
-                    mode,
-                    "dynpaint",
-                    &panel_rel(t.vmat_rel, t, p.id),
-                ) {
-                    report.soft_fail(format!("animated: {} {}", dp.id, p.id), e);
-                    continue 'targets;
+            let staged = match &t.rehost {
+                Some(rh) => stage_rehosted_model(helper, cfg, content_root, t, rh, &built),
+                None => stage_combo_model(helper, content_root, t, &built),
+            };
+            let vmdl_abs = match staged {
+                Ok(v) => v,
+                Err(e) => {
+                    report.soft_fail(format!("animated: {target_id}"), e);
+                    continue;
                 }
-                mesh_rels.push(out_rel);
-            }
-            let phys_rel = format!("{model_dir_rel}/dynpaint_phys.dmx");
-            let Some(phys_src) = phys_src else { continue };
-            if let Err(e) = std::fs::copy(&phys_src, content_root.join(&phys_rel)) {
-                report.soft_fail(format!("animated: {target_id}"), e.to_string());
-                continue;
-            }
-            let vmdl_rel = t.host_model_rel.trim_end_matches("_c").to_string();
-            let vmdl_abs = content_root.join(&vmdl_rel);
-            if let Some(parent) = vmdl_abs.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            if let Err(e) = std::fs::write(&vmdl_abs, combo_vmdl(&mesh_rels, &phys_rel)) {
-                report.soft_fail(format!("animated: {target_id}"), e.to_string());
-                continue;
-            }
-            match run_resource_compiler_multi(cfg, &[vmdl_abs.to_string_lossy().into_owned()]) {
+            };
+            match run_resource_compiler_multi(cfg, &[vmdl_abs]) {
                 Ok(detail) => {
                     report.ok_step(format!("compile (animated model): {target_id}"), detail)
                 }
@@ -1000,7 +1231,14 @@ mod dynpaint_tests {
                 assert_eq!(u16::from_le_bytes([p.model[4], p.model[5]]), 12, "{id}/{}", p.id);
             }
         }
-        assert_eq!(dyn_target("midtown_hidden_king").unwrap().panels.len(), 11);
+        // Hidden King: the five surfaces the rebuilt Midtown still has,
+        // carried by the plaza gate.
+        let hk = dyn_target("midtown_hidden_king").unwrap();
+        assert_eq!(hk.panels.iter().map(|p| p.id).collect::<Vec<_>>(), ["card1", "card2", "card5", "card7", "card10"]);
+        assert!(hk.rehost.is_some() && hk.host_model_rel.contains("arch_plaza_01_gate_structure_01"));
+        assert_eq!(card_model_rel(hk), "models/architecture/arch_church/arch_church_door_large.vmdl_c");
+        let hideout = dyn_target("hideout_portrait_canvas").unwrap();
+        assert_eq!(card_model_rel(hideout), hideout.host_model_rel);
         assert_eq!(dyn_target("midtown_archmother").unwrap().panels.len(), 5);
         assert!(dyn_target("midtown_archmother").unwrap().blackout.is_empty());
         assert_eq!(dyn_target("nope").map(|_| ()), None);
@@ -1012,12 +1250,12 @@ mod dynpaint_tests {
     fn panel_paths_split_only_for_combo_hosts() {
         let hk = dyn_target("midtown_hidden_king").unwrap();
         assert_eq!(
-            panel_rel(hk.vmat_rel, hk, "card4"),
-            "models/architecture/arch_church/materials/dynpaint_hidden_king_card4.vmat"
+            panel_rel(hk.vmat_rel, hk, "card5"),
+            "models/architecture/arch_plaza_01/materials/dynpaint_hidden_king_card5.vmat"
         );
         assert_eq!(
-            panel_rel(hk.texture_rel, hk, "card9"),
-            "models/architecture/arch_church/materials/dynpaint_midtown_hidden_king_card9.png"
+            panel_rel(hk.texture_rel, hk, "card10"),
+            "models/architecture/arch_plaza_01/materials/dynpaint_midtown_hidden_king_card10.png"
         );
         let hideout = dyn_target("hideout_portrait_canvas").unwrap();
         assert_eq!(panel_rel(hideout.vmat_rel, hideout, "card1"), hideout.vmat_rel);
@@ -1143,6 +1381,60 @@ mod dynpaint_tests {
         assert!(mv.contains("\"F_UNLIT\"\t\"1\"") && mv.contains("g_flVolumeFogAmount"), "{mv}");
     }
 
+    /// The move that carries the church-archway quads onto the plaza gate,
+    /// pinned to the values the CSDK proof compiled with (0.01u placement).
+    #[test]
+    fn rehost_delta_is_the_measured_move() {
+        let rh = dyn_target("midtown_hidden_king").unwrap().rehost.as_ref().unwrap();
+        let (yaw, t) = rh.delta();
+        assert!((yaw - -90.033104).abs() < 1e-6, "{yaw}");
+        assert!((t[0] - -2124.46893).abs() < 1e-3 && (t[1] - -825.776033).abs() < 1e-3, "{t:?}");
+        assert_eq!(t[2], 0.0);
+        // Round trip one point: Library Painting #3's centre, old-host-local
+        // -> world must equal new-host-local -> world.
+        let p = [-419.5f64, 2662.6, 191.4];
+        let rot = |yaw: f64, v: [f64; 3]| {
+            let (s, c) = yaw.to_radians().sin_cos();
+            [v[0] * c - v[1] * s, v[0] * s + v[1] * c, v[2]]
+        };
+        let old_world = {
+            let r = rot(rh.from.yaw, p);
+            [r[0] + rh.from.origin[0], r[1] + rh.from.origin[1], r[2] + rh.from.origin[2]]
+        };
+        let q = {
+            let r = rot(yaw, p);
+            [r[0] + t[0], r[1] + t[1], r[2] + t[2]]
+        };
+        let new_world = {
+            let r = rot(rh.to.yaw, q);
+            [r[0] + rh.to.origin[0], r[1] + rh.to.origin[1], r[2] + rh.to.origin[2]]
+        };
+        for i in 0..3 {
+            assert!((old_world[i] - new_world[i]).abs() < 1e-6, "{old_world:?} vs {new_world:?}");
+        }
+    }
+
+    #[test]
+    fn splice_adds_quads_and_keeps_the_stock_nodes() {
+        let kit = "{\n\trootNode = \n\t{\n\t\tchildren = \n\t\t[\n\t\t\t{\n\t\t\t\t_class = \"RenderMeshList\"\n\t\t\t\tchildren = \n\t\t\t\t[\n\t\t\t\t\t{\n\t\t\t\t\t\t_class = \"RenderMeshFile\"\n\t\t\t\t\t\tname = \"gate\"\n\t\t\t\t\t\tfilename = \"models/x/gate.dmx\"\n\t\t\t\t\t\timport_filter = \n\t\t\t\t\t\t{\n\t\t\t\t\t\t\texception_list = [ \"a\" ]\n\t\t\t\t\t\t}\n\t\t\t\t\t},\n\t\t\t\t]\n\t\t\t},\n\t\t\t{\n\t\t\t\t_class = \"PhysicsShapeList\"\n\t\t\t\tchildren = \n\t\t\t\t[\n\t\t\t\t\t{\n\t\t\t\t\t\t_class = \"PhysicsMeshFile\"\n\t\t\t\t\t\tsurface_prop = \"rock\"\n\t\t\t\t\t},\n\t\t\t\t]\n\t\t\t},\n\t\t]\n\t}\n}\n";
+        let out = splice_render_meshes(
+            kit,
+            &["models/x/dynpaint_quad_card5.dmx".into(), "models/x/dynpaint_quad_card10.dmx".into()],
+        )
+        .unwrap();
+        assert_eq!(out.matches("RenderMeshFile").count(), 3, "{out}");
+        // The quads sit INSIDE the render list, after the stock mesh (and
+        // its nested exception list) and before the physics shapes.
+        let stock = out.find("models/x/gate.dmx").unwrap();
+        let q5 = out.find("name = \"dynpaint_quad_card5\"").unwrap();
+        let q10 = out.find("filename = \"models/x/dynpaint_quad_card10.dmx\"").unwrap();
+        let phys = out.find("PhysicsShapeList").unwrap();
+        assert!(stock < q5 && q5 < q10 && q10 < phys, "{out}");
+        assert!(out.contains("surface_prop = \"rock\""));
+        assert_eq!(out.matches('[').count(), out.matches(']').count());
+        assert!(splice_render_meshes("{ }", &[]).is_none());
+    }
+
     #[test]
     fn combo_vmdl_lists_every_mesh_and_the_physics() {
         let v = combo_vmdl(
@@ -1159,15 +1451,18 @@ mod dynpaint_tests {
         assert!(v.starts_with("<!-- kv3 "));
     }
 
-    /// Full pipeline vs the real CSDK + helper: the hideout (cover fit) plus
-    /// TWO Hidden King cards at once - the combo model must rebuild with a
-    /// quad and material per card. Run with:
+    /// Full pipeline vs the real CSDK + helper + live game pak: the hideout
+    /// (cover fit) plus TWO Hidden King surfaces at once - the plaza gate must
+    /// rebuild with its stock mesh, a quad and material per surface, and each
+    /// quad must sit ON the map's painting (measured from the compiled model).
+    /// Run with:
     ///   cargo test -p app --lib -- --ignored e2e_dynpaint --nocapture
     #[test]
     #[ignore]
     fn e2e_dynpaint_hideout_compiles() {
         let csdk = r"C:\Users\ethob\Desktop\DeadlockModding\Reduced_CSDK_12";
         let helper = r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\tools\vpk-helper\bin\Release\net10.0\vpk-helper.dll";
+        let pak = r"D:\SteamLibrary\steamapps\common\Deadlock\game\citadel\pak01_dir.vpk";
         let content = format!(r"{csdk}\content\citadel_addons\eim_dynpaint_e2e");
         let compiled = format!(r"{csdk}\game\citadel_addons\eim_dynpaint_e2e");
         let _ = std::fs::remove_dir_all(&content);
@@ -1206,10 +1501,11 @@ mod dynpaint_tests {
             game_info_dir: format!(r"{csdk}\game\citadel"),
             resource_compiler: format!(r"{csdk}\game\bin_tools\win64\resourcecompiler.exe"),
             vpk_helper_path: Some(helper.into()),
+            pak_path: Some(pak.into()),
             dynpaints: vec![
                 entry("hideout_portrait_canvas", "card1", "cover", 0.0),
-                entry("midtown_hidden_king", "card4", "contain", 0.1),
-                entry("midtown_hidden_king", "card9", "cover", 0.2),
+                entry("midtown_hidden_king", "card5", "contain", 0.1),
+                entry("midtown_hidden_king", "card10", "cover", 0.2),
             ],
             ..Default::default()
         };
@@ -1227,13 +1523,14 @@ mod dynpaint_tests {
             assert!(rels.contains(&b.to_string()), "blackout missing: {b}");
             assert!(Path::new(&compiled).join(b).is_file());
         }
-        // The combo model + BOTH per-card materials.
-        let combo = "models/architecture/arch_church/arch_church_door_large.vmdl_c";
+        // The combo model (the plaza gate) + BOTH per-card materials.
+        let combo = HIDDEN_KING.host_model_rel;
+        assert!(combo.contains("arch_plaza_01_gate_structure_01"));
         assert!(rels.contains(&combo.to_string()), "{rels:?}");
-        for card in ["card4", "card9"] {
+        for card in ["card5", "card10"] {
             assert!(
                 rels.contains(&format!(
-                    "models/architecture/arch_church/materials/dynpaint_hidden_king_{card}.vmat_c"
+                    "models/architecture/arch_plaza_01/materials/dynpaint_hidden_king_{card}.vmat_c"
                 )),
                 "{card} material missing: {rels:?}"
             );
@@ -1244,16 +1541,79 @@ mod dynpaint_tests {
                 "{card} grid texture missing: {rels:?}"
             );
         }
-        // The compiled combo must reference both per-card materials, and the
-        // hideout material must carry the expression.
+        // The compiled combo must reference both per-card materials AND
+        // still carry the gate's own (stock) material, and the hideout
+        // material must carry the expression.
         let combo_bytes = std::fs::read(Path::new(&compiled).join(combo)).unwrap();
         let refs = crate::models::scan_vmdl_material_refs(&combo_bytes);
-        for card in ["card4", "card9"] {
+        for card in ["card5", "card10"] {
             assert!(
                 refs.iter().any(|r| r.contains(&format!("dynpaint_hidden_king_{card}"))),
                 "combo model must reference {card}: {refs:?}"
             );
         }
+        assert!(
+            refs.iter().any(|r| !r.contains("dynpaint")),
+            "the gate's stock mesh must survive the rebuild: {refs:?}"
+        );
+
+        // Placement: scan the compiled model's quads (helper `worldrects` on
+        // a pack holding just this model), carry their centres into world
+        // space with the gate's pose, and compare with where today's Midtown
+        // has the paintings (mined from the map 2026-10-04).
+        let scan_dir = std::env::temp_dir().join("eim_dynpaint_e2e_scan");
+        let _ = std::fs::remove_dir_all(&scan_dir);
+        let dest = scan_dir.join("tree").join(combo);
+        std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        std::fs::copy(Path::new(&compiled).join(combo), &dest).unwrap();
+        let pack = scan_dir.join("pack_dir.vpk");
+        crate::vpk::pack(helper, &scan_dir.join("tree").to_string_lossy(), &pack.to_string_lossy())
+            .unwrap();
+        let list = scan_dir.join("models.txt");
+        std::fs::write(&list, combo.trim_end_matches("_c")).unwrap();
+        let out_json = scan_dir.join("rects.json");
+        let scanned = crate::procutil::quiet("dotnet")
+            .args([
+                helper,
+                "worldrects",
+                &pack.to_string_lossy(),
+                pak,
+                &out_json.to_string_lossy(),
+                "models/",
+                &list.to_string_lossy(),
+            ])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        assert!(scanned, "worldrects scan of the compiled host model");
+        let scan: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&out_json).unwrap()).unwrap();
+        let to = HIDDEN_KING.rehost.as_ref().unwrap().to;
+        let (sin, cos) = to.yaw.to_radians().sin_cos();
+        for (card, want) in
+            [("card5", [5445.35, -1984.52, 447.36]), ("card10", [4925.99, -2173.37, 489.45])]
+        {
+            let rects = scan["materials"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .find(|(k, _)| k.contains(&format!("dynpaint_hidden_king_{card}")))
+                .map(|(_, v)| v)
+                .unwrap_or_else(|| panic!("{card}: no quad in the compiled model"));
+            let b: Vec<f64> =
+                rects[0]["pos"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+            let l = [(b[0] + b[3]) / 2.0, (b[1] + b[4]) / 2.0, (b[2] + b[5]) / 2.0];
+            let w = [
+                l[0] * cos - l[1] * sin + to.origin[0],
+                l[0] * sin + l[1] * cos + to.origin[1],
+                l[2] + to.origin[2],
+            ];
+            let err = ((w[0] - want[0]).powi(2) + (w[1] - want[1]).powi(2) + (w[2] - want[2]).powi(2))
+                .sqrt();
+            eprintln!("PLACEMENT {card}: [{:.2} {:.2} {:.2}] - {err:.3}u from the map's painting", w[0], w[1], w[2]);
+            assert!(err < 1.0, "{card} lands {err:.2}u off: {w:?} vs {want:?}");
+        }
+        let _ = std::fs::remove_dir_all(&scan_dir);
         let out = std::env::temp_dir().join("eim_dynpaint_e2e_rt.vmat");
         crate::vpk::decompile_from_vpk(
             helper,
@@ -1272,6 +1632,81 @@ mod dynpaint_tests {
             compile_dynpaints(&cfg, Path::new(&content), Path::new(&compiled), &mut report2);
         assert!(!dirty2, "unchanged media must skip");
         assert_eq!(rels, rels2, "skip must stage the same set");
+        let _ = std::fs::remove_dir_all(&content);
+        let _ = std::fs::remove_dir_all(&compiled);
+        let _ = std::fs::remove_file(&gif);
+    }
+
+    /// Builds a ready-to-install test pak: a moving test pattern on all five
+    /// re-hosted Hidden King surfaces - the in-game check that the plaza gate
+    /// really carries them. Output: <repo>/output/midtown_gate_test/pak01_dir.vpk
+    ///   cargo test -p app --lib -- --ignored build_midtown_gate_test_pak --nocapture
+    #[test]
+    #[ignore]
+    fn build_midtown_gate_test_pak() {
+        let csdk = r"C:\Users\ethob\Desktop\DeadlockModding\Reduced_CSDK_12";
+        let helper = r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\tools\vpk-helper\bin\Release\net10.0\vpk-helper.dll";
+        let pak = r"D:\SteamLibrary\steamapps\common\Deadlock\game\citadel\pak01_dir.vpk";
+        let content = format!(r"{csdk}\content\citadel_addons\eim_dynpaint_gate_test");
+        let compiled = format!(r"{csdk}\game\citadel_addons\eim_dynpaint_gate_test");
+        let _ = std::fs::remove_dir_all(&content);
+        let _ = std::fs::remove_dir_all(&compiled);
+        std::fs::create_dir_all(&content).unwrap();
+        let gif = std::env::temp_dir().join("eim_gate_test.gif");
+        let ok = crate::procutil::quiet("ffmpeg")
+            .args(["-y", "-f", "lavfi", "-i", "testsrc2=size=360x640:rate=8", "-frames:v", "24"])
+            .arg(&gif)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        assert!(ok, "test pattern");
+        let cfg = CompileConfig {
+            content_root: content.clone(),
+            compiled_root: compiled.clone(),
+            game_info_dir: format!(r"{csdk}\game\citadel"),
+            resource_compiler: format!(r"{csdk}\game\bin_tools\win64\resourcecompiler.exe"),
+            vpk_helper_path: Some(helper.into()),
+            pak_path: Some(pak.into()),
+            dynpaints: HIDDEN_KING
+                .panels
+                .iter()
+                .map(|p| DynpaintCompile {
+                    id: "midtown_hidden_king".into(),
+                    source_media: gif.to_string_lossy().into_owned(),
+                    dwell: 0.0,
+                    max_frames: 240,
+                    panel: p.id.into(),
+                    fit: "cover".into(),
+                    crop_x: 0.5,
+                    crop_y: 0.5,
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let mut report = CompileReport::new();
+        let (rels, _) =
+            compile_dynpaints(&cfg, Path::new(&content), Path::new(&compiled), &mut report);
+        for s in &report.steps {
+            eprintln!("STEP [{}] {} :: {}", if s.ok { "OK" } else { "FAIL" }, s.name, s.detail);
+        }
+        assert!(report.ok, "compile failed");
+        let out = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../output/midtown_gate_test"));
+        let stage = out.join("_staging");
+        let _ = std::fs::remove_dir_all(out);
+        for rel in &rels {
+            let dest = stage.join(rel);
+            std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+            std::fs::copy(Path::new(&compiled).join(rel), &dest)
+                .unwrap_or_else(|e| panic!("stage {rel}: {e}"));
+        }
+        let vpk = out.join("pak01_dir.vpk");
+        crate::vpk::pack(helper, &stage.to_string_lossy(), &vpk.to_string_lossy()).unwrap();
+        eprintln!(
+            "TEST PAK: {} ({} files, {} bytes)",
+            vpk.display(),
+            rels.len(),
+            std::fs::metadata(&vpk).map(|m| m.len()).unwrap_or(0)
+        );
         let _ = std::fs::remove_dir_all(&content);
         let _ = std::fs::remove_dir_all(&compiled);
         let _ = std::fs::remove_file(&gif);
@@ -1300,7 +1735,7 @@ mod dynpaint_tests {
             // ffmpeg build refuses - must route through the helper's Skia.
             (
                 &HIDDEN_KING,
-                "card6",
+                "card7",
                 r"C:\Users\ethob\Downloads\HIY3jAwWQAEBmzt.webp",
                 "cover",
             ),

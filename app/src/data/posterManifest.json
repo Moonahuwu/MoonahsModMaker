@@ -269,7 +269,7 @@
      "w": 2048,
      "h": 2048,
      "alphaCoverage": 0.202,
-     "placements": 568
+     "placements": 572
     }
    ]
   },
@@ -319,7 +319,7 @@
      "w": 1216,
      "h": 512,
      "alphaCoverage": 0.257,
-     "placements": 52
+     "placements": 50
     },
     {
      "id": "item_68",
@@ -328,7 +328,7 @@
      "w": 2048,
      "h": 1024,
      "alphaCoverage": 0.614,
-     "placements": 306
+     "placements": 308
     },
     {
      "id": "item_04",
@@ -927,7 +927,7 @@
      "w": 256,
      "h": 256,
      "alphaCoverage": 0.362,
-     "placements": 1
+     "placements": 1495
     }
    ]
   },
@@ -968,7 +968,7 @@
      "w": 768,
      "h": 768,
      "alphaCoverage": 0.18,
-     "placements": 506
+     "placements": 505
     },
     {
      "id": "item_31",
@@ -995,7 +995,7 @@
      "w": 1024,
      "h": 768,
      "alphaCoverage": 0.079,
-     "placements": 1822
+     "placements": 1821
     },
     {
      "id": "item_10",
@@ -1951,7 +1951,7 @@
      "w": 2048,
      "h": 976,
      "alphaCoverage": 0.144,
-     "placements": 626
+     "placements": 621
     },
     {
      "id": "item_22",
@@ -1969,7 +1969,7 @@
      "w": 608,
      "h": 544,
      "alphaCoverage": 0.177,
-     "placements": 281
+     "placements": 280
     },
     {
      "id": "item_07",
@@ -1987,7 +1987,7 @@
      "w": 1024,
      "h": 1056,
      "alphaCoverage": 0.364,
-     "placements": 558
+     "placements": 630
     },
     {
      "id": "item_11",
@@ -2005,7 +2005,7 @@
      "w": 999,
      "h": 1024,
      "alphaCoverage": 0.384,
-     "placements": 48
+     "placements": 50
     },
     {
      "id": "item_13",
@@ -2023,7 +2023,7 @@
      "w": 1024,
      "h": 640,
      "alphaCoverage": 0.185,
-     "placements": 1482
+     "placements": 1483
     },
     {
      "id": "item_18",
@@ -2172,7 +2172,7 @@
      "w": 591,
      "h": 86,
      "alphaCoverage": 0.303,
-     "placements": 4
+     "placements": 3
     },
     {
      "id": "item_62",
@@ -2181,7 +2181,7 @@
      "w": 564,
      "h": 94,
      "alphaCoverage": 0.265,
-     "placements": 10
+     "placements": 9
     },
     {
      "id": "item_65",
@@ -3697,7 +3697,7 @@
      "w": 2304,
      "h": 1280,
      "alphaCoverage": 0.157,
-     "placements": 167
+     "placements": 165
     },
     {
      "id": "item_20",
@@ -3760,7 +3760,7 @@
      "w": 768,
      "h": 768,
      "alphaCoverage": 0.138,
-     "placements": 60
+     "placements": 61
     },
     {
      "id": "item_09",
@@ -3787,7 +3787,7 @@
      "w": 1280,
      "h": 448,
      "alphaCoverage": 0.164,
-     "placements": 293
+     "placements": 294
     },
     {
      "id": "item_12",
@@ -4136,7 +4136,7 @@
      "w": 36,
      "h": 331,
      "alphaCoverage": 0.992,
-     "placements": 2
+     "placements": 1
     }
    ]
   },
@@ -4457,7 +4457,7 @@
      "w": 256,
      "h": 862,
      "alphaCoverage": 0.462,
-     "placements": 3
+     "placements": 2
     },
     {
      "id": "hotel_vertical",
@@ -4561,7 +4561,16 @@
      "w": 592,
      "h": 392,
      "alphaCoverage": 0.944,
-     "placements": 1
+     "placements": 3
+    },
+    {
+     "id": "item_04",
+     "x": 2013,
+     "y": 0,
+     "w": 35,
+     "h": 1024,
+     "alphaCoverage": 0.53,
+     "placements": 7
     },
     {
      "id": "item_01",
@@ -4609,22 +4618,13 @@
      "placements": 1
     },
     {
-     "id": "item_03",
-     "x": 2013,
-     "y": 939,
-     "w": 35,
-     "h": 85,
-     "alphaCoverage": 0.372,
-     "placements": 5
-    },
-    {
      "id": "item_00",
      "x": 0,
      "y": 1024,
-     "w": 2013,
+     "w": 2048,
      "h": 1024,
-     "alphaCoverage": 0.933,
-     "placements": 39
+     "alphaCoverage": 0.932,
+     "placements": 43
     },
     {
      "id": "canned_spirits",
@@ -4669,6 +4669,15 @@
      "w": 516,
      "h": 327,
      "alphaCoverage": 0.992,
+     "unused": true
+    },
+    {
+     "id": "item_03",
+     "x": 2013,
+     "y": 939,
+     "w": 35,
+     "h": 85,
+     "alphaCoverage": 0.372,
      "unused": true
     },
     {
@@ -4746,7 +4755,7 @@
      "w": 2032,
      "h": 992,
      "alphaCoverage": 0.964,
-     "placements": 28
+     "placements": 29
     },
     {
      "id": "oracle_paper_sign",
@@ -4972,7 +4981,7 @@
      "w": 2048,
      "h": 2048,
      "alphaCoverage": 0.036,
-     "placements": 741
+     "placements": 742
     },
     {
      "id": "item_01",
@@ -6091,7 +6100,7 @@
      "w": 704,
      "h": 1360,
      "alphaCoverage": 1.0,
-     "placements": 69
+     "placements": 70
     },
     {
      "id": "item_00",
@@ -6203,7 +6212,16 @@
      "x": 0,
      "y": 0,
      "w": 1024,
-     "h": 1484,
+     "h": 1489,
+     "alphaCoverage": 1.0,
+     "placements": 2
+    },
+    {
+     "id": "rescue_beam",
+     "x": 1093,
+     "y": 0,
+     "w": 504,
+     "h": 1154,
      "alphaCoverage": 1.0,
      "placements": 1
     },
@@ -6217,6 +6235,15 @@
      "placements": 2
     },
     {
+     "id": "white_crow",
+     "x": 1153,
+     "y": 1509,
+     "w": 381,
+     "h": 538,
+     "alphaCoverage": 1.0,
+     "placements": 1
+    },
+    {
      "id": "yes_bottle",
      "x": 1663,
      "y": 1663,
@@ -6226,31 +6253,13 @@
      "placements": 1
     },
     {
-     "id": "rescue_beam",
-     "x": 1096,
-     "y": 0,
-     "w": 496,
-     "h": 1152,
-     "alphaCoverage": 1,
-     "unused": true
-    },
-    {
-     "id": "white_crow",
-     "x": 1152,
-     "y": 1504,
-     "w": 384,
-     "h": 544,
-     "alphaCoverage": 0.993,
-     "unused": true
-    },
-    {
      "id": "crab_eyes",
      "x": 0,
-     "y": 1728,
+     "y": 1723,
      "w": 576,
-     "h": 320,
-     "alphaCoverage": 1,
-     "unused": true
+     "h": 324,
+     "alphaCoverage": 1.0,
+     "placements": 1
     }
    ]
   },
@@ -6955,13 +6964,13 @@
    "height": 2048,
    "posters": [
     {
-     "id": "item_29",
+     "id": "item_33",
      "x": 0,
      "y": 0,
-     "w": 1024,
-     "h": 256,
-     "alphaCoverage": 0.263,
-     "placements": 19
+     "w": 1376,
+     "h": 512,
+     "alphaCoverage": 0.292,
+     "placements": 42
     },
     {
      "id": "item_02",
@@ -6991,13 +7000,22 @@
      "placements": 1
     },
     {
-     "id": "item_31",
+     "id": "item_28",
      "x": 0,
      "y": 768,
+     "w": 1152,
+     "h": 256,
+     "alphaCoverage": 0.309,
+     "placements": 4
+    },
+    {
+     "id": "item_31",
+     "x": 0,
+     "y": 1024,
      "w": 2048,
-     "h": 896,
-     "alphaCoverage": 0.191,
-     "placements": 108
+     "h": 640,
+     "alphaCoverage": 0.198,
+     "placements": 82
     },
     {
      "id": "item_30",
@@ -7025,6 +7043,15 @@
      "h": 128,
      "alphaCoverage": 0.273,
      "placements": 17
+    },
+    {
+     "id": "item_29",
+     "x": 0,
+     "y": 0,
+     "w": 1024,
+     "h": 256,
+     "alphaCoverage": 0.263,
+     "unused": true
     },
     {
      "id": "item_00",
@@ -7060,15 +7087,6 @@
      "w": 272,
      "h": 185,
      "alphaCoverage": 0.47,
-     "unused": true
-    },
-    {
-     "id": "item_28",
-     "x": 0,
-     "y": 768,
-     "w": 1152,
-     "h": 256,
-     "alphaCoverage": 0.309,
      "unused": true
     },
     {
@@ -8363,7 +8381,8 @@
      "y": 0,
      "w": 1024,
      "h": 512,
-     "unused": true
+     "alphaCoverage": 1.0,
+     "placements": 1
     }
    ]
   },
@@ -8872,8 +8891,8 @@
      "y": 0,
      "w": 512,
      "h": 1024,
-     "alphaCoverage": 1,
-     "unused": true
+     "alphaCoverage": 1.0,
+     "placements": 1
     }
    ]
   },
@@ -9014,7 +9033,17 @@
    "transTexture": "signage_billboards_03_86599d86_trans.png",
    "width": 2048,
    "height": 2048,
-   "posters": []
+   "posters": [
+    {
+     "id": "item_00",
+     "x": 1024,
+     "y": 640,
+     "w": 384,
+     "h": 640,
+     "alphaCoverage": 1.0,
+     "placements": 11
+    }
+   ]
   },
   {
    "id": "signage/museum_banner",
@@ -9027,7 +9056,17 @@
    "transTexture": null,
    "width": 1024,
    "height": 4096,
-   "posters": []
+   "posters": [
+    {
+     "id": "item_00",
+     "x": 74,
+     "y": 34,
+     "w": 875,
+     "h": 4034,
+     "alphaCoverage": 1.0,
+     "placements": 4
+    }
+   ]
   },
   {
    "id": "signage/default_01",
@@ -9054,7 +9093,17 @@
    "transTexture": "signage_default_02_1dd140c0_trans.png",
    "width": 2048,
    "height": 2048,
-   "posters": []
+   "posters": [
+    {
+     "id": "item_00",
+     "x": 1983,
+     "y": 1984,
+     "w": 65,
+     "h": 64,
+     "alphaCoverage": 1.0,
+     "placements": 2
+    }
+   ]
   },
   {
    "id": "signage/hologram_01",
@@ -9146,6 +9195,518 @@
    "width": 2048,
    "height": 2048,
    "posters": []
+  },
+  {
+   "id": "chinatown_signs_01",
+   "category": "signage",
+   "curated": false,
+   "materials": [
+    "materials/overlays/chinatown_signs_01.vmat"
+   ],
+   "colorTexture": "chinatown_signs_01_color.png",
+   "transTexture": "chinatown_signs_01_6b2405a9_trans.png",
+   "width": 2048,
+   "height": 2048,
+   "posters": [
+    {
+     "id": "item_16",
+     "x": 0,
+     "y": 0,
+     "w": 256,
+     "h": 256,
+     "alphaCoverage": 1.0,
+     "placements": 6
+    },
+    {
+     "id": "item_00",
+     "x": 256,
+     "y": 0,
+     "w": 256,
+     "h": 2048,
+     "alphaCoverage": 1.0,
+     "placements": 2
+    },
+    {
+     "id": "item_06",
+     "x": 512,
+     "y": 0,
+     "w": 52,
+     "h": 1792,
+     "alphaCoverage": 0.062,
+     "placements": 15
+    },
+    {
+     "id": "item_01",
+     "x": 564,
+     "y": 0,
+     "w": 204,
+     "h": 1792,
+     "alphaCoverage": 0.353,
+     "placements": 17
+    },
+    {
+     "id": "item_15",
+     "x": 1792,
+     "y": 0,
+     "w": 128,
+     "h": 512,
+     "alphaCoverage": 1.0,
+     "placements": 2
+    },
+    {
+     "id": "item_14",
+     "x": 0,
+     "y": 256,
+     "w": 256,
+     "h": 256,
+     "alphaCoverage": 1.0,
+     "placements": 6
+    },
+    {
+     "id": "item_04",
+     "x": 768,
+     "y": 256,
+     "w": 768,
+     "h": 256,
+     "alphaCoverage": 1.0,
+     "placements": 2
+    },
+    {
+     "id": "item_13",
+     "x": 0,
+     "y": 512,
+     "w": 256,
+     "h": 256,
+     "alphaCoverage": 1.0,
+     "placements": 7
+    },
+    {
+     "id": "item_22",
+     "x": 1816,
+     "y": 520,
+     "w": 80,
+     "h": 240,
+     "alphaCoverage": 1.0,
+     "placements": 3
+    },
+    {
+     "id": "item_21",
+     "x": 1944,
+     "y": 520,
+     "w": 88,
+     "h": 240,
+     "alphaCoverage": 1.0,
+     "placements": 6
+    },
+    {
+     "id": "item_12",
+     "x": 0,
+     "y": 768,
+     "w": 256,
+     "h": 256,
+     "alphaCoverage": 1.0,
+     "placements": 7
+    },
+    {
+     "id": "item_20",
+     "x": 768,
+     "y": 768,
+     "w": 256,
+     "h": 254,
+     "alphaCoverage": 0.38,
+     "placements": 4
+    },
+    {
+     "id": "item_19",
+     "x": 1024,
+     "y": 768,
+     "w": 256,
+     "h": 254,
+     "alphaCoverage": 0.427,
+     "placements": 4
+    },
+    {
+     "id": "item_18",
+     "x": 1280,
+     "y": 768,
+     "w": 256,
+     "h": 254,
+     "alphaCoverage": 0.403,
+     "placements": 4
+    },
+    {
+     "id": "item_17",
+     "x": 1536,
+     "y": 768,
+     "w": 256,
+     "h": 254,
+     "alphaCoverage": 0.376,
+     "placements": 4
+    },
+    {
+     "id": "item_11",
+     "x": 0,
+     "y": 1024,
+     "w": 256,
+     "h": 256,
+     "alphaCoverage": 1.0,
+     "placements": 7
+    },
+    {
+     "id": "item_10",
+     "x": 0,
+     "y": 1280,
+     "w": 256,
+     "h": 256,
+     "alphaCoverage": 1.0,
+     "placements": 7
+    },
+    {
+     "id": "item_05",
+     "x": 768,
+     "y": 1280,
+     "w": 512,
+     "h": 256,
+     "alphaCoverage": 0.308,
+     "placements": 5
+    },
+    {
+     "id": "item_09",
+     "x": 0,
+     "y": 1536,
+     "w": 256,
+     "h": 256,
+     "alphaCoverage": 1.0,
+     "placements": 10
+    },
+    {
+     "id": "item_03",
+     "x": 1024,
+     "y": 1536,
+     "w": 512,
+     "h": 512,
+     "alphaCoverage": 0.156,
+     "placements": 11
+    },
+    {
+     "id": "item_02",
+     "x": 1536,
+     "y": 1536,
+     "w": 512,
+     "h": 512,
+     "alphaCoverage": 1.0,
+     "placements": 2
+    },
+    {
+     "id": "item_08",
+     "x": 0,
+     "y": 1792,
+     "w": 256,
+     "h": 256,
+     "alphaCoverage": 1.0,
+     "placements": 2
+    },
+    {
+     "id": "item_07",
+     "x": 512,
+     "y": 1792,
+     "w": 256,
+     "h": 256,
+     "alphaCoverage": 0.15,
+     "placements": 11
+    }
+   ]
+  },
+  {
+   "id": "signs_composite04a",
+   "category": "signage",
+   "curated": false,
+   "materials": [
+    "materials/overlays/signs_composite04a.vmat"
+   ],
+   "colorTexture": "signs_composite04a_color.png",
+   "transTexture": null,
+   "width": 2048,
+   "height": 2048,
+   "posters": [
+    {
+     "id": "item_00",
+     "x": 0,
+     "y": 1536,
+     "w": 1152,
+     "h": 512,
+     "alphaCoverage": 1.0,
+     "placements": 16
+    }
+   ]
+  },
+  {
+   "id": "signs_composite05a",
+   "category": "signage",
+   "curated": false,
+   "materials": [
+    "materials/overlays/signs_composite05a.vmat"
+   ],
+   "colorTexture": "signs_composite05a_color.png",
+   "transTexture": null,
+   "width": 2048,
+   "height": 2048,
+   "posters": [
+    {
+     "id": "item_01",
+     "x": 0,
+     "y": 0,
+     "w": 608,
+     "h": 1024,
+     "alphaCoverage": 1.0,
+     "placements": 3
+    },
+    {
+     "id": "item_00",
+     "x": 1344,
+     "y": 0,
+     "w": 704,
+     "h": 1024,
+     "alphaCoverage": 1.0,
+     "placements": 3
+    },
+    {
+     "id": "item_02",
+     "x": 512,
+     "y": 1024,
+     "w": 512,
+     "h": 1024,
+     "alphaCoverage": 1.0,
+     "placements": 2
+    },
+    {
+     "id": "item_03",
+     "x": 1632,
+     "y": 1408,
+     "w": 416,
+     "h": 640,
+     "alphaCoverage": 1.0,
+     "placements": 2
+    }
+   ]
+  },
+  {
+   "id": "signs_composite06a",
+   "category": "signage",
+   "curated": false,
+   "materials": [
+    "materials/overlays/signs_composite06a.vmat"
+   ],
+   "colorTexture": "signs_composite06a_color.png",
+   "transTexture": "signs_composite06a_5ed2546b_trans.png",
+   "width": 2048,
+   "height": 2048,
+   "posters": [
+    {
+     "id": "item_00",
+     "x": 0,
+     "y": 1024,
+     "w": 1024,
+     "h": 1024,
+     "alphaCoverage": 0.741,
+     "placements": 2
+    },
+    {
+     "id": "item_01",
+     "x": 1120,
+     "y": 1024,
+     "w": 928,
+     "h": 737,
+     "alphaCoverage": 0.497,
+     "placements": 3
+    }
+   ]
+  },
+  {
+   "id": "garage_decals",
+   "category": "signage",
+   "curated": false,
+   "materials": [
+    "materials/overlays/garage_decals.vmat"
+   ],
+   "colorTexture": "garage_decals_color.png",
+   "transTexture": "garage_decals_3ec19225_trans.png",
+   "width": 1024,
+   "height": 1024,
+   "posters": [
+    {
+     "id": "item_01",
+     "x": 0,
+     "y": 0,
+     "w": 1024,
+     "h": 128,
+     "alphaCoverage": 0.297,
+     "placements": 3
+    },
+    {
+     "id": "item_03",
+     "x": 1,
+     "y": 167,
+     "w": 1023,
+     "h": 59,
+     "alphaCoverage": 0.348,
+     "placements": 3
+    },
+    {
+     "id": "item_00",
+     "x": 0,
+     "y": 256,
+     "w": 512,
+     "h": 256,
+     "alphaCoverage": 0.46,
+     "placements": 8
+    },
+    {
+     "id": "item_04",
+     "x": 521,
+     "y": 263,
+     "w": 238,
+     "h": 238,
+     "alphaCoverage": 0.574,
+     "placements": 5
+    },
+    {
+     "id": "item_02",
+     "x": 0,
+     "y": 518,
+     "w": 1024,
+     "h": 122,
+     "alphaCoverage": 0.153,
+     "placements": 7
+    },
+    {
+     "id": "item_05",
+     "x": 0,
+     "y": 640,
+     "w": 192,
+     "h": 128,
+     "alphaCoverage": 0.345,
+     "placements": 1
+    }
+   ]
+  },
+  {
+   "id": "graffiti_tags_06",
+   "category": "graffiti",
+   "curated": false,
+   "materials": [
+    "materials/overlays/graffiti_tags_06.vmat"
+   ],
+   "colorTexture": "graffiti_tags_06_color.png",
+   "transTexture": "graffiti_tags_06_723fa8fa_trans.png",
+   "width": 2048,
+   "height": 2048,
+   "posters": [
+    {
+     "id": "item_08",
+     "x": 823,
+     "y": 0,
+     "w": 165,
+     "h": 365,
+     "alphaCoverage": 0.356,
+     "placements": 1
+    },
+    {
+     "id": "item_03",
+     "x": 512,
+     "y": 384,
+     "w": 512,
+     "h": 384,
+     "alphaCoverage": 0.241,
+     "placements": 4
+    },
+    {
+     "id": "item_07",
+     "x": 1024,
+     "y": 512,
+     "w": 256,
+     "h": 384,
+     "alphaCoverage": 0.059,
+     "placements": 11
+    },
+    {
+     "id": "item_06",
+     "x": 0,
+     "y": 768,
+     "w": 512,
+     "h": 362,
+     "alphaCoverage": 0.275,
+     "placements": 1
+    },
+    {
+     "id": "item_04",
+     "x": 1152,
+     "y": 1024,
+     "w": 384,
+     "h": 512,
+     "alphaCoverage": 0.187,
+     "placements": 2
+    },
+    {
+     "id": "item_05",
+     "x": 0,
+     "y": 1152,
+     "w": 512,
+     "h": 384,
+     "alphaCoverage": 0.08,
+     "placements": 2
+    },
+    {
+     "id": "item_02",
+     "x": 512,
+     "y": 1536,
+     "w": 512,
+     "h": 512,
+     "alphaCoverage": 0.255,
+     "placements": 1
+    },
+    {
+     "id": "item_00",
+     "x": 1024,
+     "y": 1536,
+     "w": 512,
+     "h": 512,
+     "alphaCoverage": 0.136,
+     "placements": 42
+    },
+    {
+     "id": "item_01",
+     "x": 1536,
+     "y": 1536,
+     "w": 512,
+     "h": 512,
+     "alphaCoverage": 0.219,
+     "placements": 1
+    }
+   ]
+  },
+  {
+   "id": "signage/campus_banner_02",
+   "category": "signage",
+   "curated": false,
+   "materials": [
+    "materials/signage/campus_banner_02.vmat"
+   ],
+   "colorTexture": "campus_banner_02_color.png",
+   "transTexture": null,
+   "width": 2048,
+   "height": 512,
+   "posters": [
+    {
+     "id": "item_00",
+     "x": 0,
+     "y": 0,
+     "w": 2048,
+     "h": 512,
+     "alphaCoverage": 1.0,
+     "placements": 1
+    }
+   ]
   }
  ]
 }

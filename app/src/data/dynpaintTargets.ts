@@ -28,6 +28,9 @@ export interface DynpaintPanelInfo {
   blurb: string;
   /** The surface's real proportions in texture pixels (drives tile shape). */
   cell: { w: number; h: number };
+  /** The surface is no longer in the current game map (the compile side has
+   *  dropped it). Hidden unless it still holds saved art, and never built. */
+  gone?: boolean;
 }
 
 export interface DynpaintTargetInfo {
@@ -38,6 +41,11 @@ export interface DynpaintTargetInfo {
   beta?: boolean;
   /** Extra caveat shown small under the host. */
   note?: string;
+  /** Set when the host prop is NOT an entity in the current game map, with
+   *  the reason shown on the host. An offline host keeps its saved entries
+   *  but takes no new art and is left out of every compile (`liveDynpaints`):
+   *  nothing draws its quads, so shipping them is dead weight. */
+  offline?: string;
   /** The map's lighting on this surface, for preview only - the compile
    *  bakes it in either way (goldenboy44's measured value). */
   roomLight?: { css: string; help: string };
@@ -65,29 +73,28 @@ export const DYNPAINT_TARGETS: DynpaintTargetInfo[] = [
   {
     id: "midtown_hidden_king",
     name: "The Hidden King signs",
-    where: "Midtown, church district (Amber side)",
+    where: "Midtown, library and T2 camp (Amber side)",
     beta: true,
-    note: "Signs draw while their host archway does (out to roughly 4,400 units - vanilla culling). Midtown was rebuilt in the 2026-09-29 patch: the host prop is still in the map, but these surfaces have not been re-checked in game since.",
+    note: "These ride the plaza gate since the 2026-09-29 map rebuild (the church archway they used was baked into the scenery). Each painting's position is measured against the map, but the new host has not been checked in game yet. The old ad frames and the standee are gone from the rebuilt map.",
     panels: [
       { id: "card1", title: "Library Painting #1", blurb: "The painting on the right", cell: { w: 364, h: 720 } },
       { id: "card2", title: "Library Painting #2", blurb: "The painting on the left", cell: { w: 364, h: 720 } },
-      { id: "card3", title: "Speakeasy Adframe", blurb: "Visible from the Hidden King side, outside the T1 camp", cell: { w: 528, h: 496 } },
-      { id: "card4", title: "Item Ad #1", blurb: "Outside the T1 camp", cell: { w: 396, h: 660 } },
+      { id: "card3", title: "Speakeasy Adframe", blurb: "Visible from the Hidden King side, outside the T1 camp", cell: { w: 528, h: 496 }, gone: true },
+      { id: "card4", title: "Item Ad #1", blurb: "Outside the T1 camp", cell: { w: 396, h: 660 }, gone: true },
       { id: "card5", title: "Library Painting #3", blurb: "Adjacent to painting #4, on the left side", cell: { w: 368, h: 708 } },
-      { id: "card6", title: "Item Ad #2", blurb: "Outside the T1 camp", cell: { w: 396, h: 660 } },
+      { id: "card6", title: "Item Ad #2", blurb: "Outside the T1 camp", cell: { w: 396, h: 660 }, gone: true },
       { id: "card7", title: "Library Painting #4", blurb: "Adjacent to painting #3, on the right side", cell: { w: 364, h: 720 } },
-      { id: "card8", title: "Vertical Adframe", blurb: "Near the T1 camp, above the staircase", cell: { w: 368, h: 716 } },
-      { id: "card9", title: "Horizontal Adframe", blurb: "On top of the T1 camp building and staircase", cell: { w: 748, h: 352 } },
+      { id: "card8", title: "Vertical Adframe", blurb: "Near the T1 camp, above the staircase", cell: { w: 368, h: 716 }, gone: true },
+      { id: "card9", title: "Horizontal Adframe", blurb: "On top of the T1 camp building and staircase", cell: { w: 748, h: 352 }, gone: true },
       { id: "card10", title: "T2 Camp Painting", blurb: "Inside the T2 camp behind the library", cell: { w: 756, h: 348 } },
-      { id: "card11", title: "Ad Standee", blurb: "Near the guardian", cell: { w: 552, h: 476 } },
+      { id: "card11", title: "Ad Standee", blurb: "Near the guardian", cell: { w: 552, h: 476 }, gone: true },
     ],
   },
   {
     id: "midtown_archmother",
     name: "The Archmother signs",
     where: "Midtown, bodega corner (Sapphire side)",
-    beta: true,
-    note: "Signs draw while their host prop does (vanilla culling). Midtown was rebuilt in the 2026-09-29 patch: the host prop is still in the map, but these surfaces have not been re-checked in game since.",
+    offline: "Not showing in the current game. The 2026-09-29 Midtown rebuild baked the prop these signs ride on into the map's scenery, so nothing draws them any more. Art you already set here is kept, but it is left out of your packs until the signs are moved to a new host prop.",
     panels: [
       { id: "card1", title: "Horizontal Adframe #1", blurb: "Above the curiosity shop", cell: { w: 1028, h: 256 } },
       { id: "card2", title: "Horizontal Adframe #2", blurb: "Above the double veil", cell: { w: 1028, h: 256 } },
@@ -97,3 +104,19 @@ export const DYNPAINT_TARGETS: DynpaintTargetInfo[] = [
     ],
   },
 ];
+
+/** True when a surface cannot show in the current game map: its host prop is
+ *  not an entity any more, or the surface itself is gone. */
+export function isDynpaintOffline(targetId: string, panelId?: string): boolean {
+  const t = DYNPAINT_TARGETS.find((x) => x.id === targetId);
+  if (!t) return false;
+  if (t.offline) return true;
+  return !!panelId && !!t.panels.find((p) => p.id === panelId)?.gone;
+}
+
+/** The entries that can actually show in game (drops offline hosts and
+ *  surfaces gone from the map). Every compile and every "has animated art"
+ *  count goes through this. */
+export function liveDynpaints<T extends { id: string; panel?: string }>(list: T[]): T[] {
+  return list.filter((d) => !isDynpaintOffline(d.id, d.panel ?? "card1"));
+}

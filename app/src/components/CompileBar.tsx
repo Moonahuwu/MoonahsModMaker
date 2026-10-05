@@ -20,6 +20,7 @@ import { cItemRoster } from "../lib/dataCache";
 import { BuildPreview, type PreviewMod, type YoursFile } from "./BuildPreview";
 import { ExportModal, type ExportExtra, type ExportSlot } from "./ExportModal";
 import { buildCompileConfig, directReplaceTarget, installSrcVpk, sheetSiblingsKey, slotSoundFolder, worldOverrideCategory, type Settings } from "../lib/settings";
+import { liveDynpaints } from "../data/dynpaintTargets";
 import { songStatus, overrideHash, effectHash, posterHash, heroTexHash } from "../lib/songHash";
 import { useToast } from "./Toaster";
 import type { DigimodConfig, DynpaintEntry, EffectOverride, EventProject, GlobalOverride, HeroTextureOverride, IconMod, ModelOverride, ModTextureOverride, PosterOverride, SoundOverride, UiFileOverride, VdataOverride, WorldOverride } from "../types";
@@ -215,7 +216,7 @@ export function CompileBar({
     soundOverrides.length > 0 ||
     effectOverrides.length > 0 ||
     posterOverrides.length > 0 ||
-    dynpaints.some((d) => d.enabled !== false && !!d.sourceMedia) ||
+    liveDynpaints(dynpaints).some((d) => d.enabled !== false && !!d.sourceMedia) ||
     heroTextures.length > 0 ||
     // Same filters buildCompileConfig ships with - a model-only pack must
     // be able to compile (GameBanana report: users added a dummy hero image
