@@ -3871,6 +3871,36 @@ fn internal_run(cfg: &CompileConfig, report: &mut CompileReport) -> Result<(), (
         report.ok_step("read imported mods", format!("{} mod(s)", cfg.imported_mods.len()));
     }
 
+    // Built hero models from before a game update keep that build's camera /
+    // aim attachments (2026-10-16 rewrote every hero's pivots): say so,
+    // once per model, so the user rebuilds instead of shipping a wrong camera.
+    // The model still ships - the rest of it is fine.
+    if let (Some(helper), Some(pak)) = (
+        cfg.vpk_helper_path.as_deref().filter(|h| !h.is_empty()),
+        cfg.pak_path.as_deref().filter(|p| !p.is_empty()),
+    ) {
+        for ov in &cfg.model_overrides {
+            let artifact = Path::new(&ov.artifact);
+            if !artifact.is_file() || !ov.target_rel.starts_with("models/heroes") {
+                continue;
+            }
+            match crate::models::outdated_attachments(helper, pak, &ov.target_rel, artifact) {
+                Ok(changed) if !changed.is_empty() => report.soft_fail(
+                    format!("model outdated: {}", ov.label),
+                    format!(
+                        "built for an older game version - the game moved {} since. Its camera will sit wrong in game: Rebuild it in Model Replacement",
+                        changed.join(", ")
+                    ),
+                ),
+                Ok(_) => {}
+                Err(e) => report.ok_step(
+                    format!("model check: {}", ov.label),
+                    format!("could not compare with the game's model ({e})"),
+                ),
+            }
+        }
+    }
+
     // 4. Produce variants in their own folders under output_dir:
     //    - "mine"     = your tracks only (a clean backup of just your mod)
     //    - "combined" = yours + the imported mods (only when mods are imported)

@@ -114,6 +114,7 @@ import { EffectsBrowser } from "./components/EffectsBrowser";
 import { ParticleReference } from "./components/ParticleReference";
 import { ParticleOutline } from "./components/ParticleOutline";
 import { MenuArtTab } from "./components/MenuArtTab";
+import { CursorsTab } from "./components/CursorsTab";
 import { PostersTab } from "./components/PostersTab";
 import { AnimatedArt } from "./components/AnimatedArt";
 import { liveDynpaints } from "./data/dynpaintTargets";
@@ -162,6 +163,9 @@ const POSTERS = "posters";
 const ANIMATED_ART = "animatedart";
 /** Replace the game's screen art (play-mode cards, any panorama image). */
 const MENU_ART = "menuart";
+/** Custom mouse cursors: loose files in the game folder, applied from the
+ *  tab (never by a compile - the game reads them off disk, not from a pak). */
+const CURSORS = "cursors";
 /** Jumpscares/Deaths (MoonahMasterUI) — only when the engine is detected installed. */
 const JUMPSCARES = "jumpscares";
 /** UI Master (experimental): edit the game's panorama layouts/styles. */
@@ -254,6 +258,7 @@ const TAB_LABELS: Record<string, string> = {
   [POSTERS]: "Static Art",
   [ANIMATED_ART]: "Animated Art",
   [MENU_ART]: "Menu Art",
+  [CURSORS]: "Cursors",
   [JUMPSCARES]: "Jumpscares",
   [UIMASTER]: "UI Master",
   [EASY_COMPILE]: "Easy Compile",
@@ -1022,6 +1027,7 @@ function accentFor(ev: { group: string; side: string }): string {
   if (ev.group === POSTERS) return "#8b5cf6"; // deep violet (posters)
   if (ev.group === ANIMATED_ART) return "#a78bfa"; // lighter violet (animated art)
   if (ev.group === MENU_ART) return "#67e8f9"; // light cyan (menu art)
+  if (ev.group === CURSORS) return "#bef264"; // lime (cursors)
   if (ev.group === JUMPSCARES) return "#ef4444"; // red (spooky)
   if (ev.group === UIMASTER) return "#f59e0b"; // amber (experimental UI editing)
   if (ev.group === EASY_COMPILE) return "#fbbf24"; // amber (compiler utility)
@@ -1541,6 +1547,7 @@ export default function App() {
     if (settings.experimentalUiMaster) out.push(UIMASTER);
     if (settings.experimentalEasyCompile) out.push(EASY_COMPILE);
     out.push(MENU_ART);
+    out.push(CURSORS);
     out.push(MODEL_SWAP);
     // Jumpscares when the MoonahMasterUI engine is in the user's mods, this
     // project already configures it, or the settings toggle opts in (build
@@ -5714,6 +5721,8 @@ export default function App() {
     if (g === POSTERS) return (p.posterOverrides ?? []).length > 0;
     if (g === ANIMATED_ART)
       return liveDynpaints(p.dynpaints ?? []).some((d) => d.enabled !== false && !!d.sourceMedia);
+    if (g === CURSORS)
+      return (p.cursors ?? []).some((c) => c.enabled !== false && !!c.sourceImage);
     if (g === CUSTOM_SERVER)
       return (
         (p.vdataOverrides ?? []).length > 0 ||
@@ -6081,6 +6090,8 @@ export default function App() {
       ? (project?.posterOverrides ?? []).length
       : g === ANIMATED_ART
       ? liveDynpaints(project?.dynpaints ?? []).filter((d) => d.enabled !== false && !!d.sourceMedia).length
+      : g === CURSORS
+      ? (project?.cursors ?? []).filter((c) => c.enabled !== false && !!c.sourceImage).length
       : g === REPLACE_SOUNDS
         ? (project?.soundOverrides ?? []).length
         : g === EFFECTS
@@ -6783,6 +6794,16 @@ export default function App() {
             accent="#67e8f9"
             onChange={(next) =>
               setProject((prev) => (prev ? { ...prev, iconMods: next } : prev))
+            }
+          />
+        ) : activeTab === CURSORS ? (
+          <CursorsTab
+            pakPath={settings.deadlockPak}
+            ffmpegPath={settings.ffmpegPath}
+            cursors={project?.cursors ?? []}
+            accent="#bef264"
+            onChange={(next) =>
+              setProject((prev) => (prev ? { ...prev, cursors: next } : prev))
             }
           />
         ) : activeTab === PARTICLE_GUIDE ? (

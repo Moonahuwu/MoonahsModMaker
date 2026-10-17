@@ -2,6 +2,22 @@
 
 All notable changes since 1.0.4. Download: https://gamebanana.com/tools/23422
 
+## 1.5.2 (2026-10-16)
+
+### Game update 2026-10-16
+- The update changed the format of the game's hero, ability and model data, and the app's file reader could not open it: the Heroes and Items tabs and Model Replacement failed on this patch. The reader is updated (ValveResourceFormat 20.1) and everything reads again.
+- New heroes: Violet, Baba, Solomon and Deadman Danny show up in the Heroes tab with their ability cards, icons, sounds, voice lines and card art, all checked against the live game. The game still marks Violet and Baba "in development" even though they are playable, so the app now goes by whether a hero has a full kit and card art instead of that flag.
+- Model Replacement: the update moved every hero's camera anchors (`standing_pivot` and `crouching_pivot` changed from -90 -90 0 to 0 0 0, and the aim and weapon attachments moved with them). The hero kits the app keeps were made from the old models, so a new build would have carried the old anchors. Kits now remember which game version they came from and re-read the hero model after an update, and a build refreshes an old kit by itself first.
+- Model swaps built before an update are now marked "outdated - rebuild" in Model Replacement, and Compile warns about them, listing the anchors the game moved. Click Rebuild to fix the camera.
+
+### New: Cursors tab
+- Give the game your own mouse cursors. Since the 2026-09-29 patch Deadlock draws four cursors from image files (the pointer, the ping pointer, the shop hand and the post-game commend), and the new Cursors tab replaces any of them.
+- Choose any image (PNG, JPG, WebP, GIF, BMP, TGA) per cursor, pick its size, and click on the preview to set where the cursor actually clicks. "Use for all" puts one image on all four.
+- Load a cursor pack someone made: a .zip, .rar or .7z of cursor files, or a folder. Packs with several looks (for example "Player 1" to "Player 4") ask which one you want.
+- "Apply to game" converts everything to the game's exact file format and writes it into the game's cursor folder. Cursors are loose files, not part of your mod pak, so they are applied from the tab and not by Compile.
+- The files your cursors replace are backed up next to them, and "Restore originals" puts them back. A game update or a Steam file verify resets the cursors; the tab notices and asks you to apply again.
+- "Save as a pack" writes your cursors as a zip in the shape cursor mods are shared in, with install notes.
+
 ## 1.5.1 (2026-10-04)
 
 ### Wall Art: what the game shows now, and the fireplace portrait is back

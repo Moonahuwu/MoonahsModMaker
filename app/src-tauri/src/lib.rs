@@ -1,6 +1,7 @@
 mod audio;
 mod commands;
 mod compile;
+mod cursors;
 mod digimod;
 mod dynpaint;
 mod host;
@@ -115,6 +116,7 @@ pub fn run() {
             commands::hero_model_target,
             commands::model_workspace,
             commands::model_preflight,
+            commands::model_outdated,
             commands::model_build,
             commands::model_open_modeldoc,
             commands::prop_thumb,
@@ -192,6 +194,11 @@ pub fn run() {
             commands::list_ui_mods,
             commands::import_digimod,
             commands::media_thumb,
+            commands::cursor_status,
+            commands::apply_cursors,
+            commands::restore_cursors,
+            commands::import_cursor_pack,
+            commands::export_cursor_pack,
             commands::extract_video_audio,
             commands::list_ui_files,
             commands::read_ui_file,

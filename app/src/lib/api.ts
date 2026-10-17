@@ -927,6 +927,18 @@ export function modelWorkspace(
   return invoke("model_workspace", { helperPath, pakPath, vmdlInternal, refresh });
 }
 
+/** Attachments of a built hero model that no longer match the live game's
+ *  hero (empty = up to date) - a patch moved them, so the build needs a
+ *  Rebuild. Cached per (artifact, game build) on the backend. */
+export function modelOutdated(
+  helperPath: string,
+  pakPath: string,
+  targetRel: string,
+  artifact: string,
+): Promise<string[]> {
+  return invoke("model_outdated", { helperPath, pakPath, targetRel, artifact });
+}
+
 /** Name-level FBX sanity scan against the hero's bone list. */
 export function modelPreflight(
   fbxPath: string,
@@ -1478,6 +1490,74 @@ export function packIcons(helperPath: string, source: string): Promise<PackIcon[
 /** Which of `names` (exe names) are currently running (lock-risk warning). */
 export function runningProcesses(names: string[]): Promise<string[]> {
   return invoke("running_processes", { names });
+}
+
+/** One of the game's cursor files as it is on disk right now. */
+export interface CursorSlotStatus {
+  slot: string;
+  file: string;
+  exists: boolean;
+  width: number;
+  height: number;
+  /** The hot spot the game will use, in pixels. */
+  hotX: number;
+  hotY: number;
+  /** "yours" = this app wrote it; "changed" = it did, something replaced it
+   *  since (game update / file verify); "game" = never ours. */
+  state: "yours" | "changed" | "game" | "missing";
+  hasBackup: boolean;
+  /** PNG of the file for display ("" when unreadable). */
+  preview: string;
+  stockWidth: number;
+  stockHeight: number;
+  stockHotX: number;
+  stockHotY: number;
+}
+
+export interface CursorStatus {
+  dir: string;
+  dirExists: boolean;
+  slots: CursorSlotStatus[];
+}
+
+/** One ready-made cursor set inside a pack: slot id -> file. */
+export interface CursorPackVariant {
+  name: string;
+  files: Record<string, string>;
+}
+
+/** What the game's cursor folder holds (derived from the game pak path). */
+export function cursorStatus(pakPath: string): Promise<CursorStatus> {
+  return invoke("cursor_status", { pakPath });
+}
+
+/** Write the set cursors into the game folder (backing up what they replace)
+ *  and put back any cursor that is no longer set. */
+export function applyCursors(
+  pakPath: string,
+  ffmpegPath: string,
+  entries: import("../types").CursorEntry[],
+): Promise<{ applied: string[]; restored: string[]; dir: string }> {
+  return invoke("apply_cursors", { pakPath, ffmpegPath, entries });
+}
+
+/** Put back every cursor file this app replaced. */
+export function restoreCursors(pakPath: string): Promise<{ restored: number; noBackup: string[] }> {
+  return invoke("restore_cursors", { pakPath });
+}
+
+/** Open a community cursor pack (archive or folder) and list its cursor sets. */
+export function importCursorPack(path: string): Promise<CursorPackVariant[]> {
+  return invoke("import_cursor_pack", { path });
+}
+
+/** Save the set cursors as a shareable cursor pack zip; resolves to its path. */
+export function exportCursorPack(
+  ffmpegPath: string,
+  entries: import("../types").CursorEntry[],
+  outZip: string,
+): Promise<string> {
+  return invoke("export_cursor_pack", { ffmpegPath, entries, outZip });
 }
 
 /** Cheap file identity (`len|mtime`), "" if unreadable - game-update detection. */

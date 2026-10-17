@@ -227,7 +227,18 @@ contains `{` braces).
   material names only WARN - success accepts the "WARNING: N compiled, 0
   failed" summary) → vmdl_c cached in app-data `model_cache/`. The app compile
   stages cached artifacts at vanilla paths in every variant
-  (`project.model_overrides` / `ModelOverrideCompile`). E2E: ignored test
+  (`project.model_overrides` / `ModelOverrideCompile`). **Game updates:** a
+  kit is stamped with the game pak's `len|mtime` (`SOURCE_STAMP`,
+  `eim_source.stamp`); `workspace()` re-decompiles a kit from another build
+  (`refreshed_for_update`) and `build_with_feed` refreshes a stale kit before
+  building - the 2026-10-16 patch rewrote every hero's pivot/aim attachments
+  (standing_pivot/crouching_pivot -90 -90 0 -> 0 0 0, origin Z-up; 18
+  attachments differ on Haze) and a cached kit would have rebuilt the OLD ones.
+  `outdated_attachments` compares a BUILT artifact's MDAT attachments with the
+  live hero's (rotation compared as matrices, so gimbal-equivalent angles
+  match; cached per artifact+pak in `<artifact>.vmdl_c.eimcheck`): compile
+  soft-fails "model outdated" per stale swap and the tab shows an "outdated -
+  rebuild" badge (cmd `model_outdated`). E2E `e2e_pivot_update_live`. E2E: ignored test
   `e2e_model_build_via_cs2` + committed rigged-cube fixture
   (`testdata/eim_testcube.fbx`, generated headlessly by Blender).
 - `dynpaint.rs` — Animated paintings (Dynamic Paintings technique + registry by
@@ -286,6 +297,35 @@ contains `{` braces).
   all" copies fit/crop/speed/frames host-wide; the Wall Art master sits directly
   under the Sounds master).
   E2E `e2e_dynpaint_hideout` (compiles hideout + a midtown card).
+- `cursors.rs` — Custom mouse cursors (the `cursors` tab, `CursorsTab.tsx`). Since
+  the 2026-09-29 patch the game draws four cursors from LOOSE BMPs in
+  `game/citadel/resource/cursors/` (`cursor.bmp` 48x58 pointer, `cursor_ping.bmp`
+  48x58, `cursor_shop.bmp` 60x60, `cursor_commend.bmp` 88x88) + `cursor.res` (hot
+  spots). Mined from the binaries: client.dll asks for `resource/cursors/<name>.bmp`
+  and tier0 opens it with `SDL_IOFromFile` + `SDL_LoadBMP_IO` - a real DISK file,
+  never the vpk filesystem, so a cursor CANNOT ride in a mod pak. The tab is
+  therefore the one feature that is not compile-driven: `apply_cursors` renders
+  each image (ffmpeg; BMP sources decode in-process, exact pixels) to the game's
+  own layout (40-byte header, 32-bit BI_RGB BGRA, bottom-up, straight alpha - the
+  module owns tiny BMP decode/encode + a stored-deflate PNG encoder for previews,
+  there is no image crate) and writes it INTO the game folder. Safety model:
+  whatever a write replaces that is not ours becomes `<file>.eim.bak` beside it,
+  and `.eim_cursors.json` there records the hash of every file we wrote - so
+  "yours" / "changed" (game update or Steam verify reset it) / "game" are told
+  apart, re-applying after an update re-snapshots the NEW game file, and restore
+  never copies a stale backup over a newer game file. Apply is declarative
+  (un-set cursors go back to their backups; `cursor.res` is rebuilt from the
+  game's text each time). Hot spots: `cursor.res` blocks keyed by the BMP's file
+  stem (inferred from the stock `cursor_commend` block; `cursor_default` /
+  `cursor_hand_open` are leftovers with no file) - NOT yet confirmed in game.
+  Entries live in `project.cursors` (frontend-only field; click point stored as
+  a 0..1 fraction, `height` 0 = the image's own size). Also `import_cursor_pack`
+  (archive/folder of BMPs, one "look" per folder that holds cursor files) and
+  `export_cursor_pack` (zip in the community shape). E2E (ignored):
+  `e2e_cursors_real_ffmpeg`, `e2e_cursor_packs_real` (the two real packs the
+  feature was built against). Untried alternative: loose files in a
+  higher-priority search-path dir (`citadel/addons/resource/cursors/`) instead of
+  overwriting the stock folder - needs an in-game test.
 - `packsync.rs` — Shared Pack profile sync (two people, one modpack, transport =
   any shared folder, typically a GitHub clone). Export walks the profile JSON
   **schema-blind**: every string that is an absolute path to something that exists
@@ -353,9 +393,15 @@ core pak (compile_project + push_ui_files), and `compiler_error_detail` surfaces
 error lines (stdout carries them; stderr is ILocalize/device-creation noise).
 
 ### 3. `tools/vpk-helper` — C# CLI (net10.0)
-Thin wrapper over **ValvePak** + **ValveResourceFormat** (VRF 20.0 / ValvePak
-5.0.2 since 2026-09-29 - VRF 20 pins ValvePak 5; ValvePak 6 renamed the
-namespace and does not link). **Shader gotcha:** the extracted vmat's texture
+Thin wrapper over **ValvePak** + **ValveResourceFormat** (VRF 20.1 / ValvePak
+5.0.2 since 2026-10-16 - VRF 20.x pins ValvePak 5; ValvePak 6 renamed the
+namespace and does not link). **Format-bump gotcha:** the 2026-10-16 patch
+introduced binary KV3 types 26/27; VRF 20.0 died on every hero/ability vdata
+and model block ("Unknown KVType for variable 'datatype': 26") - Heroes, Items
+and Model Replacement all broke until VRF 20.1 (released the day before).
+After a patch, the FIRST check is `vpk-helper decompile <pak>
+scripts/heroes.vdata_c out.txt`; if it errors, bump VRF and republish
+`dist/vpk-helper.exe`. **Shader gotcha:** the extracted vmat's texture
 INPUT names come from the shader, and a game patch can ship a `.vcs` version VRF
 cannot read yet (2026-09-29: vcs 72 vs "59 through 71") - that failed every
 poster / hero-texture compile. `SafeShaderLoader` never lets a shader take the
@@ -566,7 +612,8 @@ current defaults, so new default slots appear for existing users automatically.
   only retired maps placed flip to `unused`); `refresh_corpus` + the particle-catalog
   build chain; re-measure `MenuArtTab` curated card dims from the pak; diff
   `scripts/heroes.vdata` hero keys (new/removed heroes need no code, the roster is
-  data-driven); run the ignored e2e tests (`e2e_real_compile_to_vpk`,
+  data-driven; `experimental` = DISABLED only - Valve leaves `m_bInDevelopment` on
+  playable heroes, e.g. Violet/Baba on 2026-10-16); run the ignored e2e tests (`e2e_real_compile_to_vpk`,
   `e2e_hero_cards_fold_rules`, `e2e_poster_replace`, `e2e_hero_texture*`,
   `e2e_dynpaint_hideout_compiles`) - a helper/VRF format bump shows up there first.
   **Wall Art manifest regen (recipe in `tools/poster-manifest/README.md`):**

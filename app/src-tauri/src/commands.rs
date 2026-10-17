@@ -1917,6 +1917,27 @@ pub async fn model_workspace(
     .map_err(|e| e.to_string())?
 }
 
+/// Model Replacement: the attachments a built model has that no longer match
+/// the live game's hero (empty = up to date). Drives the "outdated" badge.
+#[tauri::command]
+pub async fn model_outdated(
+    helper_path: String,
+    pak_path: String,
+    target_rel: String,
+    artifact: String,
+) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::models::outdated_attachments(
+            &helper_path,
+            &pak_path,
+            &target_rel,
+            std::path::Path::new(&artifact),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Name-level FBX sanity scan against the hero's bone list.
 #[tauri::command]
 pub async fn model_preflight(
@@ -2487,7 +2508,12 @@ fn hero_roster_impl(
             display_name,
             portrait_path: png.to_string_lossy().into_owned(),
             gloat_path,
-            experimental: h.disabled || h.in_dev,
+            // Only DISABLED heroes are experimental. Every hero reaching this
+            // point has a full ability kit and real card art, and Valve keeps
+            // `m_bInDevelopment` on heroes that are already playable: Violet
+            // (artist) and Baba shipped playable on 2026-10-16 still flagged
+            // in development.
+            experimental: h.disabled,
             color: h.color,
             color_secondary: h.color_secondary,
         });
@@ -9111,6 +9137,144 @@ pub async fn hero_images(app: tauri::AppHandle, helper_path: String, pak_path: S
         .map_err(|e| e.to_string())?
 }
 
+/// Cursors tab: what is in the game's `resource/cursors` folder right now
+/// (per cursor: size, hot spot, whether it is ours, a PNG to show).
+#[tauri::command]
+pub async fn cursor_status(
+    app: tauri::AppHandle,
+    pak_path: String,
+) -> Result<crate::cursors::CursorStatus, String> {
+    use tauri::Manager;
+    let previews = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("cursor_previews");
+    tauri::async_runtime::spawn_blocking(move || crate::cursors::status(&pak_path, &previews))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Cursors tab: write the set cursors into the game folder (backing up what
+/// they replace) and put back any cursor that is no longer set.
+#[tauri::command]
+pub async fn apply_cursors(
+    app: tauri::AppHandle,
+    pak_path: String,
+    ffmpeg_path: Option<String>,
+    entries: Vec<crate::cursors::CursorEntry>,
+) -> Result<crate::cursors::ApplyReport, String> {
+    use tauri::Manager;
+    let work = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("cursor_work");
+    tauri::async_runtime::spawn_blocking(move || {
+        let ffmpeg = ffmpeg_path.as_deref().filter(|s| !s.is_empty()).unwrap_or("ffmpeg");
+        crate::cursors::apply(&pak_path, ffmpeg, &entries, &work)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Cursors tab: put back every file this app replaced.
+#[tauri::command]
+pub async fn restore_cursors(pak_path: String) -> Result<crate::cursors::RestoreReport, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::cursors::restore(&pak_path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Cursors tab: open a community cursor pack (a zip / rar / 7z, or a folder)
+/// and list the cursor sets inside. The files are copied into app data so the
+/// entries made from them outlive the download.
+#[tauri::command]
+pub async fn import_cursor_pack(
+    app: tauri::AppHandle,
+    path: String,
+) -> Result<Vec<crate::cursors::PackVariant>, String> {
+    use tauri::Manager;
+    let packs = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("cursor_packs");
+    tauri::async_runtime::spawn_blocking(move || {
+        let src = std::path::Path::new(&path);
+        let meta = std::fs::metadata(src).map_err(|e| format!("{path}: {e}"))?;
+        let stem = src
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "pack".into());
+        let safe: String = stem
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+            .collect();
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let key = crate::compile::fingerprint(&format!("{path}|{}|{mtime}", meta.len()));
+        let dest = packs.join(format!("{safe}_{}", &key[..8]));
+        let _ = std::fs::remove_dir_all(&dest);
+        std::fs::create_dir_all(&dest).map_err(|e| e.to_string())?;
+        let found = if meta.is_dir() {
+            crate::cursors::adopt_pack(src, &dest)?
+        } else {
+            // Unpack beside the adopted copy, keep only the cursor files.
+            let unpacked = dest.join("_unpacked");
+            std::fs::create_dir_all(&unpacked).map_err(|e| e.to_string())?;
+            extract_archive(src, &unpacked)?;
+            let mut found = crate::cursors::adopt_pack(&unpacked, &dest)?;
+            let _ = std::fs::remove_dir_all(&unpacked);
+            // A look sitting at the archive's root is named after the pack,
+            // not after our scratch folder.
+            for v in found.iter_mut() {
+                if v.name == "_unpacked" {
+                    v.name = stem.clone();
+                }
+            }
+            found
+        };
+        if found.is_empty() {
+            let _ = std::fs::remove_dir_all(&dest);
+            return Err(
+                "No cursor files in there. A cursor pack holds cursor.bmp, cursor_ping.bmp, cursor_shop.bmp or cursor_commend.bmp."
+                    .to_string(),
+            );
+        }
+        Ok(found)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Cursors tab: save the set as a shareable cursor pack (zip of the game's
+/// file names + hot spots + install notes).
+#[tauri::command]
+pub async fn export_cursor_pack(
+    app: tauri::AppHandle,
+    ffmpeg_path: Option<String>,
+    entries: Vec<crate::cursors::CursorEntry>,
+    out_zip: String,
+) -> Result<String, String> {
+    use tauri::Manager;
+    let work = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("cursor_work");
+    tauri::async_runtime::spawn_blocking(move || {
+        let ffmpeg = ffmpeg_path.as_deref().filter(|s| !s.is_empty()).unwrap_or("ffmpeg");
+        crate::cursors::export_pack(ffmpeg, &entries, std::path::Path::new(&out_zip), &work)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -9179,7 +9343,11 @@ mod tests {
         let vtext = std::fs::read_to_string(&vdata).unwrap();
         let released: Vec<&HeroInfo> = heroes
             .iter()
-            .filter(|h| !h.disabled && !h.in_dev && !HERO_CODE_DENYLIST.contains(&h.code.as_str()))
+            // An in-development hero (shown under "experimental") is checked
+            // too when named in EIM_HERO - new kits land there first.
+            // Same rule as the roster: in-development heroes with a full kit
+            // are playable (Violet, Baba on 2026-10-16).
+            .filter(|h| !h.disabled && !HERO_CODE_DENYLIST.contains(&h.code.as_str()))
             .filter(|h| !hero_bound_abilities(&vtext, &h.code).is_empty())
             .filter(|h| card_of(h).1)
             .filter(|h| focus.as_ref().map_or(true, |f| f.contains(&h.code)))
@@ -9298,8 +9466,7 @@ mod tests {
         };
 
         // Grey Talon: the gun (Greytalon.Wpn.*) and the landing thud must not
-        // ride the Power Jump card just because its vdata lists the regular
-        // weapon shot - only that directly-referenced shot stays.
+        // ride the Power Jump card - only the jump's own referenced shot stays.
         let orion = card("orion");
         let jump = orion
             .iter()
@@ -9310,10 +9477,13 @@ mod tests {
             jump_names.contains(&"Orion.Power.Jump.Cast".to_string()),
             "{jump_names:?}"
         );
+        // Since the 2026-09/10 patches Power Jump references its OWN shot
+        // event; the regular gun shot no longer belongs on this card at all.
         assert!(
-            jump_names.contains(&"Greytalon.Wpn.Fire".to_string()),
+            jump_names.contains(&"Greytalon.Power.Jump.Wpn.Fire".to_string()),
             "{jump_names:?}"
         );
+        assert!(!jump_names.contains(&"Greytalon.Wpn.Fire".to_string()), "{jump_names:?}");
         for bad in [
             "Greytalon.Wpn.Whizby",
             "Greytalon.Wpn.Reload.Start",

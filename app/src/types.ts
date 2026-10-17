@@ -279,6 +279,20 @@ export interface DynpaintEntry {
   cropY?: number;
 }
 
+/** One custom mouse cursor (the Cursors tab). Cursors are loose files in the
+ *  game folder, not pak content: the tab applies them, a compile never does. */
+export interface CursorEntry {
+  /** "default" | "ping" | "shop" | "commend" (SLOTS in cursors.rs). */
+  slot: string;
+  sourceImage: string;
+  /** Height in pixels the cursor is written at; 0 = the image's own size. */
+  height: number;
+  /** Where the cursor clicks, as a fraction of the image (0 = left / top). */
+  hotX: number;
+  hotY: number;
+  enabled?: boolean;
+}
+
 export interface Project {
   version: number;
   gameContentRoot: string;
@@ -311,6 +325,8 @@ export interface Project {
   modules?: PackModule[];
   /** Animated paintings (Dynamic Paintings, with goldenboy44's permission). */
   dynpaints?: DynpaintEntry[];
+  /** Custom mouse cursors (frontend-only, like `dynpaints`). */
+  cursors?: CursorEntry[];
 }
 
 /** One Pack Builder module (see `Project.modules`). */

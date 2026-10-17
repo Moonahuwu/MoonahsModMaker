@@ -42,6 +42,31 @@ pub struct ModelWorkspace {
     pub camera: Vec<CameraKey>,
     /// File count of the decompiled tree.
     pub files: usize,
+    /// The kit was re-decompiled because the game updated since it was made.
+    #[serde(default)]
+    pub refreshed_for_update: bool,
+}
+
+/// The game build a kit was decompiled from (the game pak's `len|mtime`).
+/// A kit from another build is re-decompiled: a patch can change the hero
+/// model under it. The 2026-10-16 update rewrote every hero's
+/// `standing_pivot` / `crouching_pivot` / `root_aim` camera attachments
+/// (pitch -90 / yaw -90 -> identity, origin re-expressed Z-up); a kit kept
+/// from before would have rebuilt models with the OLD camera anchors.
+pub const SOURCE_STAMP: &str = "eim_source.stamp";
+
+fn pak_stamp(pak: &str) -> String {
+    crate::commands::stamp_of(pak)
+}
+
+/// True when the kit at `dir` was decompiled from a different game build than
+/// `pak` (or predates stamping). An unreadable pak never forces a refresh.
+pub fn kit_is_stale(dir: &Path, pak: &str) -> bool {
+    let now = pak_stamp(pak);
+    if now.is_empty() || !dir.exists() {
+        return false;
+    }
+    std::fs::read_to_string(dir.join(SOURCE_STAMP)).map(|s| s.trim() != now).unwrap_or(true)
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -76,12 +101,18 @@ pub fn workspace(
     let vmdl_rel = internal_c.trim_end_matches("_c").replace('/', std::path::MAIN_SEPARATOR_STR);
     let vmdl_abs = dir.join(&vmdl_rel);
 
-    if refresh && dir.exists() {
+    // A kit from an older game build is re-decompiled (see SOURCE_STAMP).
+    let stale = !refresh && kit_is_stale(&dir, pak);
+    if (refresh || stale) && dir.exists() {
         std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
     }
     if !vmdl_abs.exists() {
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         crate::vpk::model_from_vpk(helper, pak, &internal_c, &dir.to_string_lossy())?;
+    }
+    let stamp = pak_stamp(pak);
+    if !stamp.is_empty() {
+        let _ = std::fs::write(dir.join(SOURCE_STAMP), &stamp);
     }
     if !vmdl_abs.exists() {
         return Err(format!("decompile produced no vmdl at {}", vmdl_abs.display()));
@@ -122,6 +153,7 @@ pub fn workspace(
         materials,
         camera,
         files,
+        refreshed_for_update: stale,
     })
 }
 
@@ -1229,6 +1261,98 @@ pub fn correct_attachments(text: &str, vanilla: &[(String, VanillaAttachment)]) 
     }
     out.push_str(rest);
     (out, fixed)
+}
+
+// ---------------------------------------------------------------------------
+// Outdated builds: a model compiled against an older game version
+// ---------------------------------------------------------------------------
+//
+// A built hero model carries the attachments of the hero model it was built
+// from. When a patch moves them (2026-10-16: standing_pivot /
+// crouching_pivot / root_aim went from pitch -90 + yaw -90 to identity), the
+// old build keeps the old camera / aim anchors and the camera sits wrong in
+// game. Compare the build with the live hero, attachment by attachment.
+
+/// Source AngleMatrix (pitch, yaw, roll degrees) as its 9 entries - compared
+/// instead of the angles, so equivalent angle triples (gimbal lock) match.
+fn qangle_matrix(a: [f64; 3]) -> [f64; 9] {
+    let r = |d: f64| d.to_radians();
+    let (sp, cp) = r(a[0]).sin_cos();
+    let (sy, cy) = r(a[1]).sin_cos();
+    let (sr, cr) = r(a[2]).sin_cos();
+    [
+        cp * cy,
+        cp * sy,
+        -sp,
+        sr * sp * cy - cr * sy,
+        sr * sp * sy + cr * cy,
+        sr * cp,
+        cr * sp * cy + sr * sy,
+        cr * sp * sy - sr * cy,
+        cr * cp,
+    ]
+}
+
+/// Names of the attachments both models have whose parent, offset or rotation
+/// differ (beyond float noise from the compile). Attachments only one side has
+/// are ignored: a build may add none, and a patch adding one breaks nothing.
+pub fn changed_attachments(
+    built: &[(String, VanillaAttachment)],
+    live: &[(String, VanillaAttachment)],
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for (name, b) in built {
+        let Some((_, l)) = live.iter().find(|(n, _)| n == name) else { continue };
+        let moved = (0..3).any(|i| (b.origin[i] - l.origin[i]).abs() > 0.05);
+        let (mb, ml) = (qangle_matrix(b.angles), qangle_matrix(l.angles));
+        let turned = (0..9).any(|i| (mb[i] - ml[i]).abs() > 0.01);
+        if b.parent != l.parent || moved || turned {
+            out.push(name.clone());
+        }
+    }
+    out
+}
+
+/// Which attachments of a BUILT model (`artifact`, a loose .vmdl_c meant for
+/// `target_rel`) no longer match the live game's model. Empty = up to date.
+/// The answer is cached beside the artifact per (artifact, game build), so a
+/// compile only pays for the check once per patch.
+pub fn outdated_attachments(
+    helper: &str,
+    pak: &str,
+    target_rel: &str,
+    artifact: &Path,
+) -> Result<Vec<String>, String> {
+    let ident = |p: &Path| crate::commands::stamp_of(&p.to_string_lossy());
+    let key = format!("v1|{}|{}", ident(artifact), crate::commands::stamp_of(pak));
+    let cache = artifact.with_extension("vmdl_c.eimcheck");
+    if let Ok(text) = std::fs::read_to_string(&cache) {
+        if let Some((k, names)) = text.split_once('\n') {
+            if k == key {
+                return Ok(names.split(',').filter(|n| !n.is_empty()).map(str::to_string).collect());
+            }
+        }
+    }
+    let live = parse_mdat_attachments(&crate::vpk::model_block_from_vpk(helper, pak, target_rel, "MDAT")?);
+    if live.is_empty() {
+        return Ok(Vec::new());
+    }
+    // The helper reads blocks out of a vpk: pack the artifact at its path.
+    let scratch = std::env::temp_dir()
+        .join("eim_model_check")
+        .join(crate::compile::fingerprint(&artifact.to_string_lossy()));
+    let _ = std::fs::remove_dir_all(&scratch);
+    let dest = scratch.join("tree").join(target_rel);
+    std::fs::create_dir_all(dest.parent().ok_or("bad model path")?).map_err(|e| e.to_string())?;
+    std::fs::copy(artifact, &dest).map_err(|e| e.to_string())?;
+    let vpk = scratch.join("check_dir.vpk");
+    crate::vpk::pack(helper, &scratch.join("tree").to_string_lossy(), &vpk.to_string_lossy())?;
+    let built = crate::vpk::model_block_from_vpk(helper, &vpk.to_string_lossy(), target_rel, "MDAT")
+        .map(|t| parse_mdat_attachments(&t));
+    let _ = std::fs::remove_dir_all(&scratch);
+    let changed = changed_attachments(&built?, &live);
+    let _ = std::fs::write(&cache, format!("{key}\n{}", changed.join(",")));
+    Ok(changed)
 }
 
 /// The workspace-cached vanilla attachment table (fetched from the compiled
@@ -2397,6 +2521,29 @@ pub fn build_with_feed(
     feed: Option<std::sync::mpsc::Sender<String>>,
 ) -> ModelBuildReport {
     let mut rep = ModelBuildReport { feed, ..Default::default() };
+    // A kit decompiled under an older game build would bake that build's
+    // attachments (camera anchors) into the new model: refresh it first. The
+    // tab normally does this when the hero is opened; a Rebuild straight from
+    // a saved entry would not. The refreshed kit lands in the same folder.
+    if let (Some(helper), Some(pak)) = (
+        req.helper_path.as_deref().filter(|h| !h.is_empty()),
+        req.pak_path.as_deref().filter(|p| !p.is_empty()),
+    ) {
+        let ws = Path::new(&req.workspace_dir);
+        if req.kind == ModelKind::Hero && kit_is_stale(ws, pak) {
+            if let Some(root) = ws.parent() {
+                match workspace(helper, pak, &req.vmdl_internal, root, true) {
+                    Ok(_) => rep.note("kit refreshed: the game updated since it was decompiled"),
+                    Err(e) => {
+                        rep.note(format!(
+                            "error: the game updated and the hero's model could not be re-read: {e}"
+                        ));
+                        return rep;
+                    }
+                }
+            }
+        }
+    }
     match build_inner(req, &mut rep) {
         Ok(artifact) => {
             rep.ok = true;
@@ -3238,6 +3385,104 @@ mod tests {
         // Unknown attachments and everything else stay untouched.
         assert!(out.contains("relative_angles = [ 1.0, 2.0, 3.0 ]"));
         assert_eq!(out.matches('{').count(), out.matches('}').count());
+    }
+
+    /// The 2026-10-16 pivot rewrite against the LIVE game: a hero kit from an
+    /// older build refreshes to the new identity pivots, and a hero model
+    /// built before the update (the machine's cached Haze build, when present)
+    /// is reported outdated. Run with:
+    ///   cargo test -p app --lib -- --ignored e2e_pivot_update_live --nocapture
+    #[test]
+    #[ignore]
+    fn e2e_pivot_update_live() {
+        let helper = r"C:\Users\ethob\Desktop\DeadlockModding\EasyIntroModder\tools\vpk-helper\bin\Release\net10.0\vpk-helper.dll";
+        let pak = r"D:\SteamLibrary\steamapps\common\Deadlock\game\citadel\pak01_dir.vpk";
+        let target = "models/heroes_staging/haze/haze.vmdl_c";
+        let root = std::env::temp_dir().join("eim_pivot_update_e2e");
+        let _ = std::fs::remove_dir_all(&root);
+        // A fresh kit carries the stamp and the NEW pivots.
+        let ws = workspace(helper, pak, target, &root, false).unwrap();
+        assert!(!ws.refreshed_for_update);
+        let dir = Path::new(&ws.dir);
+        assert!(!kit_is_stale(dir, pak));
+        let pivots = |d: &Path| {
+            load_attachments_cache(d)
+                .into_iter()
+                .filter(|(n, _)| n == "standing_pivot" || n == "crouching_pivot")
+                .collect::<Vec<_>>()
+        };
+        let fresh = pivots(dir);
+        assert_eq!(fresh.len(), 2, "{fresh:?}");
+        for (n, a) in &fresh {
+            eprintln!("live {n}: origin {:?} angles {:?}", a.origin, a.angles);
+            assert!(a.angles.iter().all(|v| v.abs() < 0.01), "{n} must be upright now: {:?}", a.angles);
+            assert!(a.origin[2] > 50.0, "{n} offset is Z-up now: {:?}", a.origin);
+        }
+        // An old kit (other build stamp, old pivot table) refreshes itself.
+        std::fs::write(dir.join(SOURCE_STAMP), "1|1").unwrap();
+        std::fs::write(
+            dir.join(ATTACHMENTS_CACHE),
+            "standing_pivot\troot_motion\t0\t86.25\t0\t-89.99999\t-89.99999\t0\t1\t0\n",
+        )
+        .unwrap();
+        assert!(kit_is_stale(dir, pak));
+        let ws2 = workspace(helper, pak, target, &root, false).unwrap();
+        assert!(ws2.refreshed_for_update, "an old kit must re-decompile");
+        let again = pivots(Path::new(&ws2.dir));
+        assert_eq!(again.len(), 2);
+        assert!(again.iter().all(|(_, a)| a.angles.iter().all(|v| v.abs() < 0.01)));
+        assert!(!workspace(helper, pak, target, &root, false).unwrap().refreshed_for_update);
+        let _ = std::fs::remove_dir_all(&root);
+
+        // A build from before the update is outdated.
+        let old_build = std::env::var("APPDATA")
+            .map(|a| Path::new(&a).join(r"com.digiphoenix.deadlock-intro-tool\model_cache\haze.vmdl_c"))
+            .unwrap();
+        if old_build.is_file() {
+            let copy = std::env::temp_dir().join("eim_pivot_e2e_haze.vmdl_c");
+            std::fs::copy(&old_build, &copy).unwrap();
+            let changed = outdated_attachments(helper, pak, target, &copy).unwrap();
+            eprintln!("July Haze build vs today's game: {changed:?}");
+            assert!(changed.iter().any(|n| n == "standing_pivot"), "{changed:?}");
+            // Cached per (artifact, game build): the second ask is free.
+            assert!(copy.with_extension("vmdl_c.eimcheck").is_file());
+            assert_eq!(outdated_attachments(helper, pak, target, &copy).unwrap(), changed);
+            let _ = std::fs::remove_file(&copy);
+            let _ = std::fs::remove_file(copy.with_extension("vmdl_c.eimcheck"));
+        } else {
+            eprintln!("skip: no cached Haze build on this machine");
+        }
+    }
+
+    #[test]
+    fn changed_attachments_spot_the_2026_10_16_pivot_rewrite() {
+        let att = |origin: [f64; 3], angles: [f64; 3]| VanillaAttachment {
+            parent: "root_motion".into(),
+            origin,
+            angles,
+            weight: 1.0,
+            ignore_rotation: false,
+        };
+        // Before the patch (decoded from an old build) vs after (live).
+        let built = vec![
+            ("standing_pivot".to_string(), att([0.0, 86.25, 0.0], [-89.99999, -89.99999, 0.0])),
+            ("crouching_pivot".to_string(), att([0.0, 57.5, 0.0], [-89.99999, -89.99999, 0.0])),
+            ("weapon_hand_R".to_string(), att([1.0, 2.0, 3.0], [10.0, 20.0, 30.0])),
+            ("only_in_build".to_string(), att([0.0; 3], [0.0; 3])),
+        ];
+        let live = vec![
+            ("standing_pivot".to_string(), att([0.000011, 0.000023, 86.249969], [0.000014, 0.0, 0.0])),
+            ("crouching_pivot".to_string(), att([0.000008, 0.000015, 57.499992], [0.000014, 0.0, 0.0])),
+            // Compile noise and an equivalent angle triple are NOT changes.
+            ("weapon_hand_R".to_string(), att([1.001, 2.0, 3.0], [10.0, 20.0, 30.0 + 360.0])),
+            ("only_live".to_string(), att([0.0; 3], [0.0; 3])),
+        ];
+        assert_eq!(changed_attachments(&built, &live), ["standing_pivot", "crouching_pivot"]);
+        // Gimbal lock: pitch -90 with (yaw, roll) traded is the same rotation.
+        let a = vec![("x".to_string(), att([0.0; 3], [-90.0, 30.0, 0.0]))];
+        let b = vec![("x".to_string(), att([0.0; 3], [-90.0, 0.0, 30.0]))];
+        assert!(changed_attachments(&a, &b).is_empty());
+        assert!(changed_attachments(&a, &a).is_empty());
     }
 
     #[test]

@@ -5,6 +5,7 @@ import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { appDataDir, join } from "@tauri-apps/api/path";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import {
+  modelOutdated,
   checkPaths,
   heroModelTarget,
   fbxAutoTextures,
@@ -92,6 +93,34 @@ export function ModelSwapTab({
 }) {
   const { push } = useToast();
   const [mode, setMode] = useState<SwapMode>("hero");
+  /** Saved hero swaps built against an older game version: id -> the
+   *  attachments the game has moved since (a patch moved the camera anchors). */
+  const [outdated, setOutdated] = useState<Record<string, string[]>>({});
+  useEffect(() => {
+    if (!settings.vpkHelperPath || !settings.deadlockPak) return;
+    let alive = true;
+    void (async () => {
+      const found: Record<string, string[]> = {};
+      for (const o of overrides) {
+        if (!o.targetPath.startsWith("models/heroes")) continue;
+        try {
+          const changed = await modelOutdated(
+            settings.vpkHelperPath,
+            settings.deadlockPak,
+            o.targetPath,
+            o.artifact,
+          );
+          if (changed.length > 0) found[o.id] = changed;
+        } catch {
+          /* artifact missing or unreadable: the compile reports that itself */
+        }
+      }
+      if (alive) setOutdated(found);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [overrides, settings.vpkHelperPath, settings.deadlockPak]);
   // The picked object (object mode); heroes use `hero` below.
   const [obj, setObj] = useState<ObjectTarget | null>(null);
   const [heroes, setHeroes] = useState<HeroPortrait[]>([]);
@@ -1190,9 +1219,19 @@ export function ModelSwapTab({
                     {o.materialSpecs?.length ?? 0} textured
                   </span>
                 )}
+                {outdated[o.id] && (
+                  <span
+                    className="shrink-0 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-300"
+                    title={`Built for an older game version: the game moved ${outdated[o.id].join(", ")} since, so the camera sits wrong in game. Rebuild to fix it.`}
+                  >
+                    outdated - rebuild
+                  </span>
+                )}
                 <button
                   onClick={() => void startRebuild(o)}
-                  className="shrink-0 rounded border border-zinc-700 px-1.5 py-0.5 text-[10px] text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-200"
+                  className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] transition hover:bg-zinc-800 hover:text-zinc-200 ${
+                    outdated[o.id] ? "border-amber-500/50 text-amber-200" : "border-zinc-700 text-zinc-400"
+                  }`}
                 >
                   Rebuild…
                 </button>
@@ -1875,7 +1914,8 @@ export function ModelSwapTab({
           )}
           <p className="mt-2 text-[10px] text-zinc-600">
             After a successful build, the swap appears above and ships with your normal Compile &
-            Install. Rebuild after game patches if the hero's animations change.
+            Install. A game patch can move the hero's camera anchors: a swap built before one is
+            marked "outdated" above, and Rebuild fixes it.
           </p>
         </section>
       )}
