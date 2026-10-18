@@ -211,6 +211,14 @@ contains `{` braces).
   overwrites a caller-given one, backing up the occupant under `.eim_backups/`) and, when
   asked, adds the `citadel/addons` search path to the sibling `gameinfo.gi` if missing
   (with a `.gi.eim.bak`). Commands: `scan_addon_slots`, `install_to_game`.
+  **gameinfo gotcha (2026-10-16 patch):** a BARE `Game citadel/addons` on top makes
+  addons the MOD + DEFAULT_WRITE path (the engine takes both from the first Game
+  entry), and since that patch the game then dies at launch with "FATAL ERROR: Unable
+  to read default keybinding configuration (user_keys_default)!" (reproduced live, no
+  addons loaded). `pin_mod_write` adds `Mod citadel` + `Write citadel` after our line
+  (what other managers write); installs repair an older bare line, and
+  `ensure_citadel_searchpath` (eim_dev) does the same. With addons as the write path
+  the game's `console.log` lands in `citadel/addons/` instead of `citadel/`.
 - `models.rs` — Model Replacement: custom skinned HERO models. CSDK12 CANNOT
   compile these (its DLLs lack the NmSkeletonList/AnimGraph2List classes -
   proven), so builds shell to **CS2 Workshop Tools'** headless resourcecompiler

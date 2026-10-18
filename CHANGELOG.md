@@ -2,6 +2,14 @@
 
 All notable changes since 1.0.4. Download: https://gamebanana.com/tools/23422
 
+## 1.5.3 (2026-10-18)
+
+### Fix: game crash on launch after installing a mod
+- Since the 2026-10-16 game update, installing a mod with "patch gameinfo" on made Deadlock stop at launch with "FATAL ERROR: Unable to read default keybinding configuration (user_keys_default)!". The app added the addons folder to the game's search paths in a way that made the game look for its own settings inside the addons folder, and the update made that fatal.
+- The app now adds the addons folder the same way other mod managers do (with `Mod citadel` and `Write citadel`), so the game keeps reading its settings from its own folder. Verified on the live game: no error, mods load.
+- Already hit by this? Update, then Install once more (with "patch gameinfo" on, the default): the app repairs the line it added before. A gameinfo that already has the full set of lines is left alone.
+- The UI Master test push had the same problem and gets the same fix.
+
 ## 1.5.2 (2026-10-16)
 
 ### Game update 2026-10-16

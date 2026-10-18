@@ -221,30 +221,85 @@ fn ensure_addons_searchpath(addons_dir: &Path) -> Result<(bool, String), String>
     let text = std::fs::read_to_string(&gameinfo)
         .map_err(|e| format!("reading {}: {e}", gameinfo.display()))?;
 
-    // Already mounted (any form of the addons search path).
-    if text.to_lowercase().contains("citadel/addons") {
-        return Ok((false, "already enabled".into()));
-    }
+    let (patched, note) = if text.to_lowercase().contains("citadel/addons") {
+        // Already mounted - but a bare mount from before the 2026-10-16 fix
+        // (or another tool) makes the game refuse to start: repair it.
+        match pin_mod_write(&text, "citadel/addons") {
+            Some(p) => (p, "repaired the citadel/addons search path (game said user_keys_default)"),
+            None => return Ok((false, "already enabled".into())),
+        }
+    } else {
+        let p = add_top_game_path(&text, "citadel/addons")?;
+        (
+            pin_mod_write(&p, "citadel/addons").unwrap_or(p),
+            "added citadel/addons search path",
+        )
+    };
 
-    // Insert `Game  citadel/addons` right after the SearchPaths `{`.
+    let bak = gameinfo.with_extension("gi.eim.bak");
+    std::fs::copy(&gameinfo, &bak).map_err(|e| format!("backing up gameinfo.gi: {e}"))?;
+    std::fs::write(&gameinfo, patched).map_err(|e| format!("writing gameinfo.gi: {e}"))?;
+    Ok((true, note.into()))
+}
+
+/// `text` with `Game  <needle>` inserted right after the SearchPaths `{`,
+/// i.e. TOP priority.
+fn add_top_game_path(text: &str, needle: &str) -> Result<String, String> {
     let lower = text.to_lowercase();
-    let sp = lower
-        .find("searchpaths")
-        .ok_or("no SearchPaths block in gameinfo.gi")?;
+    let sp = lower.find("searchpaths").ok_or("no SearchPaths block in gameinfo.gi")?;
     let brace = text[sp..]
         .find('{')
         .map(|i| sp + i)
         .ok_or("malformed SearchPaths block (no '{')")?;
     let insert_at = brace + 1;
-    let mut patched = String::with_capacity(text.len() + 40);
+    let nl = if text.contains("\r\n") { "\r\n" } else { "\n" };
+    let mut patched = String::with_capacity(text.len() + 48);
     patched.push_str(&text[..insert_at]);
-    patched.push_str("\n\t\t\tGame\t\t\t\tcitadel/addons");
+    patched.push_str(&format!("{nl}\t\t\tGame\t\t\t\t{needle}"));
     patched.push_str(&text[insert_at..]);
+    Ok(patched)
+}
 
-    let bak = gameinfo.with_extension("gi.eim.bak");
-    std::fs::copy(&gameinfo, &bak).map_err(|e| format!("backing up gameinfo.gi: {e}"))?;
-    std::fs::write(&gameinfo, patched).map_err(|e| format!("writing gameinfo.gi: {e}"))?;
-    Ok((true, "added citadel/addons search path".into()))
+/// Keep `citadel` the MOD and WRITE path once a folder is mounted above it.
+/// The engine takes both from the FIRST `Game` entry unless `Mod` / `Write`
+/// lines say otherwise, so a bare `Game citadel/addons` on top makes the
+/// addons folder the mod root. Since the 2026-10-16 patch the game then reads
+/// its default config from there and stops at "FATAL ERROR: Unable to read
+/// default keybinding configuration (user_keys_default)!" (reproduced on the
+/// live game, no addons loaded). Other mod managers write the same pair.
+/// Inserts whichever of the two lines is missing right after the line holding
+/// `after_needle`; None when both are already there.
+fn pin_mod_write(text: &str, after_needle: &str) -> Option<String> {
+    let lower = text.to_lowercase();
+    let sp = lower.find("searchpaths")?;
+    let open = sp + lower[sp..].find('{')?;
+    let close = open + lower[open..].find('}')?;
+    let has = |key: &str| {
+        lower[open..close].lines().any(|l| {
+            let t: Vec<&str> = l.split_whitespace().collect();
+            t.len() >= 2 && t[0] == key && t[1] == "citadel"
+        })
+    };
+    let missing: Vec<&str> = [("mod", "Mod"), ("write", "Write")]
+        .iter()
+        .filter(|(k, _)| !has(k))
+        .map(|(_, name)| *name)
+        .collect();
+    if missing.is_empty() {
+        return None;
+    }
+    let at = open + lower[open..close].find(&after_needle.to_lowercase())?;
+    let eol = at + text[at..].find('\n').unwrap_or(text.len() - at);
+    // Insert BEFORE the line break (keeps a `\r\n` file's endings intact).
+    let eol = if eol > 0 && text.as_bytes().get(eol - 1) == Some(&b'\r') { eol - 1 } else { eol };
+    let nl = if text.contains("\r\n") { "\r\n" } else { "\n" };
+    let mut out = String::with_capacity(text.len() + 48);
+    out.push_str(&text[..eol]);
+    for name in missing {
+        out.push_str(&format!("{nl}\t\t\t{name}\t\t\t\tcitadel"));
+    }
+    out.push_str(&text[eol..]);
+    Some(out)
 }
 
 /// Ensure `gameinfo.gi` (inside `citadel_dir`) mounts `citadel/<rel>` as a
@@ -258,20 +313,16 @@ pub(crate) fn ensure_citadel_searchpath(citadel_dir: &Path, rel: &str) -> Result
     let text = std::fs::read_to_string(&gameinfo)
         .map_err(|e| format!("reading {}: {e}", gameinfo.display()))?;
     let needle = format!("citadel/{rel}");
-    if text.to_lowercase().contains(&needle.to_lowercase()) {
-        return Ok(false);
-    }
-    let lower = text.to_lowercase();
-    let sp = lower.find("searchpaths").ok_or("no SearchPaths block in gameinfo.gi")?;
-    let brace = text[sp..]
-        .find('{')
-        .map(|i| sp + i)
-        .ok_or("malformed SearchPaths block (no '{')")?;
-    let insert_at = brace + 1;
-    let mut patched = String::with_capacity(text.len() + 48);
-    patched.push_str(&text[..insert_at]);
-    patched.push_str(&format!("\n\t\t\tGame\t\t\t\t{needle}"));
-    patched.push_str(&text[insert_at..]);
+    let patched = if text.to_lowercase().contains(&needle.to_lowercase()) {
+        // Mounted already; repair a bare mount (see `pin_mod_write`).
+        match pin_mod_write(&text, &needle) {
+            Some(p) => p,
+            None => return Ok(false),
+        }
+    } else {
+        let p = add_top_game_path(&text, &needle)?;
+        pin_mod_write(&p, &needle).unwrap_or(p)
+    };
     let bak = gameinfo.with_extension("gi.eim.bak");
     if !bak.exists() {
         std::fs::copy(&gameinfo, &bak).map_err(|e| format!("backing up gameinfo.gi: {e}"))?;
@@ -295,6 +346,48 @@ mod tests {
         assert_eq!(slot_of("pak01_000.vpk"), None);
         assert_eq!(slot_of("readme.txt"), None);
         assert_eq!(slot_of("pak_dir.vpk"), None);
+    }
+
+    const VANILLA_SP: &str = "\t\tSearchPaths\r\n\t\t{\r\n\t\t\tGame_LowViolence\tcitadel_lv\r\n\r\n\t\t\tGame\t\t\t\tcitadel\r\n\t\t\tGame\t\t\t\tcore\r\n\t\t}\r\n";
+
+    fn sp_lines(t: &str) -> Vec<String> {
+        t.lines()
+            .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+            .filter(|l| !l.is_empty())
+            .collect()
+    }
+
+    #[test]
+    fn addons_mount_keeps_citadel_the_mod_and_write_path() {
+        let p = add_top_game_path(VANILLA_SP, "citadel/addons").unwrap();
+        let p = pin_mod_write(&p, "citadel/addons").unwrap();
+        assert_eq!(
+            sp_lines(&p),
+            [
+                "SearchPaths", "{", "Game citadel/addons", "Mod citadel", "Write citadel",
+                "Game_LowViolence citadel_lv", "Game citadel", "Game core", "}",
+            ]
+        );
+        // CRLF file stays CRLF (no bare \n introduced).
+        assert_eq!(p.matches('\n').count(), p.matches("\r\n").count());
+        // Idempotent.
+        assert!(pin_mod_write(&p, "citadel/addons").is_none());
+    }
+
+    #[test]
+    fn bare_addons_mount_from_older_versions_is_repaired() {
+        // What 1.5.2 and earlier wrote: the game refuses to start with it.
+        let bare = add_top_game_path(VANILLA_SP, "citadel/addons").unwrap();
+        let fixed = pin_mod_write(&bare, "citadel/addons").expect("needs repair");
+        assert!(sp_lines(&fixed).contains(&"Mod citadel".to_string()));
+        // Another manager's full block (Mod + Write already there): untouched.
+        let grimoire = "SearchPaths\n{\n Game citadel/addons\n Mod citadel\n Write citadel\n Game citadel\n Game core\n}\n";
+        assert!(pin_mod_write(grimoire, "citadel/addons").is_none());
+        // Only the missing one is added.
+        let half = "SearchPaths\n{\n Game citadel/addons\n Mod citadel\n Game citadel\n}\n";
+        let out = pin_mod_write(half, "citadel/addons").unwrap();
+        assert_eq!(out.matches("Mod").count(), 1);
+        assert_eq!(out.matches("Write\t\t\t\tcitadel").count(), 1);
     }
 
     #[test]
