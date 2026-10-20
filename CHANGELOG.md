@@ -2,6 +2,27 @@
 
 All notable changes since 1.0.4. Download: https://gamebanana.com/tools/23422
 
+## 1.5.4 (2026-10-20)
+
+### New: save the game's original images
+- Every game image the app shows can now be saved to your Downloads folder as a PNG, as a reference for making replacements.
+- Heroes: hover any tile under "Hero images" (portrait cards, small and minimap icons, menu background, name logo, ability icons) and press ⤓, or "Save all" for the whole set into a "<Hero> images" folder. Hero textures have the same button. The hero grid has "Save all portraits".
+- Items: "Save all icons" on the shop, and a Save button on each item's page.
+- Menu Art: ⤓ on every card, and "Save original" for any `panorama/images/` path you type.
+- Mod retexture: Save button for the texture you're previewing.
+- Files get readable names ("Haze - Ability 1 icon.png"), never overwrite an existing file, and Wall Art keeps its existing sheet download.
+
+### Fix: installs now work alongside Deadlock Mod Manager
+- With a Deadlock Mod Manager profile active, the game only loads mods from that profile's folder (for example `addons/profile_default`), not from `addons` itself. The app used to install into `addons`, where the game never looked, so nothing changed in game.
+- Install now finds the folder the game actually loads mods from and puts your pak there, next to your Mod Manager mods, without touching Mod Manager's settings. The install message says where it went.
+
+### Fix: replaced hero name logos were invisible
+- The game draws hero name logos with its own SVG renderer, which can't show pictures embedded in an SVG, so a replaced logo came out invisible on character select.
+- Your logo art is now converted into shapes the game can draw. Recompile to update a logo you already replaced.
+
+### Fix: hero names match the game
+- Hero names now come from the game's own name list, so newer heroes show their real names: Deadman Danny (was "Deadpack"), Rat King (was "Ratking"), The Doorman. The hero grid sorts the way the game does.
+
 ## 1.5.3 (2026-10-18)
 
 ### Fix: game crash on launch after installing a mod

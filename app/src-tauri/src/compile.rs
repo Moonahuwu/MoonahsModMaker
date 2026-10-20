@@ -1182,6 +1182,91 @@ fn render_icon(ffmpeg: Option<&str>, src: &str, w: u32, h: u32, hue: f32, out_pn
     }
 }
 
+/// Longest side a raster is vectorized at for `.vsvg_c` targets. Logos show
+/// at a few hundred pixels at most; this keeps the path count sane.
+const SVG_RASTER_MAX: u32 = 512;
+
+/// Decode an image to straight RGBA bytes (`w*h*4`) via ffmpeg.
+fn rgba_pixels(ffmpeg: Option<&str>, png: &str, w: u32, h: u32) -> Result<Vec<u8>, String> {
+    let out = crate::procutil::quiet(ffmpeg.unwrap_or("ffmpeg"))
+        .args(["-v", "error", "-i", png, "-f", "rawvideo", "-pix_fmt", "rgba", "-"])
+        .output()
+        .map_err(|e| format!("launching ffmpeg: {e}"))?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).lines().rev().take(2).collect::<Vec<_>>().join(" | "));
+    }
+    if out.stdout.len() != (w * h * 4) as usize {
+        return Err(format!("expected {}x{} pixels, ffmpeg gave {} bytes", w, h, out.stdout.len()));
+    }
+    Ok(out.stdout)
+}
+
+/// Vectorize an RGBA raster into an SVG panorama can draw. Panorama's own SVG
+/// parser (panorama.dll) knows defs/use/symbol/path/rect/circle/ellipse/line/
+/// polygon/polyline/gradients/clipPath - no `<image>`, no `<pattern>` - so a
+/// PNG wrapped in an svg renders NOTHING (the invisible name logo report,
+/// 2026-10-20). Colours are quantized (5 bits per channel, 16 alpha levels),
+/// each row is run-length split, identical runs merge down the columns, and
+/// every colour becomes one `<path>` of absolute `M H V Z` rectangles (the
+/// commands Valve's own logos use).
+fn raster_to_svg(rgba: &[u8], w: u32, h: u32) -> String {
+    use std::collections::{BTreeMap, HashMap};
+    let q5 = |v: u8| {
+        let c = v >> 3;
+        (c << 3) | (c >> 2)
+    };
+    let key = |i: usize| -> u32 {
+        let a = ((rgba[i + 3] as u32) + 8) / 17; // 0..=15
+        if a == 0 {
+            return 0;
+        }
+        (q5(rgba[i]) as u32) << 24 | (q5(rgba[i + 1]) as u32) << 16 | (q5(rgba[i + 2]) as u32) << 8 | a
+    };
+    let mut paths: BTreeMap<u32, String> = BTreeMap::new();
+    let mut emit = |x: u32, y: u32, len: u32, hh: u32, k: u32| {
+        let d = paths.entry(k).or_default();
+        d.push_str(&format!("M{x} {y}H{}V{}H{x}Z", x + len, y + hh));
+    };
+    // Open rects: (x, len, colour) -> first row.
+    let mut open: HashMap<(u32, u32, u32), u32> = HashMap::new();
+    for y in 0..h {
+        let mut row = HashMap::new();
+        let mut x = 0;
+        while x < w {
+            let k = key(((y * w + x) * 4) as usize);
+            let mut len = 1;
+            while x + len < w && key(((y * w + x + len) * 4) as usize) == k {
+                len += 1;
+            }
+            if k != 0 {
+                let y0 = open.remove(&(x, len, k)).unwrap_or(y);
+                row.insert((x, len, k), y0);
+            }
+            x += len;
+        }
+        for ((x, len, k), y0) in open.drain() {
+            emit(x, y0, len, y - y0, k);
+        }
+        open = row;
+    }
+    for ((x, len, k), y0) in open.drain() {
+        emit(x, y0, len, h - y0, k);
+    }
+    let mut svg = format!(
+        "<svg width=\"{w}\" height=\"{h}\" viewBox=\"0 0 {w} {h}\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\">\n"
+    );
+    for (k, d) in paths {
+        let a = (k & 0xff) * 17;
+        svg.push_str(&format!("<path d=\"{d}\" fill=\"#{:06x}\"", k >> 8));
+        if a < 255 {
+            svg.push_str(&format!(" fill-opacity=\"{:.3}\"", a as f32 / 255.0));
+        }
+        svg.push_str("/>\n");
+    }
+    svg.push_str("</svg>\n");
+    svg
+}
+
 // ---- Particle (VFX) recolor -------------------------------------------------
 
 fn rgb_to_hsl(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
@@ -3085,7 +3170,10 @@ fn compile_world_overrides(
 /// file's identity (path/len/mtime) + the scale/hue params. Matches = the
 /// existing outputs are current and the whole pass can be skipped.
 fn icons_fingerprint(cfg: &CompileConfig) -> String {
-    let mut key = String::new();
+    // Bumped when the svg-target encoding changes (svgvec1: vectorized paths
+    // replaced the <image>-wrapped PNG panorama never drew), so existing logo
+    // swaps rebuild instead of shipping the stale output.
+    let mut key = String::from("svgvec1\n");
     for m in &cfg.icon_mods {
         let meta = std::fs::metadata(&m.source_image).ok();
         let len = meta.as_ref().map(|x| x.len()).unwrap_or(0);
@@ -3102,24 +3190,6 @@ fn icons_fingerprint(cfg: &CompileConfig) -> String {
     fingerprint(&key)
 }
 
-/// Returns the staging list + whether any real work happened (false = the
-/// stamp matched and everything was skipped).
-/// Minimal base64 (no dep): embeds a rendered PNG into an SVG wrapper for
-/// `.vsvg_c` targets (the hero name logos).
-fn b64(data: &[u8]) -> String {
-    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    for chunk in data.chunks(3) {
-        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
-        let n = u32::from_be_bytes([0, b[0], b[1], b[2]]);
-        out.push(T[(n >> 18 & 63) as usize] as char);
-        out.push(T[(n >> 12 & 63) as usize] as char);
-        out.push(if chunk.len() > 1 { T[(n >> 6 & 63) as usize] as char } else { '=' });
-        out.push(if chunk.len() > 2 { T[(n & 63) as usize] as char } else { '=' });
-    }
-    out
-}
-
 /// Compiled-output rel for icon slot `i`: svg targets compile `icon_i.svg` →
 /// `icon_i.vsvg_c`; raster targets ride the png list → `icon_i_png.vtex_c`.
 fn icon_out_rel(i: usize, target: &str) -> String {
@@ -3130,6 +3200,8 @@ fn icon_out_rel(i: usize, target: &str) -> String {
     }
 }
 
+/// Returns the staging list + whether any real work happened (false = the
+/// stamp matched and everything was skipped).
 fn compile_icon_mods(
     cfg: &CompileConfig,
     content_root: &Path,
@@ -3170,8 +3242,15 @@ fn compile_icon_mods(
     let mut produced: Vec<(String, PathBuf)> = Vec::new();
     let mut all_ok = true;
     for (i, m) in cfg.icon_mods.iter().enumerate() {
-        let w = m.width.clamp(1, 4096);
-        let h = m.height.clamp(1, 4096);
+        let mut w = m.width.clamp(1, 4096);
+        let mut h = m.height.clamp(1, 4096);
+        let is_svg = m.target_vtexc.trim_matches('/').ends_with(".vsvg_c");
+        if is_svg && w.max(h) > SVG_RASTER_MAX {
+            // Vectorized below: cap the raster, keep the aspect.
+            let s = SVG_RASTER_MAX as f64 / w.max(h) as f64;
+            w = ((w as f64 * s).round() as u32).max(1);
+            h = ((h as f64 * s).round() as u32).max(1);
+        }
         let png = icons_dir.join(format!("icon_{i}.png"));
         let label = m.target_vtexc.rsplit('/').next().unwrap_or(&m.target_vtexc);
         // A bad source image skips just this icon, not the whole build.
@@ -3181,21 +3260,18 @@ fn compile_icon_mods(
             continue;
         }
         let rel = m.target_vtexc.trim_matches('/').to_string();
-        if rel.ends_with(".vsvg_c") {
-            // SVG target (hero name logo): wrap the rendered PNG in an
-            // <image> svg — the image list compiles .svg straight to .vsvg_c.
-            let data = match std::fs::read(&png) {
-                Ok(d) => d,
+        if is_svg {
+            // SVG target (hero name logo): panorama's svg renderer can't draw
+            // an embedded raster, so vectorize the rendered art into paths;
+            // the image list compiles .svg straight to .vsvg_c.
+            let svg = match rgba_pixels(cfg.ffmpeg_path.as_deref(), &png.to_string_lossy(), w, h) {
+                Ok(px) => raster_to_svg(&px, w, h),
                 Err(e) => {
-                    report.soft_fail(format!("read icon: {label}"), e.to_string());
+                    report.soft_fail(format!("read icon: {label}"), e);
                     all_ok = false;
                     continue;
                 }
             };
-            let svg = format!(
-                "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"{w}\" height=\"{h}\" viewBox=\"0 0 {w} {h}\"><image width=\"{w}\" height=\"{h}\" xlink:href=\"data:image/png;base64,{}\"/></svg>",
-                b64(&data)
-            );
             if let Err(e) = std::fs::write(icons_dir.join(format!("icon_{i}.svg")), svg) {
                 report.soft_fail(format!("write icon svg: {label}"), e.to_string());
                 all_ok = false;
@@ -7545,6 +7621,35 @@ mod tests {
         assert!(staged.exists(), "artifact not staged at the vanilla path");
         assert!(report.output_path.is_some());
         let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod raster_svg_tests {
+    use super::raster_to_svg;
+
+    /// Logo art becomes paths panorama can draw: no <image>, solid runs merge
+    /// into one rect down the rows, transparent pixels vanish, partial alpha
+    /// rides fill-opacity.
+    #[test]
+    fn raster_becomes_merged_path_rects() {
+        let red = [255, 0, 0, 255];
+        let clear = [0, 0, 0, 0];
+        let blue_half = [0, 0, 255, 128];
+        // 3x2: [red red clear] / [red red blue@50%]
+        let px: Vec<u8> = [red, red, clear, red, red, blue_half].concat();
+        let svg = raster_to_svg(&px, 3, 2);
+        assert!(svg.starts_with("<svg width=\"3\" height=\"2\" viewBox=\"0 0 3 2\""));
+        assert!(!svg.contains("<image"));
+        assert!(svg.contains("<path d=\"M0 0H2V2H0Z\" fill=\"#ff0000\"/>"), "{svg}");
+        assert!(svg.contains("<path d=\"M2 1H3V2H2Z\" fill=\"#0000ff\" fill-opacity=\"0.533\"/>"), "{svg}");
+        assert_eq!(svg.matches("<path").count(), 2);
+    }
+
+    #[test]
+    fn fully_transparent_art_has_no_paths() {
+        let svg = raster_to_svg(&[0u8; 4 * 4 * 4], 4, 4);
+        assert_eq!(svg.matches("<path").count(), 0);
     }
 }
 

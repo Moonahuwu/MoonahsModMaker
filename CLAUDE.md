@@ -149,7 +149,12 @@ contains `{` braces).
   gameplay.vsndevts; every `SIDEBAR_ORDER` sound tab is always listed.
   Beyond slots, the project also carries
   override subsystems: `icon_mods` (also hero images + ability icons + SVG name logos:
-  `.vsvg_c` targets wrap the PNG in an `<image>` svg), `sound_overrides` (loose-file
+  `.vsvg_c` targets are VECTORIZED - `raster_to_svg`: quantized colour runs merged
+  into one `<path>` of `M H V Z` rects per colour, raster capped at
+  `SVG_RASTER_MAX` 512. Panorama's own SVG parser (panorama.dll element table:
+  defs/use/symbol/path/rect/circle/ellipse/line/polygon/polyline/gradients/clipPath)
+  has no `<image>`/`<pattern>`, so the old `<image>`-wrapped PNG drew NOTHING -
+  invisible logos on character select, 2026-10-20), `sound_overrides` (loose-file
   `.vsnd_c` replacements), `effect_overrides` (VFX recolor), `vdata_overrides` /
   `global_overrides` / `world_overrides` (gameplay config editor), `poster_overrides`
   (wall art), `digimod` (Jumpscares/Deaths config incl. the shared sound library +
@@ -219,6 +224,17 @@ contains `{` braces).
   (what other managers write); installs repair an older bare line, and
   `ensure_citadel_searchpath` (eim_dev) does the same. With addons as the write path
   the game's `console.log` lands in `citadel/addons/` instead of `citadel/`.
+  **Deadlock Mod Manager:** with a DMM profile active, gameinfo mounts
+  `Game citadel/addons/profile_<x>` (+ `citadel/addons<k>/profile_<x>` overflow
+  shards) between "// Deadlock Mod Manager" markers and NEVER the addons root, so a
+  pak in the root silently never loaded (support report 2026-10-20).
+  `mounted_addons_dir` reads the actual `Game citadel/addons...` lines
+  (`addons_mounts`; exact-line, not substring - the old `contains("citadel/addons")`
+  check called a profile mount "already enabled"): no plain root mount + a deeper
+  one = install + slot-scan go to the top-priority one, and gameinfo is left alone
+  (DMM rewrites it every "Launch Modded"). DMM allocates its own `pakNN` names
+  around occupied ones and leaves foreign files alone (its manual folder repair
+  moves untracked paks to a backup).
 - `models.rs` — Model Replacement: custom skinned HERO models. CSDK12 CANNOT
   compile these (its DLLs lack the NmSkeletonList/AnimGraph2List classes -
   proven), so builds shell to **CS2 Workshop Tools'** headless resourcecompiler
@@ -640,6 +656,11 @@ current defaults, so new default slots appear for existing users automatically.
   vsndevts, VO file, background + name logo); no `EIM_HERO` = sweep every released hero
   (report only). Hero data is fully data-driven, so a new hero needs no code - the
   smoke test is how you prove it (Ratking, 2026-10-02: 4 cards/4 icons/36 events).
+  Display names come from the LOOSE localization file beside the pak
+  (`resource/localization/citadel_gc_hero_names/citadel_gc_hero_names_english.txt`,
+  `hero_<code>:n` + `hero_<code>_sort:n`, `hero_loc_names`); the logo-svg stem is only
+  the fallback (it keeps dev codenames: deadpack = Deadman Danny). `e2e_hero_names_live`
+  fails if a released hero has no localized name.
 - Deadlock is installed at `D:\SteamLibrary\steamapps\common\Deadlock`; the CSDK toolchain
   used for verified compiles is `Reduced_CSDK_12`. Real paths are configured at runtime in
   the app's Setup panel (and auto-detected via `autodetect_paths`).

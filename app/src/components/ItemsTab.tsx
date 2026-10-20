@@ -3,6 +3,8 @@ import { motion } from "motion/react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { type ItemCard, type HeroAbilitySound } from "../lib/api";
 import { cItemRoster } from "../lib/dataCache";
+import { SaveImageButton, saveImagesToFolder } from "./SaveImageButton";
+import { useToast } from "./Toaster";
 
 /**
  * Items tab — a Deadlock-style shop. Items are grouped into three category
@@ -104,6 +106,7 @@ export function ItemsTab({
   modifiedFilter?: ((name: string) => boolean) | null;
 }) {
   const [items, setItems] = useState<ItemCard[] | null>(null);
+  const { push } = useToast();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -158,6 +161,11 @@ export function ItemsTab({
                 {cat?.label ?? selected.category} · Tier {selected.tier || "?"}
               </span>
             </div>
+            <SaveImageButton
+              path={selected.iconPath}
+              name={`${selected.displayName} icon`}
+              className="ml-auto rounded px-2 py-1 text-[11px]"
+            />
           </div>
         </div>
 
@@ -369,10 +377,25 @@ export function ItemsTab({
           {shownItems.length} item{shownItems.length === 1 ? "" : "s"}
         </span>
         <button
+          onClick={() =>
+            void saveImagesToFolder(
+              shownItems
+                .filter((i) => i.iconPath)
+                .map((i) => ({ path: i.iconPath!, name: i.displayName })),
+              "Deadlock item icons",
+              push,
+            )
+          }
+          title="Save every item icon shown here into Downloads"
+          className="ml-auto rounded border border-zinc-700 px-2 py-1 text-[11px] text-zinc-400 transition hover:border-zinc-500 hover:text-zinc-200"
+        >
+          ⤓ Save all icons
+        </button>
+        <button
           onClick={() => void load(true)}
           disabled={busy}
           title="Re-decode items + icons from the current game files"
-          className="ml-auto rounded border border-zinc-700 px-2 py-1 text-[11px] text-zinc-400 transition hover:border-zinc-500 hover:text-zinc-200 disabled:opacity-50"
+          className="rounded border border-zinc-700 px-2 py-1 text-[11px] text-zinc-400 transition hover:border-zinc-500 hover:text-zinc-200 disabled:opacity-50"
         >
           ⟳ Re-pull from game
         </button>

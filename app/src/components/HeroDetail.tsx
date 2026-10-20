@@ -3,6 +3,8 @@ import { AnimatePresence, motion } from "motion/react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { HeroAbility, HeroImage, HeroMaterialInfo, HeroSound } from "../lib/api";
 import type { HeroTextureOverride } from "../types";
+import { SaveImageButton, saveImagesToFolder } from "./SaveImageButton";
+import { useToast } from "./Toaster";
 import { HeroSoundsSection } from "./HeroSoundsSection";
 
 const IMAGE_KIND_LABELS: Record<string, string> = {
@@ -162,6 +164,9 @@ export function HeroDetail({
   }, [materials, hueBases, fallbackBase]);
   // The images grid also offers the 4 ability icons (same IconMod pipeline);
   // width 0 = "use the pick handler's default size".
+  const { push } = useToast();
+  const imageFileName = (img: HeroImage) =>
+    `${heroName} - ${IMAGE_KIND_LABELS[img.kind] ?? img.kind}`;
   const allImages: HeroImage[] = [
     ...(images ?? []),
     ...(abilities ?? [])
@@ -314,6 +319,23 @@ export function HeroDetail({
               </span>
             )}
           </summary>
+          <div className="mt-3 flex items-center gap-2">
+            <span className="text-[11px] text-zinc-500">
+              Hover a tile to save the original, or grab them all as a reference.
+            </span>
+            <button
+              onClick={() =>
+                void saveImagesToFolder(
+                  allImages.map((img) => ({ path: img.preview, name: imageFileName(img) })),
+                  `${heroName} images`,
+                  push,
+                )
+              }
+              className="ml-auto shrink-0 rounded border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-300 hover:border-zinc-500"
+            >
+              ⤓ Save all
+            </button>
+          </div>
           <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
             {allImages.map((img) => {
               const custom = customImages[img.kind];
@@ -323,7 +345,8 @@ export function HeroDetail({
                   className="flex flex-col gap-1.5 rounded-lg border border-zinc-800 bg-zinc-950/60 p-2"
                   style={custom ? { borderColor: "#34d39966" } : undefined}
                 >
-                  <div className="relative h-24 overflow-hidden rounded bg-zinc-900">
+                  <div className="group relative h-24 overflow-hidden rounded bg-zinc-900">
+                    <SaveImageButton overlay path={img.preview} name={imageFileName(img)} />
                     {img.kind.startsWith("ability") ? (
                       <WashedIcon
                         src={convertFileSrc(img.preview)}
@@ -438,7 +461,12 @@ export function HeroDetail({
                       className="flex flex-col gap-1.5 rounded-lg border border-zinc-800 bg-zinc-950/60 p-2"
                       style={ov ? { borderColor: "#34d39966" } : undefined}
                     >
-                      <div className="relative h-28 overflow-hidden rounded bg-zinc-900">
+                      <div className="group relative h-28 overflow-hidden rounded bg-zinc-900">
+                        <SaveImageButton
+                          overlay
+                          path={mat.colorPng}
+                          name={`${heroName} - ${prettyMaterialName(mat.name, heroName)} texture`}
+                        />
                         <img
                           src={convertFileSrc(shown)}
                           className="absolute inset-0 h-full w-full object-contain p-1"

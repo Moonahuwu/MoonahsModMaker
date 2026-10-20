@@ -574,9 +574,15 @@ export function downloadEntry(
   return invoke("download_entry", { helperPath, vpk, reference });
 }
 
-/** Copy an existing audio file (e.g. a source mp3) into Downloads. */
-export function copyToDownloads(srcPath: string): Promise<string> {
-  return invoke("copy_to_downloads", { srcPath });
+/** Copy an existing file (a source mp3, a decoded game image) into Downloads.
+ *  `name` = friendly file stem (extension kept from the source); `folder` =
+ *  a Downloads subfolder. Returns the saved path. */
+export function copyToDownloads(
+  srcPath: string,
+  name?: string,
+  folder?: string,
+): Promise<string> {
+  return invoke("copy_to_downloads", { srcPath, name: name ?? null, folder: folder ?? null });
 }
 
 export interface ArrayInfo {

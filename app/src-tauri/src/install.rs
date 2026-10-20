@@ -8,7 +8,7 @@
 //! `gameinfo.gi` actually mounts `citadel/addons`.
 
 use serde::Serialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Highest addon slot Deadlock will load.
@@ -70,8 +70,54 @@ pub struct SlotScan {
     pub files: Vec<SlotFile>,
 }
 
+/// `Game` values in gameinfo's SearchPaths that mount an addons folder
+/// (`citadel/addons`, `citadel/addons/profile_x`, `citadel/addons2/profile_x`),
+/// lowercased, in priority order. Comments are ignored.
+fn addons_mounts(gameinfo_text: &str) -> Vec<String> {
+    let lower = gameinfo_text.to_lowercase();
+    let Some(sp) = lower.find("searchpaths") else { return vec![] };
+    let Some(open) = lower[sp..].find('{').map(|i| sp + i) else { return vec![] };
+    let close = lower[open..].find('}').map_or(lower.len(), |i| open + i);
+    lower[open + 1..close]
+        .lines()
+        .filter_map(|l| {
+            let l = l.split("//").next().unwrap_or("");
+            let t: Vec<&str> = l.split_whitespace().collect();
+            (t.len() >= 2 && t[0] == "game" && t[1].starts_with("citadel/addons"))
+                .then(|| t[1].trim_end_matches('/').to_string())
+        })
+        .collect()
+}
+
+/// The folder the game actually loads addon paks from. Normally the given
+/// `game/citadel/addons`, but Deadlock Mod Manager mounts a PROFILE subfolder
+/// instead (`Game citadel/addons/profile_default`, its own `Mod`/`Write citadel`
+/// lines between "// Deadlock Mod Manager" markers) and never the addons root,
+/// so a pak dropped in the root silently never loads (support report
+/// 2026-10-20: "compile + install, nothing changes in game"). When gameinfo has
+/// no plain `citadel/addons` mount but does mount a folder below/beside it, that
+/// folder (the top-priority one) is where paks belong. Returns
+/// `(dir, Some(mount))` when redirected.
+pub fn mounted_addons_dir(addons_dir: &Path) -> (PathBuf, Option<String>) {
+    let unchanged = (addons_dir.to_path_buf(), None);
+    let Some(citadel) = addons_dir.parent() else { return unchanged };
+    let Ok(text) = std::fs::read_to_string(citadel.join("gameinfo.gi")) else { return unchanged };
+    let mounts = addons_mounts(&text);
+    if mounts.is_empty() || mounts.iter().any(|m| m == "citadel/addons") {
+        return unchanged;
+    }
+    let rel = mounts[0].trim_start_matches("citadel/");
+    if rel.split('/').any(|seg| seg.is_empty() || seg == "..") {
+        return unchanged;
+    }
+    (citadel.join(rel), Some(mounts[0].clone()))
+}
+
 /// Scan the addons folder for occupied slots + the next free one (for the UI).
+/// Scans the folder installs actually go to (see `mounted_addons_dir`).
 pub fn scan_slots(addons_dir: &Path) -> SlotScan {
+    let (addons_dir, _) = mounted_addons_dir(addons_dir);
+    let addons_dir = addons_dir.as_path();
     let used = used_slots(addons_dir);
     let next_free = next_free_slot(&used);
     let files = used
@@ -134,6 +180,18 @@ pub fn install(
     if !src_vpk.exists() {
         return Err(format!("source vpk not found: {}", src_vpk.display()));
     }
+    // Another manager's mounted folder (Deadlock Mod Manager profile) wins over
+    // the configured root; that manager owns gameinfo, so leave it alone.
+    let (mounted, redirect) = mounted_addons_dir(addons_dir);
+    if let Some(m) = &redirect {
+        if !mounted.is_dir() {
+            return Err(format!(
+                "gameinfo.gi loads mods from {m}, but that folder doesn't exist: {}",
+                mounted.display()
+            ));
+        }
+    }
+    let addons_dir = mounted.as_path();
     if !addons_dir.is_dir() {
         // A fresh Deadlock install has no addons folder yet - create it when
         // the path is the real game/citadel/addons (its parent holds
@@ -189,7 +247,12 @@ pub fn install(
     let bytes =
         std::fs::copy(src_vpk, &target).map_err(|e| format!("copying vpk into addons: {e}"))?;
 
-    let (gameinfo_patched, gameinfo_note) = if patch_gameinfo {
+    let (gameinfo_patched, gameinfo_note) = if let Some(m) = redirect {
+        (
+            false,
+            format!("installed into {m}, the folder gameinfo.gi loads mods from (managed by another mod manager)"),
+        )
+    } else if patch_gameinfo {
         match ensure_addons_searchpath(addons_dir) {
             Ok((patched, note)) => (patched, note),
             // A gameinfo failure shouldn't undo a successful copy — surface as a note.
@@ -221,7 +284,7 @@ fn ensure_addons_searchpath(addons_dir: &Path) -> Result<(bool, String), String>
     let text = std::fs::read_to_string(&gameinfo)
         .map_err(|e| format!("reading {}: {e}", gameinfo.display()))?;
 
-    let (patched, note) = if text.to_lowercase().contains("citadel/addons") {
+    let (patched, note) = if addons_mounts(&text).iter().any(|m| m == "citadel/addons") {
         // Already mounted - but a bare mount from before the 2026-10-16 fix
         // (or another tool) makes the game refuse to start: repair it.
         match pin_mod_write(&text, "citadel/addons") {
@@ -388,6 +451,76 @@ mod tests {
         let out = pin_mod_write(half, "citadel/addons").unwrap();
         assert_eq!(out.matches("Mod").count(), 1);
         assert_eq!(out.matches("Write\t\t\t\tcitadel").count(), 1);
+    }
+
+    /// What Deadlock Mod Manager writes with a profile active
+    /// (game_config_manager.rs: markers AROUND a rebuilt SearchPaths block).
+    const DMM_PROFILE_GI: &str = "\"GameInfo\"\r\n{\r\n\tFileSystem\r\n\t{\r\n\
+        // Deadlock Mod Manager - Start\r\n\
+        \t\tSearchPaths\r\n        {  \r\n\
+        \x20           Game_UILanguage     citadel_*LANGUAGE*\r\n\
+        \x20           Game_LowViolence    citadel_lv\r\n\
+        \x20           Game                citadel/addons/profile_default\r\n\
+        \x20           Game                citadel/addons2/profile_default\r\n\
+        \x20           Mod                 citadel\r\n\
+        \x20           Write               citadel          \r\n\
+        \x20           Game                citadel\r\n\
+        \x20           Mod                 core\r\n\
+        \x20           Write               core\r\n\
+        \x20           Game                core        \r\n\
+        \x20       }\r\n\
+        // Deadlock Mod Manager - End\r\n\t}\r\n}\r\n";
+
+    #[test]
+    fn dmm_profile_mount_redirects_installs_into_the_profile_folder() {
+        assert_eq!(
+            addons_mounts(DMM_PROFILE_GI),
+            ["citadel/addons/profile_default", "citadel/addons2/profile_default"]
+        );
+        // The old substring check called this "already enabled" and the pak
+        // went to the never-mounted addons root.
+        assert!(!addons_mounts(DMM_PROFILE_GI).iter().any(|m| m == "citadel/addons"));
+
+        let root = std::env::temp_dir().join(format!("eim_dmm_redirect_{}", timestamp()));
+        let citadel = root.join("game").join("citadel");
+        let profile = citadel.join("addons").join("profile_default");
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::write(citadel.join("gameinfo.gi"), DMM_PROFILE_GI).unwrap();
+        // DMM's own enabled mod already holds pak01.
+        std::fs::write(profile.join("pak01_dir.vpk"), b"dmm mod").unwrap();
+        let src = root.join("mine.vpk");
+        std::fs::write(&src, b"our mod").unwrap();
+
+        let addons = citadel.join("addons");
+        let (dir, mount) = mounted_addons_dir(&addons);
+        assert_eq!(dir, profile);
+        assert_eq!(mount.as_deref(), Some("citadel/addons/profile_default"));
+        assert_eq!(scan_slots(&addons).used, [1]);
+
+        let r = install(&src, &addons, None, None, true).unwrap();
+        assert_eq!(r.slot, 2, "next free slot inside the PROFILE folder");
+        assert_eq!(std::fs::read(profile.join("pak02_dir.vpk")).unwrap(), b"our mod");
+        assert!(!addons.join("pak01_dir.vpk").exists(), "nothing lands in the unmounted root");
+        // DMM owns gameinfo (rewrites it on every Launch Modded): untouched.
+        assert!(!r.gameinfo_patched);
+        assert_eq!(std::fs::read_to_string(citadel.join("gameinfo.gi")).unwrap(), DMM_PROFILE_GI);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn plain_addons_mount_is_not_redirected() {
+        let p = add_top_game_path(VANILLA_SP, "citadel/addons").unwrap();
+        assert_eq!(addons_mounts(&p), ["citadel/addons"]);
+        // DMM without profiles writes the plain root too.
+        let dmm_root = DMM_PROFILE_GI
+            .replace("citadel/addons/profile_default", "citadel/addons")
+            .replace("            Game                citadel/addons2/profile_default\r\n", "");
+        assert_eq!(addons_mounts(&dmm_root), ["citadel/addons"]);
+        // Commented-out lines and vanilla files mount nothing.
+        assert!(addons_mounts("SearchPaths\n{\n // Game citadel/addons\n Game citadel\n}\n").is_empty());
+        assert!(addons_mounts(VANILLA_SP).is_empty());
+        let missing = std::env::temp_dir().join("eim_no_such_game").join("citadel").join("addons");
+        assert_eq!(mounted_addons_dir(&missing), (missing.clone(), None));
     }
 
     #[test]

@@ -126,19 +126,44 @@ pub fn download_entry(
     Ok(dest.to_string_lossy().into_owned())
 }
 
-/// Copy an existing audio file (e.g. one of your source mp3s) into Downloads.
+/// A file-name-safe version of a display name ("Haze - Ability 1 icon"):
+/// strips what Windows forbids, trims trailing dots/spaces.
+fn download_name(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| if c.is_control() || r#"<>:"/\|?*"#.contains(c) { '_' } else { c })
+        .collect();
+    cleaned.trim().trim_end_matches(['.', ' ']).to_string()
+}
+
+/// Copy an existing file (a source mp3, a decoded game image) into Downloads.
+/// `name` replaces the file's own stem (cache files have machine names like
+/// `panorama_images_heroes_haze_card_psd`); `folder` saves into a Downloads
+/// subfolder (the "Save all" buttons). Returns the saved path.
 #[tauri::command]
-pub fn copy_to_downloads(app: tauri::AppHandle, src_path: String) -> Result<String, String> {
+pub fn copy_to_downloads(
+    app: tauri::AppHandle,
+    src_path: String,
+    name: Option<String>,
+    folder: Option<String>,
+) -> Result<String, String> {
     let src = std::path::Path::new(&src_path);
-    let stem = src
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
+    let stem = name
+        .as_deref()
+        .map(download_name)
+        .filter(|n| !n.is_empty())
+        .or_else(|| src.file_stem().map(|s| s.to_string_lossy().into_owned()))
         .unwrap_or_else(|| "track".into());
     let ext = src
         .extension()
         .map(|e| e.to_string_lossy().into_owned())
         .unwrap_or_else(|| "mp3".into());
-    let dest = unique_path(&downloads_dir(&app)?, &stem, &ext);
+    let mut dir = downloads_dir(&app)?;
+    if let Some(f) = folder.as_deref().map(download_name).filter(|f| !f.is_empty()) {
+        dir = dir.join(f);
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    }
+    let dest = unique_path(&dir, &stem, &ext);
     std::fs::copy(src, &dest).map_err(|e| e.to_string())?;
     Ok(dest.to_string_lossy().into_owned())
 }
@@ -2393,6 +2418,39 @@ fn parse_heroes_vdata(text: &str) -> Vec<HeroInfo> {
     out
 }
 
+/// The game's own English hero names, token -> text with the `:n` suffix
+/// dropped: `hero_deadpack` -> "Deadman Danny", `hero_doorman_sort` ->
+/// "Doorman". The file ships LOOSE beside the pak
+/// (`game/citadel/resource/localization/citadel_gc_hero_names/`), so it needs
+/// no decompile. The logo-svg stem the roster used before is wrong for every
+/// hero whose logo keeps the dev codename (deadpack, ratking, nurse, ...).
+fn hero_loc_names(pak_path: &str) -> std::collections::HashMap<String, String> {
+    let file = std::path::Path::new(pak_path)
+        .parent()
+        .map(|d| {
+            d.join("resource/localization/citadel_gc_hero_names/citadel_gc_hero_names_english.txt")
+        });
+    let text = file.and_then(|f| std::fs::read_to_string(f).ok()).unwrap_or_default();
+    parse_hero_loc_names(&text)
+}
+
+fn parse_hero_loc_names(text: &str) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    for line in text.lines() {
+        // `"hero_deadpack:n" "Deadman Danny"` -> ["", key, ws, value, ...]
+        let parts: Vec<&str> = line.trim().split('"').collect();
+        if parts.len() < 4 || !parts[1].starts_with("hero_") {
+            continue;
+        }
+        let key = parts[1].strip_suffix(":n").unwrap_or(parts[1]);
+        let value = parts[3].trim();
+        if !value.is_empty() {
+            out.entry(key.to_string()).or_insert_with(|| value.to_string());
+        }
+    }
+    out
+}
+
 /// Decode (and cache) hero card portraits and resolve the real roster from the
 /// game's `heroes.vdata`: in-game names, portrait join, and an experimental flag
 /// (disabled / in-development). Cache lives in app-data/hero_portraits; pass
@@ -2461,6 +2519,8 @@ fn hero_roster_impl(
     let text = std::fs::read_to_string(&vdata).map_err(|e| e.to_string())?;
 
     // 3. Join each hero to its decoded portrait.
+    let loc = hero_loc_names(&pak_path);
+    let mut sort_names: std::collections::HashMap<String, String> = Default::default();
     let mut out = Vec::new();
     for h in parse_heroes_vdata(&text) {
         if HERO_CODE_DENYLIST.contains(&h.code.as_str()) {
@@ -2498,11 +2558,20 @@ fn hero_roster_impl(
             .map(|stem| dir.join(format!("{stem}_gloat.png")))
             .filter(|p| p.exists())
             .map(|p| p.to_string_lossy().into_owned());
-        let display_name = h
-            .name
-            .as_deref()
-            .map(prettify_words)
-            .unwrap_or_else(|| prettify_words(&h.code));
+        // The game's localized name first; the logo stem (prettified, with
+        // its hand-fixes) only when the localization file is unreadable.
+        let display_name = loc
+            .get(&format!("hero_{}", h.code))
+            .cloned()
+            .unwrap_or_else(|| {
+                h.name.as_deref().map(prettify_words).unwrap_or_else(|| prettify_words(&h.code))
+            });
+        // The game sorts by a separate token ("The Doorman" -> "Doorman").
+        let sort_name = loc
+            .get(&format!("hero_{}_sort", h.code))
+            .cloned()
+            .unwrap_or_else(|| display_name.clone());
+        sort_names.insert(h.code.clone(), sort_name.to_lowercase());
         out.push(HeroPortrait {
             codename: h.code,
             display_name,
@@ -2521,7 +2590,7 @@ fn hero_roster_impl(
     out.sort_by(|a, b| {
         a.experimental
             .cmp(&b.experimental)
-            .then_with(|| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()))
+            .then_with(|| sort_names.get(&a.codename).cmp(&sort_names.get(&b.codename)))
     });
     Ok(out)
 }
@@ -8649,11 +8718,12 @@ fn hero_images_impl(
         )?;
     }
     let heroes_text = std::fs::read_to_string(&heroes_vdata).unwrap_or_default();
-    let img_stem = parse_heroes_vdata(&heroes_text)
-        .into_iter()
-        .find(|h| h.code == codename)
-        .and_then(|h| h.card_code)
-        .unwrap_or_else(|| codename.clone());
+    let info = parse_heroes_vdata(&heroes_text).into_iter().find(|h| h.code == codename);
+    // The name-logo svg stem (deadpack, rat_king's `ratking`): the display
+    // name now comes from localization ("Deadman Danny"), whose slug the
+    // game files never use for these heroes.
+    let logo_stem = info.as_ref().and_then(|h| h.name.clone());
+    let img_stem = info.and_then(|h| h.card_code).unwrap_or_else(|| codename.clone());
 
     // Background + name-logo stems are INCONSISTENT in the game files:
     // released heroes mostly use display-name slugs (grey_talon, holliday),
@@ -8661,7 +8731,7 @@ fn hero_images_impl(
     // few released ones use codenames too (astro, magician). Try every
     // plausible stem and keep whichever file actually exists.
     let mut stem_candidates: Vec<String> = vec![display_stem.clone()];
-    for s in [img_stem.clone(), codename.clone()] {
+    for s in logo_stem.into_iter().chain([img_stem.clone(), codename.clone()]) {
         if !stem_candidates.contains(&s) {
             stem_candidates.push(s);
         }
@@ -9278,6 +9348,58 @@ pub async fn export_cursor_pack(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hero_names_come_from_the_game_localization() {
+        let text = "\u{feff}\"lang\"\r\n{\r\n\t\"Tokens\"\r\n\t{\r\n\
+            \t\t// Hero names\r\n\
+            \t\t\"hero_deadpack:n\" \"Deadman Danny\"\r\n\
+            \t\t\"hero_deadpack_sort:n\" \"Deadman Danny\"\r\n\
+            \t\t\"hero_doorman:n\" \"The Doorman\"\r\n\
+            \t\t\"hero_doorman_sort:n\" \"Doorman\"\r\n\
+            \t\t\"hero_krill:n\" \"Mo & Krill\"\r\n\
+            \t\t\"Language\" \"english\"\r\n\t}\r\n}\r\n";
+        let m = parse_hero_loc_names(text);
+        assert_eq!(m.get("hero_deadpack").map(String::as_str), Some("Deadman Danny"));
+        assert_eq!(m.get("hero_doorman").map(String::as_str), Some("The Doorman"));
+        assert_eq!(m.get("hero_doorman_sort").map(String::as_str), Some("Doorman"));
+        assert_eq!(m.get("hero_krill").map(String::as_str), Some("Mo & Krill"));
+        assert!(!m.contains_key("Language"));
+    }
+
+    /// Every released hero gets its in-game name from the live install.
+    ///   cargo test -p app --lib -- --ignored e2e_hero_names_live --nocapture
+    #[test]
+    #[ignore]
+    fn e2e_hero_names_live() {
+        let pak = r"D:\SteamLibrary\steamapps\common\Deadlock\game\citadel\pak01_dir.vpk";
+        let loc = hero_loc_names(pak);
+        assert_eq!(loc.get("hero_deadpack").map(String::as_str), Some("Deadman Danny"));
+        let appdata = std::env::var("APPDATA").unwrap();
+        let vdata = std::fs::read_to_string(format!(
+            r"{appdata}\com.digiphoenix.deadlock-intro-tool\hero_portraits\heroes.vdata"
+        ))
+        .unwrap();
+        for h in parse_heroes_vdata(&vdata) {
+            if HERO_CODE_DENYLIST.contains(&h.code.as_str())
+                || hero_bound_abilities(&vdata, &h.code).is_empty()
+            {
+                continue;
+            }
+            let name = loc.get(&format!("hero_{}", h.code));
+            println!("{:12} -> {:?} (logo {:?})", h.code, name, h.name);
+            assert!(name.is_some(), "no localized name for hero_{}", h.code);
+        }
+    }
+
+    #[test]
+    fn download_names_are_windows_safe() {
+        assert_eq!(download_name("Haze - Ability 1 icon"), "Haze - Ability 1 icon");
+        assert_eq!(download_name("\"Select play mode\" banner"), "_Select play mode_ banner");
+        assert_eq!(download_name("a/b\\c:d*e?f|g<h>i"), "a_b_c_d_e_f_g_h_i");
+        assert_eq!(download_name("  trailing. . "), "trailing");
+        assert_eq!(download_name("..."), "");
+    }
 
     /// Real-data check of the ability-card folding rules. Needs the helper +
     /// live pak (Setup paths); works in a scratch copy of the app-data

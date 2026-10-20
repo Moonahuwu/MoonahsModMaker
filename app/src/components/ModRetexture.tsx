@@ -3,6 +3,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { decodePakTexture, listVpkTextures, vaultFile } from "../lib/api";
 import type { ModTextureOverride } from "../types";
+import { SaveImageButton } from "./SaveImageButton";
 import { useToast } from "./Toaster";
 
 const IMAGE_FILTERS = [{ name: "Image", extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }];
@@ -264,6 +265,13 @@ export function ModRetexture({
                   >
                     {current?.sourceImage ? "Change image…" : "Use my image…"}
                   </button>
+                  {preview && (
+                    <SaveImageButton
+                      path={preview.png}
+                      name={selected.split("/").pop()!.replace(/\.vtex(_c)?$/, "")}
+                      className="rounded-md px-3 py-1.5 text-xs"
+                    />
+                  )}
                   {current?.sourceImage && (
                     <button
                       onClick={() => upsert({ sourceImage: null })}

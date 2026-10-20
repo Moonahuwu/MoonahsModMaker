@@ -264,7 +264,13 @@ export function CompileBar({
         settings.installSlot === null ? settings.lastInstall : null,
       );
       update({ lastInstall: { slot: res.slot, bytes: res.bytes } });
+      // Deadlock Mod Manager loads mods from a profile folder, not the addons
+      // root - the backend installs there instead; say so.
+      const dir = res.target.replace(/[\\/][^\\/]+$/, "");
+      const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+      const redirected = norm(dir) !== norm(settings.addonsDir);
       const extras = [
+        redirected ? `in ${dir.split(/[\\/]/).slice(-2).join("/")}, the folder your mod manager loads` : null,
         res.replaced ? "replaced existing" : null,
         res.gameinfoPatched ? "gameinfo patched" : null,
       ]

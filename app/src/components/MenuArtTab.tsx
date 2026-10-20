@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { decodePakTexture, vaultFile } from "../lib/api";
+import { copyToDownloads, decodePakTexture, vaultFile } from "../lib/api";
 import type { IconMod } from "../types";
 import { useToast } from "./Toaster";
 
@@ -162,11 +162,40 @@ export function MenuArtTab({
       (!m.id.startsWith("menuart_") && !ownedElsewhere(m.id)),
   );
 
-  async function addCustom() {
+  async function saveOriginal(png: string, name: string) {
+    try {
+      push("success", `Saved to ${await copyToDownloads(png, name)}`);
+    } catch (e) {
+      push("error", `Download failed: ${e}`);
+    }
+  }
+
+  /** The typed custom path as `panorama/images/...` without extension. */
+  function customStem(): string {
     let p = customPath.trim().replace(/\\/g, "/").replace(/^\/+/, "");
-    if (!p) return;
+    if (!p) return "";
     if (!p.startsWith("panorama/")) p = `panorama/images/${p}`;
-    p = p.replace(/\.vtex(_c)?$/, "");
+    return p.replace(/\.vtex(_c)?$/, "");
+  }
+
+  // Just grab the vanilla image at the typed path (no replacement).
+  async function saveCustom() {
+    const p = customStem();
+    if (!p) return;
+    setCustomBusy(true);
+    try {
+      const d = await decodePakTexture(helperPath, pakPath, `${p}.vtex_c`);
+      await saveOriginal(d.png, p.split("/").pop()!.replace(/_psd$/, ""));
+    } catch (e) {
+      push("error", `Couldn't find that texture in the game files: ${e}`);
+    } finally {
+      setCustomBusy(false);
+    }
+  }
+
+  async function addCustom() {
+    const p = customStem();
+    if (!p) return;
     const target = `${p}.vtex_c`;
     setCustomBusy(true);
     try {
@@ -231,6 +260,15 @@ export function MenuArtTab({
             </span>
           )}
           <div className="absolute bottom-1.5 right-1.5 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+            {typeof prev === "string" && prev !== "loading" && prev !== "error" && (
+              <button
+                onClick={() => void saveOriginal(prev, slot.label)}
+                title="Save the original game image to Downloads"
+                className="rounded bg-black/70 px-2 py-0.5 text-xs text-zinc-200 hover:bg-zinc-700"
+              >
+                ⤓
+              </button>
+            )}
             <button
               onClick={() => void replaceSlot(slot)}
               className="rounded bg-black/70 px-2 py-0.5 text-xs text-zinc-200 hover:bg-zinc-700"
@@ -296,6 +334,14 @@ export function MenuArtTab({
             className="rounded-md border px-3 py-1.5 text-xs transition hover:brightness-125 disabled:opacity-40"
           >
             {customBusy ? "Checking…" : "Pick image…"}
+          </button>
+          <button
+            onClick={() => void saveCustom()}
+            disabled={customBusy || !customPath.trim()}
+            title="Save the original game image at this path to Downloads"
+            className="rounded-md border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 transition hover:border-zinc-500 disabled:opacity-40"
+          >
+            ⤓ Save original
           </button>
         </div>
         {customMods.length > 0 && (

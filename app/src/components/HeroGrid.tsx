@@ -3,6 +3,8 @@ import { motion } from "motion/react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { type HeroPortrait } from "../lib/api";
 import { cHeroRoster } from "../lib/dataCache";
+import { saveImagesToFolder } from "./SaveImageButton";
+import { useToast } from "./Toaster";
 
 /**
  * In-game-style hero selection grid. Pulls each hero's card portrait from the
@@ -32,6 +34,7 @@ export function HeroGrid({
   const [heroes, setHeroes] = useState<HeroPortrait[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const { push } = useToast();
 
   async function load(refresh = false) {
     if (!helperPath || !pakPath) {
@@ -126,10 +129,23 @@ export function HeroGrid({
           </span>
         )}
         <button
+          onClick={() =>
+            void saveImagesToFolder(
+              shown.map((h) => ({ path: h.portraitPath, name: `${h.displayName} - Portrait card` })),
+              "Deadlock hero portraits",
+              push,
+            )
+          }
+          title="Save every hero card shown here into Downloads (each hero's page has the rest of their images)"
+          className="ml-auto rounded border border-zinc-700 px-2 py-1 text-[11px] text-zinc-400 transition hover:border-zinc-500 hover:text-zinc-200"
+        >
+          ⤓ Save all portraits
+        </button>
+        <button
           onClick={() => void load(true)}
           disabled={loading}
           title="Re-decode the portraits + hero data from the current game files"
-          className="ml-auto rounded border border-zinc-700 px-2 py-1 text-[11px] text-zinc-400 transition hover:border-zinc-500 hover:text-zinc-200 disabled:opacity-50"
+          className="rounded border border-zinc-700 px-2 py-1 text-[11px] text-zinc-400 transition hover:border-zinc-500 hover:text-zinc-200 disabled:opacity-50"
         >
           ⟳ Re-pull from game
         </button>
