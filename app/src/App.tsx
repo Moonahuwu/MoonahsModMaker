@@ -166,8 +166,14 @@ const MENU_ART = "menuart";
 /** Custom mouse cursors: loose files in the game folder, applied from the
  *  tab (never by a compile - the game reads them off disk, not from a pak). */
 const CURSORS = "cursors";
-/** Jumpscares/Deaths (MoonahMasterUI) — only when the engine is detected installed. */
+/** MoonahMasterUI (the generated HUD mod) splits into three sidebar tabs under
+ *  one "UI mods" master: random jumpscares, death media, ability misses. They
+ *  all edit the same `project.digimod` config and ship as ONE pak; each tab
+ *  shows its own list + knobs (DigimodTab `section`). Shown when the engine
+ *  is detected installed, the project configures it, or the toggle opts in. */
 const JUMPSCARES = "jumpscares";
+const DEATH_MEDIA = "deathmedia";
+const ABILITY_MISSES = "abilitymisses";
 /** UI Master (experimental): edit the game's panorama layouts/styles. */
 const UIMASTER = "uimaster";
 /** Easy Compile (experimental): one-off source → `_c` conversion. */
@@ -260,6 +266,8 @@ const TAB_LABELS: Record<string, string> = {
   [MENU_ART]: "Menu Art",
   [CURSORS]: "Cursors",
   [JUMPSCARES]: "Jumpscares",
+  [DEATH_MEDIA]: "Death media",
+  [ABILITY_MISSES]: "Ability misses",
   [UIMASTER]: "UI Master",
   [EASY_COMPILE]: "Easy Compile",
   [PACK_BUILDER]: "Pack Builder",
@@ -301,6 +309,11 @@ const SOUND_MASTER_TABS = ["ui", UNSORTED, LIBRARY, REPLACE_SOUNDS];
  *  nest under one violet parent, mirroring the ♪ Sound master. */
 const WALL_MASTER = "Wall Art";
 const WALL_MASTER_TABS = [POSTERS, ANIMATED_ART];
+
+/** The UI mods master header: the three MoonahMasterUI triggers nest under
+ *  one red parent (same render path as Sounds / Wall Art). */
+const UI_MODS_MASTER = "UI mods";
+const UI_MODS_TABS = [JUMPSCARES, DEATH_MEDIA, ABILITY_MISSES];
 
 /** Tabs an auto-discovered/imported slot can be manually moved between. The
  *  id-keyed drill-in tabs (Heroes, Items) are excluded — their UIs render
@@ -1029,6 +1042,8 @@ function accentFor(ev: { group: string; side: string }): string {
   if (ev.group === MENU_ART) return "#67e8f9"; // light cyan (menu art)
   if (ev.group === CURSORS) return "#bef264"; // lime (cursors)
   if (ev.group === JUMPSCARES) return "#ef4444"; // red (spooky)
+  if (ev.group === DEATH_MEDIA) return "#f87171"; // lighter red (deaths)
+  if (ev.group === ABILITY_MISSES) return "#fb7185"; // rose-red (ability misses)
   if (ev.group === UIMASTER) return "#f59e0b"; // amber (experimental UI editing)
   if (ev.group === EASY_COMPILE) return "#fbbf24"; // amber (compiler utility)
   if (ev.group === PACK_BUILDER) return "#5eead4"; // teal (pack organization)
@@ -1561,7 +1576,7 @@ export default function App() {
           (project.digimod.misses?.length ?? 0) > 0 ||
           (project.digimod.mergeVpks?.length ?? 0) > 0))
     )
-      out.push(JUMPSCARES);
+      out.push(JUMPSCARES, DEATH_MEDIA, ABILITY_MISSES);
     // Custom Server is experimental: the toggle is authoritative (gameplay
     // edits only compile behind the separate includeGameplay option anyway).
     if (settings.experimentalServer) out.push(CUSTOM_SERVER);
@@ -1837,11 +1852,12 @@ export default function App() {
 
   const navItems = useMemo(() => {
     type Child = { type: "tab"; key: string } | { type: "category"; label: string; tabs: string[] };
-    type Master = { type: "master"; label: string; tint: "sky" | "violet"; items: Child[] };
+    type Master = { type: "master"; label: string; tint: "sky" | "violet" | "red"; items: Child[] };
     const items: (Child | Master)[] = [];
     const usedCats = new Set<string>();
     let soundMaster: Master | null = null;
     let wallMaster: Master | null = null;
+    let uiModsMaster: Master | null = null;
     const pushSound = (child: Child) => {
       if (!soundMaster) {
         soundMaster = { type: "master", label: SOUND_MASTER, tint: "sky", items: [] };
@@ -1855,6 +1871,13 @@ export default function App() {
         items.push(wallMaster);
       }
       wallMaster.items.push(child);
+    };
+    const pushUiMods = (child: Child) => {
+      if (!uiModsMaster) {
+        uiModsMaster = { type: "master", label: UI_MODS_MASTER, tint: "red", items: [] };
+        items.push(uiModsMaster);
+      }
+      uiModsMaster.items.push(child);
     };
     for (const g of tabs) {
       const cat = TAB_CATEGORIES.find((c) => c.tabs.includes(g));
@@ -1872,6 +1895,8 @@ export default function App() {
         pushSound({ type: "tab", key: g });
       } else if (WALL_MASTER_TABS.includes(g)) {
         pushWall({ type: "tab", key: g });
+      } else if (UI_MODS_TABS.includes(g)) {
+        pushUiMods({ type: "tab", key: g });
       } else {
         items.push({ type: "tab", key: g });
       }
@@ -5730,6 +5755,9 @@ export default function App() {
       return liveDynpaints(p.dynpaints ?? []).some((d) => d.enabled !== false && !!d.sourceMedia);
     if (g === CURSORS)
       return (p.cursors ?? []).some((c) => c.enabled !== false && !!c.sourceImage);
+    if (g === JUMPSCARES) return (p.digimod?.scares ?? []).length > 0;
+    if (g === DEATH_MEDIA) return (p.digimod?.deaths ?? []).length > 0;
+    if (g === ABILITY_MISSES) return (p.digimod?.misses ?? []).length > 0;
     if (g === CUSTOM_SERVER)
       return (
         (p.vdataOverrides ?? []).length > 0 ||
@@ -6099,6 +6127,12 @@ export default function App() {
       ? liveDynpaints(project?.dynpaints ?? []).filter((d) => d.enabled !== false && !!d.sourceMedia).length
       : g === CURSORS
       ? (project?.cursors ?? []).filter((c) => c.enabled !== false && !!c.sourceImage).length
+      : g === JUMPSCARES
+      ? (project?.digimod?.scares ?? []).length
+      : g === DEATH_MEDIA
+      ? (project?.digimod?.deaths ?? []).length
+      : g === ABILITY_MISSES
+      ? (project?.digimod?.misses ?? []).length
       : g === REPLACE_SOUNDS
         ? (project?.soundOverrides ?? []).length
         : g === EFFECTS
@@ -6372,9 +6406,17 @@ export default function App() {
             const soundCount = visibleTabs.reduce((n, t) => n + tabCount(t), 0);
             const hasActive = allTabs.includes(activeTab);
             // Tailwind needs literal class names, so each master tint is a
-            // spelled-out skin (sky = Sounds, violet = Wall Art).
+            // spelled-out skin (sky = Sounds, violet = Wall Art, red = UI mods).
             const skin =
-              item.tint === "violet"
+              item.tint === "red"
+                ? {
+                    act: "border-red-500/50 bg-red-500/10 text-red-100",
+                    idle: "border-red-500/25 bg-red-500/5 text-red-300/90 hover:border-red-400/50 hover:text-red-200",
+                    chev: "text-red-500/80",
+                    badge: "bg-red-500/15 text-red-300",
+                    rail: "border-red-500/25",
+                  }
+                : item.tint === "violet"
                 ? {
                     act: "border-violet-500/50 bg-violet-500/10 text-violet-100",
                     idle: "border-violet-500/25 bg-violet-500/5 text-violet-300/90 hover:border-violet-400/50 hover:text-violet-200",
@@ -6828,8 +6870,11 @@ export default function App() {
               setProject((prev) => (prev ? { ...prev, uiOverrides: next } : prev))
             }
           />
-        ) : activeTab === JUMPSCARES ? (
+        ) : activeTab === JUMPSCARES || activeTab === DEATH_MEDIA || activeTab === ABILITY_MISSES ? (
           <DigimodTab
+            section={
+              activeTab === JUMPSCARES ? "scares" : activeTab === DEATH_MEDIA ? "deaths" : "misses"
+            }
             config={project?.digimod ?? DEFAULT_DIGIMOD}
             addonsDir={settings.addonsDir}
             helperPath={settings.vpkHelperPath}

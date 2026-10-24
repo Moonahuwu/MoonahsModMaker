@@ -177,13 +177,38 @@ function SettingSlider({
   );
 }
 
+/** Per-tab copy: the sidebar splits the one MoonahMasterUI config into three
+ *  tabs (Jumpscares / Death media / Ability misses) that each show their own
+ *  list and knobs. Import, the shared sound library and the compile note
+ *  appear on every tab because they belong to the whole pak. */
+const SECTION_COPY: Record<ListKey, { title: string; hint: string; blurb: string }> = {
+  scares: {
+    title: "Jumpscares",
+    hint: "random RNG rolls while you play",
+    blurb: "random videos and images on a timer, rebuilt on compile",
+  },
+  deaths: {
+    title: "Death media",
+    hint: "plays when your respawn timer appears",
+    blurb: "a video or image every time you die, rebuilt on compile",
+  },
+  misses: {
+    title: "Ability misses",
+    hint: "plays when a watched ability's HUD bar ends early",
+    blurb: "a video when a watched ability is wasted, rebuilt on compile",
+  },
+};
+
 export function DigimodTab({
+  section,
   config,
   addonsDir,
   helperPath,
   ffmpegPath,
   onChange,
 }: {
+  /** Which of the three lists this tab edits (see SECTION_COPY). */
+  section: ListKey;
   config: DigimodConfig;
   addonsDir: string;
   helperPath: string;
@@ -191,6 +216,7 @@ export function DigimodTab({
   onChange: (next: DigimodConfig) => void;
 }) {
   const { push } = useToast();
+  const copy = SECTION_COPY[section];
   const patch = (p: Partial<DigimodConfig>) => onChange({ ...config, ...p });
   const sounds = config.sounds ?? [];
   const misses = config.misses ?? EMPTY;
@@ -767,11 +793,13 @@ export function DigimodTab({
       <div className="rounded-xl border border-red-500/20 bg-gradient-to-br from-red-500/10 via-zinc-900/40 to-zinc-900/40 p-4">
         <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
           <div className="min-w-[10rem]">
-            <h2 className="text-base font-bold text-zinc-100">MoonahMasterUI</h2>
+            <h2 className="text-base font-bold text-zinc-100">
+              MoonahMasterUI <span className="text-zinc-500">/</span> {copy.title}
+            </h2>
             <p className="text-[11px] leading-4 text-zinc-500">
-              random jumpscares, death videos,
+              {copy.blurb}
               <br />
-              ability-miss videos, rebuilt on compile
+              one HUD mod shared by all three UI mods tabs
             </p>
           </div>
           <Field label="Mod name (in-game F8 menu)">
@@ -783,50 +811,60 @@ export function DigimodTab({
               className="w-52 rounded-lg border border-zinc-700 bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-red-500/60"
             />
           </Field>
-          <SettingSlider
-            label="Scare roll every"
-            suffix="s"
-            min={5}
-            max={300}
-            value={config.rngInterval}
-            onChange={(v) => patch({ rngInterval: v })}
-          />
-          <SettingSlider
-            label="Scare chance per roll"
-            suffix="%"
-            min={1}
-            max={100}
-            value={config.scareChance}
-            onChange={(v) => patch({ scareChance: v })}
-          />
-          <SettingSlider
-            label="Death video chance"
-            suffix="%"
-            min={0}
-            max={100}
-            value={config.deathChance}
-            onChange={(v) => patch({ deathChance: v })}
-          />
-          <SettingSlider
-            label="Ability-miss video chance"
-            suffix="%"
-            min={0}
-            max={100}
-            value={config.missChance ?? 100}
-            onChange={(v) => patch({ missChance: v })}
-          />
-          <label
-            className="flex items-center gap-1.5 text-[11px] text-zinc-400"
-            title="Prints every watched ability window to the game console ([MoonahUI] ability ...): start, length, how far the bar got, and the hit/miss verdict. Leave on while tuning, off once it fires right."
-          >
-            <input
-              type="checkbox"
-              checked={config.missDebug ?? true}
-              onChange={(ev) => patch({ missDebug: ev.target.checked })}
-              className="accent-red-500"
+          {section === "scares" && (
+            <>
+              <SettingSlider
+                label="Scare roll every"
+                suffix="s"
+                min={5}
+                max={300}
+                value={config.rngInterval}
+                onChange={(v) => patch({ rngInterval: v })}
+              />
+              <SettingSlider
+                label="Scare chance per roll"
+                suffix="%"
+                min={1}
+                max={100}
+                value={config.scareChance}
+                onChange={(v) => patch({ scareChance: v })}
+              />
+            </>
+          )}
+          {section === "deaths" && (
+            <SettingSlider
+              label="Death video chance"
+              suffix="%"
+              min={0}
+              max={100}
+              value={config.deathChance}
+              onChange={(v) => patch({ deathChance: v })}
             />
-            ability debug log
-          </label>
+          )}
+          {section === "misses" && (
+            <>
+              <SettingSlider
+                label="Ability-miss video chance"
+                suffix="%"
+                min={0}
+                max={100}
+                value={config.missChance ?? 100}
+                onChange={(v) => patch({ missChance: v })}
+              />
+              <label
+                className="flex items-center gap-1.5 text-[11px] text-zinc-400"
+                title="Prints every watched ability window to the game console ([MoonahUI] ability ...): start, length, how far the bar got, and the hit/miss verdict. Leave on while tuning, off once it fires right."
+              >
+                <input
+                  type="checkbox"
+                  checked={config.missDebug ?? true}
+                  onChange={(ev) => patch({ missDebug: ev.target.checked })}
+                  className="accent-red-500"
+                />
+                ability debug log
+              </label>
+            </>
+          )}
         </div>
         <p className="mt-2 text-[10px] text-zinc-600">
           These compile in as the defaults - the in-game F8 menu ("
@@ -874,9 +912,7 @@ export function DigimodTab({
         </div>
       )}
 
-      {renderList("scares", "Jumpscares", "random RNG rolls while you play")}
-      {renderList("deaths", "Deaths", "plays when your respawn timer appears")}
-      {renderList("misses", "Ability misses", "plays when a watched ability's HUD bar ends early")}
+      {renderList(section, copy.title, copy.hint)}
 
       {/* Shared sound library: each row compiles to its own Digi.* event. */}
       <div className="rounded-xl border border-zinc-800 bg-zinc-900/40">
@@ -886,7 +922,7 @@ export function DigimodTab({
             {sounds.length}
           </span>
           <span className="text-[11px] text-zinc-500">
-            each becomes its own sound event - assign to any number of videos above
+            shared by all three UI mods tabs - each becomes its own sound event, assign to any video
           </span>
           <button
             onClick={() => void addSoundsToLibrary()}

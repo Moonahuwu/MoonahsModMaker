@@ -516,7 +516,7 @@ strips VRF's "Compiled Textures" block, recompiles the `.vmat`, and stages the
 textures) must ship the compiler-SYNTHESIZED `_vmat_g_*` textures too, found by
 byte-scanning the compiled vmat_c's `.vtex` refs: a generated name vanilla
 doesn't ship dangles and breaks the material in game, Ivy's black-eyes bug,
-e2e `e2e_hero_texture_ivy_no_dangling_refs`), `jumpscares` (`DigimodTab` — appears when
+e2e `e2e_hero_texture_ivy_no_dangling_refs`), `jumpscares` / `deathmedia` / `abilitymisses` (three tabs under a red "UI mods" sidebar master, `UI_MODS_TABS`, all rendering `DigimodTab` with a `section` prop over the ONE shared `project.digimod` config — appears when
 `digimod_detected` finds the engine in installed paks, the project configures it, or
 the plain `enableJumpscares` Preferences toggle opts in (build your own from the blank
 `DEFAULT_DIGIMOD` template, no installed mod needed);
