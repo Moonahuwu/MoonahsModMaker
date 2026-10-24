@@ -56,15 +56,41 @@ fn entry_js(dm: &DigimodCompile, e: &DigiEntry) -> String {
         Some(s) => format!("\"{}\"", sound_event(&s.id)),
         None => "null".into(),
     };
+    let opt = |v: &Option<String>| match v.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(s) => format!("\"{}\"", js_str(s)),
+        None => "null".into(),
+    };
     format!(
-        "{{ name: \"{}\", type: \"{}\", src: \"s2r://{}\", show: {:.2}, sound: {}, preset: \"{}\" }}",
+        "{{ name: \"{}\", type: \"{}\", src: \"s2r://{}\", show: {:.2}, sound: {}, preset: \"{}\", ability: {}, hero: {}, full: {:.1} }}",
         sanitize_id(&e.id),
         if e.kind == "image" { "image" } else { "video" },
         media_rel(e),
         e.show.max(0.1),
         sound,
         if e.preset == "banner" { "banner" } else { "fullscreen" },
+        opt(&e.ability),
+        opt(&e.hero),
+        e.full_seconds.max(0.0),
     )
+}
+
+/// A user string made safe for a JS literal the same way `menu_title` is:
+/// quotes/backslashes swapped (never escaped) so the text-scan importer's
+/// `str_after` reads it back whole.
+fn js_str(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            '"' => '\'',
+            '\\' => '/',
+            c if c.is_control() => ' ',
+            c => c,
+        })
+        .collect()
+}
+
+/// Every media entry across the three trigger lists.
+fn all_entries(dm: &DigimodCompile) -> impl Iterator<Item = &DigiEntry> {
+    dm.scares.iter().chain(dm.deaths.iter()).chain(dm.misses.iter())
 }
 
 /// path|len|mtime identity line for one source file (0s when unreadable).
@@ -82,21 +108,26 @@ fn file_identity(p: &str) -> String {
 /// Fingerprint of the whole digimod config + every source file's identity.
 fn digimod_fingerprint(dm: &DigimodCompile) -> String {
     let mut key = format!(
-        "v3|{}|{}|{}|{}\n",
+        "v4|{}|{}|{}|{}|{}|{}\n",
         dm.title.as_deref().unwrap_or(""),
         dm.rng_interval,
         dm.scare_chance,
-        dm.death_chance
+        dm.death_chance,
+        dm.miss_chance,
+        dm.miss_debug,
     );
-    for e in dm.scares.iter().chain(dm.deaths.iter()) {
+    for e in all_entries(dm) {
         key.push_str(&file_identity(&e.source_media));
         key.push_str(&format!(
-            "{}|{}|{}|{:.2}|{}\n",
+            "{}|{}|{}|{:.2}|{}|{}|{}|{:.1}\n",
             e.id,
             e.kind,
             e.preset,
             e.show,
-            e.sound_id.as_deref().unwrap_or("")
+            e.sound_id.as_deref().unwrap_or(""),
+            e.ability.as_deref().unwrap_or(""),
+            e.hero.as_deref().unwrap_or(""),
+            e.full_seconds,
         ));
     }
     for s in &dm.sounds {
@@ -245,22 +276,26 @@ fn menu_title(dm: &DigimodCompile) -> String {
 /// Generate moonah_master.js from the template + this config.
 fn gen_js(dm: &DigimodCompile) -> String {
     let config = format!(
-        "{{ IS_ENABLED: true, TITLE: \"{}\", RNG_INTERVAL: {}, SCARE_CHANCE: {}, DEATH_CHANCE: {} }}",
+        "{{ IS_ENABLED: true, TITLE: \"{}\", RNG_INTERVAL: {}, SCARE_CHANCE: {}, DEATH_CHANCE: {}, MISS_CHANCE: {}, ABILITY_DEBUG: {} }}",
         menu_title(dm),
         dm.rng_interval.clamp(5, 600),
         dm.scare_chance.min(100),
         dm.death_chance.min(100),
+        dm.miss_chance.min(100),
+        dm.miss_debug,
     );
     let scares: Vec<String> = dm.scares.iter().map(|e| entry_js(dm, e)).collect();
     let deaths: Vec<String> = dm.deaths.iter().map(|e| entry_js(dm, e)).collect();
+    let misses: Vec<String> = dm.misses.iter().map(|e| entry_js(dm, e)).collect();
     let library = format!(
-        "{{\n    SCARES: [\n        {}\n    ],\n    DEATHS: [\n        {}\n    ],\n}}",
+        "{{\n    SCARES: [\n        {}\n    ],\n    DEATHS: [\n        {}\n    ],\n    MISSES: [\n        {}\n    ],\n}}",
         scares.join(",\n        "),
         deaths.join(",\n        "),
+        misses.join(",\n        "),
     );
     TPL_JS
         .replace("/*__MOONAH_CONFIG__*/{}/*__END__*/", &config)
-        .replace("/*__MOONAH_LIBRARY__*/{ SCARES: [], DEATHS: [] }/*__END__*/", &library)
+        .replace("/*__MOONAH_LIBRARY__*/{ SCARES: [], DEATHS: [], MISSES: [] }/*__END__*/", &library)
 }
 
 /// Run the whole digimod build. Returns (compiled-root-relative rels to
@@ -274,7 +309,7 @@ pub fn compile_digimod(
     let Some(dm) = &cfg.digimod else {
         return Ok((vec![], false));
     };
-    if dm.scares.is_empty() && dm.deaths.is_empty() && dm.merge_vpks.is_empty() {
+    if dm.scares.is_empty() && dm.deaths.is_empty() && dm.misses.is_empty() && dm.merge_vpks.is_empty() {
         return Ok((vec![], false));
     }
     let ffmpeg = cfg.ffmpeg_path.as_deref();
@@ -321,7 +356,7 @@ pub fn compile_digimod(
         "panorama/styles/anita_ui.vcss_c".into(),
         "soundevents/world_ambient_emitters.vsndevts_c".into(),
     ];
-    for e in dm.scares.iter().chain(dm.deaths.iter()) {
+    for e in all_entries(dm) {
         if e.kind == "image" {
             rels.push(format!("panorama/images/moonah/{}.vtex_c", sanitize_id(&e.id)));
         } else {
@@ -403,7 +438,7 @@ pub fn compile_digimod(
     // 2) Media: videos convert/copy straight into the compiled tree (webms
     //    ship raw); images + sounds become sources for the compiler.
     let mut image_pngs: Vec<(String, PathBuf)> = Vec::new(); // (id, content png)
-    for e in dm.scares.iter().chain(dm.deaths.iter()) {
+    for e in all_entries(dm) {
         let id = sanitize_id(&e.id);
         if e.kind == "image" {
             let png = content_root.join(format!("panorama/images/moonah/{id}.png"));
@@ -587,7 +622,12 @@ pub fn compile_digimod(
     };
     report.ok_step(
         "jumpscares mod",
-        format!("{} scare(s), {} death(s){merged_note}", dm.scares.len(), dm.deaths.len()),
+        format!(
+            "{} scare(s), {} death(s), {} ability miss(es){merged_note}",
+            dm.scares.len(),
+            dm.deaths.len(),
+            dm.misses.len()
+        ),
     );
     if all_ok {
         let _ = std::fs::write(&stamp, &key);
@@ -613,6 +653,7 @@ pub struct DigimodImport {
     pub death_chance: u32,
     pub scares: Vec<ImportedEntry>,
     pub deaths: Vec<ImportedEntry>,
+    pub misses: Vec<ImportedEntry>,
     /// The recovered sound library: one per engine sound event, deduped —
     /// entries sharing an event in the pak share a sound here too.
     pub sounds: Vec<ImportedSound>,
@@ -630,6 +671,12 @@ pub struct ImportedEntry {
     pub show: f64,
     pub preset: String,
     pub sound_id: Option<String>,
+    /// Ability-miss entries: watched ability (HUD class or displayed name).
+    pub ability: Option<String>,
+    /// Ability-miss entries: hero HUD class.
+    pub hero: Option<String>,
+    /// Ability-miss entries: full window length in seconds (0 = bar only).
+    pub full_seconds: f64,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -877,6 +924,9 @@ pub fn import_from_vpk(helper: &str, vpk: &str, dest_dir: &Path) -> Result<Digim
                     _ => "fullscreen".into(),
                 },
                 sound_id,
+                ability: str_after(obj, "ability:").filter(|s| !s.is_empty()),
+                hero: str_after(obj, "hero:").filter(|s| !s.is_empty()),
+                full_seconds: num_after(obj, "full:").unwrap_or(0.0).max(0.0),
             });
         }
         out
@@ -884,10 +934,11 @@ pub fn import_from_vpk(helper: &str, vpk: &str, dest_dir: &Path) -> Result<Digim
 
     let scares = parse_list("SCARES");
     let deaths = parse_list("DEATHS");
+    let misses = parse_list("MISSES");
     drop(parse_list);
     drop(sound_for_event);
     let _ = std::fs::remove_dir_all(&tmp);
-    if scares.is_empty() && deaths.is_empty() {
+    if scares.is_empty() && deaths.is_empty() && misses.is_empty() {
         return Err("no media entries found in this pak's MoonahMasterUI library".into());
     }
     // Title: CONFIG.TITLE in current paks; older paks hardcode it in
@@ -904,6 +955,7 @@ pub fn import_from_vpk(helper: &str, vpk: &str, dest_dir: &Path) -> Result<Digim
         death_chance: num_after(&js, "DEATH_CHANCE").unwrap_or(100.0) as u32,
         scares,
         deaths,
+        misses,
         sounds,
         warnings,
     })
@@ -928,6 +980,9 @@ var LIBRARY = {
     DEATHS: [
         { name: "death_1",   type: "video", src: "s2r://panorama/videos/death_screen.webm",   show: 5.5, sound: "Digi.Death",    preset: "banner" },
     ],
+    MISSES: [
+        { name: "lasso_miss", type: "video", src: "s2r://panorama/videos/moonah/lasso_miss.webm", show: 3.0, sound: null, preset: "banner", ability: "ability_gravity_lasso", hero: "hero_astro", full: 2.5 },
+    ],
 };"#;
 
     #[test]
@@ -949,6 +1004,13 @@ var LIBRARY = {
         let deaths = objects_in(array_after(JS, "DEATHS").unwrap());
         assert_eq!(deaths.len(), 1);
         assert_eq!(str_after(deaths[0], "preset").as_deref(), Some("banner"));
+        let misses = objects_in(array_after(JS, "MISSES").unwrap());
+        assert_eq!(misses.len(), 1);
+        assert_eq!(str_after(misses[0], "ability:").as_deref(), Some("ability_gravity_lasso"));
+        assert_eq!(str_after(misses[0], "hero:").as_deref(), Some("hero_astro"));
+        assert_eq!(num_after(misses[0], "full:"), Some(2.5));
+        // Scare/death entries carry no ability fields (older paks, too).
+        assert_eq!(str_after(scares[0], "ability:"), None);
     }
 
     #[test]
@@ -1005,6 +1067,46 @@ var LIBRARY = {
     }
 
     #[test]
+    fn gen_js_injects_misses_and_leaves_no_markers() {
+        let dm = crate::compile::DigimodCompile {
+            title: None,
+            rng_interval: 60,
+            scare_chance: 3,
+            death_chance: 100,
+            scares: vec![],
+            deaths: vec![],
+            misses: vec![crate::compile::DigiEntry {
+                id: "Lasso Miss".into(),
+                name: "Lasso Miss".into(),
+                kind: "video".into(),
+                source_media: "C:/x/miss.mp4".into(),
+                show: 3.0,
+                preset: "banner".into(),
+                sound_id: None,
+                ability: Some(" Spirit \"Lasso\" ".into()),
+                hero: Some("hero_astro".into()),
+                full_seconds: 2.5,
+            }],
+            miss_chance: 100,
+            miss_debug: true,
+            sounds: vec![],
+            merge_vpks: vec![],
+        };
+        let js = super::gen_js(&dm);
+        assert!(!js.contains("__MOONAH_"), "placeholders must all be replaced");
+        assert!(js.contains("MISS_CHANCE: 100, ABILITY_DEBUG: true"));
+        let misses = objects_in(array_after(&js, "MISSES").unwrap());
+        assert_eq!(misses.len(), 1);
+        assert_eq!(str_after(misses[0], "src").as_deref(), Some("s2r://panorama/videos/moonah/lasso_miss.webm"));
+        // Quotes swapped (never escaped) + trimmed, so the importer reads it back whole.
+        assert_eq!(str_after(misses[0], "ability:").as_deref(), Some("Spirit 'Lasso'"));
+        assert_eq!(str_after(misses[0], "hero:").as_deref(), Some("hero_astro"));
+        assert_eq!(num_after(misses[0], "full:"), Some(2.5));
+        // Scare/death arrays exist (empty) so the engine's length checks hold.
+        assert!(array_after(&js, "SCARES").is_some() && array_after(&js, "DEATHS").is_some());
+    }
+
+    #[test]
     fn menu_title_custom_stock_and_sanitized() {
         let dm = |t: Option<&str>| crate::compile::DigimodCompile {
             title: t.map(String::from),
@@ -1013,6 +1115,9 @@ var LIBRARY = {
             death_chance: 100,
             scares: vec![],
             deaths: vec![],
+            misses: vec![],
+            miss_chance: 100,
+            miss_debug: false,
             sounds: vec![],
             merge_vpks: vec![],
         };

@@ -2,6 +2,14 @@
 
 All notable changes since 1.0.4. Download: https://gamebanana.com/tools/23422
 
+## Unreleased
+
+### New: ability-miss videos (Jumpscares tab)
+- A third trigger next to Jumpscares and Deaths: "Ability misses". The mod watches the HUD's ability progress bar (the one that shows the ability name while it runs, for example Holliday's Spirit Lasso) and plays a video when that bar ends well before it fills, which is what a wasted cast looks like. Deaths that cut a window short are ignored.
+- Each entry says which ability to watch (the bar's HUD class such as `ability_gravity_lasso`, or the name it displays, or empty for any ability) and optionally the hero (`hero_astro` for Holliday). Side banner or fullscreen, with a sound from the shared library, like the other entries.
+- New "Ability-miss video chance" slider, an "ability debug log" option that prints every watched window (length, how far the bar got, hit or miss verdict) to the game console as `[MoonahUI] ability ...`, and matching controls plus test buttons in the in-game F8 menu.
+- Importing an installed MoonahMasterUI pak brings these entries back too.
+
 ## 1.5.4 (2026-10-20)
 
 ### New: save the game's original images

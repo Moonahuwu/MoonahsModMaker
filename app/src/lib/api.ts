@@ -260,6 +260,9 @@ export interface DigimodCompile {
   deathChance: number;
   scares: DigiEntryCompile[];
   deaths: DigiEntryCompile[];
+  misses?: DigiEntryCompile[];
+  missChance?: number;
+  missDebug?: boolean;
   sounds?: DigiSoundCompile[];
   mergeVpks?: string[];
 }
@@ -283,6 +286,9 @@ export interface DigiEntryCompile {
   show: number;
   preset: string;
   soundId?: string | null;
+  ability?: string | null;
+  hero?: string | null;
+  fullSeconds?: number;
 }
 
 /** True when an installed addon pak ships the MoonahMasterUI jumpscare engine (legacy DigiMaster paks count too). */
@@ -313,6 +319,7 @@ export interface DigimodImport {
   deathChance: number;
   scares: DigiEntryImported[];
   deaths: DigiEntryImported[];
+  misses: DigiEntryImported[];
   /** Deduped: one per engine sound event, shared by entries exactly like the pak. */
   sounds: DigiSoundImported[];
   warnings: string[];
@@ -326,6 +333,9 @@ export interface DigiEntryImported {
   show: number;
   preset: string;
   soundId?: string | null;
+  ability?: string | null;
+  hero?: string | null;
+  fullSeconds?: number;
 }
 
 export interface DigiSoundImported {

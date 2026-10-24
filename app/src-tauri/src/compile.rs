@@ -422,6 +422,18 @@ pub struct DigimodCompile {
     pub death_chance: u32,
     pub scares: Vec<DigiEntry>,
     pub deaths: Vec<DigiEntry>,
+    /// Ability-miss entries: play when a watched ability's HUD progress bar
+    /// ends early (the cast was wasted). Each entry names the ability (HUD
+    /// class or displayed name) and optionally the hero.
+    #[serde(default)]
+    pub misses: Vec<DigiEntry>,
+    /// Chance (0-100) an ability miss plays a video.
+    #[serde(default = "default_miss_chance")]
+    pub miss_chance: u32,
+    /// Log every watched ability window to the in-game console
+    /// (`[MoonahUI] ability ...`) so the miss rule can be tuned live.
+    #[serde(default)]
+    pub miss_debug: bool,
     /// The sound library: each becomes a `Moonah.<id>` sound event, shareable
     /// across any number of entries (like the user's original mod, where
     /// several death videos played the same event).
@@ -476,10 +488,28 @@ pub struct DigiEntry {
     /// Optional sound-library id played alongside (see `DigimodCompile::sounds`).
     #[serde(default)]
     pub sound_id: Option<String>,
+    /// Ability-miss entries only: the HUD class of the watched ability
+    /// (`ability_gravity_lasso`) or its displayed name ("Spirit Lasso").
+    /// Empty = any ability.
+    #[serde(default)]
+    pub ability: Option<String>,
+    /// Ability-miss entries only: the hero's HUD class (`hero_astro`).
+    /// Empty = any hero.
+    #[serde(default)]
+    pub hero: Option<String>,
+    /// Ability-miss entries only: how long the ability's full window lasts,
+    /// used as the miss rule when the HUD bar's width can't be read. 0 =
+    /// rely on the bar alone.
+    #[serde(default)]
+    pub full_seconds: f64,
 }
 
 fn default_digi_volume() -> f64 {
     3.0
+}
+
+fn default_miss_chance() -> u32 {
+    100
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -3458,6 +3488,7 @@ fn estimate_steps(cfg: &CompileConfig) -> usize {
         est += 3
             + dm.scares.len()
             + dm.deaths.len()
+            + dm.misses.len()
             + dm.sounds.len()
             + 2 * dm.merge_vpks.len();
     }

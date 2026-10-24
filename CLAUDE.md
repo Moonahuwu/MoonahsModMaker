@@ -208,7 +208,19 @@ contains `{` braces).
   adopts an installed MoonahMasterUI pak back into editable config (raw-extract the vjs_c:
   panorama resources embed source verbatim; VRF FileExtract can't do vjs_c); detection
   and import both fall back to the legacy `digi_master` stem / `Digi.*` prefix so old
-  paks still work.
+  paks still work. Three runtime triggers in `moonah_master.js`: the RNG loop
+  (`SCARES`), the death poller (`DEATHS`, polls the HUD `respawn_number` label), and
+  the ability-miss poller (`MISSES`): it polls `Citadel_AbilityHUDElement_Progress`
+  (class `ability_element_progress`, carries `active` + `hero_<code>` +
+  `ability_<name>` classes while an ability window runs, e.g. `hero_astro` +
+  `ability_gravity_lasso` for Holliday's Spirit Lasso; the SplitLabelProgressBar's
+  `SlicedContainer` width tracks time left). `active` dropping while the bar travelled
+  < `MISS_FULL` (0.85) of the way = wasted cast = a matching MISSES entry plays
+  (`ability` = HUD class or displayed name, `hero` = hero class, `full` seconds =
+  duration fallback when the bar width is unreadable); windows ending while the
+  respawn label shows are ignored. `ABILITY_DEBUG` (tab checkbox `missDebug`) logs
+  every window to the console. NOT yet confirmed in game as of 2026-10-24: the bar
+  width readback and the hit-vs-miss distinction, so keep the debug log on.
 - `vpk.rs` — shells out to the C# helper.
 - `install.rs` — one-click install into Deadlock's `game/citadel/addons`. Addons mount as
   `pakNN_dir.vpk` (NN = 01..99); a slot is "occupied" if any file there ends `pak<NN>_dir.vpk`

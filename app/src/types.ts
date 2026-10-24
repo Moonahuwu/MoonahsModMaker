@@ -417,6 +417,17 @@ export interface DigiEntry {
   preset: "fullscreen" | "banner";
   /** Sound-library id played alongside (see DigimodConfig.sounds). */
   soundId?: string | null;
+  /** Ability-miss entries only: the watched ability, as its HUD class
+   *  (`ability_gravity_lasso`) or the name the HUD bar shows ("Spirit
+   *  Lasso"). Empty = any ability. */
+  ability?: string;
+  /** Ability-miss entries only: the hero's HUD class (`hero_astro`).
+   *  Empty = any hero. */
+  hero?: string;
+  /** Ability-miss entries only: the ability window's full length in
+   *  seconds, the fallback miss rule when the HUD bar can't be read.
+   *  0 = rely on the bar. */
+  fullSeconds?: number;
   /** @deprecated pre-library shape — migrated into `sounds` on load. */
   sourceAudio?: string | null;
   /** @deprecated pre-library shape — migrated into `sounds` on load. */
@@ -450,6 +461,13 @@ export interface DigimodConfig {
   deathChance: number;
   scares: DigiEntry[];
   deaths: DigiEntry[];
+  /** Ability misses: play when a watched ability's HUD progress bar ends
+   *  early (the cast was wasted). */
+  misses?: DigiEntry[];
+  /** Chance (0-100) an ability miss plays a video. Default 100. */
+  missChance?: number;
+  /** Log every watched ability window to the in-game console. */
+  missDebug?: boolean;
   /** Shared sound library (each entry picks one by id via dropdown). */
   sounds?: DigiSound[];
   /** Other base_hud-overriding UI mod vpks merged into this build (two HUD

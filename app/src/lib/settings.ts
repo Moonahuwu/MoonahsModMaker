@@ -740,6 +740,9 @@ export function buildCompileConfig(
             preset: e.preset,
             soundId:
               e.soundId && sounds.some((s) => s.id === e.soundId) ? e.soundId : null,
+            ability: (e.ability ?? "").trim() || null,
+            hero: (e.hero ?? "").trim() || null,
+            fullSeconds: e.fullSeconds ?? 0,
           });
           return {
             title: (digimod.title ?? "").trim() || null,
@@ -748,6 +751,9 @@ export function buildCompileConfig(
             deathChance: digimod.deathChance,
             scares: digimod.scares.filter((e) => e.sourceMedia).map(entry),
             deaths: digimod.deaths.filter((e) => e.sourceMedia).map(entry),
+            misses: (digimod.misses ?? []).filter((e) => e.sourceMedia).map(entry),
+            missChance: digimod.missChance ?? 100,
+            missDebug: digimod.missDebug ?? true,
             sounds: sounds.map((s) => ({
               id: s.id,
               sourceAudio: s.sourceAudio,

@@ -23,6 +23,16 @@ const AUDIO_FILTERS = [
   { name: "Audio", extensions: ["mp3", "wav", "flac", "ogg", "m4a", "aac"] },
 ];
 
+/** The three trigger lists an entry can live in. */
+type ListKey = "scares" | "deaths" | "misses";
+
+/** Default watched ability for a new miss entry: Holliday's Spirit Lasso,
+ *  the HUD class the progress bar carries while it runs. */
+const DEFAULT_MISS_ABILITY = "ability_gravity_lasso";
+
+/** Stable empty list so `config.misses ?? EMPTY` keeps effect deps steady. */
+const EMPTY: DigiEntry[] = [];
+
 export const DEFAULT_DIGIMOD: DigimodConfig = {
   title: "",
   rngInterval: 60,
@@ -30,6 +40,9 @@ export const DEFAULT_DIGIMOD: DigimodConfig = {
   deathChance: 100,
   scares: [],
   deaths: [],
+  misses: [],
+  missChance: 100,
+  missDebug: true,
   sounds: [],
 };
 
@@ -180,6 +193,9 @@ export function DigimodTab({
   const { push } = useToast();
   const patch = (p: Partial<DigimodConfig>) => onChange({ ...config, ...p });
   const sounds = config.sounds ?? [];
+  const misses = config.misses ?? EMPTY;
+  const allEntries = [...config.scares, ...config.deaths, ...misses];
+  const listOf = (list: ListKey): DigiEntry[] => (list === "misses" ? misses : config[list]);
 
   // Clip editor: which sound row is expanded + the shared preview player.
   const [editSound, setEditSound] = useState<string | null>(null);
@@ -206,7 +222,7 @@ export function DigimodTab({
         .then((p) => setAudioDur((d) => ({ ...d, [s.id]: p.duration })))
         .catch(() => {});
     }
-    for (const e of [...config.scares, ...config.deaths]) {
+    for (const e of allEntries) {
       if (e.kind !== "video" || videoDur[e.id] !== undefined || probing.current.has(e.id)) continue;
       probing.current.add(e.id);
       const v = document.createElement("video");
@@ -221,7 +237,7 @@ export function DigimodTab({
       v.src = convertFileSrc(e.sourceMedia);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sounds, config.scares, config.deaths]);
+  }, [sounds, config.scares, config.deaths, misses]);
 
   /** Effective clip length of a sound (trim window, else source length). */
   function clipLen(s: DigiSound): number | null {
@@ -237,7 +253,7 @@ export function DigimodTab({
   function clipSoundTo(s: DigiSound, secs: number) {
     const start = s.trimStart ?? 0;
     updateSound(s.id, { trimEnd: Math.round((start + secs) * 100) / 100 });
-    const uses = [...config.scares, ...config.deaths].filter((e) => e.soundId === s.id).length;
+    const uses = allEntries.filter((e) => e.soundId === s.id).length;
     if (uses > 1) push("info", `"${s.name}" is used by ${uses} videos - all of them get the ${fmt(secs)}s clip`);
   }
 
@@ -272,7 +288,7 @@ export function DigimodTab({
   // One-time migration from the pre-library shape: entries that carried
   // their own sourceAudio get it lifted into a shared sound.
   useEffect(() => {
-    const legacy = [...config.scares, ...config.deaths].filter(
+    const legacy = allEntries.filter(
       (e) => e.sourceAudio && !e.soundId,
     );
     if (legacy.length === 0) return;
@@ -295,7 +311,13 @@ export function DigimodTab({
           ? { ...e, soundId: soundFor(e), sourceAudio: null }
           : e,
       );
-    onChange({ ...config, scares: lift(config.scares), deaths: lift(config.deaths), sounds: lib });
+    onChange({
+      ...config,
+      scares: lift(config.scares),
+      deaths: lift(config.deaths),
+      misses: lift(misses),
+      sounds: lib,
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config]);
 
@@ -311,6 +333,7 @@ export function DigimodTab({
       sounds: sounds.filter((s) => s.id !== id),
       scares: strip(config.scares),
       deaths: strip(config.deaths),
+      misses: strip(misses),
     });
   }
 
@@ -333,14 +356,14 @@ export function DigimodTab({
   }
 
   /** Entry dropdown picked "add new": add to library + assign, atomically. */
-  async function addSoundForEntry(list: "scares" | "deaths", entryId: string) {
+  async function addSoundForEntry(list: ListKey, entryId: string) {
     const ns = await pickSoundFiles();
     if (ns.length === 0) return;
     const assigned = ns[ns.length - 1].id;
     onChange({
       ...config,
       sounds: [...sounds, ...ns],
-      [list]: config[list].map((e) => (e.id === entryId ? { ...e, soundId: assigned } : e)),
+      [list]: listOf(list).map((e) => (e.id === entryId ? { ...e, soundId: assigned } : e)),
     });
   }
 
@@ -362,7 +385,7 @@ export function DigimodTab({
     setImporting(vpk);
     try {
       const imp = await importDigimod(helperPath, vpk);
-      const have = new Set([...config.scares, ...config.deaths].map((e) => e.id));
+      const have = new Set(allEntries.map((e) => e.id));
       // Library first: imported sounds slot in unless the id is taken.
       const haveSounds = new Set(sounds.map((s) => s.id));
       const newSounds: DigiSound[] = imp.sounds
@@ -380,9 +403,14 @@ export function DigimodTab({
             show: e.show,
             preset: e.preset === "banner" ? "banner" : "fullscreen",
             soundId: e.soundId && soundKnown.has(e.soundId) ? e.soundId : null,
+            ability: e.ability ?? undefined,
+            hero: e.hero ?? undefined,
+            fullSeconds: e.fullSeconds ?? 0,
           }));
       const scares = adopt(imp.scares);
       const deaths = adopt(imp.deaths);
+      const impMisses = imp.misses ?? [];
+      const newMisses = adopt(impMisses);
       onChange({
         ...config,
         title: imp.title ?? config.title,
@@ -391,12 +419,16 @@ export function DigimodTab({
         deathChance: imp.deathChance,
         scares: [...config.scares, ...scares],
         deaths: [...config.deaths, ...deaths],
+        misses: [...misses, ...newMisses],
         sounds: [...sounds, ...newSounds],
       });
-      const skipped = imp.scares.length + imp.deaths.length - scares.length - deaths.length;
+      const skipped =
+        imp.scares.length + imp.deaths.length + impMisses.length -
+        scares.length - deaths.length - newMisses.length;
       push(
         "success",
         `Imported ${scares.length} scare(s) + ${deaths.length} death(s)` +
+          (newMisses.length > 0 ? ` + ${newMisses.length} ability miss(es)` : "") +
           (skipped > 0 ? ` (${skipped} already here)` : ""),
       );
       for (const w of imp.warnings) push("error", w);
@@ -407,7 +439,7 @@ export function DigimodTab({
     }
   }
 
-  async function addEntry(list: "scares" | "deaths", kind: "video" | "image") {
+  async function addEntry(list: ListKey, kind: "video" | "image") {
     const picked = await openDialog({
       multiple: true,
       filters: kind === "video" ? VIDEO_FILTERS : IMAGE_FILTERS,
@@ -426,7 +458,13 @@ export function DigimodTab({
     }
     const newEntries: DigiEntry[] = [];
     const newSounds: DigiSound[] = [];
-    const all = [...config.scares, ...config.deaths];
+    const all = allEntries;
+    const defaults: Partial<DigiEntry> =
+      list === "scares"
+        ? { show: 0.8, preset: "fullscreen" }
+        : list === "deaths"
+          ? { show: 5.0, preset: "banner" }
+          : { show: 3.0, preset: "banner", ability: DEFAULT_MISS_ABILITY, hero: "", fullSeconds: 0 };
     for (let i = 0; i < paths.length; i++) {
       const p = paths[i];
       const name = baseName(p).replace(/\.[^.]+$/, "");
@@ -440,14 +478,15 @@ export function DigimodTab({
         name,
         kind,
         sourceMedia: p,
-        show: list === "scares" ? 0.8 : 5.0,
-        preset: list === "scares" ? "fullscreen" : "banner",
+        show: 1,
+        preset: "banner",
+        ...defaults,
         soundId,
       });
     }
     onChange({
       ...config,
-      [list]: [...config[list], ...newEntries],
+      [list]: [...listOf(list), ...newEntries],
       sounds: [...sounds, ...newSounds],
     });
     const withAudio = newSounds.length;
@@ -461,24 +500,44 @@ export function DigimodTab({
     }
   }
 
-  function updateEntry(list: "scares" | "deaths", id: string, p: Partial<DigiEntry>) {
+  function updateEntry(list: ListKey, id: string, p: Partial<DigiEntry>) {
     patch({
-      [list]: config[list].map((e) => (e.id === id ? { ...e, ...p } : e)),
+      [list]: listOf(list).map((e) => (e.id === id ? { ...e, ...p } : e)),
     } as Partial<DigimodConfig>);
   }
 
-  function removeEntry(list: "scares" | "deaths", id: string) {
-    patch({ [list]: config[list].filter((e) => e.id !== id) } as Partial<DigimodConfig>);
+  function removeEntry(list: ListKey, id: string) {
+    patch({ [list]: listOf(list).filter((e) => e.id !== id) } as Partial<DigimodConfig>);
   }
 
-  const empty = config.scares.length === 0 && config.deaths.length === 0;
+  const empty = allEntries.length === 0;
 
-  const renderList = (list: "scares" | "deaths", title: string, hint: string) => (
+  /** Text field on a miss entry card (ability / hero match). */
+  const matchField = (
+    list: ListKey,
+    e: DigiEntry,
+    key: "ability" | "hero",
+    label: string,
+    placeholder: string,
+    title: string,
+  ) => (
+    <label className="flex min-w-0 flex-1 items-center gap-1.5" title={title}>
+      <span className="shrink-0">{label}</span>
+      <input
+        value={e[key] ?? ""}
+        placeholder={placeholder}
+        onChange={(ev) => updateEntry(list, e.id, { [key]: ev.target.value })}
+        className="min-w-0 flex-1 rounded border border-zinc-700 bg-zinc-950 px-1 py-0.5 font-mono text-zinc-300 placeholder:text-zinc-600 focus:border-zinc-500 focus:outline-none"
+      />
+    </label>
+  );
+
+  const renderList = (list: ListKey, title: string, hint: string) => (
     <div className="rounded-xl border border-zinc-800 bg-zinc-900/40">
       <div className="flex items-center gap-3 border-b border-zinc-800/70 px-4 py-2.5">
         <h3 className="text-sm font-semibold text-zinc-100">{title}</h3>
         <span className="rounded-full bg-red-500/10 px-2 py-0.5 text-[10px] font-semibold text-red-300">
-          {config[list].length}
+          {listOf(list).length}
         </span>
         <span className="text-[11px] text-zinc-500">{hint}</span>
         <div className="ml-auto flex gap-2">
@@ -496,13 +555,24 @@ export function DigimodTab({
           </button>
         </div>
       </div>
-      {config[list].length === 0 ? (
+      {list === "misses" && (
+        <p className="border-b border-zinc-800/70 px-4 py-2 text-[11px] leading-4 text-zinc-500">
+          Watches the HUD's ability progress bar (the one that shows the ability name while
+          it runs). A bar that ends well before it fills means the cast was wasted, and a
+          matching video plays. Match by the bar's HUD class (default: Holliday's Spirit
+          Lasso, <span className="font-mono">ability_gravity_lasso</span>) or by the name
+          it displays ("Spirit Lasso"); leave it empty for any ability. Hero is optional
+          (<span className="font-mono">hero_astro</span> = Holliday). Deaths that cut a
+          window short are ignored.
+        </p>
+      )}
+      {listOf(list).length === 0 ? (
         <p className="py-6 text-center text-xs text-zinc-600">
           Nothing yet - add a video (any format, it converts to webm) or a PNG.
         </p>
       ) : (
         <div className="grid grid-cols-1 gap-3 p-3 lg:grid-cols-2 2xl:grid-cols-3">
-          {config[list].map((e) => (
+          {listOf(list).map((e) => (
             <div
               key={e.id}
               className="group overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950/60 transition-colors hover:border-red-500/40"
@@ -584,6 +654,47 @@ export function DigimodTab({
                     ))}
                   </span>
                 </div>
+                {list === "misses" && (
+                  <div className="flex flex-col gap-1 text-[11px] text-zinc-500">
+                    <div className="flex gap-2">
+                      {matchField(
+                        list,
+                        e,
+                        "ability",
+                        "Ability",
+                        "any ability",
+                        "HUD class (ability_gravity_lasso) or the name the bar shows (Spirit Lasso). Empty = any ability.",
+                      )}
+                      {matchField(
+                        list,
+                        e,
+                        "hero",
+                        "Hero",
+                        "any hero",
+                        "Hero HUD class, e.g. hero_astro for Holliday. Empty = any hero.",
+                      )}
+                    </div>
+                    <label
+                      className="flex items-center gap-1"
+                      title="How long the ability's full window lasts. Only used when the bar's width can't be read in game (the debug log says 'bar never moved'). 0 = rely on the bar."
+                    >
+                      full window
+                      <input
+                        type="number"
+                        step={0.1}
+                        min={0}
+                        value={e.fullSeconds ?? 0}
+                        onChange={(ev) =>
+                          updateEntry(list, e.id, {
+                            fullSeconds: Math.max(0, Number(ev.target.value) || 0),
+                          })
+                        }
+                        className="w-14 rounded border border-zinc-700 bg-zinc-950 px-1 text-zinc-200"
+                      />
+                      s <span className="text-zinc-600">(fallback, 0 = read the bar)</span>
+                    </label>
+                  </div>
+                )}
                 <label className="flex items-center gap-1.5 text-[11px] text-zinc-500">
                   <span className="shrink-0">Sound</span>
                   <select
@@ -658,9 +769,9 @@ export function DigimodTab({
           <div className="min-w-[10rem]">
             <h2 className="text-base font-bold text-zinc-100">MoonahMasterUI</h2>
             <p className="text-[11px] leading-4 text-zinc-500">
-              random jumpscares + death videos,
+              random jumpscares, death videos,
               <br />
-              rebuilt into your mod on compile
+              ability-miss videos, rebuilt on compile
             </p>
           </div>
           <Field label="Mod name (in-game F8 menu)">
@@ -696,11 +807,32 @@ export function DigimodTab({
             value={config.deathChance}
             onChange={(v) => patch({ deathChance: v })}
           />
+          <SettingSlider
+            label="Ability-miss video chance"
+            suffix="%"
+            min={0}
+            max={100}
+            value={config.missChance ?? 100}
+            onChange={(v) => patch({ missChance: v })}
+          />
+          <label
+            className="flex items-center gap-1.5 text-[11px] text-zinc-400"
+            title="Prints every watched ability window to the game console ([MoonahUI] ability ...): start, length, how far the bar got, and the hit/miss verdict. Leave on while tuning, off once it fires right."
+          >
+            <input
+              type="checkbox"
+              checked={config.missDebug ?? true}
+              onChange={(ev) => patch({ missDebug: ev.target.checked })}
+              className="accent-red-500"
+            />
+            ability debug log
+          </label>
         </div>
         <p className="mt-2 text-[10px] text-zinc-600">
           These compile in as the defaults - the in-game F8 menu ("
           {(config.title ?? "").trim() || "MoonahMasterUI (Mod Maker)"}") can still tweak them
-          per session. Death controls only appear in that menu once a death video ships.
+          per session. Death and ability-miss controls only appear in that menu once such a
+          video ships.
         </p>
       </div>
 
@@ -744,6 +876,7 @@ export function DigimodTab({
 
       {renderList("scares", "Jumpscares", "random RNG rolls while you play")}
       {renderList("deaths", "Deaths", "plays when your respawn timer appears")}
+      {renderList("misses", "Ability misses", "plays when a watched ability's HUD bar ends early")}
 
       {/* Shared sound library: each row compiles to its own Digi.* event. */}
       <div className="rounded-xl border border-zinc-800 bg-zinc-900/40">
@@ -770,7 +903,7 @@ export function DigimodTab({
         ) : (
           <div className="grid grid-cols-1 gap-2 p-3 md:grid-cols-2">
             {sounds.map((s) => {
-              const uses = [...config.scares, ...config.deaths].filter(
+              const uses = allEntries.filter(
                 (e) => e.soundId === s.id,
               ).length;
               const edited =
@@ -864,7 +997,7 @@ export function DigimodTab({
                       {(() => {
                         const len = clipLen(s);
                         const dur = audioDur[s.id];
-                        const users = [...config.scares, ...config.deaths].filter(
+                        const users = allEntries.filter(
                           (e) => e.soundId === s.id,
                         );
                         return (

@@ -226,6 +226,7 @@ export function CompileBar({
     (digimod != null &&
       (digimod.scares.length > 0 ||
         digimod.deaths.length > 0 ||
+        (digimod.misses?.length ?? 0) > 0 ||
         (digimod.mergeVpks?.length ?? 0) > 0)) ||
     uiOverrides.length > 0 ||
     (settings.includeGameplay &&

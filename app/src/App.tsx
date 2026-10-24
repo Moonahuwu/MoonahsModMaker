@@ -1558,6 +1558,7 @@ export default function App() {
       (project?.digimod &&
         (project.digimod.scares.length > 0 ||
           project.digimod.deaths.length > 0 ||
+          (project.digimod.misses?.length ?? 0) > 0 ||
           (project.digimod.mergeVpks?.length ?? 0) > 0))
     )
       out.push(JUMPSCARES);
@@ -1668,7 +1669,13 @@ export default function App() {
     for (const o of project.modelOverrides ?? [])
       out.push({ key: `model:${o.id}`, kind: "Hero model", label: o.label });
     const d = project.digimod;
-    if (d && (d.scares.length > 0 || d.deaths.length > 0 || (d.mergeVpks?.length ?? 0) > 0))
+    if (
+      d &&
+      (d.scares.length > 0 ||
+        d.deaths.length > 0 ||
+        (d.misses?.length ?? 0) > 0 ||
+        (d.mergeVpks?.length ?? 0) > 0)
+    )
       out.push({ key: "digimod", kind: "Jumpscares", label: "Jumpscares / Deaths mod" });
     if (
       (project.vdataOverrides?.length ?? 0) > 0 ||

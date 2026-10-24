@@ -8,10 +8,11 @@
 // ==========================================================================
 
 var CONFIG = /*__MOONAH_CONFIG__*/{}/*__END__*/;
-var LIBRARY = /*__MOONAH_LIBRARY__*/{ SCARES: [], DEATHS: [] }/*__END__*/;
+var LIBRARY = /*__MOONAH_LIBRARY__*/{ SCARES: [], DEATHS: [], MISSES: [] }/*__END__*/;
 
 var _timerHandle = null;
 var _deathPollHandle = null;
+var _abilityPollHandle = null;
 var _isRespawning = false;
 var _deathCooldownTs = 0;
 var _liveN = 0;
@@ -124,6 +125,15 @@ function findRespawnLabel() {
     return _cachedTimerLabel;
 }
 
+// Seconds left on the respawn timer (0 while alive / no label).
+function respawnSeconds(label) {
+    if (label && label.text) {
+        var v = parseInt(label.text);
+        if (!isNaN(v)) return v;
+    }
+    return 0;
+}
+
 function RunDeathPoller() {
     if (!CONFIG.IS_ENABLED || LIBRARY.DEATHS.length === 0) {
         _isRespawning = false;
@@ -131,11 +141,7 @@ function RunDeathPoller() {
         return;
     }
     var label = findRespawnLabel();
-    var timerValue = 0;
-    if (label && label.text) {
-        var v = parseInt(label.text);
-        if (!isNaN(v)) timerValue = v;
-    }
+    var timerValue = respawnSeconds(label);
 
     if (timerValue > 2) {
         if (!_isRespawning) {
@@ -155,14 +161,167 @@ function RunDeathPoller() {
 }
 
 // ==========================================================================
+// ABILITY-MISS POLLER — watches the HUD's ability progress element
+// (Citadel_AbilityHUDElement_Progress, class ability_element_progress). While
+// an ability's window runs the element carries `active` plus `hero_<code>`
+// and `ability_<name>` classes, and its SplitLabelProgressBar's
+// SlicedContainer width tracks the time left. A window that drops `active`
+// while the bar is still far from its end was cut short = the cast was
+// wasted (Holliday's Spirit Lasso missing its target), and a MISSES entry
+// whose ability/hero match plays. Deaths cut windows short too, so a window
+// ending while the respawn timer shows is ignored. ABILITY_DEBUG logs every
+// window so the rule can be tuned from the console.
+// ==========================================================================
+var MISS_FULL = 0.85;        // bar travel that counts as "ran to the end"
+var MISS_MIN_SECS = 0.15;    // shorter windows are HUD flicker, not casts
+var _progressPanels = [];    // cached progress elements (index-aligned with _windows)
+var _windows = [];           // per-panel state while its window is active
+var _missCooldownTs = 0;
+
+function abilityDebug(msg) {
+    if (CONFIG.ABILITY_DEBUG) $.Msg("[MoonahUI] ability " + msg);
+}
+
+function findProgressPanels() {
+    var alive = true;
+    for (var i = 0; i < _progressPanels.length; i++) {
+        var p = _progressPanels[i];
+        if (!p || !p.IsValid || !p.IsValid()) { alive = false; break; }
+    }
+    if (alive && _progressPanels.length > 0) return _progressPanels;
+    _progressPanels = [];
+    _windows = [];
+    var ctx = $.GetContextPanel();
+    var root = ctx.GetParent() || ctx;
+    var found = root.FindChildrenWithClassTraverse("ability_element_progress");
+    for (var j = 0; j < found.length; j++) {
+        if (found[j]) {
+            _progressPanels.push(found[j]);
+            _windows.push(null);
+        }
+    }
+    if (_progressPanels.length > 0) abilityDebug("watching " + _progressPanels.length + " progress element(s)");
+    return _progressPanels;
+}
+
+function abilityLabelText(panel) {
+    var ids = ["InnerLabel", "ability_name", "SlicedLabel"];
+    for (var i = 0; i < ids.length; i++) {
+        var l = panel.FindChildTraverse(ids[i]);
+        if (l && typeof l.text === "string" && l.text.length > 0) return l.text;
+    }
+    return "";
+}
+
+// Fill fraction of the SplitLabelProgressBar: SlicedContainer width over its
+// container's. null when the bar can't be read (layout not ready / no bar).
+function barFraction(sliced) {
+    if (!sliced || !sliced.IsValid || !sliced.IsValid()) return null;
+    var box = sliced.GetParent();
+    var w = sliced.actuallayoutwidth;
+    var full = box ? box.actuallayoutwidth : 0;
+    if (typeof w !== "number" || typeof full !== "number" || !(full > 0)) return null;
+    return Math.max(0, Math.min(1, w / full));
+}
+
+function normName(s) {
+    return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/^ | $/g, "");
+}
+
+// MISSES entries whose hero/ability match the window that just opened. The
+// `ability` field is either a HUD class (ability_gravity_lasso) or the name
+// the bar displays ("Spirit Lasso"); empty matches any ability.
+function missCandidates(panel, labelText) {
+    var out = [];
+    var shown = normName(labelText);
+    for (var i = 0; i < LIBRARY.MISSES.length; i++) {
+        var e = LIBRARY.MISSES[i];
+        if (e.hero && !panel.BHasClass(e.hero)) continue;
+        if (e.ability) {
+            var byClass = panel.BHasClass(e.ability);
+            var byName = shown.length > 0 && normName(e.ability) === shown;
+            if (!byClass && !byName) continue;
+        }
+        out.push(e);
+    }
+    return out;
+}
+
+function onAbilityWindowEnd(st, secs) {
+    var travel = st.fLast === null || st.f0 === null ? null : Math.abs(st.fLast - st.f0);
+    var verdict;
+    if (secs < MISS_MIN_SECS) verdict = "flicker";
+    else if (respawnSeconds(findRespawnLabel()) > 0) verdict = "death";
+    else if (st.moved && travel !== null) verdict = travel < MISS_FULL ? "MISS" : "full";
+    else if (st.fullSecs > 0) verdict = secs < st.fullSecs * MISS_FULL ? "MISS" : "full";
+    else verdict = "unreadable";
+    abilityDebug(
+        "end: \"" + st.name + "\" " + secs.toFixed(2) + "s bar " +
+        (st.f0 === null ? "?" : st.f0.toFixed(2)) + "->" + (st.fLast === null ? "?" : st.fLast.toFixed(2)) +
+        (st.moved ? "" : " (bar never moved)") + " = " + verdict
+    );
+    if (verdict !== "MISS") return;
+    if (st.candidates.length === 0) {
+        abilityDebug("miss but no MISSES entry matches this ability/hero");
+        return;
+    }
+    if (Date.now() < _missCooldownTs) return;
+    _missCooldownTs = Date.now() + 1000;
+    if (Math.random() * 100 < CONFIG.MISS_CHANCE) {
+        $.Msg("[MoonahUI] ability miss detected: " + st.name);
+        TriggerMedia(st.candidates[Math.floor(Math.random() * st.candidates.length)]);
+    }
+}
+
+function RunAbilityPoller() {
+    if (!CONFIG.IS_ENABLED || LIBRARY.MISSES.length === 0) {
+        _abilityPollHandle = $.Schedule(2.0, RunAbilityPoller);
+        return;
+    }
+    var panels = findProgressPanels();
+    var now = Date.now();
+    for (var i = 0; i < panels.length; i++) {
+        var panel = panels[i];
+        var st = _windows[i];
+        var active = panel.BHasClass("active");
+        if (active && !st) {
+            var sliced = panel.FindChildTraverse("SlicedContainer");
+            var text = abilityLabelText(panel);
+            var cands = missCandidates(panel, text);
+            var fullSecs = 0;
+            for (var c = 0; c < cands.length; c++) {
+                if (cands[c].full > fullSecs) fullSecs = cands[c].full;
+            }
+            var f0 = barFraction(sliced);
+            st = { t0: now, name: text || "(unnamed)", sliced: sliced, f0: f0, fLast: f0, moved: false, candidates: cands, fullSecs: fullSecs };
+            _windows[i] = st;
+            abilityDebug("start: \"" + st.name + "\" bar=" + (f0 === null ? "unreadable" : f0.toFixed(2)) + " matching entries=" + cands.length);
+        } else if (active && st) {
+            var f = barFraction(st.sliced);
+            if (f !== null) {
+                if (st.f0 === null) st.f0 = f;
+                else if (Math.abs(f - st.f0) > 0.02) st.moved = true;
+                st.fLast = f;
+            }
+        } else if (!active && st) {
+            _windows[i] = null;
+            onAbilityWindowEnd(st, (now - st.t0) / 1000);
+        }
+    }
+    _abilityPollHandle = $.Schedule(panels.length > 0 ? 0.1 : 2.0, RunAbilityPoller);
+}
+
+// ==========================================================================
 // INIT
 // ==========================================================================
 (function () {
     if (_timerHandle) $.CancelScheduled(_timerHandle);
     if (_deathPollHandle) $.CancelScheduled(_deathPollHandle);
-    $.Msg("[MoonahUI] engine loaded — " + LIBRARY.SCARES.length + " scares, " + LIBRARY.DEATHS.length + " deaths");
+    if (_abilityPollHandle) $.CancelScheduled(_abilityPollHandle);
+    $.Msg("[MoonahUI] engine loaded — " + LIBRARY.SCARES.length + " scares, " + LIBRARY.DEATHS.length + " deaths, " + LIBRARY.MISSES.length + " ability misses");
     _timerHandle = $.Schedule(5.0, RunRngLoop);
     _deathPollHandle = $.Schedule(5.0, RunDeathPoller);
+    _abilityPollHandle = $.Schedule(5.0, RunAbilityPoller);
 })();
 
 // ==========================================================================
@@ -175,6 +334,10 @@ function anitaCallback(id, value) {
     }
     if (id === "TEST_DEATH" && LIBRARY.DEATHS.length > 0) {
         TriggerMedia(LIBRARY.DEATHS[Math.floor(Math.random() * LIBRARY.DEATHS.length)]);
+        return;
+    }
+    if (id === "TEST_MISS" && LIBRARY.MISSES.length > 0) {
+        TriggerMedia(LIBRARY.MISSES[Math.floor(Math.random() * LIBRARY.MISSES.length)]);
         return;
     }
     if (typeof id === "string" && id.indexOf("TEST_LIB_") === 0) {
@@ -210,12 +373,20 @@ function anitaCallback(id, value) {
         menuConfig.elements.push({ type: "stepper", label: "Death Chance %", id: "DEATH_CHANCE", min: 0, max: 100, step: 1, defaultValue: CONFIG.DEATH_CHANCE });
         menuConfig.elements.push({ type: "button", label: "Test Random Death", id: "TEST_DEATH" });
     }
+    if (LIBRARY.MISSES.length > 0) {
+        menuConfig.elements.push({ type: "stepper", label: "Ability Miss Chance %", id: "MISS_CHANCE", min: 0, max: 100, step: 1, defaultValue: CONFIG.MISS_CHANCE });
+        menuConfig.elements.push({ type: "toggle", label: "Ability debug log", id: "ABILITY_DEBUG", defaultValue: !!CONFIG.ABILITY_DEBUG });
+        menuConfig.elements.push({ type: "button", label: "Test Random Miss", id: "TEST_MISS" });
+    }
     var i;
     for (i = 0; i < LIBRARY.SCARES.length; i++) {
         menuConfig.elements.push({ type: "button", label: "Test: " + LIBRARY.SCARES[i].name, id: "TEST_LIB_SCARES_" + i });
     }
     for (i = 0; i < LIBRARY.DEATHS.length; i++) {
         menuConfig.elements.push({ type: "button", label: "Test: " + LIBRARY.DEATHS[i].name, id: "TEST_LIB_DEATHS_" + i });
+    }
+    for (i = 0; i < LIBRARY.MISSES.length; i++) {
+        menuConfig.elements.push({ type: "button", label: "Test: " + LIBRARY.MISSES[i].name, id: "TEST_LIB_MISSES_" + i });
     }
 
     $.RegisterForUnhandledEvent("ClientUI_FireOutput", function (payload) {
