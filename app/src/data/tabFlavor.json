@@ -1,9 +1,8 @@
 {
   "animatedart": "Play GIFs and videos on in-world paintings and signs",
+  "deathmedia": "A video or image every time you die - part of your MoonahMasterUI HUD mod, rebuilt on compile.",
   "effects": "Recolor any particle effect - hero abilities, item effects, and more. Preview the recolor live, then compile to apply.",
   "jumpscares": "Random jumpscares on a timer while you play - part of your MoonahMasterUI HUD mod, rebuilt on compile.",
-  "deathmedia": "A video or image every time you die - part of your MoonahMasterUI HUD mod, rebuilt on compile.",
-  "abilitymisses": "A video when a watched ability is wasted (its HUD bar ends early) - part of your MoonahMasterUI HUD mod, rebuilt on compile.",
   "menuart": "Replace the game's screen art - the play-mode cards, their hero portraits, or any menu image by path.",
   "modcombiner": "Merge other mods' sounds into your compile - nothing of yours is removed.",
   "modelswap": "Put your own model on a hero or on the game's objects - the urn, crates, soul containers, map props. The original's animations, physics and setup stay; your build ships with the normal compile.",

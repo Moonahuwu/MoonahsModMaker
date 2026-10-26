@@ -12,12 +12,24 @@
     visibility: visible;
 }
 
-/* Every spawned panel starts invisible; .moonah-show runs the entrance. */
+/* The above-HUD layer: over the player HUD, under the Anita menu (10000). */
+#MediaOverlayTopContainer
+{
+    width: 100%;
+    height: 100%;
+    z-index: 1000;
+    visibility: visible;
+}
+
+/* Every spawned panel starts invisible; .moonah-show runs the entrance.
+   The engine sets transition-duration per entry (in / out lengths) and
+   adds one .moonah-in-<style> class for the hidden pose. */
 .moonah-media
 {
     opacity: 0;
     transition-property: opacity, transform;
     transition-duration: 0.1s;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* ---- Preset: fullscreen (jumpscares) ------------------- */
@@ -28,12 +40,8 @@
     horizontal-align: center;
     vertical-align: center;
 }
-.moonah-fullscreen.moonah-show
-{
-    opacity: 1.0;
-}
 
-/* ---- Preset: banner (deaths — slides in from the left) -- */
+/* ---- Preset: banner (deaths, ability videos) ------------ */
 .moonah-banner
 {
     width: 25%;
@@ -41,13 +49,72 @@
     z-index: 10;
     vertical-align: center;
     horizontal-align: left;
-    transform: translateX(-500px);
-    transition-property: opacity, transform;
-    transition-duration: 2.0s;
-    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
 }
-.moonah-banner.moonah-show
+
+/* ---- Preset: badge (small, at an absolute HUD spot; the engine sets
+   position / width / height per entry, default beside ability 4) ---- */
+.moonah-badge
+{
+    width: 100px;
+    height: 100px;
+    z-index: 10;
+    position: 1042px 970px 0px;
+    transform-origin: 50% 50%;
+}
+
+/* ---- Motion while shown (owns transform: pair with the fade entrance) ---- */
+@keyframes 'MoonahSpin'
+{
+    0% { transform: rotateZ(0deg); }
+    100% { transform: rotateZ(360deg); }
+}
+@keyframes 'MoonahOrbit'
+{
+    0% { transform: rotateZ(0deg) translateX(50px) rotateZ(0deg); }
+    100% { transform: rotateZ(360deg) translateX(50px) rotateZ(-360deg); }
+}
+.moonah-motion-spin
+{
+    animation-name: MoonahSpin;
+    animation-duration: 2.0s;
+    animation-iteration-count: infinite;
+    animation-timing-function: linear;
+}
+.moonah-motion-orbit
+{
+    animation-name: MoonahOrbit;
+    animation-duration: 2.0s;
+    animation-iteration-count: infinite;
+    animation-timing-function: linear;
+}
+
+/* ---- Entrance styles: hidden pose -> rest pose on .moonah-show ---- */
+.moonah-in-slide
+{
+    transform: translateX(-500px);
+}
+.moonah-in-slide.moonah-show
 {
     transform: translateX(0px);
     opacity: 1.0;
+}
+.moonah-in-pop
+{
+    transform: scale3d(0.6, 0.6, 1.0);
+}
+.moonah-in-pop.moonah-show
+{
+    transform: scale3d(1.0, 1.0, 1.0);
+    opacity: 1.0;
+}
+.moonah-in-fade.moonah-show
+{
+    opacity: 1.0;
+}
+
+/* ---- Blink: the engine toggles this on the entry's on/off beat. Last so it
+   beats every .moonah-show rule above. ---- */
+.moonah-media.moonah-blink-off
+{
+    opacity: 0;
 }

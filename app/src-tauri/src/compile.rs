@@ -497,11 +497,69 @@ pub struct DigiEntry {
     /// Empty = any hero.
     #[serde(default)]
     pub hero: Option<String>,
-    /// Ability-miss entries only: how long the ability's full window lasts,
-    /// used as the miss rule when the HUD bar's width can't be read. 0 =
-    /// rely on the bar alone.
+    /// Ability-miss entries only: the window length (seconds) under which
+    /// the cast counts as a miss. The HUD bar dropping `active` before this
+    /// many seconds = wasted cast.
+    #[serde(default = "default_miss_under")]
+    pub miss_under: f64,
+    /// Ability-miss entries only: after a short (miss-length) window ends,
+    /// how long to wait for a FOLLOW-UP window before calling it a miss. A
+    /// hit brings the bar back (Spirit Lasso: cast window, then the pull);
+    /// a window reappearing within this grace = hit, nothing plays.
+    #[serde(default = "default_hit_grace")]
+    pub hit_grace: f64,
+    /// Ability-miss entries only: play on the HIT instead (the moment the
+    /// follow-up window appears) rather than on the miss.
     #[serde(default)]
-    pub full_seconds: f64,
+    pub on_hit: bool,
+    /// Entrance style: "slide" (in from the left), "fade" or "pop" (scale
+    /// up). None = the preset's own (banner slides, fullscreen fades).
+    #[serde(default)]
+    pub anim: Option<String>,
+    /// Entrance / exit transition lengths in seconds. None = the preset's
+    /// own (banner 2.0 / fullscreen 0.1; exit defaults to the entrance).
+    #[serde(default)]
+    pub enter_secs: Option<f64>,
+    #[serde(default)]
+    pub exit_secs: Option<f64>,
+    /// Continuous motion while shown: "none", "spin" (rotate in place) or
+    /// "orbit" (circle the spot). None = none.
+    #[serde(default)]
+    pub motion: Option<String>,
+    /// Seconds per revolution of the motion. None = 2.
+    #[serde(default)]
+    pub motion_secs: Option<f64>,
+    /// "badge" preset only: top-left position + size in the HUD's 1920x1080
+    /// reference space (None = beside ability 4: 1042, 970, 100).
+    #[serde(default)]
+    pub pos_x: Option<f64>,
+    #[serde(default)]
+    pub pos_y: Option<f64>,
+    #[serde(default)]
+    pub size: Option<f64>,
+    /// Blink while shown: visible `blink_on` s, hidden `blink_off` s, repeat
+    /// for the whole show time (None = 0.7 / 0.3).
+    #[serde(default)]
+    pub blink: bool,
+    #[serde(default)]
+    pub blink_on: Option<f64>,
+    #[serde(default)]
+    pub blink_off: Option<f64>,
+    /// Draw ABOVE the player HUD (ability bar, health) instead of behind it.
+    /// The behind-HUD layer is the historical default for fullscreen scares.
+    #[serde(default)]
+    pub above_hud: bool,
+}
+
+fn default_hit_grace() -> f64 {
+    0.6
+}
+
+/// Generic fallbacks only (an entry always arrives with explicit values from
+/// the app). The tuned per-hero numbers live on the frontend's presets:
+/// Holliday's Spirit Lasso = 0.55 s window / 0.27 s grace, NOT these.
+fn default_miss_under() -> f64 {
+    0.4
 }
 
 fn default_digi_volume() -> f64 {

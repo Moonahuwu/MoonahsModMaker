@@ -414,7 +414,8 @@ export interface DigiEntry {
   sourceMedia: string;
   /** Seconds on screen. */
   show: number;
-  preset: "fullscreen" | "banner";
+  /** fullscreen, side banner, or a small "badge" at an absolute HUD spot. */
+  preset: "fullscreen" | "banner" | "badge";
   /** Sound-library id played alongside (see DigimodConfig.sounds). */
   soundId?: string | null;
   /** Ability-miss entries only: the watched ability, as its HUD class
@@ -424,10 +425,42 @@ export interface DigiEntry {
   /** Ability-miss entries only: the hero's HUD class (`hero_astro`).
    *  Empty = any hero. */
   hero?: string;
-  /** Ability-miss entries only: the ability window's full length in
-   *  seconds, the fallback miss rule when the HUD bar can't be read.
-   *  0 = rely on the bar. */
-  fullSeconds?: number;
+  /** Ability-miss entries only, the "Miss window": a HUD window shorter
+   *  than this many seconds counts as a miss (per-hero: Holliday 0.55; a lasso miss
+   *  flashes the bar and hides it at once, a hit keeps it up for the
+   *  channel). Also tunable live per entry from the in-game F8 menu. */
+  missUnder?: number;
+  /** Ability-miss entries only, the "Hit grace": after a window shorter
+   *  than the Miss window ends, seconds to wait for the bar to come back
+   *  (a hit brings it back for the pull). Comes back = hit, nothing plays;
+   *  stays gone = miss. Per-hero (Holliday 0.27); also live-tunable from the F8 menu. */
+  hitGrace?: number;
+  /** Ability-miss entries only: play when the ability HITS (the moment the
+   *  follow-up window appears) instead of when it misses. */
+  onHit?: boolean;
+  /** Entrance style; unset = the preset's own (banner slides, fullscreen
+   *  fades). */
+  anim?: "slide" | "fade" | "pop";
+  /** Entrance / exit transition lengths in seconds; unset = the preset's
+   *  own (banner 2.0, fullscreen 0.1; exit follows the entrance). */
+  enterSecs?: number;
+  exitSecs?: number;
+  /** Continuous motion while shown: spin in place or orbit the spot. */
+  motion?: "none" | "spin" | "orbit";
+  /** Seconds per revolution of the motion (default 2). */
+  motionSecs?: number;
+  /** Badge preset: top-left position + size in the HUD's 1920x1080 reference
+   *  space (unset = beside ability 4: 1042, 970, 100). */
+  posX?: number;
+  posY?: number;
+  size?: number;
+  /** Blink while shown: visible blinkOn s, hidden blinkOff s, repeating
+   *  for the whole show time (defaults 0.7 / 0.3). */
+  blink?: boolean;
+  blinkOn?: number;
+  blinkOff?: number;
+  /** Draw above the player HUD (ability bar, health) instead of behind it. */
+  aboveHud?: boolean;
   /** @deprecated pre-library shape — migrated into `sounds` on load. */
   sourceAudio?: string | null;
   /** @deprecated pre-library shape — migrated into `sounds` on load. */

@@ -371,10 +371,12 @@
 	opacity: 0.35;
 }
 
+/* Moonah: the stock 0.28 opacity made the gear easy to miss in the ESC
+   menu; it is the only way into the mod menu, so show it properly. */
 .AnitaOverlayBtn.Visible
 {
-	opacity: 0.28;
-	transform: scale3d(1.2, 1.2, 1);
+	opacity: 0.9;
+	transform: scale3d(1.4, 1.4, 1);
 }
 
 .AnitaOverlayBtn:active

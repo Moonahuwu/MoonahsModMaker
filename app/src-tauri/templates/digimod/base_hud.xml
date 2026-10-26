@@ -17,8 +17,10 @@
     <Panel class="WindowRoot" hittest="false" disallowedstyleflags="hover,descendantfocus">
         <CitadelHud id="Hud" hittest="false" />
 
-        <!-- Runtime media panels land in here. -->
+        <!-- Runtime media panels land in here: the first sits BEHIND the
+             player HUD (z -1), the second ABOVE it (per-entry "above HUD"). -->
         <Panel id="MediaOverlayContainer" hittest="false" />
+        <Panel id="MediaOverlayTopContainer" hittest="false" />
 
         <Panel id="AnitaUI_Anchor" hittest="false" style="width: 100%; height: 100%; z-index: 10000;" />
     </Panel>

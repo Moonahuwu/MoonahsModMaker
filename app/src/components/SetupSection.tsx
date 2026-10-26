@@ -282,8 +282,14 @@ export function SetupSection({
             <Toggle
               checked={settings.enableJumpscares}
               onChange={(v) => update({ enableJumpscares: v })}
-              title="Jumpscares / Deaths (MoonahMasterUI)"
-              desc="Show the Jumpscares tab without the mod installed: start from a blank template, add your own videos and sounds, and compiling generates the whole mod for you. The tab always shows when the mod is detected in your addons."
+              title="UI mods (MoonahMasterUI)"
+              desc="Show the UI mods tabs (Jumpscares, Death media, Ability hit / miss) without the mod installed: start from a blank template, add your own videos and sounds, and compiling generates the whole mod for you. The tabs always show when the mod is detected in your addons."
+            />
+            <Toggle
+              checked={settings.showAbilityChance}
+              onChange={(v) => update({ showAbilityChance: v })}
+              title="Ability video chance slider"
+              desc="Show a chance slider on the Ability hit / miss tab. Off, every watched hit or miss plays its video (100%)."
             />
           </div>
         </Section>

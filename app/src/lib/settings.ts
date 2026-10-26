@@ -102,6 +102,10 @@ export interface Settings {
    *  the whole mod from scratch. The tab also self-shows on detection or when
    *  the project already configures it, independent of this toggle. */
   enableJumpscares: boolean;
+  /** Ability hit / miss tab: show the "Ability video chance" slider. Off
+   *  (default) = the knob is hidden and every watched hit/miss plays (the
+   *  compile forces 100%, so a hidden knob can never silently mute it). */
+  showAbilityChance: boolean;
   /** Easy Compile: where compiled files land (persisted between runs). */
   easyCompileOutDir: string;
   /** Easy Compile: images become world textures (.vtex source + .vtex_c,
@@ -246,6 +250,7 @@ export const DEFAULT_SETTINGS: Settings = {
   experimentalEasyCompile: false,
   experimentalModCombiner: false,
   enableJumpscares: false,
+  showAbilityChance: false,
   easyCompileOutDir: "",
   easyCompileVtexSource: false,
   includeUiSounds: false,
@@ -742,7 +747,21 @@ export function buildCompileConfig(
               e.soundId && sounds.some((s) => s.id === e.soundId) ? e.soundId : null,
             ability: (e.ability ?? "").trim() || null,
             hero: (e.hero ?? "").trim() || null,
-            fullSeconds: e.fullSeconds ?? 0,
+            missUnder: e.missUnder ?? 0.4,
+            hitGrace: e.hitGrace ?? 0.6,
+            onHit: e.onHit === true,
+            anim: e.anim ?? null,
+            enterSecs: e.enterSecs ?? null,
+            exitSecs: e.exitSecs ?? null,
+            motion: e.motion ?? null,
+            motionSecs: e.motionSecs ?? null,
+            posX: e.posX ?? null,
+            posY: e.posY ?? null,
+            size: e.size ?? null,
+            blink: e.blink === true,
+            blinkOn: e.blinkOn ?? null,
+            blinkOff: e.blinkOff ?? null,
+            aboveHud: e.aboveHud === true,
           });
           return {
             title: (digimod.title ?? "").trim() || null,
@@ -752,7 +771,7 @@ export function buildCompileConfig(
             scares: digimod.scares.filter((e) => e.sourceMedia).map(entry),
             deaths: digimod.deaths.filter((e) => e.sourceMedia).map(entry),
             misses: (digimod.misses ?? []).filter((e) => e.sourceMedia).map(entry),
-            missChance: digimod.missChance ?? 100,
+            missChance: s.showAbilityChance ? (digimod.missChance ?? 100) : 100,
             missDebug: digimod.missDebug ?? true,
             sounds: sounds.map((s) => ({
               id: s.id,

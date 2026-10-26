@@ -21,7 +21,11 @@ var _liveN = 0;
 // MEDIA ENGINE — create, show, destroy.
 // ==========================================================================
 function spawnPanel(entry) {
-    var container = $("#MediaOverlayContainer");
+    // Two layers: behind the player HUD (the default, z -1) or above it
+    // (per-entry `top`, for a badge that must sit ON the ability icon).
+    var container = entry.top ? $("#MediaOverlayTopContainer") : null;
+    if (entry.top && !container) $.Msg("[MoonahUI] MediaOverlayTopContainer missing (older hud hook) - drawing behind the HUD");
+    if (!container) container = $("#MediaOverlayContainer");
     if (!container) {
         $.Msg("[MoonahUI] ERROR: MediaOverlayContainer missing from base_hud.xml");
         return null;
@@ -64,7 +68,66 @@ function spawnPanel(entry) {
     }
     panel.AddClass("moonah-media");
     panel.AddClass("moonah-" + (entry.preset || "fullscreen"));
+    if (entry.preset === "badge") applyBadgePlacement(panel, entry);
     return panel;
+}
+
+// "badge" preset: a small panel at an absolute spot in the HUD's 1920x1080
+// reference space (default: beside ability 4). Read at trigger time so the
+// in-game menu's steppers retune it live.
+var BADGE_DEFAULT = { x: 1042, y: 970, size: 100 };
+function applyBadgePlacement(panel, entry) {
+    var x = typeof entry.x === "number" ? entry.x : BADGE_DEFAULT.x;
+    var y = typeof entry.y === "number" ? entry.y : BADGE_DEFAULT.y;
+    var size = typeof entry.size === "number" ? entry.size : BADGE_DEFAULT.size;
+    try {
+        panel.style.position = Math.round(x) + "px " + Math.round(y) + "px 0px";
+        panel.style.width = Math.round(size) + "px";
+        panel.style.height = Math.round(size) + "px";
+    } catch (e) {
+        $.Msg("[MoonahUI] badge placement failed: " + e);
+    }
+}
+
+// Entrance style + in/out lengths: per entry, else the preset's own look
+// (a banner slides in over 2 s, fullscreen fades in 0.1 s).
+function entryAnim(entry) {
+    var banner = entry.preset === "banner";
+    var anim = entry.anim || (banner ? "slide" : "fade");
+    if (anim !== "slide" && anim !== "fade" && anim !== "pop") anim = banner ? "slide" : "fade";
+    var enter = typeof entry.enter === "number" ? entry.enter : (banner ? 2.0 : 0.1);
+    var exit = typeof entry.exit === "number" ? entry.exit : enter;
+    var motion = entry.motion === "spin" || entry.motion === "orbit" ? entry.motion : "none";
+    var rev = typeof entry.rev === "number" && entry.rev > 0 ? entry.rev : 2.0;
+    var bon = typeof entry.bon === "number" && entry.bon > 0 ? entry.bon : 0.7;
+    var boff = typeof entry.boff === "number" && entry.boff > 0 ? entry.boff : 0.3;
+    return { anim: anim, enter: Math.max(0, enter), exit: Math.max(0, exit), motion: motion, rev: rev, blink: !!entry.blink, bon: bon, boff: boff };
+}
+
+// Blink: toggle a hidden class on the entry's own on/off beat for the whole
+// show time, with a crisp 0.05 s opacity step (the exit restores its own
+// transition). Scheduled up front; every tick re-checks the panel.
+function scheduleBlink(panel, a, show) {
+    var endAt = show + 0.05;
+    var t = 0.05 + a.bon;
+    var ticks = 0;
+    var hide = function () {
+        if (!(panel && panel.IsValid && panel.IsValid())) return;
+        try { panel.style.transitionDuration = "0.05s"; } catch (e) {}
+        panel.AddClass("moonah-blink-off");
+    };
+    var showAgain = function () {
+        if (panel && panel.IsValid && panel.IsValid()) panel.RemoveClass("moonah-blink-off");
+    };
+    while (t < endAt && ticks < 400) {
+        $.Schedule(t, hide);
+        t += a.boff;
+        ticks++;
+        if (t >= endAt) break;
+        $.Schedule(t, showAgain);
+        t += a.bon;
+        ticks++;
+    }
 }
 
 function TriggerMedia(entry) {
@@ -74,14 +137,28 @@ function TriggerMedia(entry) {
 
     var panel = spawnPanel(entry);
     if (!panel) return;
+    var a = entryAnim(entry);
+    panel.AddClass("moonah-in-" + a.anim);
+    try { panel.style.transitionDuration = a.enter.toFixed(2) + "s"; } catch (e) {}
+    if (a.motion !== "none") {
+        // A continuous keyframe animation on transform while shown (spin /
+        // orbit); it owns `transform`, so pair it with a fade entrance.
+        panel.AddClass("moonah-motion-" + a.motion);
+        try { panel.style.animationDuration = a.rev.toFixed(2) + "s"; } catch (e) {}
+    }
+    if (a.blink) scheduleBlink(panel, a, entry.show);
 
     $.Schedule(0.05, function () {
         if (panel && panel.IsValid && panel.IsValid()) panel.AddClass("moonah-show");
     });
     $.Schedule(entry.show + 0.05, function () {
-        if (panel && panel.IsValid && panel.IsValid()) panel.RemoveClass("moonah-show");
+        if (panel && panel.IsValid && panel.IsValid()) {
+            panel.RemoveClass("moonah-blink-off");
+            try { panel.style.transitionDuration = a.exit.toFixed(2) + "s"; } catch (e) {}
+            panel.RemoveClass("moonah-show");
+        }
     });
-    $.Schedule(entry.show + 2.4, function () {
+    $.Schedule(entry.show + 0.1 + a.exit + 0.3, function () {
         if (panel && panel.IsValid && panel.IsValid()) panel.DeleteAsync(0.0);
     });
 }
@@ -89,15 +166,26 @@ function TriggerMedia(entry) {
 // ==========================================================================
 // RNG LOOP (jumpscares)
 // ==========================================================================
+// Every trigger runs on its own $.Schedule chain, and an exception thrown
+// inside a callback ends THAT chain for good: Panorama prints the error once
+// and nothing reschedules, while the other chains keep running. That is how
+// the ability poller died silently on every map load (2026-10-25: the HUD
+// rebuild invalidated its cached panels mid-poll) while scares and deaths
+// kept working. So each loop runs its step inside try/catch, logs, resets
+// its caches, and ALWAYS reschedules.
 function RunRngLoop() {
-    if (!CONFIG.IS_ENABLED || LIBRARY.SCARES.length === 0) {
-        _timerHandle = $.Schedule(2.0, RunRngLoop);
-        return;
+    var delay = 2.0;
+    try {
+        if (CONFIG.IS_ENABLED && LIBRARY.SCARES.length > 0) {
+            if (Math.random() * 100 < CONFIG.SCARE_CHANCE) {
+                TriggerMedia(LIBRARY.SCARES[Math.floor(Math.random() * LIBRARY.SCARES.length)]);
+            }
+            delay = CONFIG.RNG_INTERVAL;
+        }
+    } catch (e) {
+        $.Msg("[MoonahUI] scare loop error (recovering): " + e);
     }
-    if (Math.random() * 100 < CONFIG.SCARE_CHANCE) {
-        TriggerMedia(LIBRARY.SCARES[Math.floor(Math.random() * LIBRARY.SCARES.length)]);
-    }
-    _timerHandle = $.Schedule(CONFIG.RNG_INTERVAL, RunRngLoop);
+    _timerHandle = $.Schedule(delay, RunRngLoop);
 }
 
 // ==========================================================================
@@ -135,10 +223,21 @@ function respawnSeconds(label) {
 }
 
 function RunDeathPoller() {
+    var delay = 2.0;
+    try {
+        delay = deathPollStep();
+    } catch (e) {
+        $.Msg("[MoonahUI] death poller error (recovering): " + e);
+        _cachedTimerLabel = null;
+        _isRespawning = false;
+    }
+    _deathPollHandle = $.Schedule(delay, RunDeathPoller);
+}
+
+function deathPollStep() {
     if (!CONFIG.IS_ENABLED || LIBRARY.DEATHS.length === 0) {
         _isRespawning = false;
-        _deathPollHandle = $.Schedule(2.0, RunDeathPoller);
-        return;
+        return 2.0;
     }
     var label = findRespawnLabel();
     var timerValue = respawnSeconds(label);
@@ -157,50 +256,94 @@ function RunDeathPoller() {
     } else {
         _isRespawning = false;
     }
-    _deathPollHandle = $.Schedule(label ? 0.25 : 2.0, RunDeathPoller);
+    return label ? 0.25 : 2.0;
 }
 
 // ==========================================================================
 // ABILITY-MISS POLLER — watches the HUD's ability progress element
-// (Citadel_AbilityHUDElement_Progress, class ability_element_progress). While
-// an ability's window runs the element carries `active` plus `hero_<code>`
-// and `ability_<name>` classes, and its SplitLabelProgressBar's
-// SlicedContainer width tracks the time left. A window that drops `active`
-// while the bar is still far from its end was cut short = the cast was
-// wasted (Holliday's Spirit Lasso missing its target), and a MISSES entry
-// whose ability/hero match plays. Deaths cut windows short too, so a window
-// ending while the respawn timer shows is ignored. ABILITY_DEBUG logs every
-// window so the rule can be tuned from the console.
+// (Citadel_AbilityHUDElement_Progress id="progress", class
+// ability_element_progress). While an ability's window runs the element
+// carries `active` plus `hero_<code>` and `ability_<name>` classes (seen
+// live: "active hero_astro ability_element_progress supports_cancel_key
+// ability_gravity_lasso lassoing" for Holliday's Spirit Lasso). The rule is
+// time, in two steps. Spirit Lasso shows the bar once for the cast (~0.5 s,
+// hit or miss) and, on a HIT, brings it back for the pull. So: a window that
+// drops `active` within `under` seconds (the entry's "Miss window"; the
+// Holliday preset ships 0.55) is a cast that may have missed; the poller then
+// waits `grace` seconds (the entry's "Hit grace"; Holliday 0.27) for a follow-up window with
+// the same name - one appears = hit, nothing plays; none = miss, the video
+// plays. Both are tunable live from the F8 menu. Deaths cut windows short
+// too, so a window ending while the respawn timer shows is ignored.
+// ABILITY_DEBUG logs every window (and the search) to the console.
 // ==========================================================================
-var MISS_FULL = 0.85;        // bar travel that counts as "ran to the end"
-var MISS_MIN_SECS = 0.15;    // shorter windows are HUD flicker, not casts
+var MISS_POLL_SECS = 0.05;   // fast enough to catch a one-flash miss
+var MISS_RESCAN_SECS = 3.0;  // re-search the live HUD this often while idle
 var _progressPanels = [];    // cached progress elements (index-aligned with _windows)
 var _windows = [];           // per-panel state while its window is active
 var _missCooldownTs = 0;
+var _missSearchLogTs = 0;
+var _missScanTs = 0;         // when the HUD was last searched
+var _pending = [];           // short windows waiting out their hit grace
 
 function abilityDebug(msg) {
     if (CONFIG.ABILITY_DEBUG) $.Msg("[MoonahUI] ability " + msg);
 }
 
+// IsValid() on a wrapper whose panel the HUD rebuild destroyed can itself
+// throw in some builds; treat any throw as "gone".
+function panelAlive(p) {
+    try { return !!(p && p.IsValid && p.IsValid()); } catch (e) { return false; }
+}
+
+// Is any cached panel mid-window (or a miss still waiting out its grace)?
+function abilityBusy() {
+    for (var i = 0; i < _windows.length; i++) if (_windows[i]) return true;
+    return _pending.length > 0;
+}
+
+// The ability bars are cached, but the HUD is REBUILT on every map load:
+// the lobby / hero-testing HUD has its own bars, and loading into a match or
+// the sandbox creates new ones while the old handles can linger "valid" but
+// detached. A cache keyed only on IsValid() then watches dead bars forever
+// with no log at all (seen 2026-10-25). So, while nothing is in flight, the
+// live tree is re-searched every MISS_RESCAN_SECS and the set is swapped
+// whenever it differs.
 function findProgressPanels() {
-    var alive = true;
+    var now = Date.now();
+    var alive = _progressPanels.length > 0;
     for (var i = 0; i < _progressPanels.length; i++) {
-        var p = _progressPanels[i];
-        if (!p || !p.IsValid || !p.IsValid()) { alive = false; break; }
+        if (!panelAlive(_progressPanels[i])) { alive = false; break; }
     }
-    if (alive && _progressPanels.length > 0) return _progressPanels;
-    _progressPanels = [];
-    _windows = [];
-    var ctx = $.GetContextPanel();
-    var root = ctx.GetParent() || ctx;
+    var due = now - _missScanTs >= MISS_RESCAN_SECS * 1000;
+    if (alive && (!due || abilityBusy())) return _progressPanels;
+    _missScanTs = now;
+    // Search from the top of the panel tree (CitadelHud), not just our own
+    // parent: the ability HUD lives in a different branch than our panel.
+    var root = $.GetContextPanel();
+    for (var up = 0; up < 32; up++) {
+        var parent = root.GetParent();
+        if (!parent) break;
+        root = parent;
+    }
     var found = root.FindChildrenWithClassTraverse("ability_element_progress");
-    for (var j = 0; j < found.length; j++) {
-        if (found[j]) {
-            _progressPanels.push(found[j]);
-            _windows.push(null);
-        }
+    var next = [];
+    for (var j = 0; j < found.length; j++) if (found[j]) next.push(found[j]);
+    // Same panels as before (compared by identity): keep the cache untouched.
+    var same = alive && next.length === _progressPanels.length;
+    for (var k = 0; same && k < next.length; k++) {
+        if (next[k] !== _progressPanels[k] && !(next[k].id === _progressPanels[k].id && next[k].GetParent() === _progressPanels[k].GetParent())) same = false;
     }
-    if (_progressPanels.length > 0) abilityDebug("watching " + _progressPanels.length + " progress element(s)");
+    if (same) return _progressPanels;
+    var hadBefore = _progressPanels.length;
+    _progressPanels = next;
+    _windows = [];
+    for (var w = 0; w < next.length; w++) _windows.push(null);
+    if (_progressPanels.length > 0) {
+        abilityDebug("watching " + _progressPanels.length + " progress element(s) under " + (root.id || root.paneltype || "root") + (hadBefore > 0 ? " (HUD changed, re-found)" : ""));
+    } else if (now > _missSearchLogTs) {
+        _missSearchLogTs = now + 10000;
+        abilityDebug("no ability_element_progress panel found" + (hadBefore > 0 ? " any more (HUD changed)" : " yet") + " - searched from " + (root.id || root.paneltype || "root") + ", retrying");
+    }
     return _progressPanels;
 }
 
@@ -216,7 +359,7 @@ function abilityLabelText(panel) {
 // Fill fraction of the SplitLabelProgressBar: SlicedContainer width over its
 // container's. null when the bar can't be read (layout not ready / no bar).
 function barFraction(sliced) {
-    if (!sliced || !sliced.IsValid || !sliced.IsValid()) return null;
+    if (!panelAlive(sliced)) return null;
     var box = sliced.GetParent();
     var w = sliced.actuallayoutwidth;
     var full = box ? box.actuallayoutwidth : 0;
@@ -247,37 +390,62 @@ function missCandidates(panel, labelText) {
     return out;
 }
 
-function onAbilityWindowEnd(st, secs) {
-    var travel = st.fLast === null || st.f0 === null ? null : Math.abs(st.fLast - st.f0);
-    var verdict;
-    if (secs < MISS_MIN_SECS) verdict = "flicker";
-    else if (respawnSeconds(findRespawnLabel()) > 0) verdict = "death";
-    else if (st.moved && travel !== null) verdict = travel < MISS_FULL ? "MISS" : "full";
-    else if (st.fullSecs > 0) verdict = secs < st.fullSecs * MISS_FULL ? "MISS" : "full";
-    else verdict = "unreadable";
-    abilityDebug(
-        "end: \"" + st.name + "\" " + secs.toFixed(2) + "s bar " +
-        (st.f0 === null ? "?" : st.f0.toFixed(2)) + "->" + (st.fLast === null ? "?" : st.fLast.toFixed(2)) +
-        (st.moved ? "" : " (bar never moved)") + " = " + verdict
-    );
-    if (verdict !== "MISS") return;
-    if (st.candidates.length === 0) {
-        abilityDebug("miss but no MISSES entry matches this ability/hero");
+// Entries of one kind (hit: true/false) among a window's candidates.
+function pickKind(cands, hit) {
+    var out = [];
+    for (var i = 0; i < cands.length; i++) if (!!cands[i].hit === hit) out.push(cands[i]);
+    return out;
+}
+
+function fireAbilityVideo(st, hit) {
+    var pool = pickKind(st.candidates, hit);
+    if (pool.length === 0) {
+        abilityDebug((hit ? "hit" : "miss") + " but no " + (hit ? "on-hit" : "on-miss") + " entry for \"" + st.name + "\"");
         return;
     }
     if (Date.now() < _missCooldownTs) return;
     _missCooldownTs = Date.now() + 1000;
     if (Math.random() * 100 < CONFIG.MISS_CHANCE) {
-        $.Msg("[MoonahUI] ability miss detected: " + st.name);
-        TriggerMedia(st.candidates[Math.floor(Math.random() * st.candidates.length)]);
+        $.Msg("[MoonahUI] ability " + (hit ? "hit" : "miss") + " detected: " + st.name);
+        TriggerMedia(pool[Math.floor(Math.random() * pool.length)]);
     }
 }
 
+function onAbilityWindowEnd(st, secs) {
+    var verdict;
+    if (respawnSeconds(findRespawnLabel()) > 0) verdict = "death";
+    else if (st.candidates.length === 0) verdict = "no entry";
+    else if (st.followUp) verdict = "follow-up (hit's own window)";
+    else verdict = secs < st.under ? "MISS?" : "full";
+    abilityDebug(
+        "end: \"" + st.name + "\" " + secs.toFixed(2) + "s (miss window " + st.under.toFixed(2) + "s) bar " +
+        (st.f0 === null ? "?" : st.f0.toFixed(2)) + "->" + (st.fLast === null ? "?" : st.fLast.toFixed(2)) +
+        " = " + verdict + (verdict === "MISS?" ? ", waiting " + st.grace.toFixed(2) + "s for a follow-up window" : "")
+    );
+    if (verdict !== "MISS?") return;
+    if (!(st.grace > 0)) { fireAbilityVideo(st, false); return; }
+    _pending.push({ st: st, endedAt: Date.now(), fireAt: Date.now() + st.grace * 1000 });
+}
+
 function RunAbilityPoller() {
-    if (!CONFIG.IS_ENABLED || LIBRARY.MISSES.length === 0) {
-        _abilityPollHandle = $.Schedule(2.0, RunAbilityPoller);
-        return;
+    var delay = 2.0;
+    try {
+        delay = abilityPollStep();
+    } catch (e) {
+        // Most likely a cached bar that the HUD rebuild destroyed mid-poll:
+        // drop every cached handle and let the next step re-search.
+        $.Msg("[MoonahUI] ability poller error (recovering, re-searching the HUD): " + e);
+        _progressPanels = [];
+        _windows = [];
+        _pending = [];
+        _missScanTs = 0;
+        delay = 1.0;
     }
+    _abilityPollHandle = $.Schedule(delay, RunAbilityPoller);
+}
+
+function abilityPollStep() {
+    if (!CONFIG.IS_ENABLED || LIBRARY.MISSES.length === 0) return 2.0;
     var panels = findProgressPanels();
     var now = Date.now();
     for (var i = 0; i < panels.length; i++) {
@@ -288,14 +456,26 @@ function RunAbilityPoller() {
             var sliced = panel.FindChildTraverse("SlicedContainer");
             var text = abilityLabelText(panel);
             var cands = missCandidates(panel, text);
-            var fullSecs = 0;
+            var under = 0, grace = 0;
             for (var c = 0; c < cands.length; c++) {
-                if (cands[c].full > fullSecs) fullSecs = cands[c].full;
+                if (cands[c].under > under) under = cands[c].under;
+                if (cands[c].grace > grace) grace = cands[c].grace;
             }
             var f0 = barFraction(sliced);
-            st = { t0: now, name: text || "(unnamed)", sliced: sliced, f0: f0, fLast: f0, moved: false, candidates: cands, fullSecs: fullSecs };
+            st = { t0: now, name: text || "(unnamed)", sliced: sliced, f0: f0, fLast: f0, moved: false, candidates: cands, under: under, grace: grace, followUp: false };
+            // A window reappearing while an earlier short one of the same
+            // ability waits out its grace = the hit's own window: cancel the
+            // miss, and never judge this follow-up window itself.
+            for (var p = _pending.length - 1; p >= 0; p--) {
+                if (_pending[p].st.name === st.name) {
+                    st.followUp = true;
+                    abilityDebug("follow-up window " + ((now - _pending[p].endedAt) / 1000).toFixed(2) + "s after the cast = HIT, miss cancelled");
+                    var hitSt = _pending.splice(p, 1)[0].st;
+                    fireAbilityVideo(hitSt, true);
+                }
+            }
             _windows[i] = st;
-            abilityDebug("start: \"" + st.name + "\" bar=" + (f0 === null ? "unreadable" : f0.toFixed(2)) + " matching entries=" + cands.length);
+            abilityDebug("start: \"" + st.name + "\" classes=[" + panelClassList(panel) + "] bar=" + (f0 === null ? "unreadable" : f0.toFixed(2)) + " matching entries=" + cands.length);
         } else if (active && st) {
             var f = barFraction(st.sliced);
             if (f !== null) {
@@ -308,7 +488,29 @@ function RunAbilityPoller() {
             onAbilityWindowEnd(st, (now - st.t0) / 1000);
         }
     }
-    _abilityPollHandle = $.Schedule(panels.length > 0 ? 0.1 : 2.0, RunAbilityPoller);
+    // Short windows whose grace ran out with no follow-up: the cast missed.
+    for (var q = _pending.length - 1; q >= 0; q--) {
+        if (now >= _pending[q].fireAt) {
+            var pend = _pending.splice(q, 1)[0];
+            abilityDebug("no follow-up window within " + pend.st.grace.toFixed(2) + "s = MISS: \"" + pend.st.name + "\"");
+            fireAbilityVideo(pend.st, false);
+        }
+    }
+    return panels.length > 0 || _pending.length > 0 ? MISS_POLL_SECS : 2.0;
+}
+
+// The classes a panel currently carries, for the debug log (the HUD puts the
+// hero and ability names there, so this is how you learn a new ability's key).
+function panelClassList(panel) {
+    var names = ["active", "ability_element_progress", "supports_cancel_key", "lassoing"];
+    var out = [];
+    for (var i = 0; i < names.length; i++) if (panel.BHasClass(names[i])) out.push(names[i]);
+    for (var e = 0; e < LIBRARY.MISSES.length; e++) {
+        var m = LIBRARY.MISSES[e];
+        if (m.hero && panel.BHasClass(m.hero) && out.indexOf(m.hero) < 0) out.push(m.hero);
+        if (m.ability && panel.BHasClass(m.ability) && out.indexOf(m.ability) < 0) out.push(m.ability);
+    }
+    return out.join(" ");
 }
 
 // ==========================================================================
@@ -338,6 +540,34 @@ function anitaCallback(id, value) {
     }
     if (id === "TEST_MISS" && LIBRARY.MISSES.length > 0) {
         TriggerMedia(LIBRARY.MISSES[Math.floor(Math.random() * LIBRARY.MISSES.length)]);
+        return;
+    }
+    if (typeof id === "string" && id.indexOf("BADGE_") === 0) {
+        // BADGE_<X|Y|SIZE>_<LIST>_<i>
+        var bp = id.split("_");
+        var blist = LIBRARY[bp[2]];
+        var bi = parseInt(bp[3]);
+        if (blist && blist[bi] && typeof value === "number") {
+            var key = bp[1] === "X" ? "x" : bp[1] === "Y" ? "y" : "size";
+            blist[bi][key] = value;
+            $.Msg("[MoonahUI] badge " + key + " for \"" + blist[bi].name + "\" = " + value);
+        }
+        return;
+    }
+    if (typeof id === "string" && id.indexOf("MISS_GRACE_") === 0) {
+        var gi = parseInt(id.substring("MISS_GRACE_".length));
+        if (LIBRARY.MISSES[gi] && typeof value === "number") {
+            LIBRARY.MISSES[gi].grace = value / 1000;
+            abilityDebug("hit grace for \"" + LIBRARY.MISSES[gi].name + "\" = " + (value / 1000).toFixed(2) + "s");
+        }
+        return;
+    }
+    if (typeof id === "string" && id.indexOf("MISS_WINDOW_") === 0) {
+        var mi = parseInt(id.substring("MISS_WINDOW_".length));
+        if (LIBRARY.MISSES[mi] && typeof value === "number") {
+            LIBRARY.MISSES[mi].under = value / 1000;
+            abilityDebug("miss window for \"" + LIBRARY.MISSES[mi].name + "\" = " + (value / 1000).toFixed(2) + "s");
+        }
         return;
     }
     if (typeof id === "string" && id.indexOf("TEST_LIB_") === 0) {
@@ -378,22 +608,40 @@ function anitaCallback(id, value) {
         menuConfig.elements.push({ type: "toggle", label: "Ability debug log", id: "ABILITY_DEBUG", defaultValue: !!CONFIG.ABILITY_DEBUG });
         menuConfig.elements.push({ type: "button", label: "Test Random Miss", id: "TEST_MISS" });
     }
+    // Badge entries get live position/size steppers (HUD 1920x1080 space):
+    // press the entry's Test button, nudge, test again.
+    function badgeSteppers(listName, idx) {
+        var e = LIBRARY[listName][idx];
+        if (!e || e.preset !== "badge") return;
+        menuConfig.elements.push({ type: "stepper", label: "Badge X: " + e.name, id: "BADGE_X_" + listName + "_" + idx, min: 0, max: 1920, step: 10, defaultValue: Math.round(typeof e.x === "number" ? e.x : BADGE_DEFAULT.x) });
+        menuConfig.elements.push({ type: "stepper", label: "Badge Y: " + e.name, id: "BADGE_Y_" + listName + "_" + idx, min: 0, max: 1080, step: 10, defaultValue: Math.round(typeof e.y === "number" ? e.y : BADGE_DEFAULT.y) });
+        menuConfig.elements.push({ type: "stepper", label: "Badge size: " + e.name, id: "BADGE_SIZE_" + listName + "_" + idx, min: 20, max: 800, step: 10, defaultValue: Math.round(typeof e.size === "number" ? e.size : BADGE_DEFAULT.size) });
+    }
     var i;
     for (i = 0; i < LIBRARY.SCARES.length; i++) {
         menuConfig.elements.push({ type: "button", label: "Test: " + LIBRARY.SCARES[i].name, id: "TEST_LIB_SCARES_" + i });
+        badgeSteppers("SCARES", i);
     }
     for (i = 0; i < LIBRARY.DEATHS.length; i++) {
         menuConfig.elements.push({ type: "button", label: "Test: " + LIBRARY.DEATHS[i].name, id: "TEST_LIB_DEATHS_" + i });
+        badgeSteppers("DEATHS", i);
     }
     for (i = 0; i < LIBRARY.MISSES.length; i++) {
-        menuConfig.elements.push({ type: "button", label: "Test: " + LIBRARY.MISSES[i].name, id: "TEST_LIB_MISSES_" + i });
+        menuConfig.elements.push({ type: "button", label: "Test: " + LIBRARY.MISSES[i].name + (LIBRARY.MISSES[i].hit ? " (on hit)" : " (on miss)"), id: "TEST_LIB_MISSES_" + i });
+        badgeSteppers("MISSES", i);
+        // Live-tunable per entry: a window shorter than this many ms is a miss.
+        menuConfig.elements.push({ type: "stepper", label: "Miss window ms: " + LIBRARY.MISSES[i].name, id: "MISS_WINDOW_" + i, min: 50, max: 5000, step: 50, defaultValue: Math.round((LIBRARY.MISSES[i].under || 0.4) * 1000) });
+        menuConfig.elements.push({ type: "stepper", label: "Hit grace ms: " + LIBRARY.MISSES[i].name, id: "MISS_GRACE_" + i, min: 0, max: 5000, step: 50, defaultValue: Math.round((typeof LIBRARY.MISSES[i].grace === "number" ? LIBRARY.MISSES[i].grace : 0.6) * 1000) });
     }
 
     $.RegisterForUnhandledEvent("ClientUI_FireOutput", function (payload) {
         try {
             var data = typeof payload === "string" ? JSON.parse(payload) : payload;
             if (data.magic_word === "ANITA_ALIVE") { _anitaConnect.done = false; _anitaConnect(); }
-            if (data.magic_word === "ANITA_HANDSHAKE" && data.mod_title === menuConfig.title) { _anitaConnect.done = true; }
+            if (data.magic_word === "ANITA_HANDSHAKE" && data.mod_title === menuConfig.title) {
+                if (!_anitaConnect.done) $.Msg("[MoonahUI] in-game mod menu ready: open ESC and click the gear (top right)");
+                _anitaConnect.done = true;
+            }
             if (data.magic_word === "ANITA_UPDATE" && data.mod_title === menuConfig.title) {
                 if (data.setting_id) {
                     var val = data.value;
@@ -408,7 +656,10 @@ function anitaCallback(id, value) {
     function _anitaConnect() {
         if (_anitaConnect.done) return;
         _anitaConnect.tries = (_anitaConnect.tries || 0) + 1;
-        if (_anitaConnect.tries > 30) return; // anita core absent, stop retrying
+        if (_anitaConnect.tries > 30) { // anita core absent, stop retrying
+            $.Msg("[MoonahUI] Anita UI core never answered - the in-game mod menu is unavailable (is another HUD mod's base_hud winning?)");
+            return;
+        }
         $.DispatchEvent("ClientUI_FireOutput", JSON.stringify({ magic_word: "ANITA_REGISTER", config: menuConfig }));
         $.Schedule(1.0, _anitaConnect);
     }

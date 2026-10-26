@@ -267,7 +267,7 @@ const TAB_LABELS: Record<string, string> = {
   [CURSORS]: "Cursors",
   [JUMPSCARES]: "Jumpscares",
   [DEATH_MEDIA]: "Death media",
-  [ABILITY_MISSES]: "Ability misses",
+  [ABILITY_MISSES]: "Ability hit / miss",
   [UIMASTER]: "UI Master",
   [EASY_COMPILE]: "Easy Compile",
   [PACK_BUILDER]: "Pack Builder",
@@ -1093,6 +1093,8 @@ export default function App() {
   // created, or once the user opens it — and stays that way on return.
   const [expandedSongs, setExpandedSongs] = useState<Record<string, boolean>>({});
   const [dropTarget, setDropTarget] = useState<string | null>(null);
+  /** True while OS files are dragged over the window (tabs show a drop hint). */
+  const [fileDragging, setFileDragging] = useState(false);
   const [activeTab, setActiveTab] = useState<string>("intro");
   // Tab flavor text (the one-liner under each tab title): shipped JSON,
   // editable in DEV builds only - the editor writes the repo data file so
@@ -1457,6 +1459,9 @@ export default function App() {
   const posterDropRef = useRef<((paths: string[], cssX: number, cssY: number) => boolean) | null>(
     null,
   );
+  // Set by the UI mods tabs (Jumpscares / Death media / Ability hit / miss):
+  // dropped videos, images and sounds go straight into the open tab.
+  const digimodDropRef = useRef<((paths: string[]) => void) | null>(null);
   // Set by the Sound Library tab so audio dropped there is shelved, not slotted.
   const libraryDropRef = useRef<((paths: string[]) => void) | null>(null);
   // Set by Easy Compile: files dropped on that tab queue for one-off compiles.
@@ -2569,14 +2574,26 @@ export default function App() {
       if (p.type === "enter" || p.type === "over") {
         const { side } = pickSide(p.position.x, p.position.y);
         setDropTarget(side);
+        setFileDragging(true);
       } else if (p.type === "leave") {
         setDropTarget(null);
+        setFileDragging(false);
       } else if (p.type === "drop") {
         const { side } = pickSide(p.position.x, p.position.y);
         setDropTarget(null);
+        setFileDragging(false);
         // Easy Compile tab: ANY dropped file queues for a one-off compile.
         if (activeTabRef.current === EASY_COMPILE && easyDropRef.current && p.paths.length > 0) {
           easyDropRef.current(p.paths);
+          return;
+        }
+        // UI mods tabs: videos / images / sounds all belong to the open tab.
+        if (
+          UI_MODS_TABS.includes(activeTabRef.current) &&
+          digimodDropRef.current &&
+          p.paths.length > 0
+        ) {
+          digimodDropRef.current(p.paths);
           return;
         }
 
@@ -6875,6 +6892,11 @@ export default function App() {
             section={
               activeTab === JUMPSCARES ? "scares" : activeTab === DEATH_MEDIA ? "deaths" : "misses"
             }
+            showMissChance={settings.showAbilityChance}
+            registerDropHandler={(fn) => {
+              digimodDropRef.current = fn;
+            }}
+            dragOver={fileDragging}
             config={project?.digimod ?? DEFAULT_DIGIMOD}
             addonsDir={settings.addonsDir}
             helperPath={settings.vpkHelperPath}

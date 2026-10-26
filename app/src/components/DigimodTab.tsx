@@ -22,6 +22,11 @@ const IMAGE_FILTERS = [{ name: "Image (PNG)", extensions: ["png"] }];
 const AUDIO_FILTERS = [
   { name: "Audio", extensions: ["mp3", "wav", "flac", "ogg", "m4a", "aac"] },
 ];
+/** OS-drop routing (the picker filters, as tests). Images accept more than
+ *  PNG because the compile sniffs and converts (see stage_as_png). */
+const DROP_VIDEO = /\.(webm|mp4|mov|mkv|avi|gif)$/i;
+const DROP_IMAGE = /\.(png|jpe?g|webp|bmp)$/i;
+const DROP_AUDIO = /\.(mp3|wav|flac|ogg|m4a|aac)$/i;
 
 /** The three trigger lists an entry can live in. */
 type ListKey = "scares" | "deaths" | "misses";
@@ -29,6 +34,34 @@ type ListKey = "scares" | "deaths" | "misses";
 /** Default watched ability for a new miss entry: Holliday's Spirit Lasso,
  *  the HUD class the progress bar carries while it runs. */
 const DEFAULT_MISS_ABILITY = "ability_gravity_lasso";
+const DEFAULT_MISS_HERO = "hero_astro";
+
+/** Ready-made "what to watch" choices for a miss entry, one per supported
+ *  hero ability with ITS tuned timing (the window/grace numbers are measured
+ *  per ability, never shared). Only Holliday's Spirit Lasso so far; a free
+ *  "Custom" / "Any ability" mode is deliberately not offered until it has
+ *  been fleshed out. */
+const MISS_PRESETS: {
+  key: string;
+  label: string;
+  ability: string;
+  hero: string;
+  missUnder?: number;
+  hitGrace?: number;
+}[] = [
+  // Live-tuned 2026-10-24: the lasso's cast window shows the bar for ~0.52 s
+  // hit or miss (Miss window 0.55), and on a hit the bar is back within
+  // ~0.27 s of the cast window ending (Hit grace). The hit video fires the
+  // instant the bar returns; the miss video waits out the grace.
+  { key: "lasso", label: "Holliday: Spirit Lasso", ability: DEFAULT_MISS_ABILITY, hero: DEFAULT_MISS_HERO, missUnder: 0.55, hitGrace: 0.27 },
+];
+/** The preset an entry's ability/hero match; the first preset when none does
+ *  (an older entry), so the dropdown always shows a real choice. */
+function missPresetOf(e: DigiEntry): string {
+  const a = (e.ability ?? "").trim();
+  const h = (e.hero ?? "").trim();
+  return MISS_PRESETS.find((p) => p.ability === a && p.hero === h)?.key ?? MISS_PRESETS[0].key;
+}
 
 /** Stable empty list so `config.misses ?? EMPTY` keeps effect deps steady. */
 const EMPTY: DigiEntry[] = [];
@@ -193,14 +226,17 @@ const SECTION_COPY: Record<ListKey, { title: string; hint: string; blurb: string
     blurb: "a video or image every time you die, rebuilt on compile",
   },
   misses: {
-    title: "Ability misses",
-    hint: "plays when a watched ability's HUD bar ends early",
-    blurb: "a video when a watched ability is wasted, rebuilt on compile",
+    title: "Ability hit / miss",
+    hint: "plays when a watched ability misses, or hits",
+    blurb: "a video when a watched ability misses or hits, rebuilt on compile",
   },
 };
 
 export function DigimodTab({
   section,
+  showMissChance,
+  registerDropHandler,
+  dragOver,
   config,
   addonsDir,
   helperPath,
@@ -209,6 +245,15 @@ export function DigimodTab({
 }: {
   /** Which of the three lists this tab edits (see SECTION_COPY). */
   section: ListKey;
+  /** Settings > "Ability video chance slider": off = the knob stays hidden
+   *  and every watched hit/miss plays (100%). */
+  showMissChance: boolean;
+  /** OS-level file drops: the app forwards dropped paths while one of the
+   *  UI mods tabs is open (videos/images -> this tab's list, audio -> the
+   *  shared sound library). */
+  registerDropHandler: (fn: ((paths: string[]) => void) | null) => void;
+  /** True while files are being dragged over the window (drop highlight). */
+  dragOver: boolean;
   config: DigimodConfig;
   addonsDir: string;
   helperPath: string;
@@ -365,15 +410,19 @@ export function DigimodTab({
 
   /** File-pick sounds and build library rows (no state change — callers
    *  fold the result into ONE onChange so nothing races). */
-  async function pickSoundFiles(): Promise<DigiSound[]> {
-    const picked = await openDialog({ multiple: true, filters: AUDIO_FILTERS });
-    const paths = typeof picked === "string" ? [picked] : (picked ?? []);
+  function soundsFromPaths(paths: string[]): DigiSound[] {
     const out: DigiSound[] = [];
     for (const p of paths) {
       const id = makeSoundId(p, [...sounds, ...out]);
       out.push({ id, name: baseName(p).replace(/\.[^.]+$/, ""), sourceAudio: p, volume: 3 });
     }
     return out;
+  }
+
+  async function pickSoundFiles(): Promise<DigiSound[]> {
+    const picked = await openDialog({ multiple: true, filters: AUDIO_FILTERS });
+    const paths = typeof picked === "string" ? [picked] : (picked ?? []);
+    return soundsFromPaths(paths);
   }
 
   async function addSoundsToLibrary() {
@@ -396,6 +445,35 @@ export function DigimodTab({
   // Installed MoonahMasterUI/DigiMaster paks — offered for one-click import.
   const [digiPaks, setDigiPaks] = useState<UiModVpk[]>([]);
   const [importing, setImporting] = useState<string | null>(null);
+  /** The shared sound library folds away: entries pick sounds from their own
+   *  dropdown, so the full list only matters when editing clips. */
+  const [libraryOpen, setLibraryOpen] = useState(false);
+
+  // OS drops while this tab is open: media joins THIS tab's list, audio the
+  // shared library, anything else gets told what is accepted. Re-registered
+  // on every config change so the closure always adds onto current state.
+  useEffect(() => {
+    registerDropHandler((paths) => {
+      const videos = paths.filter((p) => DROP_VIDEO.test(p));
+      const images = paths.filter((p) => DROP_IMAGE.test(p));
+      const audio = paths.filter((p) => DROP_AUDIO.test(p));
+      if (videos.length === 0 && images.length === 0 && audio.length === 0) {
+        push("error", "Drop videos (mp4/webm/mov/gif), images (png/jpg) or sounds (mp3/wav/ogg) here");
+        return;
+      }
+      void addEntryPaths(
+        section,
+        [
+          ...videos.map((path) => ({ path, kind: "video" as const })),
+          ...images.map((path) => ({ path, kind: "image" as const })),
+        ],
+        soundsFromPaths(audio),
+      );
+    });
+    return () => registerDropHandler(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [section, config]);
+
   useEffect(() => {
     if (!addonsDir) return;
     cListUiMods(addonsDir)
@@ -427,11 +505,25 @@ export function DigimodTab({
             kind: e.kind === "image" ? "image" : "video",
             sourceMedia: e.sourceMedia,
             show: e.show,
-            preset: e.preset === "banner" ? "banner" : "fullscreen",
+            preset: e.preset === "banner" || e.preset === "badge" ? e.preset : "fullscreen",
             soundId: e.soundId && soundKnown.has(e.soundId) ? e.soundId : null,
             ability: e.ability ?? undefined,
             hero: e.hero ?? undefined,
-            fullSeconds: e.fullSeconds ?? 0,
+            missUnder: e.missUnder ?? 0.4,
+            hitGrace: e.hitGrace ?? 0.6,
+            onHit: e.onHit === true,
+            anim: e.anim === "slide" || e.anim === "fade" || e.anim === "pop" ? e.anim : undefined,
+            enterSecs: e.enterSecs ?? undefined,
+            exitSecs: e.exitSecs ?? undefined,
+            motion: e.motion === "spin" || e.motion === "orbit" ? e.motion : undefined,
+            motionSecs: e.motionSecs ?? undefined,
+            posX: e.posX ?? undefined,
+            posY: e.posY ?? undefined,
+            size: e.size ?? undefined,
+            blink: e.blink === true,
+            blinkOn: e.blinkOn ?? undefined,
+            blinkOff: e.blinkOff ?? undefined,
+            aboveHud: e.aboveHud === true,
           }));
       const scares = adopt(imp.scares);
       const deaths = adopt(imp.deaths);
@@ -471,28 +563,66 @@ export function DigimodTab({
       filters: kind === "video" ? VIDEO_FILTERS : IMAGE_FILTERS,
     });
     const paths = typeof picked === "string" ? [picked] : (picked ?? []);
-    if (paths.length === 0) return;
+    await addEntryPaths(
+      list,
+      paths.map((path) => ({ path, kind })),
+    );
+  }
+
+  /** Add media files (picked or dropped) as entries of `list`, plus any
+   *  library sounds dropped alongside, in ONE state write (two writes from
+   *  the same closure would lose the first). */
+  async function addEntryPaths(
+    list: ListKey,
+    items: { path: string; kind: "video" | "image" }[],
+    extraSounds: DigiSound[] = [],
+  ) {
+    if (items.length === 0 && extraSounds.length === 0) return;
+    const paths = items.map((it) => it.path);
+    const videoCount = items.filter((it) => it.kind === "video").length;
     // Videos auto-pair with their own audio track: extracted to mp3 and
-    // added as a library sound (webm conversion strips audio — the game
+    // added as a library sound (webm conversion strips audio - the game
     // plays it through the soundevent instead). Silent videos get null.
     let audios: (string | null)[] = paths.map(() => null);
-    if (kind === "video") {
-      push("info", `Adding ${paths.length} video(s)… extracting audio`);
+    if (videoCount > 0) {
+      push("info", `Adding ${videoCount} video(s)... extracting audio`);
       audios = await Promise.all(
-        paths.map((p) => extractVideoAudio(p, ffmpegPath || undefined).catch(() => null)),
+        items.map((it) =>
+          it.kind === "video"
+            ? extractVideoAudio(it.path, ffmpegPath || undefined).catch(() => null)
+            : Promise.resolve(null),
+        ),
       );
     }
     const newEntries: DigiEntry[] = [];
-    const newSounds: DigiSound[] = [];
+    const newSounds: DigiSound[] = [...extraSounds];
     const all = allEntries;
     const defaults: Partial<DigiEntry> =
       list === "scares"
         ? { show: 0.8, preset: "fullscreen" }
         : list === "deaths"
           ? { show: 5.0, preset: "banner" }
-          : { show: 3.0, preset: "banner", ability: DEFAULT_MISS_ABILITY, hero: "", fullSeconds: 0 };
-    for (let i = 0; i < paths.length; i++) {
-      const p = paths[i];
+          : {
+              show: 3.0,
+              // A small spinning badge beside the ability 4 icon (the cast
+              // that just hit or missed), fading in and out fast.
+              preset: "badge",
+              aboveHud: true,
+              anim: "fade",
+              motion: "spin",
+              motionSecs: 2.0,
+              ability: DEFAULT_MISS_ABILITY,
+              hero: DEFAULT_MISS_HERO,
+              missUnder: MISS_PRESETS[0].missUnder ?? 0.55,
+              hitGrace: MISS_PRESETS[0].hitGrace ?? 0.27,
+              onHit: false,
+              // Ability videos are short reactions: in and out fast (the
+              // banner preset's own 2 s slide suits death screens, not these).
+              enterSecs: 0.25,
+              exitSecs: 0.2,
+            };
+    for (let i = 0; i < items.length; i++) {
+      const p = items[i].path;
       const name = baseName(p).replace(/\.[^.]+$/, "");
       let soundId: string | null = null;
       if (audios[i]) {
@@ -502,7 +632,7 @@ export function DigimodTab({
       newEntries.push({
         id: makeId(p, [...all, ...newEntries]),
         name,
-        kind,
+        kind: items[i].kind,
         sourceMedia: p,
         show: 1,
         preset: "banner",
@@ -515,13 +645,14 @@ export function DigimodTab({
       [list]: [...listOf(list), ...newEntries],
       sounds: [...sounds, ...newSounds],
     });
-    const withAudio = newSounds.length;
-    if (kind === "video") {
+    const withAudio = newSounds.length - extraSounds.length;
+    if (extraSounds.length > 0) push("success", `Added ${extraSounds.length} sound(s) to the library`);
+    if (videoCount > 0) {
       push(
         "success",
         withAudio > 0
-          ? `Added ${newEntries.length} video(s) - ${withAudio} came with their own sound`
-          : `Added ${newEntries.length} video(s) (no audio track found)`,
+          ? `Added ${videoCount} video(s) - ${withAudio} came with their own sound`
+          : `Added ${videoCount} video(s) (no audio track found)`,
       );
     }
   }
@@ -538,28 +669,12 @@ export function DigimodTab({
 
   const empty = allEntries.length === 0;
 
-  /** Text field on a miss entry card (ability / hero match). */
-  const matchField = (
-    list: ListKey,
-    e: DigiEntry,
-    key: "ability" | "hero",
-    label: string,
-    placeholder: string,
-    title: string,
-  ) => (
-    <label className="flex min-w-0 flex-1 items-center gap-1.5" title={title}>
-      <span className="shrink-0">{label}</span>
-      <input
-        value={e[key] ?? ""}
-        placeholder={placeholder}
-        onChange={(ev) => updateEntry(list, e.id, { [key]: ev.target.value })}
-        className="min-w-0 flex-1 rounded border border-zinc-700 bg-zinc-950 px-1 py-0.5 font-mono text-zinc-300 placeholder:text-zinc-600 focus:border-zinc-500 focus:outline-none"
-      />
-    </label>
-  );
-
   const renderList = (list: ListKey, title: string, hint: string) => (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-900/40">
+    <div
+      className={`rounded-xl border transition-colors ${
+        dragOver ? "border-red-500/70 bg-red-500/5" : "border-zinc-800 bg-zinc-900/40"
+      }`}
+    >
       <div className="flex items-center gap-3 border-b border-zinc-800/70 px-4 py-2.5">
         <h3 className="text-sm font-semibold text-zinc-100">{title}</h3>
         <span className="rounded-full bg-red-500/10 px-2 py-0.5 text-[10px] font-semibold text-red-300">
@@ -581,23 +696,16 @@ export function DigimodTab({
           </button>
         </div>
       </div>
-      {list === "misses" && (
-        <p className="border-b border-zinc-800/70 px-4 py-2 text-[11px] leading-4 text-zinc-500">
-          Watches the HUD's ability progress bar (the one that shows the ability name while
-          it runs). A bar that ends well before it fills means the cast was wasted, and a
-          matching video plays. Match by the bar's HUD class (default: Holliday's Spirit
-          Lasso, <span className="font-mono">ability_gravity_lasso</span>) or by the name
-          it displays ("Spirit Lasso"); leave it empty for any ability. Hero is optional
-          (<span className="font-mono">hero_astro</span> = Holliday). Deaths that cut a
-          window short are ignored.
-        </p>
-      )}
       {listOf(list).length === 0 ? (
         <p className="py-6 text-center text-xs text-zinc-600">
-          Nothing yet - add a video (any format, it converts to webm) or a PNG.
+          {dragOver
+            ? "Drop to add"
+            : list === "misses"
+              ? "Nothing yet - add or drop a video or PNG to play when Holliday's Spirit Lasso misses or hits."
+              : "Nothing yet - add or drop a video (any format, it converts to webm) or a PNG."}
         </p>
       ) : (
-        <div className="grid grid-cols-1 gap-3 p-3 lg:grid-cols-2 2xl:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 p-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
           {listOf(list).map((e) => (
             <div
               key={e.id}
@@ -665,7 +773,7 @@ export function DigimodTab({
                       </button>
                     )}
                   <span className="flex gap-1">
-                    {(["fullscreen", "banner"] as const).map((p) => (
+                    {(["fullscreen", "banner", "badge"] as const).map((p) => (
                       <button
                         key={p}
                         onClick={() => updateEntry(list, e.id, { preset: p })}
@@ -675,52 +783,287 @@ export function DigimodTab({
                             : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
                         }`}
                       >
-                        {p === "fullscreen" ? "fullscreen" : "side banner"}
+                        {p === "fullscreen" ? "fullscreen" : p === "banner" ? "side banner" : "ability badge"}
                       </button>
                     ))}
                   </span>
+                  <button
+                    onClick={() => updateEntry(list, e.id, { aboveHud: !(e.aboveHud === true) })}
+                    title="Draw above the player HUD (ability bar, health bar) instead of behind it. On for a badge that should sit on the ability icon; off keeps fullscreen scares under the HUD."
+                    className={`rounded px-1.5 py-0.5 ${
+                      e.aboveHud === true
+                        ? "bg-red-500/90 font-semibold text-white"
+                        : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
+                    }`}
+                  >
+                    over HUD
+                  </button>
                 </div>
-                {list === "misses" && (
-                  <div className="flex flex-col gap-1 text-[11px] text-zinc-500">
-                    <div className="flex gap-2">
-                      {matchField(
-                        list,
-                        e,
-                        "ability",
-                        "Ability",
-                        "any ability",
-                        "HUD class (ability_gravity_lasso) or the name the bar shows (Spirit Lasso). Empty = any ability.",
-                      )}
-                      {matchField(
-                        list,
-                        e,
-                        "hero",
-                        "Hero",
-                        "any hero",
-                        "Hero HUD class, e.g. hero_astro for Holliday. Empty = any hero.",
+                {list === "misses" &&
+                  (() => {
+                    const derived = missPresetOf(e);
+                    return (
+                      <div className="flex flex-col gap-1 text-[11px] text-zinc-500">
+                        <label className="flex items-center gap-1.5">
+                          <span className="shrink-0">Watch</span>
+                          <select
+                            value={derived}
+                            onChange={(ev) => {
+                              const p = MISS_PRESETS.find((x) => x.key === ev.target.value);
+                              if (p)
+                                updateEntry(list, e.id, {
+                                  ability: p.ability,
+                                  hero: p.hero,
+                                  ...(p.missUnder !== undefined ? { missUnder: p.missUnder } : {}),
+                                  ...(p.hitGrace !== undefined ? { hitGrace: p.hitGrace } : {}),
+                                });
+                            }}
+                            className="min-w-0 flex-1 rounded border border-zinc-700 bg-zinc-950 px-1 py-0.5 text-zinc-300 focus:border-zinc-500 focus:outline-none"
+                          >
+                            {MISS_PRESETS.map((p) => (
+                              <option key={p.key} value={p.key}>
+                                {p.label}
+                              </option>
+                            ))}
+                          </select>
+                          <span className="flex gap-1">
+                            {([false, true] as const).map((hit) => (
+                              <button
+                                key={String(hit)}
+                                onClick={() => updateEntry(list, e.id, { onHit: hit })}
+                                title={
+                                  hit
+                                    ? "Plays the moment the ability connects (the bar comes back)"
+                                    : "Plays when the ability misses (the bar never comes back)"
+                                }
+                                className={`rounded px-1.5 py-0.5 ${
+                                  (e.onHit === true) === hit
+                                    ? "bg-red-500/90 font-semibold text-white"
+                                    : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
+                                }`}
+                              >
+                                {hit ? "on hit" : "on miss"}
+                              </button>
+                            ))}
+                          </span>
+                        </label>
+                      </div>
+                    );
+                  })()}
+                {/* Advanced: entrance/exit animation (every list) + the miss
+                    timing knobs. Folded so a card stays one glance. */}
+                <details className="group/adv text-[11px] text-zinc-500">
+                  <summary className="cursor-pointer select-none list-none text-zinc-500 hover:text-zinc-300">
+                    <span className="mr-1 inline-block text-[9px] text-red-500/70 transition-transform group-open/adv:rotate-90">
+                      ▶
+                    </span>
+                    Advanced
+                  </summary>
+                  <div className="mt-1 flex flex-col gap-1 rounded border border-zinc-800 bg-zinc-900/40 p-1.5">
+                    <div
+                      className="flex flex-wrap items-center gap-x-2 gap-y-1"
+                      title="How the media comes in and leaves. Unset = the preset's own look: a banner slides in over 2 s, fullscreen fades in 0.1 s."
+                    >
+                      <span className="shrink-0">Enter</span>
+                      <select
+                        value={e.anim ?? (e.preset === "banner" ? "slide" : "fade")}
+                        onChange={(ev) =>
+                          updateEntry(list, e.id, { anim: ev.target.value as DigiEntry["anim"] })
+                        }
+                        className="rounded border border-zinc-700 bg-zinc-950 px-1 py-0.5 text-zinc-300 focus:border-zinc-500 focus:outline-none"
+                      >
+                        <option value="slide">slide in</option>
+                        <option value="fade">fade</option>
+                        <option value="pop">pop</option>
+                      </select>
+                      <label className="flex items-center gap-1">
+                        in
+                        <input
+                          type="number"
+                          step={0.05}
+                          min={0}
+                          value={e.enterSecs ?? (e.preset === "banner" ? 2 : 0.1)}
+                          onChange={(ev) =>
+                            updateEntry(list, e.id, {
+                              enterSecs: Math.max(0, Number(ev.target.value) || 0),
+                            })
+                          }
+                          className="w-14 rounded border border-zinc-700 bg-zinc-950 px-1 text-zinc-200"
+                        />
+                        s
+                      </label>
+                      <label className="flex items-center gap-1">
+                        out
+                        <input
+                          type="number"
+                          step={0.05}
+                          min={0}
+                          value={e.exitSecs ?? e.enterSecs ?? (e.preset === "banner" ? 2 : 0.1)}
+                          onChange={(ev) =>
+                            updateEntry(list, e.id, {
+                              exitSecs: Math.max(0, Number(ev.target.value) || 0),
+                            })
+                          }
+                          className="w-14 rounded border border-zinc-700 bg-zinc-950 px-1 text-zinc-200"
+                        />
+                        s
+                      </label>
+                    </div>
+                    <div
+                      className="flex flex-wrap items-center gap-x-2 gap-y-1"
+                      title="Keeps moving while shown: spin turns the image in place, orbit circles it around its spot. Works best with the fade entrance."
+                    >
+                      <span className="shrink-0">Motion</span>
+                      <select
+                        value={e.motion ?? "none"}
+                        onChange={(ev) =>
+                          updateEntry(list, e.id, { motion: ev.target.value as DigiEntry["motion"] })
+                        }
+                        className="rounded border border-zinc-700 bg-zinc-950 px-1 py-0.5 text-zinc-300 focus:border-zinc-500 focus:outline-none"
+                      >
+                        <option value="none">none</option>
+                        <option value="spin">spin</option>
+                        <option value="orbit">orbit</option>
+                      </select>
+                      {(e.motion ?? "none") !== "none" && (
+                        <label className="flex items-center gap-1">
+                          one turn every
+                          <input
+                            type="number"
+                            step={0.1}
+                            min={0.1}
+                            value={e.motionSecs ?? 2}
+                            onChange={(ev) =>
+                              updateEntry(list, e.id, {
+                                motionSecs: Math.max(0.1, Number(ev.target.value) || 2),
+                              })
+                            }
+                            className="w-14 rounded border border-zinc-700 bg-zinc-950 px-1 text-zinc-200"
+                          />
+                          s
+                        </label>
                       )}
                     </div>
-                    <label
-                      className="flex items-center gap-1"
-                      title="How long the ability's full window lasts. Only used when the bar's width can't be read in game (the debug log says 'bar never moved'). 0 = rely on the bar."
+                    <div
+                      className="flex flex-wrap items-center gap-x-2 gap-y-1"
+                      title="Blink while shown: visible for the on time, hidden for the off time, repeating until the show time ends. Stacks with motion."
                     >
-                      full window
-                      <input
-                        type="number"
-                        step={0.1}
-                        min={0}
-                        value={e.fullSeconds ?? 0}
-                        onChange={(ev) =>
-                          updateEntry(list, e.id, {
-                            fullSeconds: Math.max(0, Number(ev.target.value) || 0),
-                          })
-                        }
-                        className="w-14 rounded border border-zinc-700 bg-zinc-950 px-1 text-zinc-200"
-                      />
-                      s <span className="text-zinc-600">(fallback, 0 = read the bar)</span>
-                    </label>
+                      <label className="flex items-center gap-1.5">
+                        <input
+                          type="checkbox"
+                          checked={e.blink === true}
+                          onChange={(ev) => updateEntry(list, e.id, { blink: ev.target.checked })}
+                          className="accent-red-500"
+                        />
+                        Blink
+                      </label>
+                      {e.blink === true && (
+                        <>
+                          <label className="flex items-center gap-1">
+                            on
+                            <input
+                              type="number"
+                              step={0.05}
+                              min={0.05}
+                              value={e.blinkOn ?? 0.7}
+                              onChange={(ev) =>
+                                updateEntry(list, e.id, {
+                                  blinkOn: Math.max(0.05, Number(ev.target.value) || 0.7),
+                                })
+                              }
+                              className="w-14 rounded border border-zinc-700 bg-zinc-950 px-1 text-zinc-200"
+                            />
+                            s
+                          </label>
+                          <label className="flex items-center gap-1">
+                            off
+                            <input
+                              type="number"
+                              step={0.05}
+                              min={0.05}
+                              value={e.blinkOff ?? 0.3}
+                              onChange={(ev) =>
+                                updateEntry(list, e.id, {
+                                  blinkOff: Math.max(0.05, Number(ev.target.value) || 0.3),
+                                })
+                              }
+                              className="w-14 rounded border border-zinc-700 bg-zinc-950 px-1 text-zinc-200"
+                            />
+                            s
+                          </label>
+                        </>
+                      )}
+                    </div>
+                    {e.preset === "badge" && (
+                      <div
+                        className="flex flex-wrap items-center gap-x-2 gap-y-1"
+                        title="Where the badge sits, in the HUD's 1920x1080 reference space (top-left corner + size). The defaults put a 100 px badge beside the ability 4 icon. The in-game menu has live steppers for the same three numbers."
+                      >
+                        <span className="shrink-0">Badge at</span>
+                        {(["posX", "posY", "size"] as const).map((k) => (
+                          <label key={k} className="flex items-center gap-1">
+                            {k === "posX" ? "x" : k === "posY" ? "y" : "size"}
+                            <input
+                              type="number"
+                              step={10}
+                              min={0}
+                              value={e[k] ?? (k === "posX" ? 1042 : k === "posY" ? 970 : 100)}
+                              onChange={(ev) =>
+                                updateEntry(list, e.id, {
+                                  [k]: Math.max(0, Number(ev.target.value) || 0),
+                                })
+                              }
+                              className="w-16 rounded border border-zinc-700 bg-zinc-950 px-1 text-zinc-200"
+                            />
+                          </label>
+                        ))}
+                        <span className="text-zinc-600">px of 1920x1080</span>
+                      </div>
+                    )}
+                    {list === "misses" && (
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <label
+                          className="flex items-center gap-1"
+                          title="Miss window: the HUD bar vanishing within this many seconds counts as a cast that may have missed. Measured per ability: Spirit Lasso 0.55 s. Tunable live from the in-game mod menu too (the gear in the ESC menu)."
+                        >
+                          Miss window
+                          <input
+                            type="number"
+                            step={0.05}
+                            min={0.05}
+                            value={e.missUnder ?? 0.55}
+                            onChange={(ev) =>
+                              updateEntry(list, e.id, {
+                                missUnder: Math.max(0.05, Number(ev.target.value) || 0.55),
+                              })
+                            }
+                            className="w-14 rounded border border-zinc-700 bg-zinc-950 px-1 text-zinc-200"
+                          />
+                          s
+                        </label>
+                        <label
+                          className="flex items-center gap-1"
+                          title="Hit grace: after a short cast window ends, how long to wait for the bar to come back. Back within this time = hit (on-hit videos play); still gone = miss. Measured per ability: Spirit Lasso 0.27 s. 0 = fire at once."
+                        >
+                          Hit grace
+                          <input
+                            type="number"
+                            step={0.05}
+                            min={0}
+                            value={e.hitGrace ?? 0.27}
+                            onChange={(ev) =>
+                              updateEntry(list, e.id, {
+                                hitGrace: Math.max(0, Number(ev.target.value) || 0),
+                              })
+                            }
+                            className="w-14 rounded border border-zinc-700 bg-zinc-950 px-1 text-zinc-200"
+                          />
+                          s
+                        </label>
+                      </div>
+                    )}
                   </div>
-                )}
+                </details>
                 <label className="flex items-center gap-1.5 text-[11px] text-zinc-500">
                   <span className="shrink-0">Sound</span>
                   <select
@@ -789,20 +1132,19 @@ export function DigimodTab({
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Header: identity + the three knobs. */}
-      <div className="rounded-xl border border-red-500/20 bg-gradient-to-br from-red-500/10 via-zinc-900/40 to-zinc-900/40 p-4">
+      {/* Header: identity + this tab's knobs (the mod name is shared). */}
+      <div
+        className="rounded-xl border border-red-500/20 bg-gradient-to-br from-red-500/10 via-zinc-900/40 to-zinc-900/40 p-4"
+        title="These compile in as the defaults. The in-game mod menu (the gear in the ESC menu) can still tweak them per session."
+      >
         <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
           <div className="min-w-[10rem]">
             <h2 className="text-base font-bold text-zinc-100">
               MoonahMasterUI <span className="text-zinc-500">/</span> {copy.title}
             </h2>
-            <p className="text-[11px] leading-4 text-zinc-500">
-              {copy.blurb}
-              <br />
-              one HUD mod shared by all three UI mods tabs
-            </p>
+            <p className="text-[11px] leading-4 text-zinc-500">{copy.blurb}</p>
           </div>
-          <Field label="Mod name (in-game F8 menu)">
+          <Field label="Mod name (in-game mod menu)">
             <input
               value={config.title ?? ""}
               onChange={(e) => patch({ title: e.target.value })}
@@ -843,14 +1185,16 @@ export function DigimodTab({
           )}
           {section === "misses" && (
             <>
-              <SettingSlider
-                label="Ability-miss video chance"
-                suffix="%"
-                min={0}
-                max={100}
-                value={config.missChance ?? 100}
-                onChange={(v) => patch({ missChance: v })}
-              />
+              {showMissChance && (
+                <SettingSlider
+                  label="Ability video chance"
+                  suffix="%"
+                  min={0}
+                  max={100}
+                  value={config.missChance ?? 100}
+                  onChange={(v) => patch({ missChance: v })}
+                />
+              )}
               <label
                 className="flex items-center gap-1.5 text-[11px] text-zinc-400"
                 title="Prints every watched ability window to the game console ([MoonahUI] ability ...): start, length, how far the bar got, and the hit/miss verdict. Leave on while tuning, off once it fires right."
@@ -866,18 +1210,12 @@ export function DigimodTab({
             </>
           )}
         </div>
-        <p className="mt-2 text-[10px] text-zinc-600">
-          These compile in as the defaults - the in-game F8 menu ("
-          {(config.title ?? "").trim() || "MoonahMasterUI (Mod Maker)"}") can still tweak them
-          per session. Death and ability-miss controls only appear in that menu once such a
-          video ships.
-        </p>
       </div>
 
       {/* One-click adoption of an already-installed MoonahMasterUI (or legacy DigiMaster) pak. */}
       {digiPaks.length > 0 && (
         <div
-          className={`rounded-xl border p-4 ${
+          className={`rounded-xl border px-4 py-2.5 ${
             empty
               ? "border-emerald-500/40 bg-emerald-500/5"
               : "border-zinc-800 bg-zinc-900/40"
@@ -889,8 +1227,9 @@ export function DigimodTab({
                 {empty ? "Your installed mod was detected" : "Import from an installed pak"}
               </h3>
               <p className="text-[11px] text-zinc-500">
-                Pulls the videos, images, sounds, and settings out of the pak so you can
-                edit them here. {empty ? "Start with everything you already have:" : "Entries you already have are skipped."}
+                {empty
+                  ? "Pull its videos, sounds and settings in here to edit them."
+                  : "Adds what the pak has that you don't."}
               </p>
             </div>
             {digiPaks.map((m) => (
@@ -916,14 +1255,27 @@ export function DigimodTab({
 
       {/* Shared sound library: each row compiles to its own Digi.* event. */}
       <div className="rounded-xl border border-zinc-800 bg-zinc-900/40">
-        <div className="flex items-center gap-3 border-b border-zinc-800/70 px-4 py-2.5">
-          <h3 className="text-sm font-semibold text-zinc-100">Sounds</h3>
-          <span className="rounded-full bg-red-500/10 px-2 py-0.5 text-[10px] font-semibold text-red-300">
-            {sounds.length}
-          </span>
-          <span className="text-[11px] text-zinc-500">
-            shared by all three UI mods tabs - each becomes its own sound event, assign to any video
-          </span>
+        <div
+          className={`flex items-center gap-3 px-4 py-2.5 ${libraryOpen ? "border-b border-zinc-800/70" : ""}`}
+        >
+          <button
+            onClick={() => setLibraryOpen((v) => !v)}
+            className="flex items-center gap-2 text-left"
+            title="Shared by all three UI mods tabs. Each sound becomes its own sound event; pick one from a video's Sound dropdown."
+          >
+            <span
+              className={`text-[9px] text-red-500/80 transition-transform duration-200 ${
+                libraryOpen ? "rotate-90" : ""
+              }`}
+            >
+              ▶
+            </span>
+            <h3 className="text-sm font-semibold text-zinc-100">Sound library</h3>
+            <span className="rounded-full bg-red-500/10 px-2 py-0.5 text-[10px] font-semibold text-red-300">
+              {sounds.length}
+            </span>
+            <span className="text-[11px] text-zinc-500">shared, clip and trim here</span>
+          </button>
           <button
             onClick={() => void addSoundsToLibrary()}
             className="ml-auto rounded-lg bg-red-500/90 px-2.5 py-1 text-xs font-semibold text-white shadow-sm hover:bg-red-500"
@@ -931,7 +1283,7 @@ export function DigimodTab({
             ＋ Add sounds
           </button>
         </div>
-        {sounds.length === 0 ? (
+        {!libraryOpen ? null : sounds.length === 0 ? (
           <p className="py-5 text-center text-xs text-zinc-600">
             No sounds yet - add mp3/wav/ogg files here (or straight from a video's dropdown)
             and pick them per video.
@@ -1119,11 +1471,12 @@ export function DigimodTab({
         )}
       </div>
 
-      <p className="text-[11px] text-zinc-600">
-        Compile bakes this into your mod: videos become VP9 webm (panorama's requirement),
-        PNGs compile to textures, sounds get their own Moonah.* sound events. This overrides
-        the game's base HUD layout - merge other HUD mods in the Mod Combiner tab, and
-        remove your old jumpscare pak from addons once this one is installed.
+      <p
+        className="text-[11px] text-zinc-600"
+        title="Videos become VP9 webm, PNGs compile to textures, sounds get their own Moonah.* sound events."
+      >
+        Compile builds all three tabs into one HUD mod. It replaces the game's base HUD layout,
+        so merge other HUD mods in Mod combiner and remove any old jumpscare pak from addons.
       </p>
     </div>
   );

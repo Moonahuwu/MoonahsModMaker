@@ -61,17 +61,39 @@ fn entry_js(dm: &DigimodCompile, e: &DigiEntry) -> String {
         None => "null".into(),
     };
     format!(
-        "{{ name: \"{}\", type: \"{}\", src: \"s2r://{}\", show: {:.2}, sound: {}, preset: \"{}\", ability: {}, hero: {}, full: {:.1} }}",
+        "{{ name: \"{}\", type: \"{}\", src: \"s2r://{}\", show: {:.2}, sound: {}, preset: \"{}\", ability: {}, hero: {}, under: {:.2}, grace: {:.2}, hit: {}, anim: {}, enter: {}, exit: {}, motion: {}, rev: {}, x: {}, y: {}, size: {}, blink: {}, bon: {}, boff: {}, top: {} }}",
         sanitize_id(&e.id),
         if e.kind == "image" { "image" } else { "video" },
         media_rel(e),
         e.show.max(0.1),
         sound,
-        if e.preset == "banner" { "banner" } else { "fullscreen" },
+        match e.preset.as_str() { "banner" => "banner", "badge" => "badge", _ => "fullscreen" },
         opt(&e.ability),
         opt(&e.hero),
-        e.full_seconds.max(0.0),
+        e.miss_under.max(0.0),
+        e.hit_grace.max(0.0),
+        e.on_hit,
+        opt(&e.anim),
+        optnum(e.enter_secs),
+        optnum(e.exit_secs),
+        opt(&e.motion),
+        optnum(e.motion_secs),
+        optnum(e.pos_x),
+        optnum(e.pos_y),
+        optnum(e.size),
+        e.blink,
+        optnum(e.blink_on),
+        optnum(e.blink_off),
+        e.above_hud,
     )
+}
+
+/// `0.25` or `null` for an optional seconds value in the generated JS.
+fn optnum(v: Option<f64>) -> String {
+    match v {
+        Some(n) => format!("{:.2}", n.max(0.0)),
+        None => "null".into(),
+    }
 }
 
 /// A user string made safe for a JS literal the same way `menu_title` is:
@@ -119,7 +141,7 @@ fn digimod_fingerprint(dm: &DigimodCompile) -> String {
     for e in all_entries(dm) {
         key.push_str(&file_identity(&e.source_media));
         key.push_str(&format!(
-            "{}|{}|{}|{:.2}|{}|{}|{}|{:.1}\n",
+            "{}|{}|{}|{:.2}|{}|{}|{}|{:.2}|{:.2}|{}|{}|{:?}|{:?}|{}|{:?}|{:?}|{:?}|{:?}|{}|{:?}|{:?}|{}\n",
             e.id,
             e.kind,
             e.preset,
@@ -127,7 +149,21 @@ fn digimod_fingerprint(dm: &DigimodCompile) -> String {
             e.sound_id.as_deref().unwrap_or(""),
             e.ability.as_deref().unwrap_or(""),
             e.hero.as_deref().unwrap_or(""),
-            e.full_seconds,
+            e.miss_under,
+            e.hit_grace,
+            e.on_hit,
+            e.anim.as_deref().unwrap_or(""),
+            e.enter_secs,
+            e.exit_secs,
+            e.motion.as_deref().unwrap_or(""),
+            e.motion_secs,
+            e.pos_x,
+            e.pos_y,
+            e.size,
+            e.blink,
+            e.blink_on,
+            e.blink_off,
+            e.above_hud,
         ));
     }
     for s in &dm.sounds {
@@ -184,23 +220,47 @@ fn inject_hooks(xml: &str) -> Result<String, String> {
         }
     }
     if !out.contains("MediaOverlayContainer") {
-        let panels = "\t\t<Panel id=\"MediaOverlayContainer\" hittest=\"false\" />\n\t\t<Panel id=\"AnitaUI_Anchor\" hittest=\"false\" style=\"width: 100%; height: 100%; z-index: 10000;\" />\n";
+        let panels = "\t\t<Panel id=\"MediaOverlayContainer\" hittest=\"false\" />\n\t\t<Panel id=\"MediaOverlayTopContainer\" hittest=\"false\" />\n\t\t<Panel id=\"AnitaUI_Anchor\" hittest=\"false\" style=\"width: 100%; height: 100%; z-index: 10000;\" />\n";
         // The last </Panel> closes the WindowRoot panel — land just inside it.
         let pos = out
             .rfind("</Panel>")
             .ok_or("no root <Panel> in the mod's base_hud")?;
         out.insert_str(pos, panels);
+    } else if !out.contains("MediaOverlayTopContainer") {
+        // A hud hooked by an older build: add the above-HUD layer beside the
+        // existing container.
+        let pos = out
+            .rfind("</Panel>")
+            .ok_or("no root <Panel> in the mod's base_hud")?;
+        out.insert_str(pos, "\t\t<Panel id=\"MediaOverlayTopContainer\" hittest=\"false\" />\n");
     }
     Ok(out)
 }
 
+/// The VP9 encode settings, part of every webm's cache key so a recipe
+/// change re-encodes cached videos.
+const WEBM_RECIPE: &str = "libvpx-vp9|crf34|cpu-used4|an|v1";
+
 /// Convert (or copy) a user video into panorama's required VP9 webm.
+///
+/// Cached per video: a `.eimsrc` sidecar beside the output records the
+/// source's path|len|mtime + the encode recipe, and a matching sidecar with
+/// the webm still present skips the encode. The whole-build stamp only skips
+/// when NOTHING changed, so without this every config edit (a new entry, a
+/// nudged show time) re-encoded every video - minutes of ffmpeg for nothing.
 fn to_webm(ffmpeg: Option<&str>, src: &str, dest: &Path) -> Result<String, String> {
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
+    let sidecar = dest.with_extension("webm.eimsrc");
+    let key = format!("{}{}", file_identity(src), WEBM_RECIPE);
+    if dest.is_file() && std::fs::read_to_string(&sidecar).ok().as_deref() == Some(key.as_str()) {
+        return Ok("unchanged - reused last build's webm".into());
+    }
+    let _ = std::fs::remove_file(&sidecar);
     if src.to_lowercase().ends_with(".webm") {
         std::fs::copy(src, dest).map_err(|e| e.to_string())?;
+        let _ = std::fs::write(&sidecar, &key);
         return Ok("webm - copied as-is".into());
     }
     let exe = ffmpeg.unwrap_or("ffmpeg");
@@ -232,6 +292,7 @@ fn to_webm(ffmpeg: Option<&str>, src: &str, dest: &Path) -> Result<String, Strin
             .collect::<Vec<_>>()
             .join(" | "));
     }
+    let _ = std::fs::write(&sidecar, &key);
     Ok("converted to VP9 webm".into())
 }
 
@@ -675,8 +736,28 @@ pub struct ImportedEntry {
     pub ability: Option<String>,
     /// Ability-miss entries: hero HUD class.
     pub hero: Option<String>,
-    /// Ability-miss entries: full window length in seconds (0 = bar only).
-    pub full_seconds: f64,
+    /// Ability-miss entries: a window shorter than this many seconds is a miss.
+    pub miss_under: f64,
+    /// Ability-miss entries: seconds to wait for a follow-up window (= hit).
+    pub hit_grace: f64,
+    /// Ability-miss entries: plays on the hit (follow-up window) instead.
+    pub on_hit: bool,
+    /// Entrance style / transition lengths (None = preset defaults).
+    pub anim: Option<String>,
+    pub enter_secs: Option<f64>,
+    pub exit_secs: Option<f64>,
+    /// Motion while shown + badge placement (None = defaults).
+    pub motion: Option<String>,
+    pub motion_secs: Option<f64>,
+    pub pos_x: Option<f64>,
+    pub pos_y: Option<f64>,
+    pub size: Option<f64>,
+    /// Blink while shown (on/off seconds; None = 0.7 / 0.3).
+    pub blink: bool,
+    pub blink_on: Option<f64>,
+    pub blink_off: Option<f64>,
+    /// Draw above the player HUD instead of behind it.
+    pub above_hud: bool,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -921,12 +1002,29 @@ pub fn import_from_vpk(helper: &str, vpk: &str, dest_dir: &Path) -> Result<Digim
                 show: num_after(obj, "show").unwrap_or(1.0).max(0.1),
                 preset: match str_after(obj, "preset").as_deref() {
                     Some("banner") => "banner".into(),
+                    Some("badge") => "badge".into(),
                     _ => "fullscreen".into(),
                 },
                 sound_id,
                 ability: str_after(obj, "ability:").filter(|s| !s.is_empty()),
                 hero: str_after(obj, "hero:").filter(|s| !s.is_empty()),
-                full_seconds: num_after(obj, "full:").unwrap_or(0.0).max(0.0),
+                // Older paks carried `full:` (a bar-travel fallback); they get the
+                // current default threshold instead.
+                miss_under: num_after(obj, "under:").unwrap_or(0.4).max(0.0),
+                hit_grace: num_after(obj, "grace:").unwrap_or(0.6).max(0.0),
+                on_hit: obj.contains("hit: true"),
+                anim: str_after(obj, "anim:").filter(|s| !s.is_empty()),
+                enter_secs: num_after(obj, "enter:").map(|v| v.max(0.0)),
+                exit_secs: num_after(obj, "exit:").map(|v| v.max(0.0)),
+                motion: str_after(obj, "motion:").filter(|s| !s.is_empty()),
+                motion_secs: num_after(obj, "rev:").map(|v| v.max(0.1)),
+                pos_x: num_after(obj, "x:"),
+                pos_y: num_after(obj, "y:"),
+                size: num_after(obj, "size:").map(|v| v.max(1.0)),
+                blink: obj.contains("blink: true"),
+                blink_on: num_after(obj, "bon:").map(|v| v.max(0.05)),
+                blink_off: num_after(obj, "boff:").map(|v| v.max(0.05)),
+                above_hud: obj.contains("top: true"),
             });
         }
         out
@@ -981,7 +1079,7 @@ var LIBRARY = {
         { name: "death_1",   type: "video", src: "s2r://panorama/videos/death_screen.webm",   show: 5.5, sound: "Digi.Death",    preset: "banner" },
     ],
     MISSES: [
-        { name: "lasso_miss", type: "video", src: "s2r://panorama/videos/moonah/lasso_miss.webm", show: 3.0, sound: null, preset: "banner", ability: "ability_gravity_lasso", hero: "hero_astro", full: 2.5 },
+        { name: "lasso_miss", type: "video", src: "s2r://panorama/videos/moonah/lasso_miss.webm", show: 3.0, sound: null, preset: "banner", ability: "ability_gravity_lasso", hero: "hero_astro", under: 0.50, grace: 0.60, hit: false },
     ],
 };"#;
 
@@ -1008,7 +1106,9 @@ var LIBRARY = {
         assert_eq!(misses.len(), 1);
         assert_eq!(str_after(misses[0], "ability:").as_deref(), Some("ability_gravity_lasso"));
         assert_eq!(str_after(misses[0], "hero:").as_deref(), Some("hero_astro"));
-        assert_eq!(num_after(misses[0], "full:"), Some(2.5));
+        assert_eq!(num_after(misses[0], "under:"), Some(0.5));
+        assert_eq!(num_after(misses[0], "grace:"), Some(0.6));
+        assert!(!misses[0].contains("hit: true"));
         // Scare/death entries carry no ability fields (older paks, too).
         assert_eq!(str_after(scares[0], "ability:"), None);
     }
@@ -1085,7 +1185,21 @@ var LIBRARY = {
                 sound_id: None,
                 ability: Some(" Spirit \"Lasso\" ".into()),
                 hero: Some("hero_astro".into()),
-                full_seconds: 2.5,
+                miss_under: 0.75,
+                hit_grace: 0.9,
+                on_hit: true,
+                anim: Some("pop".into()),
+                enter_secs: Some(0.25),
+                exit_secs: None,
+                motion: Some("spin".into()),
+                motion_secs: Some(1.5),
+                pos_x: Some(1042.0),
+                pos_y: Some(970.0),
+                size: None,
+                blink: true,
+                blink_on: Some(0.7),
+                blink_off: None,
+                above_hud: true,
             }],
             miss_chance: 100,
             miss_debug: true,
@@ -1101,7 +1215,20 @@ var LIBRARY = {
         // Quotes swapped (never escaped) + trimmed, so the importer reads it back whole.
         assert_eq!(str_after(misses[0], "ability:").as_deref(), Some("Spirit 'Lasso'"));
         assert_eq!(str_after(misses[0], "hero:").as_deref(), Some("hero_astro"));
-        assert_eq!(num_after(misses[0], "full:"), Some(2.5));
+        assert_eq!(num_after(misses[0], "under:"), Some(0.75));
+        assert_eq!(num_after(misses[0], "grace:"), Some(0.9));
+        assert!(misses[0].contains("hit: true"));
+        assert_eq!(str_after(misses[0], "anim:").as_deref(), Some("pop"));
+        assert_eq!(num_after(misses[0], "enter:"), Some(0.25));
+        assert!(misses[0].contains("exit: null"));
+        assert_eq!(str_after(misses[0], "motion:").as_deref(), Some("spin"));
+        assert_eq!(num_after(misses[0], "rev:"), Some(1.5));
+        assert_eq!(num_after(misses[0], "x:"), Some(1042.0));
+        assert!(misses[0].contains("size: null"));
+        assert!(misses[0].contains("blink: true"));
+        assert_eq!(num_after(misses[0], "bon:"), Some(0.7));
+        assert!(misses[0].contains("boff: null"));
+        assert!(misses[0].contains("top: true"));
         // Scare/death arrays exist (empty) so the engine's length checks hold.
         assert!(array_after(&js, "SCARES").is_some() && array_after(&js, "DEATHS").is_some());
     }
@@ -1168,6 +1295,7 @@ var LIBRARY = {
         assert!(out.contains("moonah_master.vjs_c"));
         assert!(out.contains("anita_ui_core.vjs_c"));
         assert!(out.contains("MediaOverlayContainer"));
+        assert!(out.contains("MediaOverlayTopContainer"));
         // …inside the WindowRoot panel, before its closing tag.
         assert!(out.rfind("MediaOverlayContainer").unwrap() < out.rfind("</Panel>").unwrap());
         assert!(out.rfind("MediaOverlayContainer").unwrap() > out.find("CitadelHud").unwrap());

@@ -213,14 +213,64 @@ contains `{` braces).
   the ability-miss poller (`MISSES`): it polls `Citadel_AbilityHUDElement_Progress`
   (class `ability_element_progress`, carries `active` + `hero_<code>` +
   `ability_<name>` classes while an ability window runs, e.g. `hero_astro` +
-  `ability_gravity_lasso` for Holliday's Spirit Lasso; the SplitLabelProgressBar's
-  `SlicedContainer` width tracks time left). `active` dropping while the bar travelled
-  < `MISS_FULL` (0.85) of the way = wasted cast = a matching MISSES entry plays
-  (`ability` = HUD class or displayed name, `hero` = hero class, `full` seconds =
-  duration fallback when the bar width is unreadable); windows ending while the
-  respawn label shows are ignored. `ABILITY_DEBUG` (tab checkbox `missDebug`) logs
-  every window to the console. NOT yet confirmed in game as of 2026-10-24: the bar
-  width readback and the hit-vs-miss distinction, so keep the debug log on.
+  `ability_gravity_lasso` for Holliday's Spirit Lasso, live-confirmed 2026-10-24 with
+  the extra `supports_cancel_key lassoing` classes). The rule is TIME in two steps
+  (live-confirmed: the bar shows ~0.52 s for the CAST whether it hits or misses, and a
+  HIT brings it back for the pull): `active` dropping within the entry's `under`
+  seconds (`missUnder` = "Miss window") = a cast that may have missed ->
+  the poller waits `grace` seconds (`hitGrace` = "Hit grace") for a
+  follow-up window with the same displayed name: one appears = hit (and that
+  follow-up window is never judged itself) -> entries with `hit: true` (`onHit`,
+  the card's "on hit" chip) play at once; none = miss -> `hit: false` entries play
+  (`ability` = HUD class or displayed name, `hero` = hero class). The timings are
+  PER ABILITY and live on the tab's `MISS_PRESETS` (the only source of tuned
+  numbers; the Rust/JS 0.4/0.6 fallbacks are neutral placeholders): Holliday's
+  Spirit Lasso = Miss window 0.55 / Hit grace 0.27 (live-tuned 2026-10-24: the pull
+  window is back ~0.27 s after the cast window ends). The Watch dropdown offers ONLY
+  the presets - no "Custom" / "Any ability" mode until that is fleshed out (the
+  engine still matches `ability`/`hero` generically, so adding a hero = one preset
+  row + its measured numbers). Both are per-entry `MISS_WINDOW_<i>` / `MISS_GRACE_<i>` ms
+  steppers in the in-game mod menu and sit under each card's "Advanced" fold.
+  The in-game menu is ANITA UI (bundled `anita_ui_core.js`/`anita_ui.css`, registered
+  via `ClientUI_FireOutput` ANITA_REGISTER/HANDSHAKE), NOT our F8 RCON overlay: its
+  gear button only exists while the Hud carries `ShowEscapeMenu` (still the game's
+  class as of 2026-10-24), top-right of the ESC menu (our css copy lifts it from 0.28
+  to 0.9 opacity). `MISS_CHANCE` compiles as 100 unless Settings
+  `showAbilityChance` exposes the slider. Every entry
+  (all three lists) also carries an entrance style `anim` slide|fade|pop + `enter` /
+  `exit` seconds (null = the preset's look: banner slides 2 s, fullscreen fades 0.1 s):
+  `TriggerMedia` adds `moonah-in-<style>` and sets `style.transitionDuration` per
+  phase (`jumpscare_overlay.css` holds the hidden poses). A third preset `badge`
+  (chip "ability badge") is a small panel at an ABSOLUTE spot in the HUD's 1920x1080
+  reference space (`posX`/`posY`/`size`, default 1042/970/100 = beside the ability 4
+  icon; `applyBadgePlacement` sets `style.position`/width/height at trigger time, and
+  the in-game menu has `BADGE_<X|Y|SIZE>_<LIST>_<i>` steppers for live nudging), and
+  every entry can carry `motion` spin|orbit + `motionSecs` (a keyframe animation on
+  transform, `moonah-motion-<m>`, `style.animationDuration` = one revolution; it owns
+  transform so pair with the fade entrance), and `blink` + `blinkOn`/`blinkOff`
+  (`scheduleBlink`: pre-scheduled `$.Schedule` ticks toggle `moonah-blink-off`, the
+  LAST rule in the css so it beats `.moonah-show`; default 0.7 s on / 0.3 s off, capped
+  at 400 ticks). Layers: `#MediaOverlayContainer` sits BEHIND the player HUD (z -1,
+  the historical look for fullscreen scares) and `#MediaOverlayTopContainer` (z 1000,
+  under the Anita anchor's 10000) ABOVE it; per-entry `aboveHud` (`top:` in the JS
+  library, the card's "over HUD" chip) picks the container in `spawnPanel`, and
+  `inject_hooks` adds the top container to older hooked huds too. New ability entries
+  default to a spinning fade-in badge above the HUD.
+  The poller searches from the TOP of the panel tree
+  (walks GetParent to CitadelHud - the ability HUD is not under our panel's parent)
+  at 20 Hz while elements exist, and RE-SEARCHES every 3 s while idle (`MISS_RESCAN_SECS`,
+  skipped mid-window / mid-grace): the HUD is rebuilt per map load (lobby/hero-testing
+  bars vs match/sandbox bars) and the old handles can stay IsValid while detached, so an
+  IsValid-only cache watched dead bars forever with no log (2026-10-25). Every loop
+  (`RunRngLoop` / `RunDeathPoller` / `RunAbilityPoller`) runs its step in try/catch
+  and ALWAYS reschedules: a throw inside a `$.Schedule` callback ends that chain for
+  good while the others keep running, which is how the ability poller died on map
+  load with scares/deaths intact (`[MoonahUI] ... error (recovering)` in the console
+  names the culprit); windows ending while the respawn label shows are
+  ignored. `ABILITY_DEBUG` (tab checkbox `missDebug`) logs the search, every window
+  start (with the panel's classes), end verdict, follow-up gap and grace expiry to the
+  console. NOT yet confirmed in game: the gap between the cast window and the pull
+  window on a hit (the 0.6 s default grace is a guess - read it off the debug log).
 - `vpk.rs` — shells out to the C# helper.
 - `install.rs` — one-click install into Deadlock's `game/citadel/addons`. Addons mount as
   `pakNN_dir.vpk` (NN = 01..99); a slot is "occupied" if any file there ends `pak<NN>_dir.vpk`

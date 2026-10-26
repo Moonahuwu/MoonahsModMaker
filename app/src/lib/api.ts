@@ -288,7 +288,21 @@ export interface DigiEntryCompile {
   soundId?: string | null;
   ability?: string | null;
   hero?: string | null;
-  fullSeconds?: number;
+  missUnder?: number;
+  hitGrace?: number;
+  onHit?: boolean;
+  anim?: string | null;
+  enterSecs?: number | null;
+  exitSecs?: number | null;
+  motion?: string | null;
+  motionSecs?: number | null;
+  posX?: number | null;
+  posY?: number | null;
+  size?: number | null;
+  blink?: boolean;
+  blinkOn?: number | null;
+  blinkOff?: number | null;
+  aboveHud?: boolean;
 }
 
 /** True when an installed addon pak ships the MoonahMasterUI jumpscare engine (legacy DigiMaster paks count too). */
@@ -335,7 +349,21 @@ export interface DigiEntryImported {
   soundId?: string | null;
   ability?: string | null;
   hero?: string | null;
-  fullSeconds?: number;
+  missUnder?: number;
+  hitGrace?: number;
+  onHit?: boolean;
+  anim?: string | null;
+  enterSecs?: number | null;
+  exitSecs?: number | null;
+  motion?: string | null;
+  motionSecs?: number | null;
+  posX?: number | null;
+  posY?: number | null;
+  size?: number | null;
+  blink?: boolean;
+  blinkOn?: number | null;
+  blinkOff?: number | null;
+  aboveHud?: boolean;
 }
 
 export interface DigiSoundImported {
