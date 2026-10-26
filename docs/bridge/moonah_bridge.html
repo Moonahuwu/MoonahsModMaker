@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline';">
+<title>MOONAH:INIT</title>
+</head>
+<body>
+<!--
+  MoonahMasterUI settings bridge (Moonahs Mod Maker).
+
+  Deadlock's panorama UI has no persistent storage, so the mod opens this page
+  in a hidden game-embedded browser panel. Requests arrive in the URL fragment
+  after "#" as JSON; the answer is handed back through the page title.
+  The page keeps the mod's in-game settings in this browser's localStorage on
+  the player's own PC. It has no network code (default-src 'none') and never
+  sends anything anywhere.
+
+  Protocol (one request per hash change):
+    #{"id":"1","op":"load","key":"moonah_ui:Title"}            -> MOONAH:RES:1:{"op":"load","data":<json|null>}
+    #{"id":"2","op":"save","key":"moonah_ui:Title","data":{}}  -> MOONAH:RES:2:{"op":"save","data":true}
+    #{"id":"3","op":"clear","key":"moonah_ui:Title"}           -> MOONAH:RES:3:{"op":"clear","data":true}
+  Startup title: MOONAH:READY, or MOONAH:ERROR:localStorage when storage is blocked.
+-->
+<script>
+(function () {
+    "use strict";
+    var KEY_RE = /^[A-Za-z0-9_.:-]{1,80}$/;
+
+    function reply(id, op, data) {
+        document.title = "MOONAH:RES:" + id + ":" + JSON.stringify({ op: op, data: data });
+    }
+
+    var storageOk = true;
+    try {
+        localStorage.setItem("__moonah_probe__", "1");
+        localStorage.removeItem("__moonah_probe__");
+    } catch (e) { storageOk = false; }
+
+    function handle() {
+        var raw = location.hash ? location.hash.slice(1) : "";
+        if (!raw) return;
+        var msg;
+        try { msg = JSON.parse(decodeURIComponent(raw)); } catch (e) { return; }
+        if (!msg || typeof msg.id !== "string" || !/^\d+$/.test(msg.id)) return;
+        if (typeof msg.key !== "string" || !KEY_RE.test(msg.key)) { reply(msg.id, msg.op, null); return; }
+        if (!storageOk) { reply(msg.id, msg.op, null); return; }
+        if (msg.op === "load") {
+            var data = null;
+            try { data = JSON.parse(localStorage.getItem(msg.key) || "null"); } catch (e) { data = null; }
+            reply(msg.id, "load", data);
+        } else if (msg.op === "save" && msg.data && typeof msg.data === "object") {
+            try { localStorage.setItem(msg.key, JSON.stringify(msg.data)); reply(msg.id, "save", true); }
+            catch (e) { reply(msg.id, "save", false); }
+        } else if (msg.op === "clear") {
+            try { localStorage.removeItem(msg.key); } catch (e) {}
+            reply(msg.id, "clear", true);
+        }
+    }
+
+    window.addEventListener("hashchange", handle);
+    document.title = storageOk ? "MOONAH:READY" : "MOONAH:ERROR:localStorage";
+    handle();
+})();
+</script>
+</body>
+</html>
