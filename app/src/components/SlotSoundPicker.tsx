@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "motion/react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useEscape } from "../lib/useEscape";
+import { playableSrc } from "../lib/mediaUrl";
 
 /** One decoded sound from the downloaded pack, playable from disk. */
 export interface PickClip {
@@ -58,14 +59,21 @@ export function SlotSoundPicker({
   function togglePlay(path: string) {
     audioRef.current?.pause();
     if (playing === path) {
+      audioRef.current = null; // cancels a start still loading
       setPlaying(null);
       return;
     }
-    const a = new Audio(convertFileSrc(path));
+    const a = new Audio();
     a.onended = () => setPlaying((p) => (p === path ? null : p));
     audioRef.current = a;
-    void a.play().catch(() => setPlaying(null));
     setPlaying(path);
+    void playableSrc(convertFileSrc(path))
+      .then((src) => {
+        if (audioRef.current !== a) return; // superseded while loading
+        a.src = src;
+        return a.play();
+      })
+      .catch(() => setPlaying(null));
   }
 
   const toggleClip = (path: string) =>

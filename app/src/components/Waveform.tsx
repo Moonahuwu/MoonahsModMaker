@@ -3,6 +3,7 @@ import WaveSurfer from "wavesurfer.js";
 import RegionsPlugin from "wavesurfer.js/dist/plugins/regions.esm.js";
 import TimelinePlugin from "wavesurfer.js/dist/plugins/timeline.esm.js";
 import { getCachedPeaks, setCachedPeaks } from "../lib/peaksCache";
+import { playableSrc, releaseMediaUrl } from "../lib/mediaUrl";
 
 /** Shared time-ruler under a waveform so timestamps line up between two stacked
  *  (same px/second) waveforms. */
@@ -35,6 +36,12 @@ interface WaveformProps {
   /** Receives a "move the playhead to t seconds" function - the card drives
    *  it while ITS audio (the rendered mix) plays, so the cursor follows. */
   seekRef?: React.MutableRefObject<((t: number) => void) | null>;
+  /** Receives a "pause the waveform's own player" function, so the card can
+   *  stop it before playing its own audio (two players = doubled sound). */
+  pauseRef?: React.MutableRefObject<(() => void) | null>;
+  /** Fires when the waveform's OWN player starts (region click), so the card
+   *  can stop its audio. */
+  onPlay?: () => void;
   /** Live playhead position (seconds) as the waveform plays. */
   onTime?: (t: number) => void;
   /** Show a zoom slider (horizontal px-per-second; the wave scrolls when
@@ -47,7 +54,7 @@ interface WaveformProps {
  * marking the trim window. The region is the source of truth for trim edits;
  * `trimStart/trimEnd` seed it on load.
  */
-export function Waveform({ url, trimStart, trimEnd, onTrimChange, widthPct, onDuration, timeline, onTime, onRegionPlay, seekRef, zoomable }: WaveformProps) {
+export function Waveform({ url, trimStart, trimEnd, onTrimChange, widthPct, onDuration, timeline, onTime, onRegionPlay, seekRef, pauseRef, onPlay, zoomable }: WaveformProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WaveSurfer | null>(null);
   // The trim region, once created - lets external trim edits (number fields,
@@ -68,6 +75,8 @@ export function Waveform({ url, trimStart, trimEnd, onTrimChange, widthPct, onDu
   onDurationRef.current = onDuration;
   const timelineRef = useRef(timeline);
   timelineRef.current = timeline;
+  const onPlayRef = useRef(onPlay);
+  onPlayRef.current = onPlay;
   const onTimeRef = useRef(onTime);
   onTimeRef.current = onTime;
 
@@ -78,16 +87,12 @@ export function Waveform({ url, trimStart, trimEnd, onTrimChange, widthPct, onDu
     const cached = getCachedPeaks(url);
     const ws = WaveSurfer.create({
       container: containerRef.current,
-      url,
       height: 72,
       waveColor: "#3f3f46",
       progressColor: "#52525b",
       cursorColor: "#a1a1aa",
       normalize: true,
       plugins: timelineRef.current ? [regions, makeTimeline()] : [regions],
-      // Reuse decoded peaks if we have them — skips the costly re-decode and
-      // renders instantly; the media element still lazy-loads for playback.
-      ...(cached ? { peaks: cached.peaks, duration: cached.duration } : {}),
     });
 
     // `decode` fires whether peaks were decoded fresh or supplied from cache,
@@ -115,6 +120,8 @@ export function Waveform({ url, trimStart, trimEnd, onTrimChange, widthPct, onDu
 
     // External playhead control (the card syncs it to the rendered mix).
     if (seekRef) seekRef.current = (t) => ws.setTime(t);
+    if (pauseRef) pauseRef.current = () => ws.pause();
+    ws.on("play", () => onPlayRef.current?.());
 
     // Left-click the trim region to play that slice; click again to pause/resume.
     // A layered track hands playback to the card (the full mix), so what you
@@ -140,10 +147,29 @@ export function Waveform({ url, trimStart, trimEnd, onTrimChange, widthPct, onDu
     };
     el.addEventListener("contextmenu", onContext);
 
+    // Load AFTER the handlers exist. Reuse decoded peaks if we have them -
+    // skips the costly re-decode and renders instantly; the media element
+    // still lazy-loads for playback. Playback needs a blob: URL on Linux.
+    let cancelled = false;
+    let loaded: string | undefined;
+    void playableSrc(url).then((src) => {
+      if (cancelled) {
+        releaseMediaUrl(src);
+        return;
+      }
+      loaded = src;
+      void ws
+        .load(src, cached?.peaks, cached?.duration)
+        .catch(() => {});
+    });
+
     wsRef.current = ws;
     return () => {
+      cancelled = true;
+      releaseMediaUrl(loaded);
       el.removeEventListener("contextmenu", onContext);
       if (seekRef) seekRef.current = null;
+      if (pauseRef) pauseRef.current = null;
       regionRef.current = null;
       wsRef.current = null;
       ws.destroy();

@@ -1054,6 +1054,9 @@ function accentFor(ev: { group: string; side: string }): string {
   return "#e0564f"; // heroes
 }
 
+/** decoded-file path -> blob: URL (Linux playback workaround, see decodeStock). */
+const stockBlobUrls = new Map<string, string>();
+
 export default function App() {
   const [project, setProject] = useState<Project | null>(null);
   const [pools, setPools] = useState<Record<string, EventView>>({});
@@ -2938,7 +2941,21 @@ export default function App() {
   async function decodeStock(ref: string, vpk?: string): Promise<string> {
     const s = settingsRef.current;
     const path = await decodeStockApi(s.vpkHelperPath, vpk ?? s.deadlockPak, ref);
-    return convertFileSrc(path);
+    const url = convertFileSrc(path);
+    // WebKitGTK can't stream media from the asset:// scheme (play() resolves
+    // but stays silent), so hand the element an in-memory blob URL. Images
+    // fetch whole over asset:// fine, so the same path works for the bytes.
+    if (!/linux/i.test(navigator.userAgent)) return url;
+    const hit = stockBlobUrls.get(path);
+    if (hit) return hit;
+    try {
+      const blob = await (await fetch(url)).blob();
+      const b = URL.createObjectURL(blob);
+      stockBlobUrls.set(path, b);
+      return b;
+    } catch {
+      return url;
+    }
   }
 
   // Same decode, but the raw file path: layer mixing feeds it to ffmpeg

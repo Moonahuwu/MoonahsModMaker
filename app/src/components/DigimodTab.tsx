@@ -4,6 +4,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { extractVideoAudio, importDigimod, probeAudio, processAudio, type UiModVpk } from "../lib/api";
 import { cListUiMods } from "../lib/dataCache";
 import { videoThumb } from "../lib/videoThumbs";
+import { playableSrc, releaseMediaUrl } from "../lib/mediaUrl";
 import { Waveform } from "./Waveform";
 import { useToast } from "./Toaster";
 import type { DigiEntry, DigimodConfig, DigiSound } from "../types";
@@ -78,6 +79,26 @@ export const DEFAULT_DIGIMOD: DigimodConfig = {
   missDebug: true,
   sounds: [],
 };
+
+/** Inline player for a library sound. Linux can't stream asset:// into a
+ *  media element, so it plays from a blob: URL made when first needed. */
+function LibraryAudio({ path }: { path: string }) {
+  const [src, setSrc] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    let cancelled = false;
+    let made: string | undefined;
+    void playableSrc(convertFileSrc(path)).then((u) => {
+      if (cancelled) return releaseMediaUrl(u);
+      made = u;
+      setSrc(u);
+    });
+    return () => {
+      cancelled = true;
+      releaseMediaUrl(made);
+    };
+  }, [path]);
+  return <audio src={src} controls preload="none" className="h-7 w-36 shrink-0" />;
+}
 
 function baseName(p: string): string {
   return p.replace(/\\/g, "/").split("/").pop() ?? p;
@@ -346,7 +367,7 @@ export function DigimodTab({
         fadeOut: s.fadeOut ?? 0,
         ffmpegPath: ffmpegPath || undefined,
       });
-      const audio = new Audio(convertFileSrc(wav));
+      const audio = new Audio(await playableSrc(convertFileSrc(wav)));
       playerRef.current = audio;
       audio.onended = () => setPreviewing((p) => (p === s.id ? null : p));
       await audio.play();
@@ -1341,12 +1362,7 @@ export function DigimodTab({
                         {edited && <span className="ml-2 text-sky-300/80">clipped</span>}
                       </div>
                     </div>
-                    <audio
-                      src={convertFileSrc(s.sourceAudio)}
-                      controls
-                      preload="none"
-                      className="h-7 w-36 shrink-0"
-                    />
+                    <LibraryAudio path={s.sourceAudio} />
                     <label className="flex shrink-0 items-center gap-1 text-[11px] text-zinc-500">
                       vol
                       <input

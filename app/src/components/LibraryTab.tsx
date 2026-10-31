@@ -4,6 +4,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { libraryAdd, libraryRemove, probeAudio } from "../lib/api";
 import { copySound, useCopiedSound } from "../lib/soundClipboard";
+import { playableSrc } from "../lib/mediaUrl";
 import type { Settings } from "../lib/settings";
 import type { LibraryItem } from "../types";
 import { useToast } from "./Toaster";
@@ -108,19 +109,26 @@ export function LibraryTab({
   function playPause(item: LibraryItem) {
     if (playing === item.id) {
       audioRef.current?.pause();
+      audioRef.current = null; // cancels a start still loading
       setPlaying(null);
       return;
     }
     audioRef.current?.pause();
-    const audio = new Audio(convertFileSrc(item.path));
+    const audio = new Audio();
     audioRef.current = audio;
     audio.onended = () => setPlaying((p) => (p === item.id ? null : p));
     audio.onerror = () => {
       push("error", "Playback failed (the library copy may be missing)");
       setPlaying((p) => (p === item.id ? null : p));
     };
-    void audio.play();
     setPlaying(item.id);
+    void playableSrc(convertFileSrc(item.path)).then((src) => {
+      if (audioRef.current !== audio) return; // superseded while loading
+      audio.src = src;
+      // Same as before: a rejected play() (e.g. paused mid-load) stays silent;
+      // a genuinely unplayable file still raises the element error above.
+      return audio.play().catch(() => {});
+    });
   }
 
   async function copyToClipboard(item: LibraryItem) {
