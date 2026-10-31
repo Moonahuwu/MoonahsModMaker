@@ -5,6 +5,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import WaveSurfer from "wavesurfer.js";
 import { measureLoudness, probeAudio, processAudio, renderSpecOf } from "../lib/api";
 import { getCachedPeaks, setCachedPeaks } from "../lib/peaksCache";
+import { playableSrc, releaseMediaUrl } from "../lib/mediaUrl";
 import { songStatus } from "../lib/songHash";
 import type { BiteMode, Song, SongLayer, SoundFx } from "../types";
 import { Waveform } from "./Waveform";
@@ -222,12 +223,16 @@ export function SongCard({
   }, []);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioBlobRef = useRef<string | undefined>(undefined);
+  // Bumped by stop()/cancel: an in-flight start (render + blob fetch) bails.
+  const playToken = useRef(0);
   // Key the rendered audio was produced for; re-render when trim/gain change.
   const renderedKey = useRef<string>("");
   // The card's preview plays a RENDERED file (mix included), not the wave -
   // this loop walks the waveform's playhead along with it. The mix's t=0 is
   // the trim start on the source timeline.
   const waveSeek = useRef<((t: number) => void) | null>(null);
+  const wavePause = useRef<(() => void) | null>(null);
   const trimStartRef = useRef(song.trimStart);
   trimStartRef.current = song.trimStart;
   const startOffsetRef = useRef(0);
@@ -515,6 +520,20 @@ export function SongCard({
 
   async function playPause() {
     setError(null);
+    // Create + resume the AudioContext synchronously, inside the click: after
+    // the render/fetch awaits below WebKitGTK no longer counts it as a user
+    // gesture and leaves the context suspended (silent, delayed start).
+    try {
+      void audioCtx().resume();
+    } catch {
+      /* no WebAudio */
+    }
+    if (state === "loading") {
+      // A click while the preview is still being prepared cancels it.
+      playToken.current++;
+      setState("idle");
+      return;
+    }
     if (state === "playing") {
       audioRef.current?.pause();
       setState("paused");
@@ -528,6 +547,7 @@ export function SongCard({
     }
     // idle → render (if needed) then play
     setState("loading");
+    const token = ++playToken.current;
     try {
       // Gain and fades stay OUT of the preview render - the live chain below
       // applies them during playback (compile still bakes everything).
@@ -541,11 +561,21 @@ export function SongCard({
         ...previewSpec,
         ffmpegPath,
       });
+      if (token !== playToken.current) return;
+      const blobSrc = await playableSrc(convertFileSrc(outPath));
+      if (token !== playToken.current) {
+        releaseMediaUrl(blobSrc);
+        return;
+      }
+      wavePause.current?.();
+      audioRef.current?.pause();
       const audio = new Audio();
       // The asset protocol sends CORS headers (the waveforms fetch it) - and
       // WebAudio needs a non-opaque stream to process it.
       audio.crossOrigin = "anonymous";
-      audio.src = convertFileSrc(outPath);
+      releaseMediaUrl(audioBlobRef.current);
+      audio.src = blobSrc;
+      audioBlobRef.current = blobSrc;
       // Loop tracks preview looped, so the seam is audible before compiling.
       audio.loop = song.looping;
       audioRef.current = audio;
@@ -605,6 +635,8 @@ export function SongCard({
   }
 
   function stop() {
+    playToken.current++;
+    wavePause.current?.();
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
@@ -1101,6 +1133,14 @@ export function SongCard({
                         : undefined
                     }
                     seekRef={waveSeek}
+                    pauseRef={wavePause}
+                    onPlay={() => {
+                      // The waveform's own player started: ours must not
+                      // keep going underneath it.
+                      playToken.current++;
+                      audioRef.current?.pause();
+                      setState("idle");
+                    }}
                   />
                   </div>
                   </div>

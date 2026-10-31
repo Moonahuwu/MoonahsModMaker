@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { SoundOverride } from "../types";
 import { PauseIcon } from "./PauseIcon";
+import { playableSrc, releaseMediaUrl } from "../lib/mediaUrl";
 
 /**
  * Compact editor for one loose-file sound override: swap the source file, preview
@@ -21,6 +22,22 @@ export function OverrideEditor({
   const [playing, setPlaying] = useState(false);
   // Media elements keep playing after DOM removal — stop on unmount.
   useEffect(() => () => audioRef.current?.pause(), []);
+  // Linux can't stream asset:// into a media element - see lib/mediaUrl.
+  const [src, setSrc] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    let cancelled = false;
+    let made: string | undefined;
+    setSrc(undefined);
+    void playableSrc(convertFileSrc(override.sourceAudio)).then((u) => {
+      if (cancelled) return releaseMediaUrl(u);
+      made = u;
+      setSrc(u);
+    });
+    return () => {
+      cancelled = true;
+      releaseMediaUrl(made);
+    };
+  }, [override.sourceAudio]);
 
   const fileName = override.sourceAudio.split(/[\\/]/).pop() ?? override.sourceAudio;
 
@@ -43,7 +60,7 @@ export function OverrideEditor({
     <div className="flex flex-col gap-3 text-sm">
       <audio
         ref={audioRef}
-        src={convertFileSrc(override.sourceAudio)}
+        src={src}
         onEnded={() => setPlaying(false)}
         className="hidden"
       />
