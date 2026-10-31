@@ -125,7 +125,9 @@ export function LibraryTab({
     void playableSrc(convertFileSrc(item.path)).then((src) => {
       if (audioRef.current !== audio) return; // superseded while loading
       audio.src = src;
-      return audio.play().catch(() => audio.onerror?.(new Event("error")));
+      // Same as before: a rejected play() (e.g. paused mid-load) stays silent;
+      // a genuinely unplayable file still raises the element error above.
+      return audio.play().catch(() => {});
     });
   }
 
